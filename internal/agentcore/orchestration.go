@@ -380,6 +380,11 @@ type notifyRecordedCall struct {
 const (
 	PreApprovedSentinel = "\x00fleet-session-preapproved\x00"
 	PreDeniedSentinel   = "\x00fleet-session-predenied\x00"
+	// RecordedSentinel signals that Stage authorized the call (e.g. per-chat
+	// Autonomous mode on a critical_tool_autonomous tool) AND already wrote a
+	// durable audit record + live receipt card, so the gate lets the tool run
+	// and hooks ActionResultRecorder if the tool declares a result card.
+	RecordedSentinel = "\x00fleet-action-recorded\x00"
 )
 
 // MemoryProposer stages a memory proposal for user confirmation (interactive).

@@ -54,6 +54,7 @@ type chatStore interface {
 	RolloutConversationModel(ctx context.Context, model, fromModel string, includeLockdown, notify bool) (store.ConversationModelRolloutResult, error)
 	SetApprovalTimeout(ctx context.Context, userEmail, convID string, seconds *int) error
 	SetAutoApprove(ctx context.Context, userEmail, convID string, enabled bool) error
+	SetApprovalMode(ctx context.Context, userEmail, convID, mode string) error
 	SetThinkingConfig(ctx context.Context, userEmail, convID string, cfg *store.ThinkingConfig) error
 	SetOptionalMCPServers(ctx context.Context, userEmail, convID string, servers []string) error
 	AutoApproveEnableMCPConnectors(ctx context.Context, req store.AutoApproveConnectorsRequest) (store.AutoApproveConnectorsResult, error)

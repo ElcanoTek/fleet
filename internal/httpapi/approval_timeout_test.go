@@ -336,3 +336,85 @@ func TestStage_ConversationAutoApprove(t *testing.T) {
 		t.Errorf("patrol resolveTimeoutSeconds = %d, want >= %d", got, defaultApprovalTimeoutSeconds)
 	}
 }
+
+func TestStage_ConversationAutonomousMode(t *testing.T) {
+	t.Cleanup(func() { agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{}) })
+	agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{
+		CriticalToolSuffixes:          []string{"execute_plan", "create_deal", "deploy_page"},
+		CriticalToolNoSessionApproval: []string{"execute_plan", "create_deal"},
+		CriticalToolAutonomous:        []string{"execute_plan"},
+		CriticalToolResultCards:       []string{"execute_plan"},
+	})
+
+	st := &recordStageStore{}
+	sink := &eventSink{}
+	liveMode := store.ConversationApprovalAutonomous
+	a := &approvalStager{
+		ctx:              context.Background(),
+		store:            st,
+		conversationID:   "c1",
+		userEmail:        "alice@example.com",
+		sink:             sink,
+		convApprovalMode: store.ConversationApprovalManual,
+		liveApprovalMode: func(context.Context) string { return liveMode },
+	}
+
+	// 1. Checked plan executor in critical_tool_autonomous runs without blocking,
+	// persists an approved record row with the "Ran without asking" prefix, emits
+	// tool.action_recorded, and wires RecordActionResult for its outcome card.
+	got, err := a.Stage("mcp_openx_ox_execute_plan", "call_plan_1", `{"plan_id":"p1","deal_ids":["d1"]}`)
+	if err != nil {
+		t.Fatalf("Stage autonomous execute_plan: %v", err)
+	}
+	if got != agentcore.RecordedSentinel {
+		t.Fatalf("Stage returned %q, want RecordedSentinel", got)
+	}
+	recEv := eventNamed(sink, "tool.action_recorded")
+	if recEv == nil || recEv["tool"] != "mcp_openx_ox_execute_plan" {
+		t.Fatalf("missing tool.action_recorded event: %v", recEv)
+	}
+	resultText, _ := recEv["result_text"].(string)
+	if !isNotifyRecordResult(resultText) {
+		t.Errorf("result_text = %q, want prefix %q", resultText, notifyRecordResultPrefix)
+	}
+	outcomeJSON := `{"ok":true,"result_card":{"outcome":"done","title":"Updated 1 OpenX deal","items":[]}}`
+	a.RecordActionResult("mcp_openx_ox_execute_plan", "call_plan_1", outcomeJSON, true)
+	if cardEv := eventNamed(sink, "tool.action_record_card"); cardEv == nil || cardEv["result_card"] == nil {
+		t.Errorf("expected tool.action_record_card after RecordActionResult, got %v", cardEv)
+	}
+
+	// 2. Routine critical tools (SessionApprovalAllowed) also run in Autonomous mode.
+	got, err = a.Stage("mcp_pages_deploy_page", "call_routine", `{"slug":"s"}`)
+	if err != nil || got != agentcore.PreApprovedSentinel {
+		t.Fatalf("routine tool in autonomous = (%q, %v), want PreApprovedSentinel", got, err)
+	}
+
+	// 3. Raw un-planned SSP writes (in critical_tool_no_session_approval, NOT in
+	// critical_tool_autonomous) STILL stage an explicit pending approval card.
+	id, err := a.Stage("mcp_openx_ox_create_deal", "call_raw", `{"name":"Adhoc"}`)
+	if err != nil {
+		t.Fatalf("Stage raw create_deal: %v", err)
+	}
+	if id == agentcore.PreApprovedSentinel || id == agentcore.RecordedSentinel {
+		t.Fatalf("raw create_deal bypassed approval card in autonomous mode: %q", id)
+	}
+
+	// 4. Outbound email to external recipients STILL stages an approval card.
+	id, err = a.Stage("mcp_sendgrid_send_template_email", "call_email", `{}`)
+	if err != nil {
+		t.Fatalf("Stage send_template_email: %v", err)
+	}
+	if id == agentcore.PreApprovedSentinel || id == agentcore.RecordedSentinel {
+		t.Fatalf("outbound email bypassed approval card in autonomous mode: %q", id)
+	}
+
+	// 5. Downgrading liveApprovalMode to "auto" immediately re-gates execute_plan.
+	liveMode = store.ConversationApprovalAuto
+	id, err = a.Stage("mcp_openx_ox_execute_plan", "call_plan_2", `{"plan_id":"p2","deal_ids":["d2"]}`)
+	if err != nil {
+		t.Fatalf("Stage execute_plan in auto mode: %v", err)
+	}
+	if id == agentcore.PreApprovedSentinel || id == agentcore.RecordedSentinel {
+		t.Fatalf("execute_plan bypassed approval card in standard auto mode: %q", id)
+	}
+}

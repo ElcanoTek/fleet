@@ -137,6 +137,26 @@ describe("PatrolBanner", () => {
     expect(screen.queryByText(/Auto-approve off/)).not.toBeInTheDocument();
     expect(autoApprove).toHaveAttribute("title", expect.stringContaining("Click to turn it on"));
   });
+
+  it("renders three-level approval mode controls on PatrolBanner when onChangeApprovalMode is wired", () => {
+    const onChangeApprovalMode = vi.fn();
+    render(
+      <PatrolBanner
+        schedules={[sampleSchedule]}
+        approvalMode="autonomous"
+        isAutoApprove={true}
+        isStreaming={false}
+        onChangeApprovalMode={onChangeApprovalMode}
+        onRunNow={vi.fn()}
+        onTogglePause={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+    const autonomousBtn = screen.getByTestId("patrol-mode-autonomous");
+    expect(autonomousBtn).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(screen.getByTestId("patrol-mode-auto"));
+    expect(onChangeApprovalMode).toHaveBeenCalledWith("auto");
+  });
 });
 
 describe("PatrolPopover", () => {

@@ -635,10 +635,13 @@ func sanitizeConversationEvent(data []byte, viewerEmail, convOwnerEmail string) 
 	if err := json.Unmarshal(data, &m); err != nil {
 		return data, true
 	}
-	if _, ok := m["auto_approve"]; !ok {
+	_, hasAuto := m["auto_approve"]
+	_, hasMode := m["approval_mode"]
+	if !hasAuto && !hasMode {
 		return data, true
 	}
 	delete(m, "auto_approve")
+	delete(m, "approval_mode")
 	if b, err := json.Marshal(m); err == nil {
 		return b, true
 	}

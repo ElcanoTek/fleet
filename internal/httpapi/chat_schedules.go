@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/tools"
@@ -38,10 +39,12 @@ func (s *Server) ChatScheduleFireSettled(ctx context.Context, fire models.ChatSc
 		s.maybeDrainQueue(fire.ConversationID)
 	}
 	autoApprove := false
+	approvalMode := store.ConversationApprovalManual
 	if conv, cerr := s.store.Get(ctx, fire.UserEmail, fire.ConversationID); cerr == nil && conv != nil {
 		autoApprove = conv.AutoApprove
+		approvalMode = conv.EffectiveApprovalMode()
 	}
-	s.emitPatrolUpdate(ctx, fire.UserEmail, fire.ConversationID, nil, autoApprove)
+	s.emitPatrolUpdate(ctx, fire.UserEmail, fire.ConversationID, nil, autoApprove, approvalMode)
 }
 
 // KickQueuedChatScheduleTurns starts the drain of every conversation holding
@@ -103,7 +106,7 @@ func toChatPatrolScheduleViews(list []store.ChatSchedule) []tools.ChatPatrolSche
 	return out
 }
 
-func (s *Server) emitPatrolUpdate(ctx context.Context, user, convID string, buf *turnBuffer, autoApprove bool) {
+func (s *Server) emitPatrolUpdate(ctx context.Context, user, convID string, buf *turnBuffer, autoApprove bool, approvalMode string) {
 	s.notePublish("patrol.updated")
 	if s.store == nil {
 		return
@@ -112,9 +115,18 @@ func (s *Server) emitPatrolUpdate(ctx context.Context, user, convID string, buf 
 	if err != nil {
 		return
 	}
+	mode, ok := store.ParseConversationApprovalMode(approvalMode)
+	if !ok {
+		if autoApprove {
+			mode = store.ConversationApprovalAuto
+		} else {
+			mode = store.ConversationApprovalManual
+		}
+	}
 	payload := map[string]any{
-		"schedules":    list,
-		"auto_approve": autoApprove,
+		"schedules":     list,
+		"auto_approve":  autoApprove,
+		"approval_mode": mode,
 	}
 	if user != "" {
 		payload["user_email"] = user
@@ -140,6 +152,7 @@ func (s *Server) newChatPatrolHandler(conv *store.Conversation, user string, buf
 		// AutoApprove on its own.
 		if fresh, err := s.getOwnedOrMultiplayerConversation(ctx, user, conv.ID); err == nil && fresh != nil {
 			conv.AutoApprove = fresh.AutoApprove
+			conv.ApprovalMode = fresh.ApprovalMode
 		}
 
 		switch params.Action {
@@ -187,11 +200,12 @@ func (s *Server) chatPatrolList(ctx context.Context, conv *store.Conversation, u
 		msg = "No active or paused schedules in this conversation."
 	}
 	return &tools.ChatPatrolResult{
-		Status:      "ok",
-		Action:      params.Action,
-		Message:     msg,
-		AutoApprove: conv.AutoApprove,
-		Schedules:   toChatPatrolScheduleViews(list),
+		Status:       "ok",
+		Action:       params.Action,
+		Message:      msg,
+		AutoApprove:  conv.AutoApprove,
+		ApprovalMode: conv.EffectiveApprovalMode(),
+		Schedules:    toChatPatrolScheduleViews(list),
 	}, nil
 }
 
@@ -215,20 +229,26 @@ func (s *Server) chatPatrolCreate(ctx context.Context, conv *store.Conversation,
 		return nil, err
 	}
 	s.armShortScheduleTimer(sched.NextRunAt)
-	s.emitPatrolUpdate(ctx, user, conv.ID, buf, conv.AutoApprove)
+	s.emitPatrolUpdate(ctx, user, conv.ID, buf, conv.AutoApprove, conv.EffectiveApprovalMode())
 	list, _ := s.store.ListChatSchedules(ctx, user, conv.ID, false)
 	view := toChatPatrolScheduleView(*sched)
 	msg := fmt.Sprintf("Scheduled %s %q (id=%s, next run at %s).", view.Kind, view.Title, view.ID, view.NextRunISO)
-	if !conv.AutoApprove {
-		msg += " Tip: ask the user to enable ⚡ Auto-approve in the Patrol bar or composer so unattended patrol runs do not pause on tool approval cards."
+	switch conv.EffectiveApprovalMode() {
+	case store.ConversationApprovalManual:
+		msg += " Tip: ask the user to enable Auto-approve (for routine workspace tools) or Autonomous (to also execute checked deal plans unattended) in the Patrol bar or composer."
+	case store.ConversationApprovalAuto:
+		if len(agentcore.AutonomousToolSuffixes()) > 0 {
+			msg += " Note: this chat is in Auto-approve mode (routine workspace tools run unattended; checked deal plans still wait on approval cards unless the owner selects Autonomous in the Patrol bar or composer)."
+		}
 	}
 	return &tools.ChatPatrolResult{
-		Status:      "ok",
-		Action:      params.Action,
-		Message:     msg,
-		AutoApprove: conv.AutoApprove,
-		Schedule:    &view,
-		Schedules:   toChatPatrolScheduleViews(list),
+		Status:       "ok",
+		Action:       params.Action,
+		Message:      msg,
+		AutoApprove:  conv.AutoApprove,
+		ApprovalMode: conv.EffectiveApprovalMode(),
+		Schedule:     &view,
+		Schedules:    toChatPatrolScheduleViews(list),
 	}, nil
 }
 
@@ -268,16 +288,17 @@ func (s *Server) chatPatrolUpdate(ctx context.Context, conv *store.Conversation,
 		return nil, err
 	}
 	s.armShortScheduleTimer(sched.NextRunAt)
-	s.emitPatrolUpdate(ctx, user, conv.ID, buf, conv.AutoApprove)
+	s.emitPatrolUpdate(ctx, user, conv.ID, buf, conv.AutoApprove, conv.EffectiveApprovalMode())
 	list, _ := s.store.ListChatSchedules(ctx, user, conv.ID, false)
 	view := toChatPatrolScheduleView(*sched)
 	return &tools.ChatPatrolResult{
-		Status:      "ok",
-		Action:      params.Action,
-		Message:     fmt.Sprintf("Updated %s %q (id=%s, next run at %s).", view.Kind, view.Title, view.ID, view.NextRunISO),
-		AutoApprove: conv.AutoApprove,
-		Schedule:    &view,
-		Schedules:   toChatPatrolScheduleViews(list),
+		Status:       "ok",
+		Action:       params.Action,
+		Message:      fmt.Sprintf("Updated %s %q (id=%s, next run at %s).", view.Kind, view.Title, view.ID, view.NextRunISO),
+		AutoApprove:  conv.AutoApprove,
+		ApprovalMode: conv.EffectiveApprovalMode(),
+		Schedule:     &view,
+		Schedules:    toChatPatrolScheduleViews(list),
 	}, nil
 }
 
@@ -297,16 +318,17 @@ func (s *Server) chatPatrolTogglePause(ctx context.Context, conv *store.Conversa
 	if status == store.ChatScheduleStatusActive {
 		s.armShortScheduleTimer(sched.NextRunAt)
 	}
-	s.emitPatrolUpdate(ctx, user, conv.ID, buf, conv.AutoApprove)
+	s.emitPatrolUpdate(ctx, user, conv.ID, buf, conv.AutoApprove, conv.EffectiveApprovalMode())
 	list, _ := s.store.ListChatSchedules(ctx, user, conv.ID, false)
 	view := toChatPatrolScheduleView(*sched)
 	return &tools.ChatPatrolResult{
-		Status:      "ok",
-		Action:      params.Action,
-		Message:     fmt.Sprintf("Schedule %q (id=%s) is now %s.", view.Title, view.ID, view.Status),
-		AutoApprove: conv.AutoApprove,
-		Schedule:    &view,
-		Schedules:   toChatPatrolScheduleViews(list),
+		Status:       "ok",
+		Action:       params.Action,
+		Message:      fmt.Sprintf("Schedule %q (id=%s) is now %s.", view.Title, view.ID, view.Status),
+		AutoApprove:  conv.AutoApprove,
+		ApprovalMode: conv.EffectiveApprovalMode(),
+		Schedule:     &view,
+		Schedules:    toChatPatrolScheduleViews(list),
 	}, nil
 }
 
@@ -321,13 +343,14 @@ func (s *Server) chatPatrolCancel(ctx context.Context, conv *store.Conversation,
 				return nil, cerr
 			}
 		}
-		s.emitPatrolUpdate(ctx, user, conv.ID, buf, conv.AutoApprove)
+		s.emitPatrolUpdate(ctx, user, conv.ID, buf, conv.AutoApprove, conv.EffectiveApprovalMode())
 		return &tools.ChatPatrolResult{
-			Status:      "ok",
-			Action:      params.Action,
-			Message:     fmt.Sprintf("Cancelled %d schedule(s) in this conversation.", len(active)),
-			AutoApprove: conv.AutoApprove,
-			Schedules:   []tools.ChatPatrolScheduleView{},
+			Status:       "ok",
+			Action:       params.Action,
+			Message:      fmt.Sprintf("Cancelled %d schedule(s) in this conversation.", len(active)),
+			AutoApprove:  conv.AutoApprove,
+			ApprovalMode: conv.EffectiveApprovalMode(),
+			Schedules:    []tools.ChatPatrolScheduleView{},
 		}, nil
 	}
 	targetID, err := s.resolveChatScheduleTargetID(ctx, user, conv.ID, params.ScheduleID)
@@ -338,16 +361,17 @@ func (s *Server) chatPatrolCancel(ctx context.Context, conv *store.Conversation,
 	if err != nil {
 		return nil, err
 	}
-	s.emitPatrolUpdate(ctx, user, conv.ID, buf, conv.AutoApprove)
+	s.emitPatrolUpdate(ctx, user, conv.ID, buf, conv.AutoApprove, conv.EffectiveApprovalMode())
 	list, _ := s.store.ListChatSchedules(ctx, user, conv.ID, false)
 	view := toChatPatrolScheduleView(*sched)
 	return &tools.ChatPatrolResult{
-		Status:      "ok",
-		Action:      params.Action,
-		Message:     fmt.Sprintf("Cancelled schedule %q (id=%s).", view.Title, view.ID),
-		AutoApprove: conv.AutoApprove,
-		Schedule:    &view,
-		Schedules:   toChatPatrolScheduleViews(list),
+		Status:       "ok",
+		Action:       params.Action,
+		Message:      fmt.Sprintf("Cancelled schedule %q (id=%s).", view.Title, view.ID),
+		AutoApprove:  conv.AutoApprove,
+		ApprovalMode: conv.EffectiveApprovalMode(),
+		Schedule:     &view,
+		Schedules:    toChatPatrolScheduleViews(list),
 	}, nil
 }
 
@@ -432,24 +456,75 @@ func (s *Server) handleScheduleList(w http.ResponseWriter, r *http.Request, user
 		return
 	}
 	writeJSON(w, r, map[string]any{
-		"schedules":    items,
-		"auto_approve": conv.AutoApprove,
+		"schedules":     items,
+		"auto_approve":  conv.AutoApprove,
+		"approval_mode": conv.EffectiveApprovalMode(),
 	})
+}
+
+func (s *Server) applyScheduleApprovalMutation(
+	ctx context.Context,
+	user string,
+	conv *store.Conversation,
+	approvalMode *string,
+	parsedMode string,
+	autoApprove *bool,
+	defaultAutoWhenUnset bool,
+) error {
+	if conv.UserEmail != "" && !strings.EqualFold(conv.UserEmail, user) {
+		return nil
+	}
+	switch {
+	case approvalMode != nil:
+		if err := s.store.SetApprovalMode(ctx, user, conv.ID, parsedMode); err != nil {
+			return err
+		}
+		conv.ApprovalMode = parsedMode
+		conv.AutoApprove = parsedMode != store.ConversationApprovalManual
+	case autoApprove != nil:
+		if err := s.store.SetAutoApprove(ctx, user, conv.ID, *autoApprove); err != nil {
+			return err
+		}
+		conv.AutoApprove = *autoApprove
+		if *autoApprove {
+			if conv.EffectiveApprovalMode() != store.ConversationApprovalAutonomous {
+				conv.ApprovalMode = store.ConversationApprovalAuto
+			}
+		} else {
+			conv.ApprovalMode = store.ConversationApprovalManual
+		}
+	case defaultAutoWhenUnset && !conv.AutoApprove:
+		if err := s.store.SetAutoApprove(ctx, user, conv.ID, true); err == nil {
+			conv.AutoApprove = true
+			conv.ApprovalMode = store.ConversationApprovalAuto
+		}
+	}
+	return nil
 }
 
 func (s *Server) handleScheduleCreate(w http.ResponseWriter, r *http.Request, user string, conv *store.Conversation) {
 	var req struct {
-		Title           string `json:"title"`
-		Prompt          string `json:"prompt"`
-		Cron            string `json:"cron"`
-		Timezone        string `json:"timezone"`
-		DurationSeconds int    `json:"duration_seconds"`
-		MaxRuns         int    `json:"max_runs"`
-		AutoApprove     *bool  `json:"auto_approve"`
-		AllowMultiple   bool   `json:"allow_multiple"`
+		Title           string  `json:"title"`
+		Prompt          string  `json:"prompt"`
+		Cron            string  `json:"cron"`
+		Timezone        string  `json:"timezone"`
+		DurationSeconds int     `json:"duration_seconds"`
+		MaxRuns         int     `json:"max_runs"`
+		AutoApprove     *bool   `json:"auto_approve"`
+		ApprovalMode    *string `json:"approval_mode"`
+		AllowMultiple   bool    `json:"allow_multiple"`
 	}
 	if !decodeJSONBody(w, r, &req) {
 		return
+	}
+	var parsedMode string
+	if req.ApprovalMode != nil {
+		var ok bool
+		parsedMode, ok = store.ParseConversationApprovalMode(*req.ApprovalMode)
+		if !ok {
+			http.Error(w, "invalid approval_mode: must be manual, auto, or autonomous", http.StatusBadRequest)
+			return
+		}
 	}
 	sched, err := s.store.CreateChatSchedule(r.Context(), store.ChatScheduleInput{
 		ConversationID:  conv.ID,
@@ -466,27 +541,18 @@ func (s *Server) handleScheduleCreate(w http.ResponseWriter, r *http.Request, us
 		writeScheduleError(w, err)
 		return
 	}
-	isOwner := conv.UserEmail == "" || strings.EqualFold(conv.UserEmail, user)
-	if isOwner {
-		if req.AutoApprove != nil {
-			if err := s.store.SetAutoApprove(r.Context(), user, conv.ID, *req.AutoApprove); err != nil {
-				writeScheduleError(w, err)
-				return
-			}
-			conv.AutoApprove = *req.AutoApprove
-		} else if !conv.AutoApprove {
-			if err := s.store.SetAutoApprove(r.Context(), user, conv.ID, true); err == nil {
-				conv.AutoApprove = true
-			}
-		}
+	if err := s.applyScheduleApprovalMutation(r.Context(), user, conv, req.ApprovalMode, parsedMode, req.AutoApprove, true); err != nil {
+		writeScheduleError(w, err)
+		return
 	}
 	s.armShortScheduleTimer(sched.NextRunAt)
-	s.emitPatrolUpdate(r.Context(), user, conv.ID, nil, conv.AutoApprove)
+	s.emitPatrolUpdate(r.Context(), user, conv.ID, nil, conv.AutoApprove, conv.EffectiveApprovalMode())
 	items, _ := s.store.ListChatSchedules(r.Context(), user, conv.ID, false)
 	writeJSON(w, r, map[string]any{
-		"schedule":     sched,
-		"schedules":    items,
-		"auto_approve": conv.AutoApprove,
+		"schedule":      sched,
+		"schedules":     items,
+		"auto_approve":  conv.AutoApprove,
+		"approval_mode": conv.EffectiveApprovalMode(),
 	})
 }
 
@@ -501,9 +567,19 @@ func (s *Server) handleSchedulePatch(w http.ResponseWriter, r *http.Request, use
 		MaxRuns         *int    `json:"max_runs"`
 		Status          *string `json:"status"`
 		AutoApprove     *bool   `json:"auto_approve"`
+		ApprovalMode    *string `json:"approval_mode"`
 	}
 	if !decodeJSONBody(w, r, &req) {
 		return
+	}
+	var parsedMode string
+	if req.ApprovalMode != nil {
+		var ok bool
+		parsedMode, ok = store.ParseConversationApprovalMode(*req.ApprovalMode)
+		if !ok {
+			http.Error(w, "invalid approval_mode: must be manual, auto, or autonomous", http.StatusBadRequest)
+			return
+		}
 	}
 	patch := store.ChatSchedulePatch{
 		Title:           req.Title,
@@ -530,22 +606,20 @@ func (s *Server) handleSchedulePatch(w http.ResponseWriter, r *http.Request, use
 		writeScheduleError(w, err)
 		return
 	}
-	if req.AutoApprove != nil && (conv.UserEmail == "" || strings.EqualFold(conv.UserEmail, user)) {
-		if err := s.store.SetAutoApprove(r.Context(), user, conv.ID, *req.AutoApprove); err != nil {
-			writeScheduleError(w, err)
-			return
-		}
-		conv.AutoApprove = *req.AutoApprove
+	if err := s.applyScheduleApprovalMutation(r.Context(), user, conv, req.ApprovalMode, parsedMode, req.AutoApprove, false); err != nil {
+		writeScheduleError(w, err)
+		return
 	}
 	if sched.Status == store.ChatScheduleStatusActive {
 		s.armShortScheduleTimer(sched.NextRunAt)
 	}
-	s.emitPatrolUpdate(r.Context(), user, conv.ID, nil, conv.AutoApprove)
+	s.emitPatrolUpdate(r.Context(), user, conv.ID, nil, conv.AutoApprove, conv.EffectiveApprovalMode())
 	items, _ := s.store.ListChatSchedules(r.Context(), user, conv.ID, false)
 	writeJSON(w, r, map[string]any{
-		"schedule":     sched,
-		"schedules":    items,
-		"auto_approve": conv.AutoApprove,
+		"schedule":      sched,
+		"schedules":     items,
+		"auto_approve":  conv.AutoApprove,
+		"approval_mode": conv.EffectiveApprovalMode(),
 	})
 }
 
@@ -555,12 +629,13 @@ func (s *Server) handleScheduleDelete(w http.ResponseWriter, r *http.Request, us
 		writeScheduleError(w, err)
 		return
 	}
-	s.emitPatrolUpdate(r.Context(), user, conv.ID, nil, conv.AutoApprove)
+	s.emitPatrolUpdate(r.Context(), user, conv.ID, nil, conv.AutoApprove, conv.EffectiveApprovalMode())
 	items, _ := s.store.ListChatSchedules(r.Context(), user, conv.ID, false)
 	writeJSON(w, r, map[string]any{
-		"schedule":     sched,
-		"schedules":    items,
-		"auto_approve": conv.AutoApprove,
+		"schedule":      sched,
+		"schedules":     items,
+		"auto_approve":  conv.AutoApprove,
+		"approval_mode": conv.EffectiveApprovalMode(),
 	})
 }
 
@@ -622,9 +697,10 @@ func (s *Server) handleScheduleRunNow(w http.ResponseWriter, r *http.Request, us
 		}
 	}
 	writeJSON(w, r, map[string]any{
-		"schedule":     *target,
-		"input_id":     delivery.InputID,
-		"schedules":    items,
-		"auto_approve": conv.AutoApprove,
+		"schedule":      *target,
+		"input_id":      delivery.InputID,
+		"schedules":     items,
+		"auto_approve":  conv.AutoApprove,
+		"approval_mode": conv.EffectiveApprovalMode(),
 	})
 }

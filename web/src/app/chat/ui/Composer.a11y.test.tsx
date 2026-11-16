@@ -499,6 +499,34 @@ describe("Composer — per-chat Auto-approve toggle", () => {
     fireEvent.click(btn);
     expect(toggleAutoApprove).toHaveBeenCalledTimes(1);
   });
+
+  it("renders the three-level approval mode selector and amber Autonomous badge", () => {
+    const onChangeApprovalMode = vi.fn();
+    render(
+      <Host
+        overrides={{
+          approvalMode: "autonomous",
+          isAutoApprove: true,
+          onChangeApprovalMode,
+        }}
+      />,
+    );
+    const badge = screen.getByTestId("composer-autonomous-indicator");
+    expect(badge).toHaveAttribute("aria-pressed", "true");
+    expect(badge).toHaveTextContent("Autonomous");
+    fireEvent.click(badge);
+    expect(onChangeApprovalMode).toHaveBeenCalledWith("manual");
+
+    fireEvent.click(screen.getByTestId("composer-more-button"));
+    const menu = screen.getByTestId("composer-more-popover");
+    const autoRadio = within(menu).getByTestId("composer-approval-mode-auto");
+    const autonomousRadio = within(menu).getByTestId(
+      "composer-approval-mode-autonomous",
+    );
+    expect(autonomousRadio).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(autoRadio);
+    expect(onChangeApprovalMode).toHaveBeenCalledWith("auto");
+  });
 });
 
 // User personas (docs/USER-PERSONAS.md): the persona menu groups the user's

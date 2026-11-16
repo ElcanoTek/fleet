@@ -80,8 +80,10 @@ type approvalStager struct {
 	// convAutoApprove is this conversation's initial per-chat auto-approve setting
 	// (conversations.auto_approve). When liveAutoApprove is non-nil, Stage reads
 	// the live toggle so toggling Auto-approve mid-turn takes effect immediately.
-	convAutoApprove bool
-	liveAutoApprove func(context.Context) bool
+	convAutoApprove  bool
+	liveAutoApprove  func(context.Context) bool
+	convApprovalMode string
+	liveApprovalMode func(context.Context) string
 	// autoApproveInTest auto-approves executable critical tools; handler-only
 	// cards still require explicit decisions. A CI/test escape hatch,
 	// off by default; see config.Config.AutoApproveInTest.
@@ -347,11 +349,78 @@ func (a *approvalStager) RecordAction(toolName, toolCallID, rawInput, undoHint s
 	return nil
 }
 
-func (a *approvalStager) isAutoApprove() bool {
-	if a.liveAutoApprove != nil {
-		return a.liveAutoApprove(a.ctx)
+func (a *approvalStager) effectiveApprovalMode() string {
+	if a.liveApprovalMode != nil {
+		if m, ok := store.ParseConversationApprovalMode(a.liveApprovalMode(a.ctx)); ok {
+			return m
+		}
+		return store.ConversationApprovalManual
 	}
-	return a.convAutoApprove
+	if m, ok := store.ParseConversationApprovalMode(a.convApprovalMode); ok {
+		return m
+	}
+	if a.liveAutoApprove != nil {
+		if a.liveAutoApprove(a.ctx) {
+			return store.ConversationApprovalAuto
+		}
+		return store.ConversationApprovalManual
+	}
+	if a.convAutoApprove {
+		return store.ConversationApprovalAuto
+	}
+	return store.ConversationApprovalManual
+}
+
+func (a *approvalStager) isAutoApprove() bool {
+	return a.effectiveApprovalMode() != store.ConversationApprovalManual
+}
+
+func (a *approvalStager) isAutonomous() bool {
+	return a.effectiveApprovalMode() == store.ConversationApprovalAutonomous
+}
+
+func (a *approvalStager) recordAutonomousAction(toolName, toolCallID, rawInput string) error {
+	if a.store == nil {
+		return errors.New("approval store is not configured")
+	}
+	cardJSON, _ := a.describeApproval(toolName, rawInput)
+	seat := a.seatFor(toolName)
+	approval, err := a.store.CreateApproval(a.ctx, a.conversationID, a.userEmail, toolName, toolCallID, rawInput, a.expiryUnixFor(toolName), seat)
+	if err != nil {
+		return err
+	}
+	if cardJSON != "" {
+		if ok, cerr := a.store.SetApprovalCard(a.ctx, a.userEmail, approval.ID, cardJSON); cerr == nil && ok {
+			approval.CardJSON = cardJSON
+		}
+	}
+	_, undoHint := agentcore.ApprovalModeForTool(toolName)
+	result := notifyRecordResultPrefix + ": this chat is in Autonomous mode."
+	if hint := strings.TrimSpace(undoHint); hint != "" {
+		result += " " + hint
+	}
+	if err := a.store.ResolveApproval(a.ctx, a.userEmail, approval.ID, "approved", result); err != nil {
+		return err
+	}
+	if toolCallID != "" && agentcore.ApprovalResultCard(toolName) {
+		a.recordMu.Lock()
+		if a.recordIDs == nil {
+			a.recordIDs = map[string]string{}
+		}
+		a.recordIDs[toolCallID] = approval.ID
+		a.recordMu.Unlock()
+	}
+	payload := withApprovalCard(map[string]any{
+		"approval_id": approval.ID,
+		"tool":        toolName,
+		"summary":     summarizeApprovalInput(toolName, rawInput, a.conversationID),
+		"undo_hint":   strings.TrimSpace(undoHint),
+		"result_text": result,
+		"mcp_server":  approval.MCPServer,
+		"mcp_account": approval.MCPAccount,
+	}, approval)
+	a.emitUserScoped("tool.action_recorded", payload)
+	return nil
 }
 
 // isSelfAddressedPatrolEmail reports whether an outbound email call during an
@@ -422,37 +491,20 @@ func (a *approvalStager) emitUserScoped(name string, payload map[string]any) {
 	a.sink.Emit(name, payload)
 }
 
-func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, error) {
-	// A task prompt the create/edit seam will refuse is refused BEFORE a card
-	// exists (#1601): the model learns the error now, and nobody is asked to
-	// approve a call that is certain to fail after they click Approve.
-	if err := prevalidateStagedTaskPrompt(toolName, rawInput); err != nil {
-		return "", err
-	}
+func (a *approvalStager) tryPreResolveStage(toolName, toolCallID, rawInput string) (string, bool) {
 	// Auto-approve-in-test (#225): a CI/test escape hatch (FLEET_AUTO_APPROVE_IN_TEST,
 	// off by default) for pipelines that have no human present and run against a
-	// mocked backend. Return the pre-approved sentinel so the tool runs normally,
-	// after surfacing a tool.auto_resolved event so an observing stream still sees
-	// the decision. Runs before staging so no approval row or card is created.
-	// NEVER enable this in production — it bypasses the human-in-the-loop gate.
+	// mocked backend.
 	if a.autoApproveInTest && !handlerOnlyApproval(toolName) {
 		a.emitUserScoped("tool.auto_resolved", map[string]any{
 			"tool": toolName,
 			"mode": "approve",
 			"via":  "auto_approve_in_test",
 		})
-		return agentcore.PreApprovedSentinel, nil
+		return agentcore.PreApprovedSentinel, true
 	}
-	// Session pre-approval (#300): if the user previously chose "approve/deny all
-	// <tool>" for this conversation, short-circuit the card by returning a
-	// sentinel the orchestration gate interprets — pre-approved → run the tool
-	// normally; pre-denied → block it. This runs before staging AND before
-	// conversation-wide auto-approve so an explicit session deny policy takes
-	// precedence over auto-approve.
-	//
-	// A tool the bundle lists in critical_tool_no_session_approval never takes
-	// a session policy, even one registered before that rule existed or by a
-	// path that skipped the POST refusal: every call stages its own card.
+	// Session pre-approval (#300): an explicit session deny policy takes
+	// precedence over conversation-wide auto-approve and autonomous modes.
 	if a.sessionRegistry != nil && !handlerOnlyApproval(toolName) && agentcore.SessionApprovalAllowed(toolName) {
 		if p, ok := a.sessionRegistry.MatchForUser(a.conversationID, a.userEmail, toolName, rawInput); ok {
 			a.emitUserScoped("tool.auto_resolved", map[string]any{
@@ -461,17 +513,30 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 				"pattern": p.Pattern,
 			})
 			if p.Mode == "deny" {
-				return agentcore.PreDeniedSentinel, nil
+				return agentcore.PreDeniedSentinel, true
 			}
-			return agentcore.PreApprovedSentinel, nil
+			return agentcore.PreApprovedSentinel, true
+		}
+	}
+	// Per-conversation Autonomous mode: bundle-declared checked plan executors
+	// (agent_policy.critical_tool_autonomous) run without blocking on a card,
+	// while writing a durable record in chat.approvals and posting a muted
+	// "ran without asking" receipt card. Recording is required, not best-effort.
+	if !handlerOnlyApproval(toolName) && !tools.IsEmailToolName(toolName) && !agentcore.IsOutboundEmailTool(toolName) &&
+		a.isAutonomous() && agentcore.AutonomousApprovalAllowed(toolName) {
+		if err := a.recordAutonomousAction(toolName, toolCallID, rawInput); err != nil {
+			logging.From(a.ctx).Warn("autonomous-mode record failed; falling back to a blocking approval card", "tool", safe.LogSafe(toolName), "conv_id", safe.LogSafe(a.conversationID), "err", err)
+		} else {
+			a.emitUserScoped("tool.auto_resolved", map[string]any{
+				"tool": toolName,
+				"mode": "approve",
+				"via":  "conversation_autonomous",
+			})
+			return agentcore.RecordedSentinel, true
 		}
 	}
 	// Per-conversation auto-approve (or a self-addressed status/digest email in
-	// an unattended in-chat patrol/timer turn): executable critical tools run
-	// without parking on an approval card. Handler-only tools (schedule_task,
-	// manage_tasks, preview_email, suggest_advanced_model), outbound email to
-	// other recipients (or with cc/bcc), and bundle-declared
-	// critical_tool_no_session_approval tools still stage an explicit card.
+	// an unattended in-chat patrol/timer turn).
 	if !handlerOnlyApproval(toolName) && agentcore.SessionApprovalAllowed(toolName) &&
 		((a.isAutoApprove() && !tools.IsEmailToolName(toolName) && !agentcore.IsOutboundEmailTool(toolName)) || a.isSelfAddressedPatrolEmail(toolName, rawInput)) {
 		a.emitUserScoped("tool.auto_resolved", map[string]any{
@@ -479,7 +544,20 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 			"mode": "approve",
 			"via":  "conversation_auto_approve",
 		})
-		return agentcore.PreApprovedSentinel, nil
+		return agentcore.PreApprovedSentinel, true
+	}
+	return "", false
+}
+
+func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, error) {
+	// A task prompt the create/edit seam will refuse is refused BEFORE a card
+	// exists (#1601): the model learns the error now, and nobody is asked to
+	// approve a call that is certain to fail after they click Approve.
+	if err := prevalidateStagedTaskPrompt(toolName, rawInput); err != nil {
+		return "", err
+	}
+	if sentinel, ok := a.tryPreResolveStage(toolName, toolCallID, rawInput); ok {
+		return sentinel, nil
 	}
 	// For email tools that accept content_file, inline the file bytes
 	// now. run_python writes to workspace/<convID>/, but the Go server

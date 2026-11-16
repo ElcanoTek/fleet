@@ -599,6 +599,26 @@ func (s *fakeChatStore) SetAutoApprove(_ context.Context, _, convID string, enab
 	defer s.mu.Unlock()
 	if c := s.convs[convID]; c != nil {
 		c.AutoApprove = enabled
+		if enabled {
+			if c.EffectiveApprovalMode() != store.ConversationApprovalAutonomous {
+				c.ApprovalMode = store.ConversationApprovalAuto
+			}
+		} else {
+			c.ApprovalMode = store.ConversationApprovalManual
+		}
+	}
+	return nil
+}
+func (s *fakeChatStore) SetApprovalMode(_ context.Context, _, convID, mode string) error {
+	normalized, ok := store.ParseConversationApprovalMode(mode)
+	if !ok {
+		return fmt.Errorf("invalid approval_mode %q", mode)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if c := s.convs[convID]; c != nil {
+		c.ApprovalMode = normalized
+		c.AutoApprove = normalized != store.ConversationApprovalManual
 	}
 	return nil
 }

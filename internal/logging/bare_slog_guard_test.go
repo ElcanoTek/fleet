@@ -71,6 +71,7 @@ var bareSlogAllowed = map[string]string{
 	"internal/agent.warnPersistentMemoryBudget":         reasonBoot,
 	"internal/agentcore.ConfigureAgentPolicy":           reasonConfig,
 	"internal/agentcore.closeEmailLastOverEquivalents":  reasonConfig,
+	"internal/agentcore.installAutonomousSet":           reasonConfig,
 	"internal/agentcore.installInteractiveHiddenList":   reasonConfig,
 	"internal/agentcore.installNarrowableArgs":          reasonConfig,
 	"internal/agentcore.installResultCardSet":           reasonConfig,

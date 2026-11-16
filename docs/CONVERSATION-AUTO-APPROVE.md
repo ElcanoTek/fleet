@@ -31,33 +31,45 @@ high-consequence gates.
      (`stagedTaskApprovalTimeoutSeconds = 86400`) and also inherit any longer
      global or per-conversation timeout override.
 
-2. **Per-conversation `auto_approve` persistence and API**
+2. **Per-conversation `auto_approve` and `approval_mode` persistence and API**
    - Stored on `conversations.auto_approve` (`BOOLEAN NOT NULL DEFAULT FALSE`,
-     migration `internal/migrations/sql/legacy/chat/085_conversation_auto_approve.sql`).
+     migration `internal/migrations/sql/legacy/chat/085_conversation_auto_approve.sql`)
+     and `conversations.approval_mode` (`TEXT NOT NULL DEFAULT 'manual'`,
+     values `'manual' | 'auto' | 'autonomous'`, migration
+     `internal/migrations/sql/0200_conversation_approval_mode.up.sql`), kept in
+     lockstep (`auto_approve` is `true` for `'auto'` and `'autonomous'`, `false`
+     for `'manual'`).
    - Returned on `Conversation` payloads (`GET /conversations`,
-     `GET /conversations/{id}`, and the `conversation` SSE frame).
-   - Can be seeded on the initial `POST /chat` request (`auto_approve: true`)
-     when creating a conversation on first turn, and toggled at any time by the
+     `GET /conversations/{id}`, and the `conversation` SSE frame) for the
+     conversation owner, and redacted for non-owners.
+   - Can be seeded on `POST /chat` or `POST /conversations`
+     (`approval_mode` or `auto_approve`) and updated at any time by the
      conversation owner via `POST /conversations/{id}/auto-approve` (forwarded
      by the web gateway at `POST /api/conversations/{id}/auto-approve`).
 
-3. **Safety boundary in `approvalStager.Stage`**
-   - When `auto_approve` is active for a conversation, `Stage` re-reads the
-     conversation row (`liveAutoApprove`) before each critical tool call so
-     toggling Auto-approve on or off mid-turn takes effect immediately on the
-     next tool call.
-   - Auto-approve applies **only** to executable critical tools that are eligible
-     for session pre-approval (`!handlerOnlyApproval(toolName) &&
-     !tools.IsEmailToolName(toolName) && !agentcore.IsOutboundEmailTool(toolName)
-     && agentcore.SessionApprovalAllowed(toolName)`).
-   - It emits `tool.auto_resolved` (`mode: "approve"`,
-     `via: "conversation_auto_approve"`) and returns `PreApprovedSentinel`.
-   - **Always excluded from Auto-approve** (still stage an explicit card):
+3. **Three-tier safety boundary in `approvalStager.Stage`**
+   - `Stage` re-reads the conversation row (`liveApprovalMode`) before each
+     critical tool call so changing the approval mode mid-turn takes effect
+     immediately on the next tool call. Non-owner turns in shared/multiplayer
+     conversations always fall back to `manual`.
+   - **Manual (`manual`)**: every critical tool stages an inline approval card.
+   - **Auto-approve (`auto`)**: applies to executable critical tools eligible
+     for session pre-approval (`SessionApprovalAllowed(toolName)`), emitting
+     `tool.auto_resolved` (`via: "conversation_auto_approve"`).
+   - **Autonomous (`autonomous`)**: includes everything in `auto` AND allows
+     bundle-declared checked pipelines in `agent_policy.critical_tool_autonomous`
+     (such as `execute_plan` and `apply_first_party_plan`) to run without
+     blocking, while persisting an approved audit record in `chat.approvals`
+     (`"Ran without asking: this chat is in Autonomous mode."`), rendering a
+     muted receipt card (`tool.action_recorded`), and attaching the tool's
+     structured `result_card` once execution finishes.
+   - **Always excluded even in `Autonomous` mode** (still stage an explicit card):
      - Handler-only approval cards (`schedule_task`, `manage_tasks`,
        `preview_email`, `suggest_advanced_model`).
-     - Outbound email tools (`send_email`, `send_template_email`, and any
-       `mcp_*_send_email` / `mcp_*_send_template_email` tool).
-     - Bundle-declared `critical_tool_no_session_approval` tools.
+     - Outbound email tools to external recipients (`send_email`,
+       `send_template_email`, and `mcp_*_send_email` / `mcp_*_send_template_email`).
+     - Raw ad-hoc writes listed in `critical_tool_no_session_approval` that are
+       not opted into `critical_tool_autonomous`.
    - Explicit session-level deny policies (`SessionApprovalRegistry` `mode:
      "deny"`) are evaluated before `auto_approve` and always take precedence.
 
