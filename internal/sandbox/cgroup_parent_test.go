@@ -57,6 +57,9 @@ func TestDelegatedCgroupParentFrom(t *testing.T) {
 		t.Skip("cgroup v2 parent resolution is unix-only")
 	}
 	euid := os.Geteuid()
+	if euid == 0 {
+		t.Skip("positive delegation ownership tests run as non-root")
+	}
 
 	t.Run("delegated subgroup on systemd >= 254 with empty parent procs", func(t *testing.T) {
 		root := t.TempDir()
@@ -127,6 +130,9 @@ func TestDelegatedCgroupParentSelfEvacuatePre254(t *testing.T) {
 		t.Skip("cgroup v2 parent resolution is unix-only")
 	}
 	euid := os.Geteuid()
+	if euid == 0 {
+		t.Skip("positive delegation ownership tests run as non-root")
+	}
 
 	t.Run("pre-254 systemd unit root self-evacuates pids into supervisor subgroup", func(t *testing.T) {
 		root := t.TempDir()
@@ -172,6 +178,9 @@ func TestDelegatedCgroupParentSelfEvacuatePre254(t *testing.T) {
 		proc := []byte("0::/system.slice/fleet.service\n")
 		if got := delegatedCgroupParentWithMover(proc, root, otherUID, 4242, fakeKernelCgroupMover); got != "" {
 			t.Fatalf("expected empty parent when owned by another uid, got %q", got)
+		}
+		if got := delegatedCgroupParentWithMover(proc, root, 0, 4242, fakeKernelCgroupMover); got != "" {
+			t.Fatalf("expected empty parent for root (euid=0), got %q", got)
 		}
 	})
 }
