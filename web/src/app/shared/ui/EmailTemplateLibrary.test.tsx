@@ -213,6 +213,22 @@ describe("useHasEmailTemplates", () => {
     expect(orchestratorApi.emailTemplates).toHaveBeenCalledTimes(1);
   });
 
+  it("asks again after an empty library, so a team's first template brings the entry in", async () => {
+    vi.mocked(orchestratorApi.emailTemplates).mockResolvedValueOnce([]).mockResolvedValue([weekly]);
+    const hook = renderHook(({ ask }) => useHasEmailTemplates(ask), { initialProps: { ask: true } });
+    await waitFor(() => expect(orchestratorApi.emailTemplates).toHaveBeenCalledTimes(1));
+    expect(hook.result.current).toBe(false);
+    // The menu closes and opens again after the first template was saved from chat.
+    hook.rerender({ ask: false });
+    hook.rerender({ ask: true });
+    await waitFor(() => expect(hook.result.current).toBe(true));
+    expect(orchestratorApi.emailTemplates).toHaveBeenCalledTimes(2);
+    // A "yes" is kept.
+    hook.rerender({ ask: false });
+    hook.rerender({ ask: true });
+    expect(orchestratorApi.emailTemplates).toHaveBeenCalledTimes(2);
+  });
+
   it("stays off for an empty library and asks again after a failure", async () => {
     vi.mocked(orchestratorApi.emailTemplates).mockRejectedValueOnce(new Error("down")).mockResolvedValue([]);
     const failed = renderHook(() => useHasEmailTemplates(true));

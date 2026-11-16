@@ -62,7 +62,9 @@ used as a path. Both are read-only and need the view permission. Like `/prompts`
 member without Operations Center access reads it by their Fleet role.
 
 **UI.** Chat's composer menu (**More options**) lists **Email templates** when
-the bundle has any; the composer asks once, the first time the menu opens. The
+the workspace has any (the bundle's or the team's); the composer asks when the
+menu opens, keeps a yes, and asks again after a no, so a team's first template
+brings the entry in without a reload. The
 dialog reads the example of the template on screen, one at a time. It has
 three columns: the list with search, the example email, and the
 template's rules (sections in order with their limits in words, then the rules

@@ -65,10 +65,12 @@ export function templateProvenance(template: EmailTemplate): string {
   return tr("Added by your team");
 }
 
-// Whether this workspace's bundle ships any email template. A bundle without
-// them (the generic one, for a start) should not show a menu entry that opens
-// an empty library, so the composer asks once, the first time its menu opens,
-// and every composer on the page shares the answer.
+// Whether this workspace has any email template, the bundle's or the team's.
+// A workspace without them (the generic bundle, for a start) should not show a
+// menu entry that opens an empty library, so the composer asks when its menu
+// opens. Every composer on the page shares a "yes"; a "no" is asked again on
+// the next open. On a workspace with none yet, the first template is added by
+// asking the assistant in chat, and the entry then appears.
 let availability: Promise<boolean> | null = null;
 
 export function resetEmailTemplateAvailabilityForTests() {
@@ -79,16 +81,22 @@ export function useHasEmailTemplates(ask: boolean): boolean {
   const [has, setHas] = useState(false);
   useEffect(() => {
     if (!ask) return;
-    availability ??= orchestratorApi
+    const check = (availability ??= orchestratorApi
       .emailTemplates()
-      .then((list) => list.length > 0)
+      .then((list) => {
+        // Only "yes" is kept. An empty library is asked about again the next
+        // time the menu opens, so the entry appears as soon as a team saves
+        // its first template from chat, without a reload.
+        if (list.length === 0 && availability === check) availability = null;
+        return list.length > 0;
+      })
       .catch(() => {
         // Not cached: a failed check is asked again on the next open.
-        availability = null;
+        if (availability === check) availability = null;
         return false;
-      });
+      }));
     let live = true;
-    void availability.then((value) => {
+    void check.then((value) => {
       if (live) setHas(value);
     });
     return () => {
