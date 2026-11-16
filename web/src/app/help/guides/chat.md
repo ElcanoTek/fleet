@@ -452,7 +452,7 @@ The toolbar beneath the message box keeps everyday controls upfront and groups s
 | Model selector | Shows the model this conversation runs on, with a cost band from `$` to `$$$$` where its pricing is known. Click to change it. See [Picking the model](#picking-the-model). |
 | Attach files | Add files to your next message. Dragging a file anywhere onto the conversation does the same. |
 | Tools | The wrench. Its badge counts the connectors on in this conversation, **Always on** ones included; hover it for "Tools, N on". See [Connectors in a conversation](#5-connectors-in-a-conversation). |
-| More options (`•••`) | Opens a labeled menu organized into three groups: **Prompt library**, **Persona** (active on any new or empty chat before the first message is sent, and shown disabled with *"Personas can only be changed in a new chat"* once chatting has started), and **Memories**; **Share this chat**, **Patrol & schedule**, **Auto-approve tools**, and **Summarize earlier messages** (once a conversation has messages, showing how full the chat is); and **Show details**, **Dashboard view**, and **Send on Enter**. When a non-default persona, a patrol schedule, sharing (**Multiplayer**, team sharing, or a public link), or **Auto-approve** is active, **More options** shows an accent dot, and on desktop screens a quick status pill or indicator also appears directly on the toolbar so you can see or change it in one click. |
+| More options (`•••`) | Opens a labeled menu organized into three groups: **Prompt library**, **Email templates** (only when your deployment has any), **Persona** (active on any new or empty chat before the first message is sent, and shown disabled with *"Personas can only be changed in a new chat"* once chatting has started), and **Memories**; **Share this chat**, **Patrol & schedule**, **Auto-approve tools**, and **Summarize earlier messages** (once a conversation has messages, showing how full the chat is); and **Show details**, **Dashboard view**, and **Send on Enter**. When a non-default persona, a patrol schedule, sharing (**Multiplayer**, team sharing, or a public link), or **Auto-approve** is active, **More options** shows an accent dot, and on desktop screens a quick status pill or indicator also appears directly on the toolbar so you can see or change it in one click. |
 | Send | At the far right. While the assistant is working it becomes **Stop**. |
 
 ### Dashboard view
@@ -1460,6 +1460,28 @@ it is the whole of your prompt work in one file.
 > quietly stops being true. The task's other settings — its schedule, its
 > recipients, the connectors it may use — are fields of their own on the task
 > form, and inserting a prompt there does not disturb them.
+
+### Email templates
+
+If your deployment has standard emails, **More options** (`•••`) also lists
+**Email templates**. A template is the fixed shape of an email the team sends
+again and again, such as a weekly client update: the same sections, in the same
+order, at the same length, whoever asks for it and in whichever chat. The entry
+is not shown on a deployment that has none.
+
+Select a template to see two things side by side: an **example email** built
+from sample data, and the template's **sections in order**, each with what
+belongs in it and its limits (for example *Up to 3 bullets*). Below them are the
+rules for the whole email and the phrases it never uses. Templates come with
+your deployment and are read-only.
+
+Choose **Use this template**, fill in the short form, and choose **Use
+prompt**. Like a library prompt, this
+only puts a request in your draft; nothing is written or sent until you send
+the message, and sending the email itself still asks for your approval. The
+assistant then writes the email to that template. A draft that breaks the
+template, by running long or adding a section, is not built: the assistant is
+told what to fix and tries again, so what you get back fits the example.
 
 ## 10. From chat to a task
 

@@ -49,6 +49,7 @@ import {
   type SkillInfo,
 } from "./skillSlash";
 import { PromptLibrary } from "@/app/shared/ui/PromptLibrary";
+import { EmailTemplateLibrary, useHasEmailTemplates } from "@/app/shared/ui/EmailTemplateLibrary";
 import { ToolsLibrary } from "./ToolsLibrary";
 import { ToolsPopover } from "./ToolsPopover";
 import { PatrolPopover, type CreatePatrolInput } from "./PatrolBanner";
@@ -423,7 +424,9 @@ export function Composer({
   const moreMenuRef = useRef<HTMLDivElement | null>(null);
   const moreButtonRef = useRef<HTMLButtonElement | null>(null);
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
+  const hasEmailTemplates = useHasEmailTemplates(moreMenuOpen);
   const openPromptLibraryRef = useRef<(() => void) | null>(null);
+  const openEmailTemplatesRef = useRef<(() => void) | null>(null);
   // The Tools library modal (null = closed), optionally opened on one
   // connection from a dimmed popover row.
   const [toolsLibrary, setToolsLibrary] = useState<{ selected?: string } | null>(null);
@@ -1273,6 +1276,18 @@ export function Composer({
                 }}
               />
             ) : null}
+            {!shareBusy ? (
+              <EmailTemplateLibrary
+                onInsert={(next) => {
+                  if (!shareBusy) setPrompt(next);
+                }}
+                returnFocusRef={moreButtonRef}
+                renderTrigger={(openLibrary) => {
+                  openEmailTemplatesRef.current = openLibrary;
+                  return null;
+                }}
+              />
+            ) : null}
             {(() => {
               const hasStartedChatting =
                 messages.some(
@@ -1477,6 +1492,33 @@ export function Composer({
                           </span>
                           <Icon name="chevron-right" className="size-3.5 shrink-0 text-[var(--color-text-muted)]" />
                         </button>
+
+                        {hasEmailTemplates ? (
+                        <button
+                          type="button"
+                          role="menuitem"
+                          aria-label={tr("Open email templates")}
+                          className={POP_ROW}
+                          onClick={() => {
+                            setMoreMenuOpen(false);
+                            moreButtonRef.current?.focus();
+                            openEmailTemplatesRef.current?.();
+                          }}
+                        >
+                          <span className="flex min-w-0 items-center gap-2.5">
+                            <span className="inline-flex size-7 shrink-0 items-center justify-center rounded-md bg-[var(--color-overlay-soft)] text-[var(--color-text-secondary)]">
+                              <Icon name="mail" className="size-3.5" />
+                            </span>
+                            <span className="grid min-w-0">
+                              <span className={POP_TITLE}>{tr("Email templates")}</span>
+                              <span className="truncate text-[0.7rem] text-[var(--color-text-muted)]">
+                                {tr("Standard emails with a preview and rules")}
+                              </span>
+                            </span>
+                          </span>
+                          <Icon name="chevron-right" className="size-3.5 shrink-0 text-[var(--color-text-muted)]" />
+                        </button>
+                        ) : null}
 
                         <button
                           type="button"

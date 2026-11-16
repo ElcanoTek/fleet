@@ -1,6 +1,6 @@
 import { bundleText } from "./index";
 import type { PillField } from "@/app/chat/ui/protocolPills";
-import type { PromptLibraryItem, TaskTemplate } from "@/app/shared/lib/orchestratorApi";
+import type { EmailTemplate, PromptLibraryItem, TaskTemplate } from "@/app/shared/lib/orchestratorApi";
 
 export function localizeField(field: PillField): PillField {
   return {
@@ -52,6 +52,20 @@ export function localizePrompt(prompt: PromptLibraryItem): PromptLibraryItem {
     ...(prompt.fields ? { fields: prompt.fields.map(localizeField) } : {}),
     ...(prompt.prompt_template ? { prompt_template: bundleText(prompt.prompt_template) } : {}),
     // Content is the versioned source file, used verbatim for export/backup.
+  };
+}
+
+// Only what the library shows as chrome is translated. The sections' rules
+// and the preview are the bundle's own writing guidance, in the language the
+// emails are written in.
+export function localizeEmailTemplate(template: EmailTemplate): EmailTemplate {
+  return {
+    ...template,
+    name: bundleText(template.name),
+    ...(template.description ? { description: bundleText(template.description) } : {}),
+    ...(template.use_when ? { use_when: bundleText(template.use_when) } : {}),
+    ...(template.fields ? { fields: template.fields.map(localizeField) } : {}),
+    ...(template.prompt_template ? { prompt_template: bundleText(template.prompt_template) } : {}),
   };
 }
 

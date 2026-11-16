@@ -204,6 +204,68 @@ components:
               description: >
                 The form's template; each {key} token names one of fields.
                 Present exactly when fields is. content stays the raw file.
+    EmailTemplate:
+      type: object
+      description: >
+        One bundle-owned email template (docs/EMAIL-TEMPLATES.md): the fixed
+        shape of an email a team sends repeatedly. The bundle's mail connector
+        enforces the same file when it renders an email; fleet only presents it.
+      required: [id, name, path, subject, sections, has_preview]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        description: { type: string }
+        audience: { type: string, description: "client or internal." }
+        use_when: { type: string }
+        based_on: { type: string }
+        path: { type: string }
+        max_words:
+          type: integer
+          description: Cap on the prose of the whole email. Absent means none.
+        subject:
+          type: object
+          properties:
+            instruction: { type: string }
+            max_chars: { type: integer }
+        rules: { type: array, items: { type: string } }
+        never_say:
+          type: array
+          description: >
+            Phrases the renderer refuses. A "re:" prefix marks a regular expression.
+          items: { type: string }
+        sections:
+          type: array
+          items: { $ref: "#/components/schemas/EmailTemplateSection" }
+        has_preview:
+          type: boolean
+          description: The bundle ships a rendered sample of this template.
+        preview_html:
+          type: string
+          description: >
+            The bundle's rendered sample of the template, a complete HTML
+            document. Only on a single-template read, never in the list.
+            Untrusted markup: show it only in a sandboxed frame.
+        fields:
+          type: array
+          description: The optional form, in the form-prompt schema.
+          items: { $ref: "#/components/schemas/PromptField" }
+        prompt_template:
+          type: string
+          description: The text the library inserts; each {key} token names one of fields.
+    EmailTemplateSection:
+      type: object
+      required: [id, title, block, required]
+      properties:
+        id: { type: string }
+        title: { type: string }
+        heading: { type: string, description: The fixed heading the renderer sets. }
+        block: { type: string, description: "The mail connector's block type (text, table, chart, ...)." }
+        required: { type: boolean }
+        instruction: { type: string }
+        limits:
+          type: object
+          description: Enforced bounds by name (max_words, max_bullets, max_rows, ...).
+          additionalProperties: { type: integer }
     PromptField:
       type: object
       description: >
@@ -1383,6 +1445,50 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/CurrentUserResponse"
+  /email-templates:
+    get:
+      summary: List the bundle's email templates.
+      description: |
+        The read-only email template library: live-read files from the client bundle's email_templates/ directory, each with its sections and rules. preview_html is never included here (has_preview says one exists); read one template for it. Shared with chat like the prompt library.
+      security:
+        - adminApiKey: []
+        - scopedApiKey: []
+        - elcanoAuthCookie: []
+      x-fleet-permission: view_tasks
+      responses:
+        "200":
+          description: The email templates, by name.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/EmailTemplate"
+  /email-templates/{template_id}:
+    parameters:
+      - name: template_id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      summary: Read one email template with its rendered preview.
+      description: |
+        The template as listed, plus preview_html when the bundle ships a preview for it.
+      security:
+        - adminApiKey: []
+        - scopedApiKey: []
+        - elcanoAuthCookie: []
+      x-fleet-permission: view_tasks
+      responses:
+        "200":
+          description: The email template.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmailTemplate"
+        "404":
+          $ref: "#/components/responses/Error"
   /files/{filename}:
     parameters:
       - name: filename
