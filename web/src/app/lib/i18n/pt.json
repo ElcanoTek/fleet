@@ -1297,7 +1297,6 @@
   "Download the per-user adoption report as CSV": "Descarregar o relatório de adoção por utilizador em CSV",
   "Download {0}": "Descarregar {0}",
   "Dozens of atomic media tools spanning image/video/lipsync/music/speech generation, generative video editing, scene composition, and avatar/voice management. Vendor labels it an experiment (\"intentionally rough around the edges\"); OAuth browser login or dk_* developer keys, billed via Pika credits.": "Dezenas de ferramentas multimédia específicas para gerar imagens, vídeo, sincronização labial, música e voz, editar vídeo de forma generativa, compor cenas e gerir avatares e vozes. O fornecedor descreve-o como uma experiência («deliberadamente pouco polida»); início de sessão OAuth no navegador ou chaves de programador dk_*, com faturação através de créditos de Pika.",
-  "Draft a follow-up message for the meeting below. Separate decisions from open questions, and ask me before inventing an owner or a date.\nMeeting: {meeting}\nNotes: {notes}\nTone: {tone}\nTarget length: about {words} words\nFollow-up window: {window}\nInclude an action-items table with owners and due dates: {actions}\nAlso: {extra}": "Redija uma mensagem de acompanhamento para a reunião seguinte. Separe as decisões das perguntas em aberto e pergunte-me antes de inventar um responsável ou uma data.\nReunião: {meeting}\nNotas: {notes}\nTom: {tone}\nExtensão pretendida: cerca de {words} palavras\nPrazo de acompanhamento: {window}\nInclua uma tabela de ações pendentes com responsáveis e prazos: {actions}\nAlém disso: {extra}",
   "Draft dismissed": "Rascunho descartado",
   "Draft in my voice: warm, direct, short sentences, no jargon.": "Redija com o meu estilo: cordial, direto, com frases curtas e sem jargão.",
   "Draft it": "Redigir",
@@ -5743,5 +5742,18 @@
   "⚡ Act for me": "⚡ Agir por mim",
   "✓ {0} done": "✓ {0} concluídos",
   "✨ new": "✨ novo",
-  "🔗 Read-only shared conversation — anyone with this link can view it.": "🔗 Conversa partilhada só de leitura — qualquer pessoa com esta ligação pode vê-la."
+  "🔗 Read-only shared conversation — anyone with this link can view it.": "🔗 Conversa partilhada só de leitura — qualquer pessoa com esta ligação pode vê-la.",
+  "Draft a follow-up message for the meeting below. Separate decisions from open questions, and ask me before inventing an owner or a date.\nMeeting: {meeting}\nNotes: {notes}\nTone: {tone}\nTarget length: about {words} words\nFollow-up window: {window}\nInclude an action-items table with owners and due dates: {actions}\nIt goes to: {attendees}\nAccent color if you format it as an email: {accent}\nAlso: {extra}": "Redija uma mensagem de acompanhamento para a reunião seguinte. Separe as decisões das perguntas em aberto e pergunte-me antes de inventar um responsável ou uma data.\nReunião: {meeting}\nNotas: {notes}\nTom: {tone}\nExtensão pretendida: cerca de {words} palavras\nPrazo de acompanhamento: {window}\nInclua uma tabela de ações pendentes com responsáveis e prazos: {actions}\nVai para: {attendees}\nCor de destaque se o formatar como e-mail: {accent}\nAlém disso: {extra}",
+  "Who it goes to": "Para quem vai",
+  "Accent color, if it becomes an email": "Cor de destaque, se se tornar um e-mail",
+  "navy": "azul-marinho",
+  "forest": "verde-floresta",
+  "Accent": "Destaque",
+  "Add an address": "Adicione um endereço",
+  "Frequently used": "Usados com frequência",
+  "Add {0}": "Adicionar {0}",
+  "Show fewer": "Mostrar menos",
+  "Custom colors": "Cores personalizadas",
+  "Recently used": "Usados recentemente",
+  "Use {0}": "Usar {0}"
 }

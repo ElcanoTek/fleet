@@ -70,6 +70,22 @@ the template's form in place of the rules, and **Use prompt** puts the rendered
 `promptTemplate` in the composer. A template with no form inserts a one-line
 request naming the template instead.
 
+A template's form can use the two [pickers](PROMPT-LIBRARY.md#pickers): a
+`recipients` field for who the email goes to (the addresses the person mails
+most are one click each) and a `palette` field for how it looks (the bundle's
+themes as swatches, or custom colors, with the ones used last offered first).
+Both only add a line to the prompt; the bundle's renderer is what applies and
+checks them.
+
+**Draft first.** Use prompt never sends anything: it fills the composer, and
+the person sends the message. The assistant then builds the email as a file and
+shows it. Sending is a separate `send_email` call, and in a chat every such
+call is staged on an approval card that names the recipients and waits for the
+person to choose Send ([AGENT-RUNTIME](AGENT-RUNTIME.md)). The exception is a
+conversation where the person themselves pre-approved sending. A bundle should
+still end its `promptTemplate` with the instruction to show the draft and wait,
+so the assistant does not stage a send the person did not ask for yet.
+
 **The preview is untrusted markup.** It comes from the bundle, which is trusted
 content, but it is an HTML document all the same, so it is shown in an
 `<iframe sandbox="">` via `srcdoc`: no scripts, no same-origin access, no

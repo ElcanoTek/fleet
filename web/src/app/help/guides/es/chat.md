@@ -462,7 +462,12 @@ Si tu instalación tiene correos estándar, **Más opciones** (`•••`) tamb
 
 Selecciona una plantilla para ver dos cosas, una junto a la otra: un **correo de ejemplo** creado con datos de muestra y las **secciones, en orden**, cada una con lo que debe contener y sus límites (por ejemplo, *Hasta 3 viñetas*). Debajo están las reglas de todo el correo y las expresiones que nunca usa. Las plantillas vienen con tu instalación y son de solo lectura.
 
-Elige **Usar esta plantilla**, rellena el formulario y elige **Usar instrucción**. Como con un prompt de la biblioteca, esto solo pone una petición en tu borrador; no se escribe ni se envía nada hasta que envías el mensaje, y el envío del correo sigue pidiendo tu aprobación. El asistente escribe entonces el correo según la plantilla. Un borrador que la incumple, por ser demasiado largo o añadir una sección, no se genera: el asistente recibe qué corregir y lo intenta de nuevo, de modo que el resultado se ajusta al ejemplo.
+Elige **Usar esta plantilla** y rellena el formulario. Además de las preguntas propias de la plantilla, puede pedirte a quién va el correo y qué aspecto tiene:
+
+- **Enviar a** muestra las direcciones a las que más escribes en **Usados con frecuencia**; selecciona una para añadirla, o escribe cualquier otra y elige **Añadir**. Una dirección que escribes se vuelve a ofrecer la próxima vez. Déjalo vacío para recibir tú una copia de revisión.
+- **Estilo** muestra cada aspecto con sus colores. **Colores personalizados** te deja elegir los colores de cabecera y de acento de un cliente, y **Usados recientemente** recupera los últimos aspectos que usaste, de modo que eliges los colores de un cliente una sola vez.
+
+Después elige **Usar instrucción**. Como con un prompt de la biblioteca, esto solo pone una petición en tu borrador; no se escribe ni se envía nada hasta que envías el mensaje. El asistente escribe entonces el correo según la plantilla y te muestra el borrador; no se envía hasta que lo pides, y el envío sigue pidiendo tu aprobación en una tarjeta que indica los destinatarios. Un borrador que la incumple, por ser demasiado largo o añadir una sección, no se genera: el asistente recibe qué corregir y lo intenta de nuevo, de modo que el resultado se ajusta al ejemplo.
 
 ## 10. Del chat a una tarea
 

@@ -105,3 +105,69 @@ test("an email template shows its example and rules, and its form fills the comp
     "Write this week's client optimization update for Acme CTV with the email template weekly-optimization-update.",
   );
 });
+
+test("the form picks who it goes to and how it looks, and asks for a draft", async ({ page }) => {
+  const withPickers = {
+    ...weekly,
+    fields: [
+      { key: "campaign", label: "Campaign", type: "text", required: true },
+      { key: "recipient", label: "Send to", type: "recipients", hint: "Leave empty for a review copy to yourself." },
+      {
+        key: "style",
+        label: "Style",
+        type: "palette",
+        options: ["elcano", "amazon"],
+        swatches: { elcano: ["#1A0B1E", "#6262A0"], amazon: ["#333E48", "#FF9900"] },
+        custom: ["Header", "Accent"],
+        default: "elcano",
+      },
+    ],
+    prompt_template:
+      "Write this week's update for {campaign}.\nSend to: {recipient}\nStyle: {style}\nThis is a draft: show me the preview and wait.",
+  };
+  await mockChatBoot(page);
+  await page.route("**/api/orchestrator/email-templates", (r: Route) => r.fulfill({ json: [withPickers] }));
+  await page.route("**/api/orchestrator/email-templates/weekly-optimization-update", (r: Route) =>
+    r.fulfill({ json: { ...withPickers, preview_html: weeklyPreview } }),
+  );
+  await page.route("**/api/orchestrator/tasks/recipients", (r: Route) =>
+    r.fulfill({
+      json: [
+        { email: "media@acme.com", task_count: 5, last_used: "2026-11-10T00:00:00Z" },
+        { email: "trading@elcanotek.com", task_count: 2, last_used: "2026-11-09T00:00:00Z" },
+      ],
+    }),
+  );
+
+  await page.goto("/chat");
+  await page.getByRole("heading", { name: /what can i help with/i }).waitFor({ timeout: 15_000 });
+  await page.getByRole("button", { name: "More options" }).click();
+  await page.getByRole("menuitem", { name: "Open email templates" }).click();
+  const dialog = page.getByRole("dialog", { name: "Email templates" });
+  await dialog.getByRole("button", { name: "Use this template" }).click();
+  await dialog.getByRole("textbox", { name: /^Campaign/ }).fill("Acme CTV");
+
+  // The team the person's tasks already mail is one click each; anyone else is typed.
+  const offered = dialog.getByTestId("recipient-suggestions");
+  await offered.getByRole("button", { name: "media@acme.com" }).click();
+  await dialog.getByPlaceholder("Add an address").fill("new.buyer@acme.com");
+  await dialog.getByRole("button", { name: "Add", exact: true }).click();
+  await expect(dialog.getByTestId("recipient-chosen").getByRole("listitem")).toHaveCount(2);
+
+  await dialog.getByRole("radio", { name: "amazon" }).click();
+  await dialog.getByRole("radio", { name: "Custom colors" }).click();
+  await dialog.getByLabel("Accent", { exact: true }).fill("#c2410c");
+  if (process.env.E2E_PICKER_SHOT) await page.screenshot({ path: process.env.E2E_PICKER_SHOT });
+  await dialog.getByRole("button", { name: "Use prompt" }).click();
+
+  await expect(page.getByRole("textbox").first()).toHaveValue(
+    "Write this week's update for Acme CTV.\nSend to: media@acme.com, new.buyer@acme.com\nStyle: custom (Header #1F3A5F, Accent #C2410C)\nThis is a draft: show me the preview and wait.",
+  );
+
+  // Next time, the typed address and the look are offered again.
+  await page.getByRole("button", { name: "More options" }).click();
+  await page.getByRole("menuitem", { name: "Open email templates" }).click();
+  await dialog.getByRole("button", { name: "Use this template" }).click();
+  await expect(dialog.getByTestId("recipient-suggestions").getByRole("button", { name: "new.buyer@acme.com" })).toBeVisible();
+  await expect(dialog.getByTestId("palette-recent").getByRole("button", { name: /Header #1F3A5F, Accent #C2410C/ })).toBeVisible();
+});

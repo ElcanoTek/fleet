@@ -1475,11 +1475,22 @@ belongs in it and its limits (for example *Up to 3 bullets*). Below them are the
 rules for the whole email and the phrases it never uses. Templates come with
 your deployment and are read-only.
 
-Choose **Use this template**, fill in the short form, and choose **Use
-prompt**. Like a library prompt, this
+Choose **Use this template** and fill in the short form. Besides the
+template's own questions it can ask who the email goes to and how it looks:
+
+- **Send to** lists the addresses you mail most under **Frequently used**;
+  select one to add it, or type any other address and choose **Add**. An
+  address you type is offered again next time. Leave it empty to get a review
+  copy yourself.
+- **Style** shows each look with its colors. **Custom colors** lets you pick a
+  client's header and accent colors instead, and **Recently used** brings back
+  the looks you used last, so you set a client's colors once.
+
+Then choose **Use prompt**. Like a library prompt, this
 only puts a request in your draft; nothing is written or sent until you send
-the message, and sending the email itself still asks for your approval. The
-assistant then writes the email to that template. A draft that breaks the
+the message. The assistant then writes the email to that template and shows
+you the draft; it is not sent until you say so, and sending still asks for
+your approval on a card that names the recipients. A draft that breaks the
 template, by running long or adding a section, is not built: the assistant is
 told what to fix and tries again, so what you get back fits the example.
 

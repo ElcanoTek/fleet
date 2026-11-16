@@ -6,6 +6,8 @@ import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { Icon } from "./Icon";
+import { PalettePicker } from "./PalettePicker";
+import { RecipientPicker } from "./RecipientPicker";
 import {
   asInputText,
   asText,
@@ -129,6 +131,15 @@ function Field({
         <span className="text-[0.82rem] text-[var(--color-text-secondary)]">{field.label}</span>
       </div>
     );
+  }
+
+  // The pickers hold several controls each, so they bring their own group and
+  // labels instead of sitting inside the one <label> below.
+  if (field.type === "recipients") {
+    return <RecipientPicker field={field} value={asInputText(value)} onChange={onChange} />;
+  }
+  if (field.type === "palette") {
+    return <PalettePicker field={field} value={asText(value)} onChange={onChange} />;
   }
 
   const range = (value as DateRangeValue) ?? { from: "", to: "" };

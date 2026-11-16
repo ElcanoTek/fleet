@@ -28,7 +28,8 @@ import (
 // The field schema is deliberately NOT new. It is the one the chat empty-state
 // cards already render (`empty_state.cards[].fields`, the web's PillField):
 // key, label, type, required, placeholder, hint, default, options, advanced,
-// min, over the types text / textarea / select / number / daterange / toggle.
+// min, over the types text / textarea / select / number / daterange / toggle,
+// plus the two pickers described under "Pickers" below.
 // One schema means one set of field components in the web, and a bundle author
 // who has written a card has already written a form prompt.
 //
@@ -72,6 +73,21 @@ import (
 //   - Every `{token}` in the template names a declared field, and every field
 //     is used by at least one token.
 //
+// Pickers. Two types draw a picker instead of a box, and both still yield plain
+// text for the template, so the bundle's promptTemplate decides what the
+// assistant is told to do with it:
+//
+//   - `recipients`: email addresses as chips. The picker offers the addresses
+//     the person's tasks already mail and the ones they added before, plus any
+//     `options` the bundle lists; more can be typed. The value is the addresses
+//     joined with ", ".
+//   - `palette`: one of `options`, each drawn with the colors `swatches`
+//     gives it (one to four #RRGGBB per option, every option listed). With
+//     `custom` (one to three color names, e.g. [Header, Accent]) the person
+//     may instead pick those colors themselves; the value is then
+//     "custom (Header #1F3A5F, Accent #C2410C)". The picker also offers the
+//     values that browser used last.
+//
 // Only the top-level `fields` and `promptTemplate` keys are reserved. Every
 // other key in the file (`name`, `description`, `mode`, anything the bundle
 // uses) is untouched, and Content remains the raw file.
@@ -93,19 +109,29 @@ var promptFormKeyLine = regexp.MustCompile(`(?m)^(fields|promptTemplate)\s*:`)
 
 // promptFieldTypes is the closed set of field types a form prompt may use —
 // the types the web's shared field renderer draws.
-var promptFieldTypes = []string{"text", "textarea", "select", "number", "daterange", "toggle"}
+var promptFieldTypes = []string{"text", "textarea", "select", "number", "daterange", "toggle", "recipients", "palette"}
 
 var promptFieldProperties = map[string]bool{
 	"key": true, "label": true, "type": true, "required": true,
 	"placeholder": true, "hint": true, "default": true, "options": true,
-	"advanced": true, "min": true,
+	"advanced": true, "min": true, "swatches": true, "custom": true,
 }
+
+// promptSwatchColor is the one color form a palette swatch takes: the web
+// puts it straight into a style attribute.
+var promptSwatchColor = regexp.MustCompile(`^#[0-9A-Fa-f]{6}$`)
+
+const (
+	maxPromptSwatchColors = 4
+	maxPromptCustomColors = 3
+)
 
 // PromptField is one input of a form prompt. The JSON shape is the web's
 // PillField, so the browser renders it with the same components as an
 // empty-state card field. Default carries the type's value shape: a string for
-// text/textarea/select, a number for number, a bool for toggle, and a
-// {"from","to"} object for daterange.
+// text/textarea/select/recipients/palette, a number for number, a bool for
+// toggle, and a {"from","to"} object for daterange. Swatches and Custom belong
+// to a palette field (see "Pickers" above).
 type PromptField struct {
 	Key         string   `json:"key"`
 	Label       string   `json:"label"`
@@ -117,6 +143,10 @@ type PromptField struct {
 	Options     []string `json:"options,omitempty"`
 	Advanced    bool     `json:"advanced,omitempty"`
 	Min         *float64 `json:"min,omitempty"`
+	// Swatches maps each palette option to the colors it is drawn with.
+	Swatches map[string][]string `json:"swatches,omitempty"`
+	// Custom names the colors a palette lets the person pick themselves.
+	Custom []string `json:"custom,omitempty"`
 }
 
 // ParsePromptForm reads the optional form definition out of a YAML prompt.
@@ -333,6 +363,8 @@ func parsePromptField(m map[string]any) (PromptField, []string) {
 
 	f.Options = r.options(f.Type)
 	f.Min = r.minimum(f.Type)
+	f.Swatches = r.swatches(f.Type, f.Options)
+	f.Custom = r.custom(f.Type)
 
 	if f.Type == "toggle" && f.Required {
 		r.reportf("a toggle always has a value, so it cannot be required")
@@ -354,18 +386,20 @@ func parsePromptField(m map[string]any) (PromptField, []string) {
 	return f, r.issues
 }
 
-// options reads a select's choices: strings or numbers, each non-blank and
-// listed once. They are an error on any other type, and required on a select.
+// options reads a field's choices: strings or numbers, each non-blank and
+// listed once. A select and a palette need at least one; a recipients field
+// may list addresses to suggest; they are an error on any other type.
 func (r *promptFieldReader) options(fieldType string) []string {
+	needsOptions := fieldType == "select" || fieldType == "palette"
 	raw, ok := r.value("options")
 	if !ok {
-		if fieldType == "select" {
-			r.reportf("a select field needs at least one option")
+		if needsOptions {
+			r.reportf("a %s field needs at least one option", fieldType)
 		}
 		return nil
 	}
-	if fieldType != "select" {
-		r.reportf("options only apply to a select field")
+	if !needsOptions && fieldType != "recipients" {
+		r.reportf("options only apply to a select, palette or recipients field")
 	}
 	list, isList := raw.([]any)
 	if !isList {
@@ -390,8 +424,103 @@ func (r *promptFieldReader) options(fieldType string) []string {
 			out = append(out, s)
 		}
 	}
-	if fieldType == "select" && isList && len(out) == 0 && len(list) == 0 {
-		r.reportf("a select field needs at least one option")
+	if needsOptions && isList && len(out) == 0 && len(list) == 0 {
+		r.reportf("a %s field needs at least one option", fieldType)
+	}
+	return out
+}
+
+// swatches reads a palette's colors: for every option, one to four #RRGGBB
+// values. A palette with an option it cannot draw is reported, as are swatches
+// on any other type.
+func (r *promptFieldReader) swatches(fieldType string, options []string) map[string][]string {
+	raw, ok := r.value("swatches")
+	if !ok {
+		if fieldType == "palette" {
+			r.reportf("a palette field needs swatches: the colors of each option")
+		}
+		return nil
+	}
+	if fieldType != "palette" {
+		r.reportf("swatches only apply to a palette field")
+		return nil
+	}
+	m, isMap := raw.(map[string]any)
+	if !isMap {
+		r.reportf("swatches must map each option to a list of colors")
+		return nil
+	}
+	out := make(map[string][]string, len(m))
+	names := make([]string, 0, len(m))
+	for name := range m {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		option := strings.TrimSpace(name)
+		if !slices.Contains(options, option) {
+			r.reportf("swatches names %q, which is not one of the options", option)
+			continue
+		}
+		list, isList := m[name].([]any)
+		if !isList || len(list) == 0 || len(list) > maxPromptSwatchColors {
+			r.reportf("swatches for %q must be a list of 1 to %d colors", option, maxPromptSwatchColors)
+			continue
+		}
+		colors := make([]string, 0, len(list))
+		for _, c := range list {
+			color, isString := c.(string)
+			if !isString || !promptSwatchColor.MatchString(color) {
+				r.reportf("swatches for %q: each color must be a quoted #RRGGBB value", option)
+				colors = nil
+				break
+			}
+			colors = append(colors, strings.ToUpper(color))
+		}
+		if colors != nil {
+			out[option] = colors
+		}
+	}
+	for _, option := range options {
+		if _, drawn := m[option]; !drawn {
+			r.reportf("option %q has no swatches", option)
+		}
+	}
+	return out
+}
+
+// custom reads the names of the colors a palette lets the person pick
+// themselves: one to three, non-blank, listed once.
+func (r *promptFieldReader) custom(fieldType string) []string {
+	raw, ok := r.value("custom")
+	if !ok {
+		return nil
+	}
+	if fieldType != "palette" {
+		r.reportf("custom only applies to a palette field")
+		return nil
+	}
+	list, isList := raw.([]any)
+	if !isList || len(list) == 0 || len(list) > maxPromptCustomColors {
+		r.reportf("custom must be a list of 1 to %d color names", maxPromptCustomColors)
+		return nil
+	}
+	var out []string
+	for _, item := range list {
+		name, isString := item.(string)
+		name = strings.TrimSpace(name)
+		switch {
+		case !isString || name == "":
+			r.reportf("custom color names must be non-blank text")
+		// The value is written "custom (Name #RRGGBB, ...)", so a name may not
+		// carry the characters that delimit it.
+		case strings.ContainsAny(name, "#,()"):
+			r.reportf("custom color name %q must not contain #, a comma or parentheses", name)
+		case slices.Contains(out, name):
+			r.reportf("custom color name %q is listed twice", name)
+		default:
+			out = append(out, name)
+		}
 	}
 	return out
 }
@@ -416,13 +545,13 @@ func (r *promptFieldReader) minimum(fieldType string) *float64 {
 // in the shape the web's form state expects (see PromptField).
 func promptFieldDefault(f PromptField, v any) (any, string) {
 	switch f.Type {
-	case "text", "textarea":
+	case "text", "textarea", "recipients":
 		s, ok := yamlScalarText(v)
 		if !ok {
 			return nil, "default must be a string"
 		}
 		return s, ""
-	case "select":
+	case "select", "palette":
 		s, ok := yamlScalarText(v)
 		if !ok {
 			return nil, "default must be one of the options"
