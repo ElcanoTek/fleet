@@ -90,6 +90,13 @@ silences that offer for boxes that deliberately run without it (see
 enabled, active, and that its last run succeeded — the same posture it applies
 to the backup timer.
 
+A run that fires while the fleet service is down (stopped, or never started on
+a fresh box) skips the podman prune and exits 0: podman's runtime dir
+`/run/fleet` exists only while `fleet.service` runs, and the maintenance unit
+cannot create it. The journal says so ("podman runtime dir /run/fleet does not
+exist ... Skipping image cleanup"), the unit records success, and the next
+daily run retries. A prune that runs and fails still fails the unit.
+
 `fleet cleanup --deep` additionally prunes unused *named* images and is
 deliberately left to a human: on a stopped box it can remove the sandbox image
 itself and force a rebuild on the next deploy.
