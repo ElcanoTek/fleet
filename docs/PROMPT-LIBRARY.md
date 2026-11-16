@@ -202,26 +202,69 @@ the manifest) already use, and is drawn by the same components:
 | --- | --- |
 | `key` | Required. Letters, digits and underscores, unique in the form; `{key}` in the template names it. |
 | `label` | Required. The field's label. |
-| `type` | Required. `text`, `textarea`, `select`, `number`, `daterange` or `toggle`. |
+| `type` | Required. `text`, `textarea`, `select`, `number`, `daterange`, `toggle`, or one of the two [pickers](#pickers), `recipients` and `palette`. |
 | `required` | `true` disables **Use prompt** until the field is filled (a daterange needs both dates). Not allowed on a toggle, or together with `advanced`. |
 | `placeholder` | Example text shown in an empty text or textarea box. Not allowed on other types, which do not draw one. |
 | `hint` | Help text under the input. Not allowed on a toggle, which does not show one. |
-| `default` | The starting value: a string for text and textarea, one of `options` for a select (otherwise the first option is preselected), a finite number for a number (otherwise the field starts empty), `true`/`false` for a toggle (otherwise off), and `{from, to}` YYYY-MM-DD dates for a daterange. |
-| `options` | A select's choices (strings or numbers, trimmed, each listed once). Required on a select, not allowed elsewhere. |
+| `default` | The starting value: a string for text and textarea, email addresses separated by commas for recipients, one of `options` for a palette, one of `options` for a select (otherwise the first option is preselected), a finite number for a number (otherwise the field starts empty), `true`/`false` for a toggle (otherwise off), and `{from, to}` YYYY-MM-DD dates for a daterange. |
+| `options` | The choices of a select or a palette (strings or numbers, trimmed, each listed once), required on both. On a recipients field, optional email addresses to suggest. Not allowed elsewhere. |
 | `advanced` | `true` tucks the field under a collapsed **More options** toggle, which summarises the current values while closed. Use it for optional fields. |
 | `min` | A number field's minimum. |
+| `swatches` | Palette only, required: for every option, the one to four `"#RRGGBB"` colors it is drawn with. |
+| `custom` | Palette only, optional: one to three color names (for example `[Header, Accent]`) the person may pick themselves instead of an option. |
+
+### Pickers
+
+Two types draw a picker instead of a box. Both still give the template plain
+text, so the bundle's `promptTemplate` decides what the assistant does with it.
+
+**`recipients`** collects email addresses as chips. Under the box it offers,
+most useful first: the addresses the field lists in `options`, the addresses
+the person's own tasks already mail (`GET /tasks/recipients`), and the ones
+they typed into a recipients picker in this browser before. Anything else can
+be typed; an address that is not one is refused. The value is the addresses
+joined with `, `, and an empty picker is a blank field, so its line drops.
+
+**`palette`** is a select drawn as color swatches: each option shows the colors
+`swatches` gives it. With `custom`, a **Custom colors** choice opens one color
+well per name, and the value becomes `custom (Header #1F3A5F, Accent #C2410C)`.
+The picker also lists the values this browser used last for a field of the
+same `key` (**Recently used**, up to four), so a client's colors are picked once.
+Fleet does not know what the colors are for: say it in the template, for
+example `Style: {style} (a theme name, or custom header and accent colors)`.
+
+```yaml
+fields:
+  - {key: to, label: Send to, type: recipients, hint: Leave empty for a copy to yourself.}
+  - key: style
+    label: Style
+    type: palette
+    options: [brand, plain]
+    swatches: {brand: ["#1A0B1E", "#6262A0"], plain: ["#333E48"]}
+    custom: [Header, Accent]
+promptTemplate: |-
+  Draft the update.
+  Send to: {to}
+  Style: {style}
+```
+
+What a picker remembers (typed addresses, recent palette values) is a
+convenience kept in the browser's local storage, under the signed-in account's
+email, so someone else signing in on the same browser is not offered it. It is
+recorded when **Use prompt** is chosen, is not sent to the server, and does not
+follow the person to another device.
 
 ### How the prompt is rendered
 
 The template is rendered with the cards' interpolation — a select, text,
-textarea or number gives its trimmed value, a daterange gives `from → to` (`?`
+textarea, number, recipients or palette gives its trimmed value, a daterange gives `from → to` (`?`
 for a missing end), a toggle gives `yes` or `no` — plus one rule the cards do not use: **a template
 line whose tokens were all left blank is dropped**. An optional field the user
 skipped therefore vanishes instead of leaving `Deals: {deals}` behind. A line
 with at least one answered token, or with no token at all, is kept, and a blank
 token on a kept line stays as written. So put each optional field on a line of
-its own. Only a text, textarea, number or daterange field can be left blank: a
-select always has one of its options chosen and a toggle is always yes or no, so
+its own. Only a text, textarea, number, daterange or recipients field can be left blank: a
+select or palette always has a value and a toggle is always yes or no, so
 their lines are always kept. (Unlike a card, a library form starts a number with
 no `default` empty rather than at 0, so an untouched optional number is dropped
 too.) If every line of a template holds only optional fields, the form renders

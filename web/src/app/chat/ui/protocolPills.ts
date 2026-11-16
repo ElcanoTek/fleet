@@ -22,7 +22,19 @@ import { t as tr } from "@/app/lib/i18n";
 //   • Conversation pills (optionalForm) — chat-first; an OPTIONAL form can
 //     point the assistant at specifics, but skipping it just starts the intake.
 
-export type PillFieldType = "text" | "textarea" | "select" | "number" | "daterange" | "toggle";
+// `recipients` and `palette` are pickers (FormFields draws them); both hold a
+// plain string, so the template and the helpers below treat them as text:
+// addresses joined with ", ", and either a palette option or
+// "custom (Name #RRGGBB, …)" (see shared/lib/formPickers.ts).
+export type PillFieldType =
+  | "text"
+  | "textarea"
+  | "select"
+  | "number"
+  | "daterange"
+  | "toggle"
+  | "recipients"
+  | "palette";
 
 export type DateRangeValue = { from: string; to: string };
 
@@ -37,8 +49,14 @@ export interface PillField {
   /** Pre-filled value. Forms are a guide, not a gate — defaults stand in for
    *  anything the user skips. */
   default?: PillFieldValue;
-  /** Options for `select`. */
+  /** Choices of a `select` or `palette`; suggested addresses of `recipients`. */
   options?: string[];
+  /** `palette`: the colors (#RRGGBB) each option is drawn with. */
+  swatches?: Record<string, string[]>;
+  /** `palette`: names of the colors the person may pick themselves. */
+  custom?: string[];
+  /** Translated display names for `custom`; the value keeps the originals. */
+  customLabels?: Record<string, string>;
   /** Translated display labels supplied by a client bundle; values stay stable. */
   optionLabels?: Record<string, string>;
   /** Tuck the field under the "Advanced" disclosure. */
@@ -135,7 +153,7 @@ export function formInitialValues(pill: PillFormShape): PillValues {
       out[f.key] = { from: "", to: "" };
     } else if (f.type === "toggle") {
       out[f.key] = false;
-    } else if (f.type === "select") {
+    } else if (f.type === "select" || f.type === "palette") {
       out[f.key] = f.options?.[0] ?? "";
     } else if (f.type === "number") {
       out[f.key] = f.min ?? 0;

@@ -13,6 +13,7 @@ import {
   type PillValues,
 } from "@/app/chat/ui/protocolPills";
 import type { PromptLibraryItem } from "@/app/shared/lib/orchestratorApi";
+import { rememberPickerValues } from "@/app/shared/lib/formPickers";
 
 // A Prompt Library FORM prompt: a Git YAML prompt that declares `fields` and a
 // `promptTemplate` (docs/PROMPT-LIBRARY.md, "Form prompts"). Selecting one in
@@ -139,7 +140,12 @@ export function PromptLibraryForm({
             type="button"
             className="btn btn-primary"
             disabled={!ready}
-            onClick={() => ready && onUse(rendered)}
+            onClick={() => {
+              if (!ready) return;
+              // So the next form offers these recipients and this style again.
+              rememberPickerValues(prompt.fields, values);
+              onUse(rendered);
+            }}
           >
             <Icon name="arrow-up" className="mr-1.5 size-3.5 rotate-90" />
             {tr("Use prompt")}

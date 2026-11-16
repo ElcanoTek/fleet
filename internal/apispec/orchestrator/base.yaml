@@ -270,14 +270,19 @@ components:
       type: object
       description: >
         One input of a form prompt. The same shape as an empty-state card field.
-        default takes the type's value shape: a string for text, textarea and
-        select (one of options), a number for number, a boolean for toggle, and
-        an object with from/to YYYY-MM-DD strings for daterange.
+        default takes the type's value shape: a string for text, textarea,
+        recipients, select and palette (the last two one of options), a number
+        for number, a boolean for toggle, and an object with from/to YYYY-MM-DD
+        strings for daterange. recipients and palette are pickers: recipients
+        collects email addresses (options are addresses to suggest) and yields
+        them joined with ", "; palette offers options drawn with their swatches
+        and, with custom, colors the person picks themselves, yielding an
+        option or "custom (Name #RRGGBB, ...)".
       required: [key, label, type]
       properties:
         key: { type: string, pattern: "^\\w+$" }
         label: { type: string }
-        type: { type: string, enum: [text, textarea, select, number, daterange, toggle] }
+        type: { type: string, enum: [text, textarea, select, number, daterange, toggle, recipients, palette] }
         required: { type: boolean }
         placeholder: { type: string }
         hint: { type: string }
@@ -285,6 +290,14 @@ components:
         options: { type: array, items: { type: string } }
         advanced: { type: boolean }
         min: { type: number }
+        swatches:
+          type: object
+          description: "palette only: the #RRGGBB colors (1 to 4) each option is drawn with."
+          additionalProperties: { type: array, items: { type: string } }
+        custom:
+          type: array
+          description: "palette only: names of the colors (1 to 3) the person may pick themselves."
+          items: { type: string }
     ErrorResponse:
       type: object
       properties:

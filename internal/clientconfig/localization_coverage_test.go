@@ -94,6 +94,7 @@ func readDefaultLocalizationSources(t *testing.T, root string, add func(...strin
 		for _, field := range prompt.Fields {
 			add(field.Label, field.Placeholder, field.Hint)
 			add(field.Options...)
+			add(field.Custom...)
 		}
 	}
 }

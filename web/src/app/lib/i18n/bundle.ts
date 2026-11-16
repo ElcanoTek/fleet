@@ -9,6 +9,7 @@ export function localizeField(field: PillField): PillField {
     ...(field.placeholder ? { placeholder: bundleText(field.placeholder) } : {}),
     ...(field.hint ? { hint: bundleText(field.hint) } : {}),
     ...(field.options ? { optionLabels: Object.fromEntries(field.options.map((option) => [option, bundleText(option)])) } : {}),
+    ...(field.custom ? { customLabels: Object.fromEntries(field.custom.map((name) => [name, bundleText(name)])) } : {}),
     // Text defaults are draft prose. Select values, dates, numbers and boolean
     // defaults retain their exact machine meaning.
     ...((field.type === "text" || field.type === "textarea") && typeof field.default === "string"

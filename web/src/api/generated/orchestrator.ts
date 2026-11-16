@@ -3472,12 +3472,12 @@ export interface components {
                 [key: string]: number;
             };
         };
-        /** @description One input of a form prompt. The same shape as an empty-state card field. default takes the type's value shape: a string for text, textarea and select (one of options), a number for number, a boolean for toggle, and an object with from/to YYYY-MM-DD strings for daterange. */
+        /** @description One input of a form prompt. The same shape as an empty-state card field. default takes the type's value shape: a string for text, textarea, recipients, select and palette (the last two one of options), a number for number, a boolean for toggle, and an object with from/to YYYY-MM-DD strings for daterange. recipients and palette are pickers: recipients collects email addresses (options are addresses to suggest) and yields them joined with ", "; palette offers options drawn with their swatches and, with custom, colors the person picks themselves, yielding an option or "custom (Name #RRGGBB, ...)". */
         PromptField: {
             key: string;
             label: string;
             /** @enum {string} */
-            type: "text" | "textarea" | "select" | "number" | "daterange" | "toggle";
+            type: "text" | "textarea" | "select" | "number" | "daterange" | "toggle" | "recipients" | "palette";
             required?: boolean;
             placeholder?: string;
             hint?: string;
@@ -3485,6 +3485,12 @@ export interface components {
             options?: string[];
             advanced?: boolean;
             min?: number;
+            /** @description palette only: the #RRGGBB colors (1 to 4) each option is drawn with. */
+            swatches?: {
+                [key: string]: string[];
+            };
+            /** @description palette only: names of the colors (1 to 3) the person may pick themselves. */
+            custom?: string[];
         };
         ErrorResponse: {
             /** @description Human-readable error message (the handler's writeError body). */

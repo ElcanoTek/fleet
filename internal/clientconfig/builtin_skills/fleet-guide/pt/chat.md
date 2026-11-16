@@ -462,7 +462,12 @@ Se a sua instalação tiver e-mails padrão, **Mais opções** (`•••`) mos
 
 Selecione um modelo para ver duas coisas lado a lado: um **e-mail de exemplo** criado com dados de amostra e as **secções, por ordem**, cada uma com o que deve conter e os seus limites (por exemplo, *Até 3 marcadores*). Por baixo estão as regras do e-mail inteiro e as expressões que nunca usa. Os modelos vêm com a sua instalação e são só de leitura.
 
-Escolha **Usar este modelo**, preencha o formulário e escolha **Usar instrução**. Tal como um prompt da biblioteca, isto apenas coloca um pedido no seu rascunho; nada é escrito nem enviado até enviar a mensagem, e o envio do e-mail continua a pedir a sua aprovação. O assistente escreve então o e-mail de acordo com o modelo. Um rascunho que não o cumpra, por ser demasiado longo ou acrescentar uma secção, não é gerado: o assistente é informado do que corrigir e tenta de novo, pelo que o resultado corresponde ao exemplo.
+Escolha **Usar este modelo** e preencha o formulário. Além das perguntas próprias do modelo, este pode perguntar para quem vai o e-mail e que aspeto tem:
+
+- **Enviar para** mostra os endereços para os quais mais escreve em **Usados com frequência**; selecione um para o adicionar, ou escreva qualquer outro e escolha **Adicionar**. Um endereço que escreva volta a ser sugerido da próxima vez. Deixe vazio para receber uma cópia de revisão.
+- **Estilo** mostra cada aspeto com as suas cores. **Cores personalizadas** permite escolher as cores de cabeçalho e de destaque de um cliente, e **Usados recentemente** recupera os últimos aspetos que usou, pelo que escolhe as cores de um cliente uma única vez.
+
+Depois escolha **Usar instrução**. Tal como um prompt da biblioteca, isto apenas coloca um pedido no seu rascunho; nada é escrito nem enviado até enviar a mensagem. O assistente escreve então o e-mail de acordo com o modelo e mostra-lhe o rascunho; não é enviado até o pedir, e o envio continua a pedir a sua aprovação num cartão que indica os destinatários. Um rascunho que não o cumpra, por ser demasiado longo ou acrescentar uma secção, não é gerado: o assistente é informado do que corrigir e tenta de novo, pelo que o resultado corresponde ao exemplo.
 
 ## 10. Do chat para uma tarefa
 
