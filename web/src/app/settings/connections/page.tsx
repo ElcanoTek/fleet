@@ -3383,17 +3383,23 @@ function ConnectionsPageInner() {
                             onClick={() => selectDirectoryCategory(cat.slug)}
                             className="flex flex-col items-start gap-1.5 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-1)] p-3 text-left transition hover:border-[var(--color-border-strong)] hover:bg-[var(--color-overlay-soft)]"
                           >
-                            <div className="flex w-full items-start justify-between gap-2">
-                              <span className="inline-flex min-w-0 items-start gap-2 text-[0.8125rem] font-semibold text-[var(--color-text-primary)]">
+                            {/* The name keeps at least the width of its longest
+                                word (min-w-min), so a word is never split to
+                                make room for the count: when the two do not
+                                fit side by side the count drops to its own
+                                line instead. Otherwise the name takes the
+                                rest of the row and wraps between words. */}
+                            <div className="flex w-full flex-wrap items-start justify-between gap-x-2 gap-y-1">
+                              <span className="inline-flex min-w-min flex-[1_1_0] items-start gap-2 text-[0.8125rem] font-semibold text-[var(--color-text-primary)]">
                                 <span className="inline-flex size-6 shrink-0 items-center justify-center rounded-[var(--radius-sm)] bg-[var(--color-overlay-soft)] text-[var(--color-text-secondary)]">
                                   <Icon
                                     name={categoryIcon(cat.slug)}
                                     className="size-[0.85rem]"
                                   />
                                 </span>
-                                <span className="min-w-0 pt-[0.12rem] [overflow-wrap:break-word]">{cat.label}</span>
+                                <span className="min-w-0 pt-[0.12rem]">{cat.label}</span>
                               </span>
-                              <span className="shrink-0 pt-[0.08rem]">
+                              <span className="ml-auto shrink-0 pt-[0.08rem]">
                                 <ConnBadge>{cat.count}</ConnBadge>
                               </span>
                             </div>

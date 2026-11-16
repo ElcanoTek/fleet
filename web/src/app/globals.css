@@ -2558,10 +2558,15 @@ button {
   letter-spacing: 0.08em;
   color: var(--color-text-muted);
   font-weight: 500;
-  /* Beside the dot it may shrink, and a word longer than the card breaks
-     rather than being cut off by the card's edge. */
+  /* Beside the dot it may shrink and wrap between words. A word is split
+     only when it is wider than the card itself: the title may run into the
+     card's right padding (the negative margin), which is the room one long
+     word needs ("COMPLETADAS" in a 154px card), and only past that does the
+     inherited break-word step in. It used to be `anywhere`, which let the
+     title be narrower than its longest word and split it ("COMPLETAD / AS")
+     wherever a card was under about 155px wide. */
   min-width: 0;
-  overflow-wrap: anywhere;
+  margin-right: -0.9rem;
 }
 .stat-card-val {
   font-size: 2.1rem;
@@ -2660,8 +2665,7 @@ button {
   /* A three-up tile is about 110px wide at 390px. The dot stays beside the
      title, so the tile's side padding, the dot, its gap and the title's size
      are all trimmed until the longest single word ("COMPLETADAS") fits beside
-     it down to 375px; narrower than that it breaks rather than run past the
-     tile's edge. */
+     it down to 375px; narrower than that the row goes two-up (below). */
   .stat-card-head {
     gap: 0.25rem;
     margin-bottom: 0.45rem;
@@ -2672,13 +2676,21 @@ button {
   }
   .stat-card-title {
     min-width: 0;
+    margin-right: -0.3rem;
     font-size: 0.6rem;
     letter-spacing: 0.02em;
     line-height: 1.25;
-    overflow-wrap: anywhere;
   }
   .stat-card-val {
     font-size: 1.6rem;
+  }
+}
+/* Below 375px a three-up tile is too narrow for the longest title word in
+   any language we ship, so the six cards go two-up there (as the four-card
+   row already is) rather than split a word. */
+@media (max-width: 374px) {
+  .stats-bar-agents {
+    grid-template-columns: repeat(2, 1fr);
   }
 }
 

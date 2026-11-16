@@ -63,4 +63,26 @@ describe("layout defaults for long values", () => {
     // A word longer than its line may break; text that fits is unchanged.
     expect(inBase).toContain(":where(html) { overflow-wrap: break-word }");
   });
+
+  // A title made of ordinary, translated words may wrap between words but must
+  // not be allowed to break inside one: `anywhere` (and break-all) lets the
+  // box become narrower than its longest word, which split "COMPLETADAS HOY"
+  // into "COMPLETAD / AS HOY" on every stat card under about 155px wide. The
+  // inherited break-word default already covers a word wider than its card.
+  it("does not let label titles break inside a word", () => {
+    const LABELS = [".stat-card-title"];
+    const offenders: string[] = [];
+    root.walkRules((rule) => {
+      if (!rule.selectors.some((sel) => LABELS.some((label) => sel.trim().endsWith(label)))) return;
+      rule.walkDecls((d) => {
+        if (
+          (d.prop === "overflow-wrap" && d.value === "anywhere") ||
+          (d.prop === "word-break" && d.value !== "normal")
+        ) {
+          offenders.push(`${rule.selector} { ${d.prop}: ${d.value} } (line ${d.source?.start?.line ?? "?"})`);
+        }
+      });
+    });
+    expect(offenders).toEqual([]);
+  });
 });
