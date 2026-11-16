@@ -63,7 +63,7 @@ Dos tipos de filas muestran menos de cuatro. Mientras una ejecución está **en 
 
 ### Cómo encontrar cosas
 
-El tablero filtra por **Estado** y **Creado por**. Para ver los trabajos en espera de ejecución, elige **programadas** en **Estado**: trabajos únicos previstos para más adelante, la siguiente ejecución de cada trabajo recurrente y trabajos que esperan un webhook o una condición en lugar de una hora.
+El tablero filtra por **Estado** y **Creado por**. Para ver los trabajos en espera de ejecución, elige **programado** en **Estado**: trabajos únicos previstos para más adelante, la siguiente ejecución de cada trabajo recurrente y trabajos que esperan un webhook o una condición en lugar de una hora.
 
 El cuadro de búsqueda busca cada palabra que escribas por separado y en cualquier orden, por lo que `sales weekly` encuentra «Weekly sales report». Una palabra puede aparecer en el título, el prompt, la descripción de la tarea, una etiqueta, el nombre del creador o el ID (bastan los primeros caracteres); cada palabra tiene que coincidir en algún lugar. Se usan hasta ocho palabras; se ignora todo lo que venga después de la octava. Pon las palabras entre comillas dobles, como `"daily deal"`, para buscarlas como una sola frase en ese orden. La búsqueda abarca las tareas que el tablero puede mostrarte y se combina con los demás filtros; si falta una tarea que esperabas encontrar, comprueba primero **Estado** y las etiquetas o pulsa **Borrar filtros**.
 

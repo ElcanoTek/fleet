@@ -144,6 +144,9 @@ export default function PromptsPage() {
     setError(null);
     setNotice(null);
     if (scope === "deployment") setScope("all");
+    // A copy is a new item whichever one it came from, so the form's id does
+    // not change when one is already open: move the cursor here.
+    firstFieldRef.current?.focus();
     setDraft({
       id: "",
       name:
@@ -330,8 +333,11 @@ export default function PromptsPage() {
                     />
                     <span>{tr("Share with this workspace")}</span>
                   </label>
+                  {/* ml-auto: when it does not fit beside "Share with this
+                      workspace" it drops to its own line and stays at the
+                      right edge, where the buttons are once the hint goes. */}
                   <FormActions
-                    className="min-w-0 max-sm:w-full"
+                    className="ml-auto min-w-0 max-sm:w-full"
                     hint={
                         <MissingFieldsHint
                           id="promptMissing"

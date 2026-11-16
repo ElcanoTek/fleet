@@ -50,8 +50,8 @@ import {
 
 // Models sometimes paste a full <!DOCTYPE html>…</html> document directly
 // into prose instead of wrapping it in a ```html fence (which the system
-// prompt explicitly tells them to do). ReactMarkdown is configured with
-// only remarkGfm — no rehype-raw — so block-level HTML is silently
+// prompt explicitly tells them to do). ReactMarkdown is configured
+// without rehype-raw, so block-level HTML is silently
 // dropped, and the user sees a mysterious gap with no preview and no
 // source to copy. Auto-wrap any unfenced HTML document in a ```html
 // fence so the existing InlineHtmlPreview mounts a sandboxed iframe.

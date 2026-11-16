@@ -410,7 +410,9 @@ function ProvidersAdmin() {
   const [providers, setProviders] = useState<LLMProvider[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
-  const firstFieldRef = useFocusOnOpen<HTMLInputElement>(draft !== null, draft?.id ?? null);
+  // The first field a person can type in: Name on a new provider, Type on an
+  // existing one (its name is fixed, and a disabled field cannot take focus).
+  const firstFieldRef = useFocusOnOpen<HTMLElement>(draft !== null, draft?.id ?? null);
   const [busy, setBusy] = useState(false);
   // Catch-all confirmation: an enabled provider with no models listed can
   // hijack every unmatched slug, so Save arms on the first click and fires on
@@ -645,7 +647,9 @@ function ProvidersAdmin() {
               >
                 <input
                   id="providerName"
-                  ref={firstFieldRef}
+                  ref={(el) => {
+                    if (draft.id === "") firstFieldRef.current = el;
+                  }}
                   value={draft.name}
                   onChange={(e) => setDraft({ ...draft, name: e.target.value })}
                   placeholder="my-provider"
@@ -659,6 +663,9 @@ function ProvidersAdmin() {
                 <span className="select-wrap block">
                   <select
                     id="providerType"
+                    ref={(el) => {
+                      if (draft.id !== "") firstFieldRef.current = el;
+                    }}
                     value={draft.type}
                     // A new row's window belongs to the type it was typed for
                     // (Ollama's is the server's num_ctx), so a type change

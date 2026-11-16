@@ -279,6 +279,70 @@ describe("ReplyMoreActions", () => {
     expect(toggle).toHaveFocus();
   });
 
+  // Closing without a key: the transcript scrolls under the open menu. Focus
+  // was on one of its items and must not fall to <body> with them.
+  it("hands focus back to its button when the transcript scrolls the menu shut", () => {
+    narrowScreen(true);
+    render(
+      <section data-testid="transcript">
+        <ReplyMoreActions>
+          <button type="button" className="reply-action">Branch</button>
+        </ReplyMoreActions>
+      </section>,
+    );
+    const toggle = screen.getByRole("button", { name: "More actions" });
+    fireEvent.click(toggle);
+    screen.getByRole("button", { name: "Branch" }).focus();
+    fireEvent.scroll(screen.getByTestId("transcript"));
+    expect(screen.getByTestId("reply-more-menu")).not.toBeVisible();
+    expect(toggle).toHaveFocus();
+  });
+
+  // Off a phone the actions fold into the menu only while the row cannot hold
+  // them, and come back inline once it is as wide as they needed. jsdom lays
+  // nothing out, so the row's widths are stubbed.
+  it("on a desktop, folds the actions when the row overflows and unfolds when it is wide enough again", () => {
+    narrowScreen(false);
+    let rowWidth = 300;
+    const client = vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(() => rowWidth);
+    const scroll = vi.spyOn(HTMLElement.prototype, "scrollWidth", "get").mockReturnValue(520);
+    const resized: Array<() => void> = [];
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(cb: () => void) {
+          resized.push(cb);
+        }
+        observe() {}
+        disconnect() {}
+      },
+    );
+    try {
+      render(
+        <div className="reply-actions">
+          <ReplyMoreActions>
+            <button type="button" className="reply-action">Branch</button>
+          </ReplyMoreActions>
+        </div>,
+      );
+      // 520px of actions in a 300px row: folded behind the menu button.
+      expect(screen.getByRole("button", { name: "More actions" })).toBeVisible();
+      // Still too narrow at 400px.
+      rowWidth = 400;
+      act(() => resized.forEach((cb) => cb()));
+      expect(screen.getByRole("button", { name: "More actions" })).toBeVisible();
+      // Wide enough for what they needed: inline again.
+      rowWidth = 560;
+      act(() => resized.forEach((cb) => cb()));
+      expect(screen.queryByRole("button", { name: "More actions" })).toBeNull();
+      expect(screen.getByRole("button", { name: "Branch" })).toBeVisible();
+    } finally {
+      client.mockRestore();
+      scroll.mockRestore();
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("keeps Escape to itself while open", () => {
     narrowScreen(true);
     const pageShortcut = vi.fn();

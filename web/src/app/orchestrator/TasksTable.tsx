@@ -523,7 +523,7 @@ export function TasksTable({
       </Table>
       </div>
 
-      {/* Phone card view: the 8-column table needs sideways scrolling on a
+      {/* Phone card view: the task table needs sideways scrolling on a
           phone, so <=720px renders each task as a stacked card instead. CSS
           toggles .tasks-table-wrapper/.task-cards; both share onOpenLogs.
           Created time + creator are deliberately omitted here — the log

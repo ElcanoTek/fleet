@@ -2677,9 +2677,13 @@ button {
   .stat-card-title {
     min-width: 0;
     margin-right: -0.3rem;
+    line-height: 1.25;
+  }
+  /* Only the three-up row needs the smaller title; the four-card row is
+     two-up here and has room for the usual size. */
+  .stats-bar-agents .stat-card-title {
     font-size: 0.6rem;
     letter-spacing: 0.02em;
-    line-height: 1.25;
   }
   .stat-card-val {
     font-size: 1.6rem;

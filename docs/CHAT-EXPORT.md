@@ -57,7 +57,10 @@ untrusted:
   comment), which would silently delete content — an assistant reply explaining
   a `<div>` would export with the explanation missing. A small custom node
   renderer instead writes those nodes as **escaped, visible text**, which is
-  faithful to what the reader saw and exactly as inert.
+  faithful to what the reader saw and exactly as inert. One difference from
+  the app: there, a `<br>` that stands between two pieces of content inside a
+  table cell is drawn as a line break (the chat's only raw-HTML exception);
+  the export shows that tag as text like any other.
 - Everything outside the Markdown renderer — the title, model, persona, tool
   names, tool JSON, tool output — goes through `html.EscapeString`. There is no
   template execution and no `template.HTML` conversion in the renderer.

@@ -443,11 +443,11 @@ your eye lands on the answer and then on anything that needs you:
 | Interactive cards | A form, picker, checklist, comparison, chart or small calculator the assistant built for this answer. Fill it in and press its button; your answers go back as your next message. See [Interactive cards](#interactive-cards). |
 | Status | Banners for anything unusual about the turn: retrying, cancelled, failed. See [When a turn goes wrong](#11-when-a-turn-goes-wrong). |
 | Cards | Anything asking for your decision: an approval, a proposed memory, a suggested model switch. See [Cards that ask for a decision](#6-cards-that-ask-for-a-decision). |
-| Footer | The actions on a finished reply: **Copy**, **Regenerate** and **Retry with** the stronger model (both under the latest reply only; **Retry with** when the chat is not already on it and no switch card is waiting, since the card offers the same), **Branch**, **Save as workflow**, and **Save to memory** (the answer, as a memory). On a phone, or in a window too narrow to show them all on one line, **Copy** and **Regenerate** stay in view and the rest open from the **⋯** (more actions) button beside them, each with a line saying what it does. Each is covered where it belongs later in the guide. |
+| Footer | The actions on a finished reply: **Copy**, **Regenerate** and **Retry with** the stronger model (both under the latest reply only; **Retry with** when the chat is not already on it and no switch card is waiting, since the card offers the same), **Branch**, **Save as workflow**, and **Save to memory** (the answer, as a memory). On a phone, or in a window too narrow to show them all on one line, **Copy** and **Regenerate** stay in view and the rest open from the **•••** (more actions) button beside them, each with a line saying what it does. Each is covered where it belongs later in the guide. |
 
 Long conversations collapse their older turns behind **Show N earlier turns**,
 and a minimap along the edge lets you jump between messages (it is hidden in
-Dashboard view).
+dashboard view).
 
 ### The composer
 

@@ -368,6 +368,9 @@ export default function SkillsPage() {
       .then((d) => {
         const existing = mine?.find((m) => m.name === (d.name || s.name));
         const body = (d.body ?? d.content.replace(/^---[\s\S]*?---\s*/, "")).trim();
+        // Loading another skill into a form that is already open may leave
+        // the form's id unchanged (two copies are both new): move the cursor.
+        firstFieldRef.current?.focus();
         setDraft({
           id: existing?.id ?? "",
           name: d.name || s.name,

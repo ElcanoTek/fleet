@@ -124,6 +124,46 @@ export type FollowBottomInput = {
   afterOwnFollow?: boolean;
 };
 
+/** Where a reader who counts as "at the end" was last seen, to measure their scrolling against. */
+export type PinAnchor = { top: number; distance: number };
+
+/**
+ * trackPin keeps "is the reader at the end" up to date from one scroll event:
+ * the position (`top`) and how far it is from the end (`distance`). Pure, so
+ * the cases can be written down as a table (stickToBottom.test.ts).
+ *
+ * The reader has left the end when they are both higher up AND further from
+ * the end than the anchor: the place they were last known to be level with
+ * it. Measuring against that place, not against the previous event, is the
+ * point. A slow scroll (a trackpad, a finger) arrives as many events of a
+ * pixel or less, none of which is a "move" on its own, so comparing event to
+ * event never noticed it and the reader was pulled back to the end by the
+ * next re-measurement.
+ *
+ * Other things move the numbers too, and none of them is the reader leaving:
+ *  - our own follows and the reader scrolling down: the position only goes
+ *    down, and the anchor goes with it;
+ *  - new content below: the distance grows but the position does not move;
+ *  - a row above changing height: the position shifts and the distance stays.
+ */
+export function trackPin(
+  pinned: boolean,
+  anchor: PinAnchor | null,
+  top: number,
+  distance: number,
+): { pinned: boolean; anchor: PinAnchor | null } {
+  if (distance <= FOLLOW_BOTTOM_EPSILON_PX) return { pinned: true, anchor: { top, distance } };
+  if (!pinned) return { pinned: false, anchor: null };
+  // Pinned by the app (a send, Jump to latest, another conversation): start
+  // measuring from wherever they are when the first event arrives.
+  if (!anchor) return { pinned: true, anchor: { top, distance } };
+  if (top < anchor.top - 1 && distance > anchor.distance + 1) return { pinned: false, anchor: null };
+  if (top >= anchor.top) return { pinned: true, anchor: { top, distance } };
+  // Higher up but no further from the end: content above changed height.
+  if (Math.abs(distance - anchor.distance) <= 0.5) return { pinned: true, anchor: { top, distance: anchor.distance } };
+  return { pinned: true, anchor };
+}
+
 /**
  * decideFollowBottom is the whole policy, as a pure function of numbers — so
  * it can be tested without a layout engine (jsdom performs none).
@@ -323,7 +363,7 @@ export function useStickToBottom({
   // (record only — nothing is scheduled from the handler) because distance
   // alone cannot tell "scrolled up" from "the end moved away".
   const pinnedRef = useRef(true);
-  const lastScrollRef = useRef<{ top: number; distance: number } | null>(null);
+  const pinAnchorRef = useRef<PinAnchor | null>(null);
   const listenedRef = useRef<HTMLElement | null>(null);
   const onScrollRef = useRef<() => void>(() => {});
   const conversationKeyRef = useRef(conversationKey);
@@ -343,14 +383,14 @@ export function useStickToBottom({
   useEffect(() => {
     const pin = () => {
       pinnedRef.current = true;
-      lastScrollRef.current = null;
+      pinAnchorRef.current = null;
       pinHeldUntilRef.current = Date.now() + PIN_HOLD_MS;
     };
     let holdCheck: number | null = null;
     const hold = () => {
       pinnedRef.current = false;
       pinHeldUntilRef.current = 0;
-      lastScrollRef.current = null;
+      pinAnchorRef.current = null;
       // The place they were put may be the end itself (the message asked
       // for is the last one): once the jump has settled, read it back, or a
       // reader sitting at the end would count as scrolled away until they
@@ -409,7 +449,7 @@ export function useStickToBottom({
     if (conversationKeyRef.current !== conversationKey) {
       conversationKeyRef.current = conversationKey;
       pinnedRef.current = true;
-      lastScrollRef.current = null;
+      pinAnchorRef.current = null;
     }
     // The scroller can be replaced (another conversation's transcript), so
     // the listener follows whichever element the ref holds now.
@@ -420,7 +460,7 @@ export function useStickToBottom({
     ) {
       listenedRef.current?.removeEventListener("scroll", onScrollRef.current);
       listenedRef.current = liveScroller;
-      lastScrollRef.current = null;
+      pinAnchorRef.current = null;
       pinnedRef.current = true;
       lastVisibleTopRef.current = null;
       wasHiddenRef.current = false;
@@ -444,7 +484,7 @@ export function useStickToBottom({
             return;
           }
           wasHiddenRef.current = false;
-          lastScrollRef.current = null;
+          pinAnchorRef.current = null;
           // The app placed the reader itself in the same step (see
           // requestHoldPosition): leave them there.
           if (skipRestoreRef.current) {
@@ -493,16 +533,9 @@ export function useStickToBottom({
         const top = el.scrollTop;
         lastVisibleTopRef.current = top;
         const distance = el.scrollHeight - top - el.clientHeight;
-        const last = lastScrollRef.current;
-        lastScrollRef.current = { top, distance };
-        if (distance <= FOLLOW_BOTTOM_EPSILON_PX) {
-          pinnedRef.current = true;
-        } else if (last && top < last.top - 1 && distance > last.distance + 1) {
-          // Moved up and away from the end. Our own follows only ever move
-          // down, and a row above changing height shifts the position without
-          // changing the distance, so this is the reader.
-          pinnedRef.current = false;
-        }
+        const next = trackPin(pinnedRef.current, pinAnchorRef.current, top, distance);
+        pinnedRef.current = next.pinned;
+        pinAnchorRef.current = next.anchor;
       };
       liveScroller?.addEventListener("scroll", onScrollRef.current, { passive: true });
     }
@@ -514,7 +547,12 @@ export function useStickToBottom({
       // chat): a hidden box measures 0 / 0 / 0, which reads as "at the end".
       // Deciding on that would mark a reader who had scrolled up as pinned
       // and carry them to the end when they came back. Wait until it shows.
-      if (scroller && typeof scroller.checkVisibility === "function" && !scroller.checkVisibility()) {
+      // Where checkVisibility is missing (older Safari), a box with no height
+      // is the same signal the scroll handler and the observer already use.
+      if (
+        scroller &&
+        (typeof scroller.checkVisibility === "function" ? !scroller.checkVisibility() : scroller.clientHeight === 0)
+      ) {
         return;
       }
       const metrics: ScrollMetrics | null = scroller

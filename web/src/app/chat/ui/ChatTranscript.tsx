@@ -541,8 +541,12 @@ export function ChatTranscript({
     // Below lg this arrives together with the chat pane being shown again:
     // tell the follow rule the reader is being placed here, or its "back to
     // where you were" would run over the jump.
-    requestHoldPosition();
-    if (rowIndex >= 0) virtualizer.scrollToIndex(rowIndex, { align: "start" });
+    // Only when there is a row to go to: a hold with no jump after it would
+    // leave the reader neither at the end nor back where they were.
+    if (rowIndex >= 0) {
+      requestHoldPosition();
+      virtualizer.scrollToIndex(rowIndex, { align: "start" });
+    }
     // Not cleared on re-run: rows change with every streamed token, which
     // must not cancel the centring of a request already handled.
     const approvalId = dashboardJump.approvalId;
@@ -2035,10 +2039,18 @@ export function ReplyMoreActions({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!open) return;
     menuRef.current?.querySelector<HTMLElement>(".reply-action")?.focus({ preventScroll: true });
+    // Closing without a key (a press elsewhere, the transcript scrolling):
+    // if focus is on one of the menu's items it would fall to <body> when
+    // they are hidden, so it goes back to the button first. A press on
+    // something focusable then takes it from there as usual.
+    const closeFromOutside = () => {
+      if (menuRef.current?.contains(document.activeElement)) toggleRef.current?.focus({ preventScroll: true });
+      setOpen(false);
+    };
     const onPointerDown = (event: PointerEvent) => {
       const target = event.target as Node;
       if (menuRef.current?.contains(target) || toggleRef.current?.contains(target)) return;
-      setOpen(false);
+      closeFromOutside();
     };
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
@@ -2095,7 +2107,7 @@ export function ReplyMoreActions({ children }: { children: ReactNode }) {
     // The sheet is placed against where the reply sits now; once the
     // transcript scrolls it would be pointing at the wrong place.
     const scroller = toggleRef.current?.closest("section");
-    const onScroll = () => setOpen(false);
+    const onScroll = closeFromOutside;
     document.addEventListener("pointerdown", onPointerDown);
     // Capture phase: ahead of the page's own document-level key handlers.
     document.addEventListener("keydown", onKeyDown, true);

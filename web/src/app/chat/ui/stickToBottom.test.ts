@@ -9,8 +9,10 @@ import {
   decideFollowBottom,
   requestFollowBottom,
   requestHoldPosition,
+  trackPin,
   useStickToBottom,
   type FollowBottomInput,
+  type PinAnchor,
 } from "./stickToBottom";
 
 const decide = (over: Partial<FollowBottomInput> = {}) =>
@@ -292,6 +294,50 @@ describe("decideFollowBottom while our own smooth follow is in flight", () => {
   });
 });
 
+// "Is the reader at the end", kept from scroll events. Each row is a sequence
+// of events [top, distance from the end] starting pinned at the end of a
+// 2000px transcript in a 600px box (top 1400), and whether they still count
+// as at the end afterwards.
+describe("trackPin", () => {
+  const run = (events: ReadonlyArray<readonly [number, number]>, start: { pinned: boolean; anchor: PinAnchor | null }) =>
+    events.reduce((state, [top, distance]) => trackPin(state.pinned, state.anchor, top, distance), start);
+  const atEnd = { pinned: true, anchor: { top: 1400, distance: 0 } };
+  const steps = (n: number, size: number) =>
+    Array.from({ length: n }, (_, i) => [1400 - (i + 1) * size, (i + 1) * size] as const);
+
+  it.each([
+    // The reader scrolls up: in one jump, and slowly, in steps too small to
+    // count on their own (a trackpad or a finger).
+    ["one jump up", [[1100, 300]], false],
+    ["80 steps of 1px", steps(80, 1), false],
+    ["200 steps of 0.4px", steps(200, 0.4), false],
+    ["10 steps of 1px", steps(10, 1), false],
+    // Not the reader leaving.
+    ["a couple of pixels from the end is still the end", steps(2, 1), true],
+    ["new content below: the end moves away, they do not", [[1400, 300], [1400, 900]], true],
+    ["our follow carries them down", [[1400, 600], [1700, 300], [2000, 0]], true],
+    ["a row above shrinks: the position shifts, the distance does not", [[1400, 300], [1360, 300], [1300, 300]], true],
+    ["a row above shrinks while they sit at the end", [[1360, 0]], true],
+    // Content grew, then the reader scrolled up slowly from there.
+    ["growth, then 5 steps of 1px up", [[1400, 300], [1399, 301], [1398, 302], [1397, 303], [1396, 304], [1395, 305]], false],
+    // They scroll up and come back to the end.
+    ["up and back down to the end", [[1100, 300], [1400, 0]], true],
+  ] as const)("%s", (_name, events, pinned) => {
+    expect(run(events, atEnd).pinned).toBe(pinned);
+  });
+
+  it("starts measuring from the first event after the app pins them (a send, Jump to latest)", () => {
+    // Far up, pinned by the app, carried down by its smooth scroll: still pinned.
+    expect(run([[600, 800], [1000, 400], [1400, 0]], { pinned: true, anchor: null }).pinned).toBe(true);
+    // ... unless they scroll up against it.
+    expect(run([[600, 800], [1000, 400], [990, 410], [960, 440]], { pinned: true, anchor: null }).pinned).toBe(false);
+  });
+
+  it("does not pin a reader who is scrolled up just because they scroll", () => {
+    expect(run([[900, 500], [1000, 400], [950, 450]], { pinned: false, anchor: null }).pinned).toBe(false);
+  });
+});
+
 describe("useStickToBottom", () => {
   function harness() {
     const scrollIntoView = vi.fn();
@@ -407,8 +453,12 @@ describe("useStickToBottom", () => {
     }
   });
 
-  // The regression this guards: a reader scrolls up 80px at rest, rows near
-  // the viewport are re-measured, and the transcript's height moves a little.
+  // Where no scroll listener can be attached the hook falls back to its own
+  // estimate of "was the reader at the end" (this harness has none, so the
+  // four tests around here cover that fallback; the app's scroller is
+  // listened to, and that path is tested with liveHarness below).
+  // A reader scrolls up 80px at rest, rows near the viewport are re-measured,
+  // and the transcript's height moves a little.
   it("does not pull a reader back when a re-measure follows their own scroll", () => {
     vi.useFakeTimers();
     try {
@@ -572,13 +622,20 @@ describe("useStickToBottom", () => {
       rerender({ messages: [1, 2], contentHeight: 2900 });
       expect(scroller.scrollTo).toHaveBeenLastCalledWith({ top: 2900, behavior: "smooth" });
 
-      // After the hold a change they are left behind by clears the pin again.
+      // After the hold, the same kind of change clears the pin: the reader
+      // lands at the end (still pinned, and they do not scroll), a row then
+      // grows by more than the window, and they are left behind for good, so
+      // the next message is not followed. Inside the hold it was (above).
       vi.advanceTimersByTime(PIN_HOLD_MS + SMOOTH_FOLLOW_SETTLE_MS);
       userScrollsTo(2300);
-      userScrollsTo(300);
+      const two: readonly unknown[] = [1, 2];
+      rerender({ messages: two, contentHeight: 2900 });
+      vi.advanceTimersByTime(SMOOTH_FOLLOW_SETTLE_MS);
+      scroller.scrollHeight = 3300;
+      rerender({ messages: two, contentHeight: 3300 });
       const calls = scroller.scrollTo.mock.calls.length;
-      scroller.scrollHeight = 3600;
-      rerender({ messages: [1, 2, 3], contentHeight: 3600 });
+      scroller.scrollHeight = 3900;
+      rerender({ messages: [1, 2, 3], contentHeight: 3900 });
       expect(scroller.scrollTo).toHaveBeenCalledTimes(calls);
     } finally {
       vi.useRealTimers();
@@ -604,6 +661,35 @@ describe("useStickToBottom", () => {
       scroller.scrollHeight = 2900;
       rerender({ messages: [1, 2] });
       expect(scroller.scrollTo).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // The same reader, scrolling slowly: 120px up in 1px steps, then a row
+  // near the viewport is measured for the first time and the height moves.
+  // None of the steps is a "move" by itself; together they are.
+  it("does not pull back a reader who scrolled up slowly", () => {
+    vi.useFakeTimers();
+    try {
+      const { scroller, userScrollsTo, refs } = liveHarness();
+      const one: readonly unknown[] = [1];
+      const { rerender } = renderHook(
+        ({ messages, contentHeight }: { messages: readonly unknown[]; contentHeight: number }) =>
+          useStickToBottom({ ...refs, messages, isStreaming: false, contentHeight }),
+        { initialProps: { messages: one, contentHeight: 2000 } },
+      );
+      vi.advanceTimersByTime(SMOOTH_FOLLOW_SETTLE_MS);
+      userScrollsTo(1400);
+      for (let top = 1399; top >= 1280; top--) userScrollsTo(top);
+      const calls = scroller.scrollTo.mock.calls.length;
+      scroller.scrollHeight = 2030;
+      rerender({ messages: one, contentHeight: 2030 });
+      expect(scroller.scrollTo).toHaveBeenCalledTimes(calls);
+      // Nor does the next message carry them to the end.
+      scroller.scrollHeight = 2400;
+      rerender({ messages: [1, 2], contentHeight: 2400 });
+      expect(scroller.scrollTo).toHaveBeenCalledTimes(calls);
     } finally {
       vi.useRealTimers();
     }
@@ -637,6 +723,10 @@ describe("useStickToBottom", () => {
         },
         show() {
           Object.assign(h.scroller, { scrollTop: 0, clientHeight: 600 });
+          observed?.();
+        },
+        /** The observer notices a pane that is already showing; the position is left as it is. */
+        shown() {
           observed?.();
         },
       };
@@ -683,18 +773,20 @@ describe("useStickToBottom", () => {
     it("leaves a reader the app placed in the same step where they were put", () => {
       vi.useFakeTimers();
       try {
-        const { scroller, userScrollsTo, hide, show, refs } = hiddenHarness();
+        const { scroller, userScrollsTo, hide, shown, refs } = hiddenHarness();
         mount(refs);
         userScrollsTo(1400);
         userScrollsTo(500);
         hide();
         // The Board asks for a message: the pane is shown and scrolled there
-        // before the observer has noticed the return.
+        // before the observer has noticed the return. `shown()` fires the
+        // observer without touching the position, so anything the hook does
+        // to it (restoring 500, or going to the end) shows in the assertion.
         Object.assign(scroller, { clientHeight: 600 });
         requestHoldPosition();
         scroller.scrollTop = 900;
-        show.call(null);
-        scroller.scrollTop = 900;
+        shown();
+        expect(scroller.scrollTop).toBe(900);
         vi.advanceTimersByTime(250);
         expect(scroller.scrollTop).toBe(900);
       } finally {

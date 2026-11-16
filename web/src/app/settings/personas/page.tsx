@@ -629,7 +629,9 @@ export default function PersonasPage() {
                   className={`${ROW} ${p.id === reviewId ? "rounded-[var(--radius-md)] bg-[color-mix(in_srgb,var(--color-accent)_8%,transparent)]" : ""}`}
                 >
                   <div className={ROW_HEAD}>
-                    <span className="text-[0.88rem] font-semibold text-[var(--color-text-primary)]">
+                    {/* A name is a value: it may shrink and break, so one long
+                        word cannot widen the row (and the page with it). */}
+                    <span className="min-w-0 text-[0.88rem] font-semibold text-[var(--color-text-primary)] [overflow-wrap:anywhere]">
                       {p.display_name}
                     </span>
                     <ConnBadge variant={p.kind === "twin" ? "overridden" : "neutral"}>
@@ -638,7 +640,9 @@ export default function PersonasPage() {
                     <ConnBadge variant="neutral">{p.autonomy === "act" ? tr("Acts for you") : tr("Suggests actions")}</ConnBadge>
                     {proposed ? (
                       <ConnBadge variant="warn">
-                        {p.replaces_name ? tr("Proposed edit to {0}", [p.replaces_name]) : tr("Proposed — review it")}
+                        <span className="truncate">
+                          {p.replaces_name ? tr("Proposed edit to {0}", [p.replaces_name]) : tr("Proposed — review it")}
+                        </span>
                       </ConnBadge>
                     ) : null}
                     <span className="ml-auto inline-flex flex-wrap gap-[0.35rem]">
@@ -706,7 +710,7 @@ export default function PersonasPage() {
                           key={i}
                           className="flex flex-wrap items-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] px-[0.65rem] py-[0.45rem] text-[0.76rem]"
                         >
-                          <span className="font-medium text-[var(--color-text-primary)]">{pt.title}</span>
+                          <span className="min-w-0 font-medium text-[var(--color-text-primary)] [overflow-wrap:anywhere]">{pt.title}</span>
                           <span className="text-[var(--color-text-muted)]">
                             {cadenceLabel(pt.cron)}
                             {pt.timezone && pt.timezone !== "UTC" ? ` · ${pt.timezone}` : pt.timezone === "UTC" ? " · UTC" : ""}

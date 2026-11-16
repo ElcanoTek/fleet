@@ -417,6 +417,7 @@ above fails otherwise.
 - [`USER-PERSONAS.md`](USER-PERSONAS.md) — Your own personas, the digital-twin builder (`persona_studio`) and persona patrols
 - [`VERIFIER-FINAL-RESPONSE.md`](VERIFIER-FINAL-RESPONSE.md) — The end-of-run verifier sees the run's final response
 - [`VERSIONING.md`](VERSIONING.md) — Versioning and releases
+- [`WEB-UI-RULES.md`](WEB-UI-RULES.md) — Web UI rules from the November 2026 UI audit: line breaks, long values, form footers, sidebar focus, following the end of a chat
 - [`WEBHOOK-SIGNING.md`](WEBHOOK-SIGNING.md) — Webhook signing (verifying fleet's outbound webhooks)
 - [`WEBHOOKS.md`](WEBHOOKS.md) — Webhook-triggered conversations (#268)
 

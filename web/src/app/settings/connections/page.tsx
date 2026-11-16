@@ -2,7 +2,7 @@ import { bundleText } from "@/app/lib/i18n";
 import { localizeConnector } from "@/app/lib/i18n/bundle";
 import { rich } from "@/app/lib/i18n/rich";
 import { t as tr } from "@/app/lib/i18n";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { Icon } from "@/app/shared/ui/Icon";
@@ -713,6 +713,9 @@ function DirectoryCard({
     (!secretRequired || clientSecret.trim() !== "") &&
     (!anotherAccount || account.trim() !== "");
 
+  // A generated id: an entry's name comes from the catalog and may hold a
+  // space, which aria-describedby would read as two ids.
+  const missingId = useId();
   // Why Add is greyed out, for the line under it. Together the two lists are
   // exactly the terms of `ready`.
   const missingFields = [
@@ -1078,7 +1081,7 @@ function DirectoryCard({
               data-testid={`dir-form-add-${entry.name}`}
               onClick={() => void submit()}
               disabled={busy || !ready}
-              aria-describedby={ready ? undefined : `dirFormMissing-${entry.name}`}
+              aria-describedby={ready ? undefined : missingId}
               className={dirAddButtonClass(false)}
             >
               {tr("Add")}
@@ -1089,10 +1092,10 @@ function DirectoryCard({
               which would corrupt the URL) is named separately: "fill in" would
               be the wrong thing to say about a field that is not empty. */}
           {missingFields.length > 0 ? (
-            <MissingFieldsHint block id={`dirFormMissing-${entry.name}`} missing={missingFields} />
+            <MissingFieldsHint block id={missingId} missing={missingFields} />
           ) : unusableFields.length > 0 ? (
             <p
-              id={`dirFormMissing-${entry.name}`}
+              id={missingId}
               className="m-0 w-full text-right text-[0.72rem] text-[var(--color-text-muted)]"
             >
               {tr("To continue, remove spaces and braces from: {0}", [unusableFields.join(", ")])}

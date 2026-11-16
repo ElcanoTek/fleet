@@ -142,6 +142,16 @@ describe("NavRail phone drawer", () => {
         const aside = container.querySelector("aside")!;
         expect(aside.contains(document.activeElement)).toBe(true);
 
+        // Tab wraps inside the drawer: back from its first control goes to
+        // its last, and on from the last returns to the first.
+        const first = document.activeElement;
+        fireEvent.keyDown(window, { key: "Tab", shiftKey: true });
+        const last = document.activeElement;
+        expect(last).not.toBe(first);
+        expect(aside.contains(last)).toBe(true);
+        fireEvent.keyDown(window, { key: "Tab" });
+        expect(document.activeElement).toBe(first);
+
         // Focus that ended up on the page behind is brought back by Tab.
         screen.getByRole("link", { name: "Behind the drawer" }).focus();
         fireEvent.keyDown(window, { key: "Tab" });

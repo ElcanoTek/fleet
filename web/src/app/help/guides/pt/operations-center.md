@@ -63,7 +63,7 @@ Dois tipos de linhas mostram menos de quatro. Enquanto uma execução está **em
 
 ### Como encontrar o que procura
 
-O quadro filtra por **Estado** e **Criado por**. Para ver os trabalhos à espera de execução, escolha **agendadas** em **Estado**: trabalhos únicos previstos para mais tarde, a execução seguinte de cada trabalho recorrente e trabalhos que aguardam um webhook ou uma condição em vez de uma hora.
+O quadro filtra por **Estado** e **Criado por**. Para ver os trabalhos à espera de execução, escolha **agendado** em **Estado**: trabalhos únicos previstos para mais tarde, a execução seguinte de cada trabalho recorrente e trabalhos que aguardam um webhook ou uma condição em vez de uma hora.
 
 A caixa de pesquisa procura cada palavra que escrever separadamente e em qualquer ordem, pelo que `sales weekly` encontra «Weekly sales report». Uma palavra pode aparecer no título, no prompt, na descrição da tarefa, numa etiqueta, no nome do criador ou no ID (bastam os primeiros carateres); cada palavra tem de corresponder em algum local. São usadas até oito palavras; tudo o que vier depois da oitava é ignorado. Coloque as palavras entre aspas duplas, como `"daily deal"`, para as procurar como uma única expressão nessa ordem. A pesquisa abrange as tarefas que o quadro lhe pode mostrar e combina-se com os restantes filtros; se faltar uma tarefa que esperava encontrar, verifique primeiro **Estado** e as etiquetas ou prima **Limpar filtros**.
 

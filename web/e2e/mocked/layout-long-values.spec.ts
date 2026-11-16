@@ -177,6 +177,39 @@ for (const vp of WIDTHS) {
       await expectFits(page);
     });
 
+    test("Personas: a long persona name, with a proposed edit to another", async ({ page }) => {
+      await page.route("**/api/**", (route: Route) => route.fulfill({ json: {} }));
+      await mockShellBasics(page);
+      const persona = {
+        id: "p1",
+        name: `twin-${TOKEN}`,
+        ref: `user:twin-${TOKEN}`,
+        display_name: `Twin_${TOKEN}`,
+        description: TOKEN,
+        instructions: `Lead with ${TOKEN}`,
+        base_persona: "",
+        kind: "twin",
+        autonomy: "advise",
+        status: "active",
+        patrols: [{ title: `Briefing_${TOKEN}`, cron: "0 8 * * 1-5", timezone: "UTC", prompt: TOKEN }],
+      };
+      await page.route("**/api/user-personas", (r: Route) =>
+        r.fulfill({
+          json: {
+            personas: [
+              persona,
+              { ...persona, id: "p2", name: "deal-watch", display_name: "Deal Watch", status: "proposed", replaces_name: `twin-${TOKEN}` },
+            ],
+            workspace_personas: ["assistant"],
+            default: "assistant",
+          },
+        }),
+      );
+      await page.goto("/settings/personas");
+      await expect(page.getByText(`Twin_${TOKEN}`).first()).toBeVisible();
+      await expectFits(page);
+    });
+
     test("Chat: a long chat title in the sidebar", async ({ page }) => {
       await mockChatBoot(page, {
         conversations: [

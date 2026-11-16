@@ -18,7 +18,7 @@ describe("layout defaults for long values", () => {
   const css = readFileSync(GLOBALS_CSS, "utf8");
   const root = postcss.parse(css);
 
-  it("gives every grid in globals.css a column it can shrink", () => {
+  it("lets no grid in globals.css go without declared columns", () => {
     const offenders: string[] = [];
     root.walkRules((rule) => {
       const decls = new Map<string, string>();
