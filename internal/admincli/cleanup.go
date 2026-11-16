@@ -2,12 +2,16 @@ package admincli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 )
 
 // cmdCleanup reclaims host-side BUILD/DEPLOY cruft — never user data. The
@@ -58,15 +62,34 @@ type cleanupOpts struct {
 // cleanupHost is the seam between the sweep and the box (the podman/go
 // binaries, stdout), so the exit-code contract is testable without pruning
 // anything. lookPath answers "is this tool installed"; run executes one step
-// with its output passed through and returns its error.
+// with its output passed through and returns its error; missingRuntimeDir
+// names podman's runtime dir when it is configured but absent.
 type cleanupHost struct {
-	lookPath func(string) (string, error)
-	run      func(name string, args ...string) error
-	out      io.Writer
+	lookPath          func(string) (string, error)
+	run               func(name string, args ...string) error
+	missingRuntimeDir func() (dir string, missing bool)
+	out               io.Writer
 }
 
 func defaultCleanupHost() cleanupHost {
-	return cleanupHost{lookPath: exec.LookPath, run: runLoud, out: os.Stdout}
+	return cleanupHost{lookPath: exec.LookPath, run: runLoud, missingRuntimeDir: missingXDGRuntimeDir, out: os.Stdout}
+}
+
+// missingXDGRuntimeDir reports XDG_RUNTIME_DIR when it is set but does not
+// exist. Under fleet-maintenance.service that is /run/fleet, which only
+// fleet.service creates (RuntimeDirectory=fleet) and systemd removes again
+// when the service stops. The maintenance unit runs as the unprivileged fleet
+// user, which cannot create a directory under /run, so with the service down
+// (stopped, or never started on a fresh box) every podman call dies with
+// "lstat /run/fleet: no such file or directory". Any other stat error
+// (permission, I/O) is not reported here: podman gets to fail on it loudly.
+func missingXDGRuntimeDir() (string, bool) {
+	dir := envreg.Get("XDG_RUNTIME_DIR")
+	if dir == "" {
+		return "", false
+	}
+	_, err := os.Stat(dir)
+	return dir, errors.Is(err, fs.ErrNotExist)
 }
 
 // newCleanupHost is how cmdCleanup obtains its host. A var so the flag-parsing
@@ -83,6 +106,13 @@ var newCleanupHost = defaultCleanupHost
 // partial failure stays 0 (the failing step is reported "(continuing)"): each
 // step is independent, and a box without a Go cache to clean must not page
 // anyone because `go clean` had nothing to do.
+//
+// A missing podman runtime dir (see missingXDGRuntimeDir) skips the podman
+// steps instead of running them into a certain failure: the fleet service is
+// not running, there is nothing podman can do until it is, and the next timer
+// fire retries. Without the skip a fresh box whose service had not started
+// yet failed the unit, and `fleet doctor` then reported a maintenance fault on
+// top of the real one (the service being down), which it already reports.
 func runCleanup(opts cleanupOpts, h cleanupHost) int {
 	if line := diskLine("before"); line != "" {
 		fmt.Fprintln(h.out, line)
@@ -98,6 +128,8 @@ func runCleanup(opts cleanupOpts, h cleanupHost) int {
 
 	if _, err := h.lookPath("podman"); err != nil {
 		fmt.Fprintln(h.out, "podman not found — skipping image cleanup.")
+	} else if dir, missing := h.missingRuntimeDir(); missing {
+		fmt.Fprintf(h.out, "podman runtime dir %s does not exist: the fleet service creates it on start, so it is not running. Skipping image cleanup; the next run retries.\n", dir)
 	} else if opts.dryRun {
 		// Informational only: `podman system df` failing is not a prune failure.
 		_ = h.run("podman", "system", "df")

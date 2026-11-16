@@ -33,9 +33,11 @@
 [Unit]
 Description=fleet host maintenance (prune dangling podman layers + build caches)
 Documentation=https://github.com/ElcanoTek/fleet/blob/main/docs/MAINTENANCE.md
-# Ordering only. A maintenance pass on a box whose service is down is harmless
-# and still useful (it is the one time --deep could reclaim the sandbox image),
-# so nothing here pulls the service up or requires it.
+# Ordering only: nothing here pulls the service up or requires it. While the
+# service is down (stopped, or never started on a fresh box) /run/fleet, its
+# RuntimeDirectory, does not exist and this unit cannot create it, so podman
+# cannot run; `fleet cleanup` logs that it is skipping image cleanup and exits
+# 0, and the next timer fire retries.
 After=network-online.target fleet.service
 
 [Service]

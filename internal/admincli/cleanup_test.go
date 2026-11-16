@@ -16,9 +16,10 @@ func useSilentCleanupHost(t *testing.T) {
 	old := newCleanupHost
 	newCleanupHost = func() cleanupHost {
 		return cleanupHost{
-			lookPath: func(string) (string, error) { return "", errors.New("not installed") },
-			run:      func(string, ...string) error { return nil },
-			out:      io.Discard,
+			lookPath:          func(string) (string, error) { return "", errors.New("not installed") },
+			run:               func(string, ...string) error { return nil },
+			missingRuntimeDir: func() (string, bool) { return "", false },
+			out:               io.Discard,
 		}
 	}
 	t.Cleanup(func() { newCleanupHost = old })

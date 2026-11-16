@@ -438,6 +438,7 @@ client bundle's manifest names them, and fleet admits them at startup ([MCP-BUND
 | `VISUAL` | string | — | cli | Editor `fleet env edit` opens (before EDITOR). *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `EDITOR` | string | — | cli | Editor `fleet env edit` opens when VISUAL is unset. *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `NO_COLOR` | string | — | cli | Any value turns colour off in `fleet motd` (no-color.org). *Process env only* (fleet's env-file loader does not admit it; export it). |
+| `XDG_RUNTIME_DIR` | path | — | cli | Podman's runtime dir; when set but absent (fleet.service, which creates /run/fleet, is not running) `fleet cleanup` skips the podman prune. *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `PGHOST` | string | — | cli | libpq/pgx default host for a DSN that names none. *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `PGPORT` | string | — | cli | libpq/pgx default port for a DSN that names none. *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `PGDATABASE` | string | — | cli | libpq/pgx default database for a DSN that names none. *Process env only* (fleet's env-file loader does not admit it; export it). |

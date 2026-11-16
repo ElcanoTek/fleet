@@ -804,6 +804,8 @@ var table = []Entry{
 		Description: "Editor `fleet env edit` opens when VISUAL is unset."},
 	{Name: "NO_COLOR", Group: GroupPlatform, Scope: ScopeCLI, Type: TypeString, ProcessOnly: true,
 		Description: "Any value turns colour off in `fleet motd` (no-color.org)."},
+	{Name: "XDG_RUNTIME_DIR", Group: GroupPlatform, Scope: ScopeCLI, Type: TypePath, ProcessOnly: true,
+		Description: "Podman's runtime dir; when set but absent (fleet.service, which creates /run/fleet, is not running) `fleet cleanup` skips the podman prune."},
 	// libpq/pgx connection defaults (config.PGTargetEnv): they fill what a
 	// DSN leaves out — for fleet's own connections (config.ParseConnTarget),
 	// and for psql/pg_dump, which the scripts and backup/restore run.
