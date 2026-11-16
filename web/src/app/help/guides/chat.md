@@ -1086,7 +1086,8 @@ card helps; you can also simply ask for one ("give me a form for this").
   card unlocks by itself and says **Not sent. Try again.**
 - **An optional single choice can be undone.** A list of round options shows
   **Clear choice** once you pick one, and a table you pick one row from shows
-  **Clear selection**, if the question is optional.
+  **Clear selection**, if the question is optional. A table where you can pick
+  several rows has a checkbox in its header to select or clear every row at once.
 - **Updated cards replace older ones.** When the assistant checks your answers
   and comes back with a corrected version, the earlier card collapses to a
   one-line note (**Show** opens it), with any problems marked on the new card's
