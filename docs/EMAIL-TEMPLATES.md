@@ -8,7 +8,8 @@ assistant to write the email to that template.
 
 It sits beside the [prompt library](PROMPT-LIBRARY.md) and follows the same
 ownership model for bundle content: files in the bundle, read live, read-only
-in the UI.
+in the UI. A team can also add its own from chat; see
+[Team templates](#team-templates).
 
 ## Why
 
@@ -61,7 +62,9 @@ used as a path. Both are read-only and need the view permission. Like `/prompts`
 member without Operations Center access reads it by their Fleet role.
 
 **UI.** Chat's composer menu (**More options**) lists **Email templates** when
-the bundle has any; the composer asks once, the first time the menu opens. The
+the workspace has any (the bundle's or the team's); the composer asks when the
+menu opens, keeps a yes, and asks again after a no, so a team's first template
+brings the entry in without a reload. The
 dialog reads the example of the template on screen, one at a time. It has
 three columns: the list with search, the example email, and the
 template's rules (sections in order with their limits in words, then the rules
@@ -118,11 +121,53 @@ carries.
   `max_words_per_bullet`, `max_items`, `min_items`, `max_rows`, `max_columns`)
   and leaves out one it does not, rather than showing a raw key.
 
+## Team templates
+
+A person can add a template from chat ("save this email as a template"). Fleet
+does not write templates: the bundle's mail connector does, with its own
+validation and its own rendering of the example, behind one of its
+approval-gated tools. Fleet's part is the place and the reading.
+
+**The place.** `<workspace-root>/mcp-runs/email-templates/`
+(`agentcore.TeamEmailTemplatesDir`), in the bundle directory's own layout:
+`<id>.yaml`, `previews/<id>.html`, `previews/styles.json`. A bundle hands it to
+its connector as
+
+```yaml
+env:
+  EMAIL_TEMPLATES_TEAM_DIR: "${FLEET_WORKSPACE_ROOT}/mcp-runs/email-templates"
+```
+
+It sits under `mcp-runs/` because that tree is already mounted read-only in
+every sandbox, on both backends: host-side connectors write there by pathname
+and no `bash` or `run_python` can. A saved template is shown to everyone and
+its rules become instructions to later chats, so the approval card on the
+connector's save tool must be the only way in. The name cannot collide with a
+run directory (`task-<id>`).
+
+**The reading.** `clientconfig.EmailTemplateLibrary` serves the bundle's
+templates and the team's as one list. A team entry has `source: "team"`,
+`created_by` and `created_at` (what the connector recorded; a bundle template
+never carries them), and `path: team/<file>`. The team directory is read with
+the bundle directory's bounds and refusals (regular files only, size caps, an
+id matched against the listing and never joined into a path), a directory that
+is a symlink is not read, and a team file under a bundle template's id is
+reported and not served.
+
+**The UI.** A team template has a **Team** badge and an "Added by" line. **New
+template** puts a request in the composer for the assistant to save an email
+from the chat as a template; like every library action it sends nothing.
+
 ## Deliberately deferred
 
-- Templates created or edited in the UI. Like form prompts, they are Git-only:
-  there is no database model for them, and an editable template would need its
-  preview rendered by the bundle.
+- Editing a template in the library itself. A team template is added, replaced
+  or removed from chat (above), because its example has to be rendered and
+  checked by the bundle; the library stays a reader.
+- Per-person or per-team visibility. A team template is for everyone on the
+  deployment.
+- Backing up team templates. They live under the workspace root, not in the
+  database; a template worth keeping for good belongs in the bundle's
+  repository.
 - The library in the Operations Center task form. The inserted prompt works in
   a task, but the entry point is chat only for now.
 - Translating a template's rules. Names, descriptions and forms go through the

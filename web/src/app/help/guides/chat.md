@@ -1472,8 +1472,9 @@ is not shown on a deployment that has none.
 Select a template to see two things side by side: an **example email** built
 from sample data, and the template's **sections in order**, each with what
 belongs in it and its limits (for example *Up to 3 bullets*). Below them are the
-rules for the whole email and the phrases it never uses. Templates come with
-your deployment and are read-only.
+rules for the whole email and the phrases it never uses. Some templates come
+with your deployment; others are ones your team added, marked **Team** with
+the name of whoever added them.
 
 Choose **Use this template** and fill in the short form. Besides the
 template's own questions it can ask who the email goes to and how it looks:
@@ -1495,6 +1496,18 @@ only when you choose **Send** on that card; reject it, or ask for changes, and
 nothing goes out. A draft that breaks the
 template, by running long or adding a section, is not built: the assistant is
 told what to fix and tries again, so what you get back fits the example.
+
+**Adding a template.** When an email came out the way you want it every time,
+ask the assistant to keep it: *"Save this email as a template called Monthly
+QBR recap."* Or choose **New template** in the library, which writes that
+request into your draft for you to finish. The assistant builds the template
+from the email in the chat (its sections, their order and their length), checks
+it, and asks you to approve it on a card. Once approved it is in the library
+for your whole team, with that email as its example. The example is visible to
+everyone, so ask for invented names and numbers if the real ones should not be
+shown. To change a team template, save a new version under the same name; to
+remove one, ask the assistant by name. Templates that came with your
+deployment cannot be changed from chat.
 
 ## 10. From chat to a task
 

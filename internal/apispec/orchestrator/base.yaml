@@ -210,7 +210,7 @@ components:
         One bundle-owned email template (docs/EMAIL-TEMPLATES.md): the fixed
         shape of an email a team sends repeatedly. The bundle's mail connector
         enforces the same file when it renders an email; fleet only presents it.
-      required: [id, name, path, subject, sections, has_preview]
+      required: [id, name, path, source, subject, sections, has_preview]
       properties:
         id: { type: string }
         name: { type: string }
@@ -219,6 +219,18 @@ components:
         use_when: { type: string }
         based_on: { type: string }
         path: { type: string }
+        source:
+          type: string
+          enum: [bundle, team]
+          description: >
+            bundle for a template the bundle ships; team for one a person
+            added from chat through the bundle's mail connector.
+        created_by:
+          type: string
+          description: "Team templates only: who saved it, as the connector recorded."
+        created_at:
+          type: string
+          description: "Team templates only: when it was first saved (RFC 3339)."
         max_words:
           type: integer
           description: Cap on the prose of the whole email. Absent means none.

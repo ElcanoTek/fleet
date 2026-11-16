@@ -46,10 +46,31 @@ export function defaultTemplatePrompt(template: EmailTemplate): string {
     : tr('Write the email with the email template "{0}". Show me the preview before anything is sent.', [template.id]);
 }
 
-// Whether this workspace's bundle ships any email template. A bundle without
-// them (the generic one, for a start) should not show a menu entry that opens
-// an empty library, so the composer asks once, the first time its menu opens,
-// and every composer on the page shares the answer.
+/** What "New template" puts in the composer: a request the person finishes
+ *  and sends. The assistant writes the template from an email in the chat and
+ *  saves it through the bundle's mail connector, which asks for approval. */
+export function newTemplatePrompt(): string {
+  return tr(
+    "Save an email as a team email template, so it comes out the same way next time.\nName: \nUse it when: \nBase it on: the email we just built in this chat\nTake the sections, their order and their length from that email, check the template, then save it for my approval.",
+  );
+}
+
+/** Where a template comes from, for the line under its name. */
+export function templateProvenance(template: EmailTemplate): string {
+  if (template.source !== "team") return tr("Tracked in {0}", [template.path]);
+  const day = template.created_at ? new Date(template.created_at) : null;
+  const date = day && !Number.isNaN(day.getTime()) ? day.toLocaleDateString() : "";
+  if (template.created_by && date) return tr("Added by {0} on {1}", [template.created_by, date]);
+  if (template.created_by) return tr("Added by {0}", [template.created_by]);
+  return tr("Added by your team");
+}
+
+// Whether this workspace has any email template, the bundle's or the team's.
+// A workspace without them (the generic bundle, for a start) should not show a
+// menu entry that opens an empty library, so the composer asks when its menu
+// opens. Every composer on the page shares a "yes"; a "no" is asked again on
+// the next open. On a workspace with none yet, the first template is added by
+// asking the assistant in chat, and the entry then appears.
 let availability: Promise<boolean> | null = null;
 
 export function resetEmailTemplateAvailabilityForTests() {
@@ -60,16 +81,22 @@ export function useHasEmailTemplates(ask: boolean): boolean {
   const [has, setHas] = useState(false);
   useEffect(() => {
     if (!ask) return;
-    availability ??= orchestratorApi
+    const check = (availability ??= orchestratorApi
       .emailTemplates()
-      .then((list) => list.length > 0)
+      .then((list) => {
+        // Only "yes" is kept. An empty library is asked about again the next
+        // time the menu opens, so the entry appears as soon as a team saves
+        // its first template from chat, without a reload.
+        if (list.length === 0 && availability === check) availability = null;
+        return list.length > 0;
+      })
       .catch(() => {
         // Not cached: a failed check is asked again on the next open.
-        availability = null;
+        if (availability === check) availability = null;
         return false;
-      });
+      }));
     let live = true;
-    void availability.then((value) => {
+    void check.then((value) => {
       if (live) setHas(value);
     });
     return () => {
@@ -271,7 +298,10 @@ export function EmailTemplateLibrary({ onInsert, renderTrigger, returnFocusRef }
                             <Icon name={t.audience === "internal" ? "briefcase" : "mail"} className="size-3.5" />
                           </span>
                           <span className="grid min-w-0 gap-0.5">
-                            <span className="text-sm font-medium text-[var(--color-text-primary)]">{t.name}</span>
+                            <span className="flex flex-wrap items-center gap-1.5 text-sm font-medium text-[var(--color-text-primary)]">
+                              {t.name}
+                              {t.source === "team" ? <span className={CHIP}>{tr("Team")}</span> : null}
+                            </span>
                             {t.description ? (
                               <span className="line-clamp-2 text-xs text-[var(--color-text-muted)]">{t.description}</span>
                             ) : null}
@@ -279,6 +309,21 @@ export function EmailTemplateLibrary({ onInsert, renderTrigger, returnFocusRef }
                         </button>
                       ))}
                     </div>
+                    {!loading && !error ? (
+                      <div className="mt-2 grid gap-1 border-t border-[var(--color-border)] pt-2">
+                        <button
+                          type="button"
+                          className="btn btn-secondary w-full justify-center"
+                          onClick={() => use(newTemplatePrompt())}
+                        >
+                          <Icon name="plus" className="mr-1.5 size-3.5" />
+                          {tr("New template")}
+                        </button>
+                        <span className="px-0.5 text-[0.7rem] text-[var(--color-text-muted)]">
+                          {tr("Puts a request in your draft. The assistant builds the template from an email in the chat and asks you to approve it.")}
+                        </span>
+                      </div>
+                    ) : null}
                   </aside>
 
                   {selected ? (
@@ -320,6 +365,7 @@ export function EmailTemplateLibrary({ onInsert, renderTrigger, returnFocusRef }
                           {audienceLabel(selected.audience) ? (
                             <span className={CHIP}>{audienceLabel(selected.audience)}</span>
                           ) : null}
+                          {selected.source === "team" ? <span className={CHIP}>{tr("Team")}</span> : null}
                         </div>
                         {selected.use_when ? (
                           <p className="mt-1 text-sm text-[var(--color-text-secondary)]">
@@ -341,7 +387,7 @@ export function EmailTemplateLibrary({ onInsert, renderTrigger, returnFocusRef }
                             </button>
                             <PromptLibraryForm
                               prompt={form}
-                              note={tr("Tracked in {0}", [selected.path])}
+                              note={templateProvenance(selected)}
                               onUse={use}
                               onValuesChange={setFormValues}
                             />
@@ -350,7 +396,7 @@ export function EmailTemplateLibrary({ onInsert, renderTrigger, returnFocusRef }
                           <>
                             <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
                               <span className="text-xs text-[var(--color-text-muted)]">
-                                {tr("Tracked in {0}", [selected.path])}
+                                {templateProvenance(selected)}
                               </span>
                               <button
                                 type="button"

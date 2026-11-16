@@ -460,7 +460,7 @@ Uma convenção que convém adotar desde o início. **Uma versão da equipa por 
 
 Se a sua instalação tiver e-mails padrão, **Mais opções** (`•••`) mostra também **Modelos de e-mail**. Um modelo é a forma fixa de um e-mail que a equipa envia repetidamente, como a atualização semanal para um cliente: as mesmas secções, pela mesma ordem e com a mesma extensão, seja quem for que o peça e em qualquer chat. A opção não aparece numa instalação que não tenha nenhum.
 
-Selecione um modelo para ver duas coisas lado a lado: um **e-mail de exemplo** criado com dados de amostra e as **secções, por ordem**, cada uma com o que deve conter e os seus limites (por exemplo, *Até 3 marcadores*). Por baixo estão as regras do e-mail inteiro e as expressões que nunca usa. Os modelos vêm com a sua instalação e são só de leitura.
+Selecione um modelo para ver duas coisas lado a lado: um **e-mail de exemplo** criado com dados de amostra e as **secções, por ordem**, cada uma com o que deve conter e os seus limites (por exemplo, *Até 3 marcadores*). Por baixo estão as regras do e-mail inteiro e as expressões que nunca usa. Alguns modelos vêm com a sua instalação; outros foram adicionados pela sua equipa e aparecem marcados como **Equipa**, com o nome de quem os adicionou.
 
 Escolha **Usar este modelo** e preencha o formulário. Além das perguntas próprias do modelo, este pode perguntar para quem vai o e-mail e que aspeto tem:
 
@@ -468,6 +468,8 @@ Escolha **Usar este modelo** e preencha o formulário. Além das perguntas próp
 - **Estilo** mostra cada aspeto com as suas cores, e o e-mail de exemplo ao lado do formulário assume o aspeto à medida que o escolhe. **Cores personalizadas** permite escolher as cores de cabeçalho e de destaque de um cliente, e **Usados recentemente** recupera os últimos aspetos que usou, pelo que escolhe as cores de um cliente uma única vez.
 
 Depois escolha **Usar instrução**. Tal como um prompt da biblioteca, isto apenas coloca um pedido no seu rascunho; nada é escrito nem enviado até enviar a mensagem. O assistente escreve então o e-mail de acordo com o modelo e coloca-o num cartão de aprovação que mostra o e-mail e indica os destinatários. Só é enviado quando escolhe **Enviar** nesse cartão; se o rejeitar ou pedir alterações, nada é enviado. Um rascunho que não o cumpra, por ser demasiado longo ou acrescentar uma secção, não é gerado: o assistente é informado do que corrigir e tenta de novo, pelo que o resultado corresponde ao exemplo.
+
+**Adicionar um modelo.** Quando um e-mail ficou como quer que fique sempre, peça ao assistente que o guarde: *«Guarda este e-mail como modelo com o nome Resumo mensal QBR».* Também pode escolher **Novo modelo** na biblioteca, que escreve esse pedido no seu rascunho para o completar. O assistente cria o modelo a partir do e-mail do chat (as suas secções, a ordem e a extensão), verifica-o e pede-lhe que o aprove num cartão. Depois de aprovado, fica na biblioteca para toda a equipa, com esse e-mail como exemplo. O exemplo é visível para todos, por isso peça nomes e números inventados se os reais não devem ser mostrados. Para alterar um modelo da equipa, guarde uma nova versão com o mesmo nome; para remover um, peça-o ao assistente pelo nome. Os modelos que vêm com a sua instalação não podem ser alterados a partir do chat.
 
 ## 10. Do chat para uma tarefa
 
