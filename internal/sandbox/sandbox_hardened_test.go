@@ -112,7 +112,6 @@ func TestSandboxUnderSystemdHardening(t *testing.T) {
 		"--setenv=XDG_RUNTIME_DIR=/run/user/987",
 		"--setenv=SANDBOX_IMAGE=" + image,
 		"--property=Delegate=yes",
-		"--property=DelegateSubgroup=supervisor",
 		"--property=NoNewPrivileges=false",
 		"--property=ProtectSystem=strict",
 		// PrivateDevices= is intentionally omitted — see the unit file
@@ -316,7 +315,6 @@ func TestSandboxUnderRestrictSUIDSGIDFails(t *testing.T) {
 		"--setenv=HOME=/opt/chat",
 		"--setenv=XDG_RUNTIME_DIR=/run/user/987",
 		"--property=Delegate=yes",
-		"--property=DelegateSubgroup=supervisor",
 		"--property=NoNewPrivileges=false",
 		"--property=ProtectSystem=strict",
 		// PrivateDevices= is omitted to mirror the prod unit. The

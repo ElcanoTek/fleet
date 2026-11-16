@@ -190,11 +190,13 @@ RuntimeDirectoryMode=0700
 # crun manages cgroups for the sandbox containers. Delegate=yes hands the service a
 # writable cgroup subtree so the cgroupfs manager (set in the fleet user's
 # ~/.config/containers/containers.conf, created by bootstrap) applies per-container
-# limits without needing a systemd user D-Bus session. DelegateSubgroup=supervisor
-# places the fleet daemon itself into fleet.service/supervisor so fleet.service has
-# no internal processes in cgroup.procs and cgroup v2 allows crun to enable
-# +memory +cpu +pids in fleet.service/cgroup.subtree_control for sibling container
-# cgroups (--cgroup-parent in internal/sandbox/cgroup_parent.go).
+# limits without needing a systemd user D-Bus session. On systemd >= 254,
+# DelegateSubgroup=supervisor places the fleet daemon into fleet.service/supervisor
+# at exec time; on older systemd releases (such as RHEL 9's systemd 252, which
+# ignores unknown unit keys), EnsureDelegatedCgroupSubgroup in
+# internal/sandbox/cgroup_parent.go creates fleet.service/supervisor and moves
+# the service PIDs into it at startup so fleet.service/cgroup.procs is empty and
+# cgroup v2 allows +memory +cpu +pids for sibling container cgroups.
 Delegate=yes
 DelegateSubgroup=supervisor
 
