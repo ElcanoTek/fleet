@@ -54,7 +54,9 @@ function StatusLight({ status, onApprovals }: { status: BoardStatus; onApprovals
         <span aria-hidden="true" className="sm:hidden">
           {status.count}
         </span>
-        <span className="max-sm:sr-only">
+        {/* One line, always: the pill is one line tall, and a label left to
+            wrap spilled out of it when the header was tight. */}
+        <span className="truncate max-sm:sr-only">
           {tr(status.count === 1 ? "{0} approval waiting" : "{0} approvals waiting", [status.count])}
         </span>
       </button>
@@ -71,7 +73,7 @@ function StatusLight({ status, onApprovals }: { status: BoardStatus; onApprovals
   return (
     <span data-testid="dashboard-status" data-status="standby" className="dash-status dash-status-ok" role="status">
       <span className="dash-led" aria-hidden="true" />
-      <span className="max-sm:sr-only">{tr("Standby")}</span>
+      <span className="truncate max-sm:sr-only">{tr("Standby")}</span>
     </span>
   );
 }
@@ -161,12 +163,22 @@ export function DashboardHud({
   }, []);
   return (
     <header data-testid="dashboard-hud" className="dash-hud">
-      {/* sm:flex-initial, not flex-none: the title block keeps its own width
-          while there is room and gives way (the title shortens) when there is
-          not. Fixed at its full width, a long chat title pushed Exit off the
-          right edge between 640 and about 880px. */}
-      <div className="flex min-w-0 flex-1 items-center gap-3 sm:min-w-[6rem] sm:flex-initial">
-        <span className="dash-hud-mark max-sm:hidden" aria-hidden="true">
+      {/* Not flex-none: the title block keeps its own width while there is
+          room and gives way (the title shortens) when there is not. Fixed at
+          its full width, a long chat title pushed Exit off the right edge
+          between 640 and about 880px. It gives way long before the status
+          beside it does: the reader knows which chat this is, and the status
+          ("3 approvals waiting", the tool that is running) is news. The
+          factor is huge on purpose: a share of the squeeze small enough to
+          round to nothing, since even a fraction of a pixel puts an
+          ellipsis on the status. The floor (about ten letters of title) is
+          what a very long status may not take. From 640 to 767px the mark
+          and the Esc keycap are dropped and the floor is the title alone:
+          that is the room "3 aprobaciones pendientes" needs to stay whole
+          at 640px (the status is whole in en/es/pt at every width from
+          there up; measured, not assumed). */}
+      <div className="flex min-w-0 flex-1 items-center gap-3 sm:min-w-[5rem] sm:flex-[0_1000000_auto] md:min-w-[7.5rem]">
+        <span className="dash-hud-mark max-md:hidden" aria-hidden="true">
           <Icon name="target" className="size-4" />
         </span>
         <div className="min-w-0">
@@ -219,7 +231,7 @@ export function DashboardHud({
         </div>
         <button type="button" data-testid="dashboard-exit" className="dash-exit" onClick={onExit}>
           <span>{tr("Exit")}</span>
-          <kbd className="dash-kbd hidden sm:inline-flex" aria-hidden="true">
+          <kbd className="dash-kbd hidden md:inline-flex" aria-hidden="true">
             {tr("Esc")}
           </kbd>
         </button>

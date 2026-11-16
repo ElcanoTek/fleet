@@ -47,6 +47,7 @@ import {
   SetSwitch,
   SETTINGS_INPUT,
   type BadgeVariant,
+  MissingFieldsHint,
   useFocusOnOpen,
 } from "../ui/atoms";
 import { useIsAdmin } from "../useIsAdmin";
@@ -712,6 +713,19 @@ function DirectoryCard({
     (!secretRequired || clientSecret.trim() !== "") &&
     (!anotherAccount || account.trim() !== "");
 
+  // Why Add is greyed out, for the line under it. Together the two lists are
+  // exactly the terms of `ready`.
+  const missingFields = [
+    ...(anotherAccount && account.trim() === "" ? [tr("Account label")] : []),
+    ...placeholders.filter((ph) => (values[ph] ?? "").trim() === "").map(placeholderLabel),
+    ...(entry.auth === "api_key" && apiKey.trim() === "" ? [tr("API key")] : []),
+    ...(manualClient && clientId.trim() === "" ? [tr("OAuth client ID")] : []),
+    ...(secretRequired && clientSecret.trim() === "" ? [tr("OAuth client secret")] : []),
+  ];
+  const unusableFields = placeholders
+    .filter((ph) => (values[ph] ?? "").trim() !== "" && !placeholderValueOK(values[ph] ?? ""))
+    .map(placeholderLabel);
+
   const submit = async () => {
     const ok = await onAdd({
       ...(placeholders.length > 0 ? { url: filledURL } : {}),
@@ -1064,11 +1078,26 @@ function DirectoryCard({
               data-testid={`dir-form-add-${entry.name}`}
               onClick={() => void submit()}
               disabled={busy || !ready}
+              aria-describedby={ready ? undefined : `dirFormMissing-${entry.name}`}
               className={dirAddButtonClass(false)}
             >
               {tr("Add")}
             </button>
           </div>
+          {/* The same terms as `ready`, in the order the fields appear. A
+              value that is filled in but unusable (it has a space or a brace,
+              which would corrupt the URL) is named separately: "fill in" would
+              be the wrong thing to say about a field that is not empty. */}
+          {missingFields.length > 0 ? (
+            <MissingFieldsHint block id={`dirFormMissing-${entry.name}`} missing={missingFields} />
+          ) : unusableFields.length > 0 ? (
+            <p
+              id={`dirFormMissing-${entry.name}`}
+              className="m-0 w-full text-right text-[0.72rem] text-[var(--color-text-muted)]"
+            >
+              {tr("To continue, remove spaces and braces from: {0}", [unusableFields.join(", ")])}
+            </p>
+          ) : null}
         </FormShell>
       ) : null}
     </div>
@@ -1351,6 +1380,13 @@ function MS365SetupDialog({
       </div>
 
       <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-[var(--color-border-subtle)] bg-[var(--color-surface-1)] px-5 pb-[max(0.875rem,env(safe-area-inset-bottom))] pt-3.5 sm:pb-3.5 max-sm:px-4">
+        {canEdit ? (
+          <MissingFieldsHint
+            block
+            id="ms365ConfigMissing"
+            missing={clientId.trim() ? [] : [tr("Application (client) ID")]}
+          />
+        ) : null}
         <div>
           {config?.source === "db" && canEdit ? (
             <InlineConfirmButton
@@ -1375,6 +1411,7 @@ function MS365SetupDialog({
               type="button"
               data-testid="ms365-save-config-btn"
               disabled={busy || !clientId.trim()}
+              aria-describedby={clientId.trim() ? undefined : "ms365ConfigMissing"}
               onClick={() =>
                 void onSave(clientId.trim(), tenantId.trim() || "common")
               }
@@ -2399,10 +2436,17 @@ function ConnectionsPageInner() {
                 <button
                   type="submit"
                   disabled={busy || !name.trim() || !url.trim()}
+                  aria-describedby={name.trim() && url.trim() ? undefined : "remoteServerMissing"}
                   className={btnClass({ variant: "primary" })}
                 >
                   {tr("Add")}
                 </button>
+                <MissingFieldsHint
+                  block
+                  align="left"
+                  id="remoteServerMissing"
+                  missing={[...(name.trim() ? [] : [tr("Name")]), ...(url.trim() ? [] : [tr("Server URL")])]}
+                />
               </ConnForm>
             </form>
           ) : null}

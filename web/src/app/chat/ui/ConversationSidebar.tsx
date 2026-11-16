@@ -2182,7 +2182,9 @@ export function ConversationSidebar({
                               </span>
                             ) : null}
                             {ownerShort ? (
-                              <span className="shrink-0 font-[family-name:var(--font-code)] text-[0.66rem] text-[var(--color-text-muted)]">
+                              // Shortens, never pushes: a long mailbox name
+                              // ran out of the row and over the sidebar edge.
+                              <span className="max-w-[45%] min-w-0 shrink truncate font-[family-name:var(--font-code)] text-[0.66rem] text-[var(--color-text-muted)]">
                                 {ownerShort}
                               </span>
                             ) : null}

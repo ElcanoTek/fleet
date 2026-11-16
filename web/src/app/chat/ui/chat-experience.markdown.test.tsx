@@ -174,19 +174,113 @@ describe("renderAssistantContent — blocks", () => {
     expect(container.textContent).toContain("<kbd>K</kbd>");
   });
 
-  // Outside a table, only a <br> that ends a line is a line break: in the
-  // middle of a sentence it is someone naming the tag, and stays as typed.
-  it("keeps a <br> named in a sentence and breaks at one that ends a line", () => {
-    const named = renderMarkdown("How do I use the <br> tag in an email?");
-    expect(named.container.querySelector("br")).toBeNull();
-    expect(named.container.textContent).toContain("the <br> tag");
-    named.unmount();
+  // The whole rule for a literal <br>: a line break inside a table cell when
+  // it has content on both sides, text everywhere else. Every row below is a case that an
+  // earlier, cleverer rule got wrong in one direction or the other; a change
+  // to the rule has to say what happens to each of them.
+  describe("a literal <br>", () => {
+    const shown = (md: string) => {
+      const view = renderMarkdown(md);
+      const text = view.container.textContent ?? "";
+      const breaks = view.container.querySelectorAll("br").length;
+      view.unmount();
+      return { text, breaks };
+    };
 
-    const { container } = renderMarkdown("Acme Corp<br>\n123 Main St<br/>\nSpringfield");
-    const p = container.querySelector("p")!;
-    expect(p.querySelectorAll("br")).toHaveLength(2);
-    // One newline per break: the source line ending is not kept as well.
-    expect(p.textContent).toBe("Acme Corp\n123 Main St\nSpringfield");
+    it.each([
+      // naming the tag
+      "How do I use the <br> tag in an email?",
+      "The tag for a line break is <br>",
+      "The tag is:<br>",
+      "Use <br>, not two spaces, and (<br>) too.",
+      'He typed "<br>" and it vanished.',
+      "Self-closing form: <br/>. Old form: <br>.",
+      "the sequence <br><br> makes a blank line",
+      "<br>s are everywhere",
+      // HTML and code written without backticks
+      "Fix this for me: <p>Hello<br>World</p>",
+      "Why does <div><br></div> add a gap?",
+      "Common void tags: <img>,<br>,<hr> and <input>.",
+      "In HTML a<br>b puts b on a new line.",
+      'echo "Hello<br>World";',
+      "return <div>a<br/>b</div>;",
+      "Here is my template:\n<span>Name<br>Title</span>",
+      "In HTML you break a line with <br>\nand a paragraph with <p>.",
+      // used as formatting outside a table: still shown, never guessed at
+      "Acme Corp<br>\n123 Main St<br>\nSpringfield",
+      "Thanks,<br>\nJohn<br>",
+      "First<br><br>\nSecond",
+      "Acme Corp<br>",
+      "Name<br>Title<br>Company",
+      "Name<br> Title",
+      "Best regards,<br>\n<br>John Smith",
+      "Options:<br>\n\n- one",
+      "- Alpha<br>\n- Beta",
+      "> Line one<br>\n> Line two",
+      "## Title<br>Subtitle",
+      // on a line of its own, and whole messages made of it
+      "The tag you want is:\n\n<br>\n\nPut it at the end of the line.",
+      "Before\n\n<br>\nAfter",
+      "<br>",
+      "<br>\n\n<br>",
+      "<br><br>",
+    ])("is shown as typed outside a table: %j", (md) => {
+      const { text, breaks } = shown(md);
+      const typed = (md.match(/<br\s*\/?>/gi) ?? []).length;
+      expect((text.match(/<br\s*\/?>/gi) ?? []).length).toBe(typed);
+      // Markdown's own hard breaks are the only <br> elements there can be.
+      expect(breaks).toBe(0);
+    });
+
+    // Inside a table cell: [the cell as typed, line breaks, tags left showing].
+    // A tag is a break only with content on both sides of it in the cell.
+    const CELLS = [
+      // Between two things: formatting.
+      ["25 seats<br>Priority support<br/>SSO", 2, 0],
+      ["a<BR>b", 1, 0],
+      ["a <br> b", 1, 0],
+      ["x<br><br>y", 2, 0],
+      ["**x<br>y**", 1, 0],
+      ["*a*<br>`code`", 1, 0],
+      ["[link](https://example.com)<br>after", 1, 0],
+      // Nothing on one side: the tag is what the cell is about.
+      ["<br>", 0, 1],
+      ["<br><br>", 0, 2],
+      ["<br> or <br/>", 0, 2],
+      ["<br> tag", 0, 1],
+      ["Use <br>", 0, 1],
+      ["text<br>", 0, 1],
+      ["<br>a<br>b<br>", 1, 2],
+      // In code it is never a tag at all.
+      ["`<br>`", 0, 1],
+      ["a `<br>` b", 0, 1],
+      ["a `x<br>y` b", 0, 1],
+      // Accepted: HTML pasted into a cell without backticks loses the tag it
+      // has content around. Backticks keep it.
+      ["<p>Hello<br>World</p>", 1, 0],
+    ] as const;
+    it.each(CELLS)("in a table cell: %j -> %i break(s), %i shown", (cell, breaks, shownTags) => {
+      for (const md of [`| Plan |\n|---|\n| ${cell} |`, `| ${cell} | B |\n|---|---|\n| 1 | 2 |`]) {
+        const view = renderMarkdown(md);
+        const el = view.container.querySelector(md.startsWith("| Plan") ? "td" : "th");
+        expect(el?.querySelectorAll("br")).toHaveLength(breaks);
+        expect((el?.textContent?.match(/<br\s*\/?>/gi) ?? []).length).toBe(shownTags);
+        view.unmount();
+      }
+    });
+
+    it("decides each cell by itself", () => {
+      const view = renderMarkdown("| Tag | Meaning |\n|---|---|\n| <br> | first<br>second |");
+      const cells = [...view.container.querySelectorAll("td")];
+      expect(cells[0].textContent).toBe("<br>");
+      expect(cells[1].querySelectorAll("br")).toHaveLength(1);
+    });
+
+    it("leaves Markdown's own hard break alone", () => {
+      const { text, breaks } = shown("Line one  \nLine two");
+      expect(breaks).toBe(1);
+      expect(text).toBe("Line one\nLine two");
+    });
   });
 
   it("names a task-list checkbox and keeps it read-only", () => {

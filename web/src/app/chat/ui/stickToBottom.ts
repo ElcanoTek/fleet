@@ -114,6 +114,14 @@ export type FollowBottomInput = {
    * measured as nothing. Omitted, the guesses apply as before.
    */
   wasPinned?: boolean;
+  /**
+   * true for the one re-check made when a smooth follow of ours lands, on
+   * behalf of changes that arrived while it was under way. The reader was
+   * being carried to the end throughout (had they scrolled up, `wasPinned`
+   * would be false), so they are carried the rest of the way however much
+   * the content grew meanwhile; the idle window is for a reader at rest.
+   */
+  afterOwnFollow?: boolean;
 };
 
 /**
@@ -128,6 +136,7 @@ export function decideFollowBottom({
   prefersReducedMotion,
   heightOnly = false,
   wasPinned,
+  afterOwnFollow = false,
 }: FollowBottomInput): FollowBottomDecision {
   // Instant while streaming (deltas arrive faster than an animation can
   // finish) and instant under reduced motion; smooth only for the one-off
@@ -151,7 +160,16 @@ export function decideFollowBottom({
   // scrolling away. A row that merely changed height at rest keeps the
   // window even for them, so opening a tall panel in the last reply does not
   // scroll the control they just pressed out of view.
-  const carriedPastWindow = wasPinned === true && !restingRemeasure;
+  const carriedPastWindow = wasPinned === true && (!restingRemeasure || afterOwnFollow);
+  // We are already carrying this reader to the end (a smooth follow of ours
+  // is under way and they have not scrolled up since). Until it lands, the
+  // distance is the animation's, not theirs: a row that re-measures one frame
+  // after a tall message arrived would otherwise find them "far from the end"
+  // and count them as having scrolled away, with nothing left to bring them
+  // the rest of the way. Wait for the landing and judge then.
+  if (behavior === "smooth" && smoothFollowInFlight && wasPinned === true) {
+    return { follow: false, reason: "smooth-follow-in-flight" };
+  }
   if (distanceFromBottom > followWindow && !carriedPastWindow) {
     return { follow: false, reason: "user-scrolled-away" };
   }
@@ -225,6 +243,17 @@ export function requestFollowBottom(): void {
 
 /** How long after a request to be at the end the pin survives a change that outran the scroll there. */
 export const PIN_HOLD_MS = 1500;
+/** How long after the app places the reader before their position is read back. */
+export const HOLD_SETTLE_MS = 400;
+
+// The opposite request: the app has just put the reader at a particular
+// message (the Board asking for the approval that is waiting). They are no
+// longer at the end, and nothing pending (the return to the end or to their
+// old place when the transcript is shown again) may move them.
+const holdRequests = new Set<() => void>();
+export function requestHoldPosition(): void {
+  for (const hold of holdRequests) hold();
+}
 
 export type UseStickToBottomInput = {
   /** The scrolling transcript container. */
@@ -286,7 +315,7 @@ export function useStickToBottom({
     messages: readonly unknown[];
     isStreaming: boolean;
   } | null>(null);
-  const runRef = useRef<(heightOnly: boolean, baseline: number | null) => void>(
+  const runRef = useRef<(heightOnly: boolean, baseline: number | null, afterOwnFollow?: boolean) => void>(
     () => {},
   );
   // Whether the reader is at the end: true until they scroll up, true again
@@ -308,6 +337,7 @@ export function useStickToBottom({
   // its scroll position, so it is put back when the box returns.
   const lastVisibleTopRef = useRef<number | null>(null);
   const wasHiddenRef = useRef(false);
+  const skipRestoreRef = useRef(false);
   const visibilityObserverRef = useRef<ResizeObserver | null>(null);
 
   useEffect(() => {
@@ -316,9 +346,33 @@ export function useStickToBottom({
       lastScrollRef.current = null;
       pinHeldUntilRef.current = Date.now() + PIN_HOLD_MS;
     };
+    let holdCheck: number | null = null;
+    const hold = () => {
+      pinnedRef.current = false;
+      pinHeldUntilRef.current = 0;
+      lastScrollRef.current = null;
+      // The place they were put may be the end itself (the message asked
+      // for is the last one): once the jump has settled, read it back, or a
+      // reader sitting at the end would count as scrolled away until they
+      // next moved.
+      if (holdCheck !== null) window.clearTimeout(holdCheck);
+      holdCheck = window.setTimeout(() => {
+        holdCheck = null;
+        const el = listenedRef.current;
+        if (el && el.clientHeight > 0 && el.scrollHeight - el.scrollTop - el.clientHeight <= FOLLOW_BOTTOM_EPSILON_PX) {
+          pinnedRef.current = true;
+        }
+      }, HOLD_SETTLE_MS);
+      // Shown in the same step as the jump: the observer has not noticed
+      // the return yet, and must not put the reader back when it does.
+      skipRestoreRef.current = wasHiddenRef.current;
+    };
     followRequests.add(pin);
+    holdRequests.add(hold);
     return () => {
       followRequests.delete(pin);
+      holdRequests.delete(hold);
+      if (holdCheck !== null) window.clearTimeout(holdCheck);
     };
   }, []);
 
@@ -331,6 +385,11 @@ export function useStickToBottom({
         window.clearTimeout(settleTimerRef.current);
         settleTimerRef.current = null;
       }
+      // The timer is what would have cleared these. Left set (React's strict
+      // mode unmounts and remounts once in development), every later follow
+      // would be told one was still in flight, for good.
+      smoothFollowInFlightRef.current = false;
+      recheckAfterSettleRef.current = null;
       listenedRef.current?.removeEventListener("scroll", onScrollRef.current);
       listenedRef.current = null;
       visibilityObserverRef.current?.disconnect();
@@ -378,22 +437,38 @@ export function useStickToBottom({
             wasHiddenRef.current = true;
             return;
           }
-          if (!wasHiddenRef.current) return;
+          if (!wasHiddenRef.current) {
+            // A hold asked for while the transcript was on screen has
+            // nothing to skip.
+            skipRestoreRef.current = false;
+            return;
+          }
           wasHiddenRef.current = false;
           lastScrollRef.current = null;
+          // The app placed the reader itself in the same step (see
+          // requestHoldPosition): leave them there.
+          if (skipRestoreRef.current) {
+            skipRestoreRef.current = false;
+            lastVisibleTopRef.current = el.scrollTop;
+            return;
+          }
+          const remembered = lastVisibleTopRef.current;
           if (!pinnedRef.current) {
-            if (lastVisibleTopRef.current !== null) el.scrollTop = lastVisibleTopRef.current;
+            if (remembered !== null) el.scrollTop = remembered;
             return;
           }
           // At the end before, at the end now. The rows are measured again
           // over the next frames and the end moves with them, so go there
           // again once they have, and do not let that re-measuring count as
-          // the reader having been left behind.
+          // the reader having been left behind. It stops by itself the
+          // moment they stop counting as at the end: the reader scrolling up
+          // or the app placing them (requestHoldPosition) both clear the pin.
+          // Nothing else is taken as a reason to stop: the browser and the
+          // virtualizer adjust the position themselves while rows settle.
           pinHeldUntilRef.current = Date.now() + PIN_HOLD_MS;
           const toEnd = () => {
-            if (listenedRef.current === el && pinnedRef.current && el.clientHeight > 0) {
-              el.scrollTop = el.scrollHeight;
-            }
+            if (listenedRef.current !== el || !pinnedRef.current || el.clientHeight === 0) return;
+            el.scrollTop = el.scrollHeight;
           };
           toEnd();
           requestAnimationFrame(() => {
@@ -431,7 +506,7 @@ export function useStickToBottom({
       };
       liveScroller?.addEventListener("scroll", onScrollRef.current, { passive: true });
     }
-    runRef.current = (runHeightOnly, baseline) => {
+    runRef.current = (runHeightOnly, baseline, afterOwnFollow = false) => {
       const sentinel = streamEndRef.current;
       if (!sentinel) return;
       const scroller = conversationRef.current;
@@ -457,6 +532,7 @@ export function useStickToBottom({
         smoothFollowInFlight: smoothFollowInFlightRef.current,
         prefersReducedMotion: prefersReducedMotion(),
         heightOnly: runHeightOnly,
+        afterOwnFollow,
         // Only where the scroll listener could be attached; otherwise the
         // decision falls back to its own estimate.
         wasPinned: listenedRef.current ? pinnedRef.current : undefined,
@@ -498,6 +574,7 @@ export function useStickToBottom({
             runRef.current(
               pending.heightOnly,
               pending.heightOnly ? pending.baseline : previousScrollHeightRef.current,
+              true,
             );
           }
         }, SMOOTH_FOLLOW_SETTLE_MS);

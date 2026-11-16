@@ -8,6 +8,7 @@ import {
   STREAMING_FOLLOW_WINDOW_PX,
   decideFollowBottom,
   requestFollowBottom,
+  requestHoldPosition,
   useStickToBottom,
   type FollowBottomInput,
 } from "./stickToBottom";
@@ -235,6 +236,58 @@ describe("decideFollowBottom", () => {
         heightOnly: true,
         wasPinned: true,
       }),
+    ).toEqual({ follow: false, reason: "user-scrolled-away" });
+  });
+});
+
+// A smooth follow of ours is under way: who is judged by distance, and who
+// waits for it to land. One row per combination.
+describe("decideFollowBottom while our own smooth follow is in flight", () => {
+  const far = { scrollTop: 400, scrollHeight: 2000, clientHeight: 600 }; // 1000px from the end
+  const near = { scrollTop: 1300, scrollHeight: 2000, clientHeight: 600 }; // 100px from the end
+  it.each([
+    // pinned, heightOnly, metrics, expected reason
+    // Still pinned: wait for the landing, however far the animation has to go.
+    [true, true, far, "smooth-follow-in-flight"],
+    [true, false, far, "smooth-follow-in-flight"],
+    [true, true, near, "smooth-follow-in-flight"],
+    [true, false, near, "smooth-follow-in-flight"],
+    // Scrolled up during the animation: they left, and distance says so.
+    [false, true, far, "user-scrolled-away"],
+    [false, false, far, "user-scrolled-away"],
+    // Not known to be pinned, but near the end: the animation is still ours.
+    [false, false, near, "smooth-follow-in-flight"],
+  ] as const)("pinned=%s heightOnly=%s: %o -> %s", (wasPinned, heightOnly, metrics, reason) => {
+    expect(
+      decide({ metrics, previousScrollHeight: 1980, smoothFollowInFlight: true, heightOnly, wasPinned }),
+    ).toEqual({ follow: false, reason });
+  });
+
+  // The re-check when that follow lands. The reader was being carried the
+  // whole time, so they are carried the rest of the way, however much grew.
+  it.each([
+    // pinned, heightOnly, expected
+    [true, true, { follow: true, behavior: "smooth" }],
+    [true, false, { follow: true, behavior: "smooth" }],
+    // They scrolled up while it was under way: left where they are.
+    [false, true, { follow: false, reason: "user-scrolled-away" }],
+    [false, false, { follow: false, reason: "user-scrolled-away" }],
+  ] as const)("the landing re-check, pinned=%s heightOnly=%s, far from the end", (wasPinned, heightOnly, expected) => {
+    expect(
+      decide({ metrics: far, previousScrollHeight: 1700, heightOnly, wasPinned, afterOwnFollow: true }),
+    ).toEqual(expected);
+  });
+
+  it("does not carry a reader at rest past the window just because a row grew (no follow of ours was under way)", () => {
+    expect(decide({ metrics: far, previousScrollHeight: 1700, heightOnly: true, wasPinned: true })).toEqual({
+      follow: false,
+      reason: "user-scrolled-away",
+    });
+  });
+
+  it("is judged by distance as before when streaming or under reduced motion (nothing is in flight)", () => {
+    expect(
+      decide({ metrics: far, previousScrollHeight: 1980, smoothFollowInFlight: true, heightOnly: true, wasPinned: true, prefersReducedMotion: true }),
     ).toEqual({ follow: false, reason: "user-scrolled-away" });
   });
 });
@@ -530,6 +583,125 @@ describe("useStickToBottom", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  // The app placed the reader at a particular message: they are not at the
+  // end any more, however they got there.
+  it("stops following once the app has placed the reader somewhere", () => {
+    vi.useFakeTimers();
+    try {
+      const { scroller, refs } = liveHarness();
+      const { rerender } = renderHook(
+        ({ messages }: { messages: readonly unknown[] }) =>
+          useStickToBottom({ ...refs, messages, isStreaming: false }),
+        { initialProps: { messages: [1] as readonly unknown[] } },
+      );
+      vi.advanceTimersByTime(SMOOTH_FOLLOW_SETTLE_MS);
+      expect(scroller.scrollTo).toHaveBeenCalledTimes(1);
+
+      requestHoldPosition();
+      scroller.scrollTop = 200;
+      scroller.scrollHeight = 2900;
+      rerender({ messages: [1, 2] });
+      expect(scroller.scrollTo).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Hidden (another pane or page laid over the chat) and shown again: a
+  // hidden box forgets its scroll position, so the hook puts the reader back.
+  describe("when the transcript is hidden and shown again", () => {
+    function hiddenHarness() {
+      const h = liveHarness();
+      let observed: (() => void) | null = null;
+      vi.stubGlobal(
+        "ResizeObserver",
+        class {
+          constructor(cb: () => void) {
+            observed = cb;
+          }
+          observe() {}
+          disconnect() {}
+        },
+      );
+      vi.stubGlobal("requestAnimationFrame", (cb: () => void) => {
+        cb();
+        return 0;
+      });
+      return {
+        ...h,
+        hide() {
+          Object.assign(h.scroller, { scrollTop: 0, clientHeight: 0 });
+          observed?.();
+        },
+        show() {
+          Object.assign(h.scroller, { scrollTop: 0, clientHeight: 600 });
+          observed?.();
+        },
+      };
+    }
+    const mount = (refs: ReturnType<typeof hiddenHarness>["refs"]) =>
+      renderHook(() => useStickToBottom({ ...refs, messages: [1], isStreaming: false }));
+
+    it("returns a reader who had scrolled up to where they were", () => {
+      vi.useFakeTimers();
+      try {
+        const { scroller, userScrollsTo, hide, show, refs } = hiddenHarness();
+        mount(refs);
+        userScrollsTo(1400);
+        userScrollsTo(500);
+        hide();
+        show();
+        expect(scroller.scrollTop).toBe(500);
+      } finally {
+        vi.useRealTimers();
+        vi.unstubAllGlobals();
+      }
+    });
+
+    it("returns a reader who was at the end to the end, even as it moves", () => {
+      vi.useFakeTimers();
+      try {
+        const { scroller, userScrollsTo, hide, show, refs } = hiddenHarness();
+        mount(refs);
+        userScrollsTo(1400);
+        hide();
+        show();
+        expect(scroller.scrollTop).toBe(2000);
+        // Rows settle: something else nudges the position and the end moves.
+        scroller.scrollTop = 1500;
+        scroller.scrollHeight = 2400;
+        vi.advanceTimersByTime(250);
+        expect(scroller.scrollTop).toBe(2400);
+      } finally {
+        vi.useRealTimers();
+        vi.unstubAllGlobals();
+      }
+    });
+
+    it("leaves a reader the app placed in the same step where they were put", () => {
+      vi.useFakeTimers();
+      try {
+        const { scroller, userScrollsTo, hide, show, refs } = hiddenHarness();
+        mount(refs);
+        userScrollsTo(1400);
+        userScrollsTo(500);
+        hide();
+        // The Board asks for a message: the pane is shown and scrolled there
+        // before the observer has noticed the return.
+        Object.assign(scroller, { clientHeight: 600 });
+        requestHoldPosition();
+        scroller.scrollTop = 900;
+        show.call(null);
+        scroller.scrollTop = 900;
+        vi.advanceTimersByTime(250);
+        expect(scroller.scrollTop).toBe(900);
+      } finally {
+        vi.useRealTimers();
+        vi.unstubAllGlobals();
+      }
+    });
   });
 
   // The scrolling element is shared between conversations: "scrolled up" in

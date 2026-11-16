@@ -9,6 +9,7 @@ import {
   InlineConfirmButton,
   RevealButton,
   SETTINGS_INPUT,
+  FormActions,
   MissingFieldsHint,
   useFocusOnOpen,
 } from "../ui/atoms";
@@ -135,7 +136,7 @@ export default function SkillsPage() {
   const [openMine, setOpenMine] = useState<string | null>(null);
   // The builder form: id === "" is a new skill; otherwise an edit.
   const [draft, setDraft] = useState<typeof EMPTY_DRAFT | null>(null);
-  const firstFieldRef = useFocusOnOpen<HTMLInputElement>(draft !== null);
+  const firstFieldRef = useFocusOnOpen<HTMLInputElement>(draft !== null, draft?.id ?? null);
   const [busy, setBusy] = useState(false);
   const editorRef = useRef<HTMLDivElement | null>(null);
 
@@ -507,8 +508,10 @@ export default function SkillsPage() {
             </label>
             {/* The design tightens .conn-form-actions' top margin inside
                 .skill-create (the grid gap already provides the spacing). */}
-            <div className="mt-[0.1rem] flex flex-wrap items-center justify-end gap-2">
-              <MissingFieldsHint id="skillMissing" missing={draft.name.trim() ? [] : [tr("Name")]} />
+            <FormActions
+              className="mt-[0.1rem]"
+              hint={<MissingFieldsHint id="skillMissing" missing={draft.name.trim() ? [] : [tr("Name")]} />}
+            >
               <button
                 type="button"
                 className={btnClass({ sm: true, reveal: true })}
@@ -525,7 +528,7 @@ export default function SkillsPage() {
               >
                 {draft.id === "" ? tr("Create skill") : tr("Save changes")}
               </button>
-            </div>
+            </FormActions>
           </div>
         ) : null}
 

@@ -33,6 +33,7 @@ import { NavToChat, NavToOrchestrator } from "./CrossViewNav";
 import { CloseButton } from "./CloseButton";
 import { Icon } from "./Icon";
 import { AccountMenu } from "./AccountMenu";
+import { isInteractiveTarget } from "./interactiveTarget";
 import { readPref, writePref } from "@/app/shared/lib/storage";
 
 // "settings" renders the rail with neither surface active (the design's
@@ -149,6 +150,21 @@ function overlayFocusables(container: HTMLElement): HTMLElement[] {
   ).filter((el) => el instanceof HTMLElement && el.offsetParent !== null);
 }
 
+// Chat's "j" / "k" shortcut opens the phone drawer to show the list cursor,
+// and its Enter opens the chat under that cursor, but only while no control
+// has focus. The shortcut calls this just before it opens the drawer (not
+// when the drawer is already open), so the drawer can tell that opening from
+// one made with its button. The drawer's effect reads the mark and clears it
+// every time the drawer opens or closes, so a mark nothing used (the rail is
+// not a drawer at this width) is gone by the close that must come before the
+// next opening. No clock is involved: an earlier version let the mark expire
+// after half a second, which made a slow render look like a button press.
+const LAYER_ABOVE_DRAWER = '[role="menu"], [role="dialog"], [role="alertdialog"], [role="listbox"]';
+let drawerOpenedByShortcut = false;
+export function keepFocusForDrawerShortcut(): void {
+  drawerOpenedByShortcut = true;
+}
+
 export function NavRail({
   activeView,
   brandName,
@@ -212,6 +228,8 @@ export function NavRail({
   // A menu or dialog opened from the drawer is portaled out of it and runs
   // its own trap, so focus inside one is left alone.
   useEffect(() => {
+    const byShortcut = drawerOpenedByShortcut;
+    drawerOpenedByShortcut = false;
     if (!sidebarOpen) return;
     // The same test the layout uses (Tailwind's sm is 40rem, which follows
     // the reader's font size), so the handling is on exactly while the rail
@@ -223,15 +241,27 @@ export function NavRail({
     // On the frame the drawer opens it is still `invisible` (the visibility
     // change rides the slide's transition and has not started), and a hidden
     // element refuses focus: so try now, then again once it has begun.
-    // Only when focus was on a control (the button that opened the drawer):
-    // it would otherwise be left on something the drawer now covers. With
-    // focus on the page itself nothing is stranded, and Chat's "j" / "k"
-    // shortcut opens the drawer that way: Enter must still open the chat
-    // under its cursor, which it declines to do while a button has focus.
-    const openedFromControl = document.activeElement !== null && document.activeElement !== document.body;
+    // Where focus goes when the drawer opens, by how it was opened and what
+    // had focus (NavRail.test.tsx has one test per row):
+    //
+    //   opened by            focus was on             focus goes
+    //   its button, a tap    anything                 into the drawer
+    //   the j / k shortcut   a control (owns Enter)   into the drawer
+    //   the j / k shortcut   anything else, nothing   stays where it is
+    //
+    // The last row is the only exception, and it needs both halves. Enter
+    // opens the chat under the list cursor only while no control has focus,
+    // so the shortcut must not put focus on one. But a control that already
+    // has focus is now underneath the drawer, and leaving it there would
+    // let Enter press something the reader cannot see. "Is a control" is
+    // the very test Enter uses (isInteractiveTarget), so the two cannot
+    // disagree. "Was a control focused" cannot replace "was it opened from
+    // its button" either: Safari does not focus a button when it is clicked
+    // or tapped.
+    const stayOnPage = byShortcut && !isInteractiveTarget(document.activeElement);
     const focusIn = () => {
       const aside = asideRef.current;
-      if (openedFromControl && aside && !aside.contains(document.activeElement)) {
+      if (!stayOnPage && aside && !aside.contains(document.activeElement)) {
         overlayFocusables(aside)[0]?.focus();
       }
     };
@@ -242,20 +272,31 @@ export function NavRail({
     });
     const onKey = (e: KeyboardEvent) => {
       if (!isPhone()) return;
+      const rail = asideRef.current;
+      // A menu or dialog opened from the drawer sits on top of it and is
+      // portaled out of it. Its keys are its own: Escape there closes that
+      // layer only (closing the drawer too would leave it handing focus back
+      // to a button that is no longer on screen), and Tab is its trap's.
+      const active = document.activeElement;
+      const inLayerAbove =
+        active instanceof Element &&
+        !(rail?.contains(active) ?? false) &&
+        active.closest(LAYER_ABOVE_DRAWER) !== null;
       if (e.key === "Escape") {
-        setSidebarOpen(false);
+        // defaultPrevented: a dialog's own handler (useDialogA11y listens on
+        // document, before this) has already used this Escape to close
+        // itself and put focus back on its trigger inside the rail, so by
+        // now focus alone no longer says a layer was open.
+        if (!inLayerAbove && !e.defaultPrevented) setSidebarOpen(false);
         return;
       }
-      if (e.key !== "Tab") return;
-      const rail = asideRef.current;
+      if (e.key !== "Tab" || inLayerAbove) return;
       if (!rail) return;
       const items = overlayFocusables(rail);
       if (items.length === 0) return;
       const first = items[0];
       const last = items[items.length - 1];
-      const active = document.activeElement;
       if (active instanceof Element && !rail.contains(active)) {
-        if (active.closest('[role="menu"], [role="dialog"], [role="alertdialog"], [role="listbox"]')) return;
         e.preventDefault();
         (e.shiftKey ? last : first).focus();
       } else if (e.shiftKey && active === first) {

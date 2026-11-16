@@ -2600,6 +2600,7 @@
   "Parallel Task": "Parallel Task",
   "Pass": "Correcto",
   "Password": "Contraseña",
+  "Password (at least 8 characters)": "Contraseña (al menos 8 caracteres)",
   "Password must be at least 8 characters": "La contraseña debe tener al menos 8 caracteres",
   "Password sign-in is turned off here. Sign in with SSO.": "El inicio de sesión con contraseña está desactivado aquí. Inicia sesión con SSO.",
   "Paste or attach a document and get a concise summary.": "Pega o adjunta un documento para obtener un resumen conciso.",
@@ -5661,5 +5662,7 @@
   "Added to the end of each task's prompt (everything else is kept):": "Se añade al final del prompt de cada tarea (todo lo demás se conserva):",
   "New prompt — replaces each task's whole current prompt; anything not in this text is removed:": "Nuevo prompt: reemplaza todo el prompt actual de cada tarea; se elimina todo lo que no esté en este texto:",
   "manage_tasks: action 'show' is read-only and is never approved; nothing was changed": "manage_tasks: la acción 'show' es de solo lectura y nunca se aprueba; no se cambió nada",
-  "To continue, fill in: {0}": "Para continuar, completa: {0}"
+  "To continue, fill in: {0}": "Para continuar, completa: {0}",
+  "To continue, remove spaces and braces from: {0}": "Para continuar, quita los espacios y las llaves de: {0}",
+  "Short name": "Nombre corto"
 }

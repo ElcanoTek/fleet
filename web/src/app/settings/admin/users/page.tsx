@@ -25,6 +25,7 @@ import { fetchStats, formatAgo, type UserStat } from "../lib";
 import {
   InlineConfirmButton,
   RevealButton,
+  MissingFieldsHint,
   useFocusOnOpen,
 } from "../../ui/atoms";
 import { ConnField, ConnForm, ConnPanel, SetSection } from "../../ui/panels";
@@ -1449,9 +1450,19 @@ export default function AdminUsersPage() {
                     type="button"
                     onClick={() => void addUser()}
                     disabled={addDisabled}
+                    aria-describedby={newEmail.trim() !== "" && newPassword.length >= 8 ? undefined : "newUserMissing"}
                   >
                     {addStatus === "saving" ? tr("Adding…") : tr("Add user")}
                   </Button>
+                  <MissingFieldsHint
+                    block
+                    align="left"
+                    id="newUserMissing"
+                    missing={[
+                      ...(newEmail.trim() === "" ? [tr("Email")] : []),
+                      ...(newPassword.length < 8 ? [tr("Password (at least 8 characters)")] : []),
+                    ]}
+                  />
                 </ConnForm>
               ) : null}
               {addStatus && addStatus !== "saving" ? (

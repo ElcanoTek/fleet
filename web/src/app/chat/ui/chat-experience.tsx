@@ -120,7 +120,8 @@ import { TeamLinkNotice, type TeamLinkNoticeState } from "./TeamLinkNotice";
 import { BranchOriginBanner } from "./TeamBranchBanners";
 import { WithheldFilesContext } from "./LockedFiles";
 import { DownloadChatDialog, type DownloadOptions } from "./DownloadChatDialog";
-import { useRailCollapse } from "@/app/shared/ui/NavRail";
+import { useRailCollapse, keepFocusForDrawerShortcut } from "@/app/shared/ui/NavRail";
+import { isInteractiveTarget } from "@/app/shared/ui/interactiveTarget";
 import { loadWorkspaceModelCatalog } from "@/app/shared/lib/workspaceModels";
 import {
   catalogModelSlug,
@@ -481,31 +482,6 @@ const shortcutHelpGroups: ShortcutHelpGroup[] = [
     ],
   },
 ];
-
-// isInteractiveTarget reports whether an element owns Enter itself (a button,
-// link, or ARIA widget), so the global Enter-to-open shortcut can decline to
-// claim the key — and thus never preventDefault — when one of these is focused.
-function isInteractiveTarget(el: Element | null): boolean {
-  if (!(el instanceof HTMLElement)) return false;
-  const tag = el.tagName;
-  if (
-    tag === "BUTTON" ||
-    tag === "A" ||
-    tag === "INPUT" ||
-    tag === "TEXTAREA" ||
-    tag === "SELECT"
-  ) {
-    return true;
-  }
-  const role = el.getAttribute("role");
-  return (
-    role === "button" ||
-    role === "link" ||
-    role === "menuitem" ||
-    role === "option" ||
-    role === "tab"
-  );
-}
 
 // ── component ────────────────────────────────────────────────────────────
 
@@ -5100,6 +5076,7 @@ export function ChatExperience({
   const moveFocus = useCallback(
     (delta: number) => {
       if (visibleOrder.length === 0) return;
+      if (!sidebarOpen) keepFocusForDrawerShortcut();
       setSidebarOpen(true);
       const idx = focusedConversationId
         ? visibleOrder.findIndex((c) => c.id === focusedConversationId)
@@ -5112,7 +5089,7 @@ export function ChatExperience({
           : Math.min(visibleOrder.length - 1, Math.max(0, idx + delta));
       setFocusedConversationId(visibleOrder[next]?.id ?? null);
     },
-    [visibleOrder, focusedConversationId],
+    [visibleOrder, focusedConversationId, sidebarOpen],
   );
 
   // Keep the focused row in view as the cursor moves (the drawer/rail may be

@@ -18,6 +18,7 @@ import {
   RevealButton,
   Segmented,
   SETTINGS_INPUT,
+  FormActions,
   MissingFieldsHint,
   useFocusOnOpen,
 } from "../ui/atoms";
@@ -62,7 +63,7 @@ export default function PromptsPage() {
   const [scope, setScope] = useState<"all" | "yours" | "workspace" | "deployment">("all");
   const [openId, setOpenId] = useState<string | null>(null);
   const [draft, setDraft] = useState<DraftState | null>(null);
-  const firstFieldRef = useFocusOnOpen<HTMLInputElement>(draft !== null);
+  const firstFieldRef = useFocusOnOpen<HTMLInputElement>(draft !== null, draft?.id ?? null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -329,14 +330,18 @@ export default function PromptsPage() {
                     />
                     <span>{tr("Share with this workspace")}</span>
                   </label>
-                  <div className="flex flex-wrap items-center justify-end gap-2">
-                    <MissingFieldsHint
-                      id="promptMissing"
-                      missing={[
-                        ...(draft.name.trim() ? [] : [tr("Name")]),
-                        ...(draft.content.trim() ? [] : [tr("Prompt text")]),
-                      ]}
-                    />
+                  <FormActions
+                    className="min-w-0 max-sm:w-full"
+                    hint={
+                        <MissingFieldsHint
+                          id="promptMissing"
+                          missing={[
+                            ...(draft.name.trim() ? [] : [tr("Name")]),
+                            ...(draft.content.trim() ? [] : [tr("Prompt text")]),
+                          ]}
+                        />
+                    }
+                  >
                     <button
                       type="button"
                       className={btnClass({ sm: true, reveal: true })}
@@ -358,7 +363,7 @@ export default function PromptsPage() {
                           ? tr("Save changes")
                           : tr("Create prompt")}
                     </button>
-                  </div>
+                  </FormActions>
                 </div>
               </div>
             ) : null}
@@ -382,8 +387,8 @@ export default function PromptsPage() {
                       className={ROW}
                     >
                       <div className={ROW_HEAD}>
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="text-[0.86rem] font-semibold text-[var(--color-text-primary)]">
+                        <div className="flex min-w-0 flex-wrap items-center gap-2">
+                          <span className="min-w-0 text-[0.86rem] font-semibold text-[var(--color-text-primary)] [overflow-wrap:anywhere]">
                             {p.name}
                           </span>
                           <ConnBadge
@@ -522,8 +527,8 @@ export default function PromptsPage() {
                     className={ROW}
                   >
                     <div className={ROW_HEAD}>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="text-[0.86rem] font-semibold text-[var(--color-text-primary)]">
+                      <div className="flex min-w-0 flex-wrap items-center gap-2">
+                        <span className="min-w-0 text-[0.86rem] font-semibold text-[var(--color-text-primary)] [overflow-wrap:anywhere]">
                           {p.name}
                         </span>
                         <ConnBadge variant="neutral">Git</ConnBadge>

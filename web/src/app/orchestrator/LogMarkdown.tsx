@@ -14,11 +14,11 @@ import { t as tr } from "@/app/lib/i18n";
 
 import { memo, useMemo, useState } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { MODEL_MARKDOWN_PLUGINS } from "@/app/shared/lib/markdownPlugins";
 import { resolveTaskWorkspaceHref } from "@/app/chat/ui/workspaceHref";
 
 // Hoisted so every render hands react-markdown the same plugin list.
-const REMARK_PLUGINS = [remarkGfm];
+const REMARK_PLUGINS = MODEL_MARKDOWN_PLUGINS;
 
 // The components map is memoised on taskId (the only thing the overrides
 // close over): a fresh map each render would give react-markdown new img/a

@@ -1214,6 +1214,71 @@ body:has(> .shared-page)::before {
   }
 }
 
+/* Three defaults that keep a long, unbroken value (a file name, a URL, a 64-
+   character skill name, a long e-mail address) from making its container, and
+   then the page, wider than the screen. All were found the slow way: the same
+   failure fixed one screen at a time (reply column, sidebar nav, skill rows,
+   task cards, prompt rows, system checks…) across several audits.
+
+   1. A grid given no columns. `grid` alone makes one implicit column, and an
+      implicit column is as wide as its widest child's longest unbreakable
+      word, so one long value widened every row of the grid and whatever held
+      it. minmax(0, 1fr) is the same single column, the width of the grid,
+      that may also be narrower than its content. Any explicit column
+      definition (a grid-cols-* utility at any breakpoint, a class in this
+      file) outranks this: it is a zero-specificity rule in @layer base. Grids
+      that flow in columns are left alone, because there the first explicit
+      column would take all the spare room; so are grids that position their
+      column (place-content-*, justify-center and its kin: the checkbox's
+      tick), which need it to stay as narrow as its content. A grid whose
+      children are placed in a second column with col-start-* must declare
+      its columns (none does today except Flag's unused alert-dialog media
+      layout).
+
+   2. A badge. Flag's badge is a one-line, non-shrinking pill, which is right
+      for "Active" and wrong for a name that came from data: it could be wider
+      than the card it sits in. It may now be at most as wide as its container.
+      That stops it widening the page; it does not make the text readable (the
+      badge centres its content, so an overlong one is cut at both ends). A
+      badge that shows a value from data wraps it in <span class="truncate">,
+      which shortens it with an ellipsis instead.
+
+   In @layer base on purpose: these are defaults, and must lose to anything
+   more specific. src/app/layoutDefaults.test.ts keeps them in place and
+   web/e2e/mocked/layout-long-values.spec.ts checks the result in a browser.
+   What they do not cover is a flex row: there the item that holds the value
+   still needs min-w-0 (and truncate or a wrap), as always. */
+@layer base {
+  :where(.grid):where(
+      :not(
+        [class*="grid-flow-col"],
+        [class*="auto-cols-"],
+        [class*="place-content-"],
+        [class*="justify-center"],
+        [class*="justify-end"],
+        [class*="justify-between"],
+        [class*="justify-around"],
+        [class*="justify-evenly"]
+      )
+    ) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  :where([data-slot="badge"]) {
+    max-width: 100%;
+  }
+  /* 3. A word longer than its line. With the box the right width, a word with
+     no space in it still ran out of the box, because by default the browser
+     breaks a line only at a space. break-word lets it break such a word, and
+     only such a word: text that fits is laid out exactly as before, and
+     column widths are still worked out from whole words (which `anywhere`
+     would change, squeezing table columns). It is inherited, so one rule
+     covers every screen; nowrap text (anything that truncates) and code
+     blocks are untouched. */
+  :where(html) {
+    overflow-wrap: break-word;
+  }
+}
+
 /* The numeric readouts that are NOT inside a table, and so are not reached by
    the rule above: KPI/stat tile values, count chips, and the per-task time and
    SLA readouts. Grouped here rather than repeated across their own blocks so
@@ -1226,6 +1291,9 @@ body:has(> .shared-page)::before {
 .task-card-time,
 .sla-detail {
   font-variant-numeric: tabular-nums;
+  /* A number is read whole: it is not broken across lines by the long-word
+     default above, however little room its tile has. */
+  overflow-wrap: normal;
 }
 
 /* Default interactive elements to the inherited font. In @layer base so it
@@ -1438,6 +1506,7 @@ body:has(> .shared-page)::before {
 }
 .reply-menu .reply-action-text {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   min-width: 0;
 }
 .reply-menu .reply-action-label {
@@ -1456,6 +1525,7 @@ body:has(> .shared-page)::before {
    row rather than beside it. */
 .reply-menu .reply-save {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.3rem;
 }
 .reply-menu .reply-save-picker {
@@ -1981,6 +2051,9 @@ button {
 
 .diff-file-pill {
   display: inline-block;
+  /* A file path has no spaces: let it break rather than widen the reply. */
+  max-width: 100%;
+  overflow-wrap: anywhere;
   border-radius: 0.4rem;
   padding: 0.05rem 0.45rem;
   background: color-mix(in srgb, var(--color-overlay-strong) 60%, transparent);
@@ -2268,6 +2341,7 @@ button {
 }
 .auth-fields {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.6rem;
   padding: 1.5rem;
   border: 1px solid var(--color-border);
@@ -3086,6 +3160,9 @@ tr.sla-row-fail {
   border-radius: 999px;
   padding: 0.15rem 0.6rem;
   background: var(--color-surface-2);
+  /* A long address wraps inside its pill instead of leaving the card. */
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 
 /* Upcoming runs timeline (Scheduler UX 2.0, #504): a day-grouped list of the
@@ -3231,11 +3308,13 @@ tr.sla-row-fail {
   margin: 0;
   padding: 0.4rem;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.3rem;
   align-content: start;
 }
 .upcoming-week-run {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.15rem;
   padding: 0.35rem 0.5rem;
   border-radius: var(--radius-sm, 0.5rem);
@@ -3291,6 +3370,7 @@ tr.sla-row-fail {
 .live-progress-copy {
   min-width: 0;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.15rem;
 }
 .live-progress-meta {
@@ -3357,6 +3437,7 @@ tr.sla-row-fail {
   margin: 0;
   padding: 0;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.2rem;
 }
 .checklist-item {
@@ -3510,6 +3591,7 @@ tr.sla-row-fail {
 }
 .filter-group {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.3rem;
 }
 .filter-label {
@@ -3834,6 +3916,7 @@ tr.sla-row-fail {
   }
   .task-cards {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: 0.5rem;
   }
 }
@@ -4142,6 +4225,7 @@ tr.sla-row-fail {
 }
 .task-reveal-body {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: 0fr;
   opacity: 0;
   transition:
@@ -4890,6 +4974,7 @@ tr.sla-row-fail {
     height: 34px;
     flex: none;
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     place-items: center;
     padding: 0;
     border: 1px solid var(--color-pill-border);
@@ -4912,6 +4997,7 @@ tr.sla-row-fail {
     background: var(--color-icon-tile);
     color: var(--color-accent);
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     place-items: center;
   }
 
@@ -5014,6 +5100,7 @@ tr.sla-row-fail {
     width: 30px;
     height: 18px;
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     place-items: center;
     color: var(--color-text-subtle);
   }
@@ -5134,6 +5221,7 @@ tr.sla-row-fail {
 }
 .task-cron-echo > span {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.1rem;
 }
 .task-cron-echo strong {
@@ -5159,6 +5247,7 @@ tr.sla-row-fail {
 }
 .task-schedule-field {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   min-width: 0;
   gap: 0.35rem;
 }
@@ -5237,6 +5326,7 @@ tr.sla-row-fail {
 }
 .preset-btn {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.125rem;
   border: 1px solid var(--color-border);
   border-radius: 0.5rem;
@@ -5490,6 +5580,7 @@ tr.sla-row-fail {
 }
 .file-list {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.5rem;
   margin-top: 0.5rem;
 }
@@ -5597,6 +5688,10 @@ tr.sla-row-fail {
   font-size: 0.78rem;
   color: var(--color-text-secondary);
   white-space: nowrap;
+  /* A long name shortens; it used to run on over the tool count beside it. */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .mcp-server-picker__row--enabled .mcp-server-picker__name {
   color: var(--color-text-primary);
@@ -5952,6 +6047,7 @@ select.mcp-server-picker__account-select {
   margin: 0 0 0.75rem;
   padding: 0;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.3rem;
 }
 .credential-account-list li {
@@ -5964,6 +6060,7 @@ select.mcp-server-picker__account-select {
 }
 .credential-account-form {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.4rem;
 }
 .credential-account-secrets {
@@ -5988,6 +6085,7 @@ select.mcp-server-picker__account-select {
   top: 1rem;
   right: 1rem;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.5rem;
   justify-items: end;
   z-index: 2000;
@@ -6205,6 +6303,7 @@ select.mcp-server-picker__account-select {
 }
 .task-summary-item {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.25rem;
   min-width: 0;
 }
@@ -6281,6 +6380,7 @@ select.mcp-server-picker__account-select {
   margin: 0;
   padding: 0;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.25rem;
   max-height: 14rem;
   overflow-y: auto;
@@ -6374,6 +6474,7 @@ select.mcp-server-picker__account-select {
 }
 .log-metric {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.3rem;
   min-width: 0;
   text-align: center;
@@ -6401,6 +6502,7 @@ select.mcp-server-picker__account-select {
   padding: 0.75rem;
   margin-bottom: 0.75rem;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.6rem;
 }
 .log-filters-head {
@@ -6419,6 +6521,7 @@ select.mcp-server-picker__account-select {
 }
 .log-filter-group {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.35rem;
 }
 .log-filter-group-title {
@@ -6434,6 +6537,11 @@ select.mcp-server-picker__account-select {
 }
 .log-chip {
   display: inline-flex;
+  /* A tool name is one long word: the chip may be no wider than the row and
+     the name breaks inside it. */
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  text-align: left;
   align-items: center;
   gap: 0.35rem;
   padding: 0.2rem 0.6rem;
@@ -6473,6 +6581,7 @@ select.mcp-server-picker__account-select {
 /* Transcript container (the timeline's cards are the .lt-* rules below). */
 .log-session {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.6rem;
 }
 .log-pre {
@@ -6621,6 +6730,7 @@ select.mcp-server-picker__account-select {
 }
 .lt-step-body {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.7rem;
   padding: 0.6rem 0.85rem 0.85rem 0.9rem;
   border-top: 1px solid var(--color-border-subtle);
@@ -6649,6 +6759,7 @@ select.mcp-server-picker__account-select {
 /* Sections inside a step */
 .lt-section {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.35rem;
   min-width: 0;
 }
@@ -6779,6 +6890,7 @@ select.mcp-server-picker__account-select {
 /* Argument rows */
 .lt-args {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.3rem;
   margin: 0;
   min-width: 0;
@@ -6830,6 +6942,7 @@ select.mcp-server-picker__account-select {
 /* Edits */
 .lt-diff {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.25rem;
 }
 .lt-diff pre {
@@ -6856,6 +6969,7 @@ select.mcp-server-picker__account-select {
 /* Plan (task_tracker) */
 .lt-plan {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.2rem;
   margin: 0;
   padding: 0.45rem 0.6rem;
@@ -6885,6 +6999,7 @@ select.mcp-server-picker__account-select {
 }
 .lt-plan-copy {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   min-width: 0;
 }
 .lt-plan-notes {
@@ -6895,6 +7010,7 @@ select.mcp-server-picker__account-select {
 /* Audit */
 .lt-audit {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.5rem;
 }
 .lt-audit-verdict {
@@ -7118,6 +7234,7 @@ select.mcp-server-picker__account-select {
 /* Runtime events */
 .lt-event {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.3rem;
   justify-items: center;
 }
@@ -7407,6 +7524,7 @@ select.mcp-server-picker__account-select {
 .guide-prose ul,
 .guide-prose ol {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.3rem;
   margin: 0.75rem 0;
   padding-left: 1.25rem;

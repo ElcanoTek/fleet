@@ -425,7 +425,7 @@ function RailButton({
       }`}
     >
       {dot ? <StatusDot status={dot === "on" ? "on" : dot} /> : null}
-      <span className="md:flex-1 md:truncate">{label}</span>
+      <span className="max-w-[16rem] truncate md:max-w-none md:flex-1">{label}</span>
       <span className="text-[0.75rem] tabular-nums text-[var(--color-text-subtle)]">{count}</span>
     </button>
   );
@@ -520,7 +520,7 @@ function Detail({
           {categoryName(categoryOf(c, categories), categories)}
         </div>
         <div className="flex items-center gap-3">
-          <h3 className="m-0 flex-1 text-[1.3rem] font-semibold leading-tight text-[var(--color-text-primary)]">{name}</h3>
+          <h3 className="m-0 min-w-0 flex-1 text-[1.3rem] font-semibold leading-tight text-[var(--color-text-primary)] [overflow-wrap:anywhere]">{name}</h3>
           {toggleable ? <ToolSwitch on={status === "on"} label={name} onToggle={onToggle} large /> : null}
         </div>
         <div className="flex items-center gap-2 text-[0.78rem] text-[var(--color-text-subtle)]">

@@ -448,7 +448,7 @@ export function PromptLibrary({
                     ) : selected ? (
                       <div className="flex min-h-full flex-col">
                         <div className="flex flex-wrap items-start justify-between gap-3">
-                          <div>
+                          <div className="min-w-0">
                             <h3 className="m-0 text-lg font-semibold text-[var(--color-text-primary)]">
                               {selected.name}
                             </h3>

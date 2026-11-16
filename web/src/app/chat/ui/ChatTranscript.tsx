@@ -97,7 +97,7 @@ import {
   turnSendersByMessageId,
   type TranscriptRow,
 } from "./transcriptRows";
-import { useStickToBottom } from "./stickToBottom";
+import { useStickToBottom, requestHoldPosition } from "./stickToBottom";
 import { assistantDisplayContent } from "./turnNarration";
 import { ReplyBubble, SubmissionBubble } from "./genui/SubmissionBubble";
 import { answerOf, cardSpecOf, deriveGenUiState, GenUiContext, isRenderableCardCall } from "./genui/transcript";
@@ -538,6 +538,10 @@ export function ChatTranscript({
       return;
     }
     handledJump.current = dashboardJump.nonce;
+    // Below lg this arrives together with the chat pane being shown again:
+    // tell the follow rule the reader is being placed here, or its "back to
+    // where you were" would run over the jump.
+    requestHoldPosition();
     if (rowIndex >= 0) virtualizer.scrollToIndex(rowIndex, { align: "start" });
     // Not cleared on re-run: rows change with every streamed token, which
     // must not cancel the centring of a request already handled.

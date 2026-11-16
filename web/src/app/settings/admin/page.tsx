@@ -318,7 +318,11 @@ export default function AdminOverviewPage() {
                     }
                     className="bg-[var(--color-surface-1)] px-[0.6rem] py-[0.2rem] font-[family-name:var(--font-code)] text-[0.7rem] font-normal text-[var(--color-text-secondary)]"
                   >
-                    {s.name}
+                    {/* A name from the catalog can be longer than the card:
+                        the badge is capped at the card's width (globals.css)
+                        and the name shortens with an ellipsis inside it,
+                        instead of being cut at both ends. */}
+                    <span className="truncate">{s.name}</span>
                   </Badge>
                 ))}
               </div>

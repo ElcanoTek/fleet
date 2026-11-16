@@ -8,6 +8,7 @@ import {
   InlineConfirmButton,
   Segmented,
   SETTINGS_INPUT,
+  useFocusOnOpen,
 } from "../ui/atoms";
 import {
   ConnEmpty,
@@ -54,6 +55,10 @@ export default function MemoriesPage() {
   const [draft, setDraft] = useState("");
   const [kindDraft, setKindDraft] = useState<string>("fact");
   const [editingId, setEditingId] = useState<string | null>(null);
+  // Edit loads a memory into the form at the top of the page. Putting the
+  // cursor in it is what shows that something happened: on a long list the
+  // form is off screen and the press otherwise changed nothing visible.
+  const editFieldRef = useFocusOnOpen<HTMLTextAreaElement>(editingId !== null, editingId);
   const [promoteId, setPromoteId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -224,6 +229,7 @@ export default function MemoriesPage() {
               <div className="grid gap-3">
                 <ConnField label={tr("Memory")}>
                   <textarea
+                    ref={editFieldRef}
                     aria-label={tr("Memory text")}
                     rows={3}
                     placeholder={tr("Remember that deal names may contain intentional typos; never correct them.")}
