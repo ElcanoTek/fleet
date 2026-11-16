@@ -1,4 +1,5 @@
 import type { PillField, PillValues } from "@/app/chat/ui/protocolPills";
+import { getBootstrap } from "@/app/lib/bootstrap";
 import { isValidEmail } from "./format";
 import { readPref, writePref } from "./storage";
 
@@ -10,15 +11,36 @@ import { readPref, writePref } from "./storage";
 // a person typed into a recipients picker, and the last few styles they used
 // in a palette. Nothing here is sent to the server, and every read tolerates
 // missing or damaged storage.
+//
+// The memory belongs to the signed-in account: its keys carry the account's
+// email, as the launchpad's saved progress does, so on a shared browser the
+// next person is never offered the last one's recipients or styles. With no
+// known account nothing is read or remembered.
 
-const RECIPIENTS_KEY = "fleet.form.recipients";
-const PALETTE_KEY_PREFIX = "fleet.form.palette.";
+const RECIPIENTS_ITEM = "fleet.form.recipients";
+const PALETTE_ITEM = "fleet.form.palette";
 const MAX_REMEMBERED_RECIPIENTS = 30;
 export const MAX_RECENT_PALETTES = 4;
 
 const HEX_COLOR = /^#[0-9A-F]{6}$/;
 
-function readList(key: string): string[] {
+function account(): string {
+  return getBootstrap().session?.email?.trim().toLowerCase() ?? "";
+}
+
+/** Storage keys of the signed-in account's picker memory; null when signed out. */
+export function recipientsItem(): string | null {
+  const email = account();
+  return email ? `${RECIPIENTS_ITEM}:${email}` : null;
+}
+
+export function paletteItem(fieldKey: string): string | null {
+  const email = account();
+  return email ? `${PALETTE_ITEM}:${email}:${fieldKey}` : null;
+}
+
+function readList(key: string | null): string[] {
+  if (!key) return [];
   try {
     const parsed: unknown = JSON.parse(readPref(key) ?? "[]");
     return Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === "string") : [];
@@ -46,14 +68,15 @@ export function joinRecipients(emails: string[]): string {
 
 /** Addresses this browser added in a recipients picker, newest first. */
 export function rememberedRecipients(): string[] {
-  return readList(RECIPIENTS_KEY).filter(isValidEmail);
+  return readList(recipientsItem()).filter(isValidEmail);
 }
 
 export function rememberRecipients(emails: string[]): void {
   const fresh = emails.map((e) => e.trim().toLowerCase()).filter(isValidEmail);
-  if (fresh.length === 0) return;
+  const item = recipientsItem();
+  if (fresh.length === 0 || !item) return;
   const merged = [...fresh, ...rememberedRecipients().filter((e) => !fresh.includes(e))];
-  writePref(RECIPIENTS_KEY, JSON.stringify(merged.slice(0, MAX_REMEMBERED_RECIPIENTS)));
+  writePref(item, JSON.stringify(merged.slice(0, MAX_REMEMBERED_RECIPIENTS)));
 }
 
 // ── palette ───────────────────────────────────────────────────────────────
@@ -93,14 +116,14 @@ export function paletteColors(field: PillField, value: unknown): string[] | null
 /** Palette values this browser used last for a field of this key, newest
  *  first, limited to the ones the field can still show. */
 export function recentPalettes(field: PillField): string[] {
-  return readList(PALETTE_KEY_PREFIX + field.key)
+  return readList(paletteItem(field.key))
     .filter((value) => paletteColors(field, value) !== null)
     .slice(0, MAX_RECENT_PALETTES);
 }
 
 function rememberPalette(field: PillField, value: string): void {
-  if (paletteColors(field, value) === null) return;
-  const key = PALETTE_KEY_PREFIX + field.key;
+  const key = paletteItem(field.key);
+  if (!key || paletteColors(field, value) === null) return;
   const merged = [value, ...readList(key).filter((v) => v !== value)];
   writePref(key, JSON.stringify(merged.slice(0, MAX_RECENT_PALETTES)));
 }

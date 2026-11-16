@@ -1,5 +1,6 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import type { PillField } from "@/app/chat/ui/protocolPills";
+import { setBootstrapForTest } from "@/app/lib/bootstrap";
 import {
   formatCustomPalette,
   joinRecipients,
@@ -21,7 +22,14 @@ const style: PillField = {
   custom: ["Header", "Accent"],
 };
 
-beforeEach(() => window.localStorage.clear());
+const signIn = (email: string | null) =>
+  setBootstrapForTest(email ? { session: { email } } : { session: null });
+
+beforeEach(() => {
+  window.localStorage.clear();
+  signIn("Me@elcanotek.com");
+});
+afterAll(() => setBootstrapForTest(null));
 
 describe("recipients", () => {
   it("splits on commas, semicolons and spaces, lower-cases and de-duplicates", () => {
@@ -38,9 +46,9 @@ describe("recipients", () => {
   });
 
   it("reads damaged storage as empty", () => {
-    window.localStorage.setItem("fleet.form.recipients", "{not json");
+    window.localStorage.setItem("fleet.form.recipients:me@elcanotek.com", "{not json");
     expect(rememberedRecipients()).toEqual([]);
-    window.localStorage.setItem("fleet.form.recipients", JSON.stringify({ a: 1 }));
+    window.localStorage.setItem("fleet.form.recipients:me@elcanotek.com", JSON.stringify({ a: 1 }));
     expect(rememberedRecipients()).toEqual([]);
   });
 });
@@ -74,6 +82,21 @@ describe("palette", () => {
     expect(recentPalettes({ ...style, options: ["elcano"], custom: undefined })).toEqual(["elcano"]);
     // Another field's history is its own.
     expect(recentPalettes({ ...style, key: "other" })).toEqual([]);
+  });
+
+  it("keeps each account's memory to itself, and none when signed out", () => {
+    const to: PillField = { key: "to", label: "Send to", type: "recipients" };
+    rememberPickerValues([to, style], { to: "a@x.com", style: "amazon" });
+    signIn("someone.else@elcanotek.com");
+    expect(rememberedRecipients()).toEqual([]);
+    expect(recentPalettes(style)).toEqual([]);
+    signIn(null);
+    rememberPickerValues([to, style], { to: "b@x.com", style: "elcano" });
+    expect(rememberedRecipients()).toEqual([]);
+    expect(recentPalettes(style)).toEqual([]);
+    signIn("me@elcanotek.com");
+    expect(rememberedRecipients()).toEqual(["a@x.com"]);
+    expect(recentPalettes(style)).toEqual(["amazon"]);
   });
 
   it("remembers a used form's recipients too", () => {

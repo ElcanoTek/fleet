@@ -206,8 +206,8 @@ the manifest) already use, and is drawn by the same components:
 | `required` | `true` disables **Use prompt** until the field is filled (a daterange needs both dates). Not allowed on a toggle, or together with `advanced`. |
 | `placeholder` | Example text shown in an empty text or textarea box. Not allowed on other types, which do not draw one. |
 | `hint` | Help text under the input. Not allowed on a toggle, which does not show one. |
-| `default` | The starting value: a string for text and textarea, one of `options` for a select (otherwise the first option is preselected), a finite number for a number (otherwise the field starts empty), `true`/`false` for a toggle (otherwise off), and `{from, to}` YYYY-MM-DD dates for a daterange. |
-| `options` | The choices of a select or a palette (strings or numbers, trimmed, each listed once), required on both. On a recipients field, optional addresses to suggest. Not allowed elsewhere. |
+| `default` | The starting value: a string for text and textarea, email addresses separated by commas for recipients, one of `options` for a palette, one of `options` for a select (otherwise the first option is preselected), a finite number for a number (otherwise the field starts empty), `true`/`false` for a toggle (otherwise off), and `{from, to}` YYYY-MM-DD dates for a daterange. |
+| `options` | The choices of a select or a palette (strings or numbers, trimmed, each listed once), required on both. On a recipients field, optional email addresses to suggest. Not allowed elsewhere. |
 | `advanced` | `true` tucks the field under a collapsed **More options** toggle, which summarises the current values while closed. Use it for optional fields. |
 | `min` | A number field's minimum. |
 | `swatches` | Palette only, required: for every option, the one to four `"#RRGGBB"` colors it is drawn with. |
@@ -249,9 +249,10 @@ promptTemplate: |-
 ```
 
 What a picker remembers (typed addresses, recent palette values) is a
-convenience kept in the browser's local storage. It is recorded when **Use
-prompt** is chosen, is not sent to the server, and is not shared between people
-or devices.
+convenience kept in the browser's local storage, under the signed-in account's
+email, so someone else signing in on the same browser is not offered it. It is
+recorded when **Use prompt** is chosen, is not sent to the server, and does not
+follow the person to another device.
 
 ### How the prompt is rendered
 

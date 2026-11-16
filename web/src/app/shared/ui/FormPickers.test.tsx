@@ -1,9 +1,10 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useState } from "react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FormFields } from "./FormFields";
 import { PromptLibraryForm, type FormPromptItem } from "./PromptLibraryForm";
 import type { PillField, PillFieldValue, PillValues } from "@/app/chat/ui/protocolPills";
+import { setBootstrapForTest } from "@/app/lib/bootstrap";
 
 const recipientHistory = vi.fn();
 vi.mock("@/app/shared/lib/orchestratorApi", () => ({
@@ -38,6 +39,7 @@ const values = () => JSON.parse(screen.getByTestId("values").textContent ?? "{}"
 
 beforeEach(() => {
   window.localStorage.clear();
+  setBootstrapForTest({ session: { email: "me@elcanotek.com" } });
   recipientHistory.mockReset();
   recipientHistory.mockResolvedValue([
     { email: "rare@client.com", task_count: 1, last_used: "2026-11-01T00:00:00Z" },
@@ -45,6 +47,7 @@ beforeEach(() => {
   ]);
 });
 afterEach(cleanup);
+afterAll(() => setBootstrapForTest(null));
 
 describe("RecipientPicker", () => {
   it("offers the most used addresses first and adds one with a click", async () => {
@@ -137,7 +140,7 @@ describe("PalettePicker", () => {
 
   it("offers the looks used last, and no custom choice when the field has none", () => {
     window.localStorage.setItem(
-      "fleet.form.palette.style",
+      "fleet.form.palette:me@elcanotek.com:style",
       JSON.stringify(["custom (Header #0B3D2E, Accent #C2410C)", "amazon", "retired"]),
     );
     render(<Harness fields={[style]} initial={{ style: "elcano" }} />);
@@ -176,7 +179,7 @@ describe("a form with pickers", () => {
     fireEvent.click(screen.getByRole("button", { name: "Use prompt" }));
 
     expect(onUse).toHaveBeenCalledWith("Write the update for NorthPeak.\nSend to: team@client.com\nStyle: amazon");
-    expect(JSON.parse(window.localStorage.getItem("fleet.form.palette.style") ?? "[]")).toEqual(["amazon"]);
-    expect(JSON.parse(window.localStorage.getItem("fleet.form.recipients") ?? "[]")).toEqual(["team@client.com"]);
+    expect(JSON.parse(window.localStorage.getItem("fleet.form.palette:me@elcanotek.com:style") ?? "[]")).toEqual(["amazon"]);
+    expect(JSON.parse(window.localStorage.getItem("fleet.form.recipients:me@elcanotek.com") ?? "[]")).toEqual(["team@client.com"]);
   });
 });

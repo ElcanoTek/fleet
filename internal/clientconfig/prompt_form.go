@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/goccy/go-yaml"
 )
@@ -120,6 +121,17 @@ var promptFieldProperties = map[string]bool{
 // promptSwatchColor is the one color form a palette swatch takes: the web
 // puts it straight into a style attribute.
 var promptSwatchColor = regexp.MustCompile(`^#[0-9A-Fa-f]{6}$`)
+
+// promptRecipientAddress is the web picker's own address test (isValidEmail in
+// web/src/app/shared/lib/format.ts), so an address a bundle writes into a
+// recipients field is one the picker would have accepted from a person.
+var promptRecipientAddress = regexp.MustCompile(`^[^\s@]+@[^\s@]+\.[^\s@]+$`)
+
+// promptRecipientList splits a recipients value the way the web does: on
+// commas, semicolons and whitespace.
+func promptRecipientList(s string) []string {
+	return strings.FieldsFunc(s, func(r rune) bool { return r == ',' || r == ';' || unicode.IsSpace(r) })
+}
 
 const (
 	maxPromptSwatchColors = 4
@@ -419,6 +431,8 @@ func (r *promptFieldReader) options(fieldType string) []string {
 			r.reportf("options must not be blank")
 		case seen[s]:
 			r.reportf("option %q is listed twice", s)
+		case fieldType == "recipients" && !promptRecipientAddress.MatchString(s):
+			r.reportf("option %q is not an email address", s)
 		default:
 			seen[s] = true
 			out = append(out, s)
@@ -545,12 +559,26 @@ func (r *promptFieldReader) minimum(fieldType string) *float64 {
 // in the shape the web's form state expects (see PromptField).
 func promptFieldDefault(f PromptField, v any) (any, string) {
 	switch f.Type {
-	case "text", "textarea", "recipients":
+	case "text", "textarea":
 		s, ok := yamlScalarText(v)
 		if !ok {
 			return nil, "default must be a string"
 		}
 		return s, ""
+	case "recipients":
+		s, ok := v.(string)
+		if !ok {
+			return nil, "default must be email addresses separated by commas"
+		}
+		addresses := promptRecipientList(s)
+		for _, address := range addresses {
+			if !promptRecipientAddress.MatchString(address) {
+				return nil, fmt.Sprintf("default %q is not an email address", address)
+			}
+		}
+		// The picker's own form of the value, so a form opened and used
+		// untouched inserts what one filled in by hand would.
+		return strings.ToLower(strings.Join(addresses, ", ")), ""
 	case "select", "palette":
 		s, ok := yamlScalarText(v)
 		if !ok {

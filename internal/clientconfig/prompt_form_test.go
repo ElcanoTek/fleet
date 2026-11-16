@@ -173,7 +173,7 @@ promptTemplate: "{days} {lookback} {flight} {note}"
 func TestPromptFormPickers(t *testing.T) {
 	body := `name: Pickers
 fields:
-  - {key: to, label: Send to, type: recipients, options: [team@example.com], hint: Who gets it, default: team@example.com}
+  - {key: to, label: Send to, type: recipients, options: [team@example.com], hint: Who gets it, default: "Team@example.com;desk@example.com"}
   - key: style
     label: Style
     type: palette
@@ -188,7 +188,7 @@ promptTemplate: "{to} {style} {cc}"
 	if len(issues) != 0 {
 		t.Fatalf("issues = %v", issues)
 	}
-	if !reflect.DeepEqual(fields[0].Options, []string{"team@example.com"}) || fields[0].Default != "team@example.com" {
+	if !reflect.DeepEqual(fields[0].Options, []string{"team@example.com"}) || fields[0].Default != "team@example.com, desk@example.com" {
 		t.Errorf("recipients field = %#v", fields[0])
 	}
 	wantSwatches := map[string][]string{"brand": {"#1A0B1E", "#6262A0"}, "plain": {"#333E48"}}
@@ -258,6 +258,10 @@ promptTemplate: "{a}"`, "must not contain #, a comma or parentheses"},
 promptTemplate: "{a}"`, "custom must be a list of 1 to 3 color names"},
 		{"palette default outside options", `fields: [{key: a, label: A, type: palette, options: [x], swatches: {x: ["#112233"]}, default: z}]
 promptTemplate: "{a}"`, `default "z" is not one of the options`},
+		{"recipients default that is not an address", `fields: [{key: a, label: A, type: recipients, default: "ok@example.com, team.example.com"}]
+promptTemplate: "{a}"`, `default "team.example.com" is not an email address`},
+		{"recipients option that is not an address", `fields: [{key: a, label: A, type: recipients, options: [nobody]}]
+promptTemplate: "{a}"`, `option "nobody" is not an email address`},
 		{"placeholder on recipients", `fields: [{key: a, label: A, type: recipients, placeholder: who}]
 promptTemplate: "{a}"`, "placeholder only applies to a text or textarea field"},
 		{"min on a text field", `fields: [{key: a, label: A, type: text, min: 1}]
