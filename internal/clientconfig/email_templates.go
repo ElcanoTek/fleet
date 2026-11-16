@@ -1,9 +1,11 @@
 package clientconfig
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -15,7 +17,13 @@ const (
 	maxBundleEmailTemplates       = 64
 	maxBundleEmailTemplateSize    = 256 << 10
 	maxBundleEmailTemplatePreview = 1 << 20
+	maxBundleEmailPreviewStyles   = 64 << 10
+	maxEmailPreviewStyleEntries   = 64
 )
+
+// emailPreviewColor is the only thing a preview recolor table may hold: the
+// browser swaps one such color for another inside the preview's markup.
+var emailPreviewColor = regexp.MustCompile(`^#[0-9A-Fa-f]{6}$`)
 
 // EmailTemplate is one read-only, bundle-owned email template: the fixed
 // shape of an email a team sends repeatedly. The bundle's mail connector
@@ -48,10 +56,26 @@ type EmailTemplate struct {
 	// every preview.
 	HasPreview  bool   `json:"has_preview"`
 	PreviewHTML string `json:"preview_html,omitempty"`
+	// PreviewStyles lets the library show a chosen look on the preview; it
+	// comes with PreviewHTML when the bundle ships previews/styles.json.
+	PreviewStyles *EmailPreviewStyles `json:"preview_styles,omitempty"`
 	// Fields and PromptTemplate are the optional form, in the form-prompt
 	// schema (docs/PROMPT-LIBRARY.md, "Form prompts").
 	Fields         []PromptField `json:"fields,omitempty"`
 	PromptTemplate string        `json:"prompt_template,omitempty"`
+}
+
+// EmailPreviewStyles is the bundle's recolor table for its previews
+// (email_templates/previews/styles.json). Fleet does not know what a theme is:
+// the table says which colors of the preview become which for each value a
+// form's palette field can take, and the library applies it in the browser as
+// the person picks. Every color is a #RRGGBB value.
+type EmailPreviewStyles struct {
+	// Options maps a palette option to {preview color: its color}.
+	Options map[string]map[string]string `json:"options,omitempty"`
+	// Custom maps a palette's custom color name to the preview colors the
+	// picked color replaces.
+	Custom map[string][]string `json:"custom,omitempty"`
 }
 
 // EmailTemplateSubject is the subject-line rule.
@@ -217,11 +241,77 @@ func ReadEmailTemplate(dir, id string) (EmailTemplate, bool, []string) {
 				template.HasPreview = false
 			default:
 				template.PreviewHTML = string(preview)
+				styles, problem := readEmailPreviewStyles(dir)
+				if problem != "" {
+					problems = append(problems, problem)
+				}
+				template.PreviewStyles = styles
 			}
 		}
 		return template, true, problems
 	}
 	return EmailTemplate{}, false, problems
+}
+
+// readEmailPreviewStyles reads previews/styles.json. A missing file is not a
+// problem (the preview just keeps its own colors); a file that is not exactly
+// a table of #RRGGBB colors is reported and not served.
+func readEmailPreviewStyles(dir string) (*EmailPreviewStyles, string) {
+	path := filepath.Join(dir, "previews", "styles.json")
+	// Lstat, not Stat: a symlink could point outside the bundle.
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return nil, ""
+	}
+	bad := func(what string) (*EmailPreviewStyles, string) {
+		return nil, "email template previews/styles.json: " + what + "; previews keep their own colors"
+	}
+	if info.Size() > maxBundleEmailPreviewStyles {
+		return bad(fmt.Sprintf("exceeds %d bytes", maxBundleEmailPreviewStyles))
+	}
+	raw, err := os.ReadFile(path) // #nosec G304 -- a fixed name under the operator-owned bundle directory.
+	if err != nil {
+		return bad(err.Error())
+	}
+	var styles EmailPreviewStyles
+	if err := json.Unmarshal(raw, &styles); err != nil {
+		return bad("not the expected JSON")
+	}
+	if what := emailPreviewStylesProblem(styles); what != "" {
+		return bad(what)
+	}
+	if len(styles.Options) == 0 && len(styles.Custom) == 0 {
+		return nil, ""
+	}
+	return &styles, ""
+}
+
+// emailPreviewStylesProblem says what is wrong with a recolor table, or "".
+func emailPreviewStylesProblem(styles EmailPreviewStyles) string {
+	if len(styles.Options) > maxEmailPreviewStyleEntries || len(styles.Custom) > maxEmailPreviewStyleEntries {
+		return "too many entries"
+	}
+	for option, table := range styles.Options {
+		if len(table) > maxEmailPreviewStyleEntries {
+			return fmt.Sprintf("option %q changes too many colors", option)
+		}
+		for from, to := range table {
+			if !emailPreviewColor.MatchString(from) || !emailPreviewColor.MatchString(to) {
+				return fmt.Sprintf("option %q has a value that is not a #RRGGBB color", option)
+			}
+		}
+	}
+	for name, replaced := range styles.Custom {
+		if len(replaced) > maxEmailPreviewStyleEntries {
+			return fmt.Sprintf("custom color %q replaces too many colors", name)
+		}
+		for _, color := range replaced {
+			if !emailPreviewColor.MatchString(color) {
+				return fmt.Sprintf("custom color %q has a value that is not a #RRGGBB color", name)
+			}
+		}
+	}
+	return ""
 }
 
 // readBundleFile reads one regular, non-empty, UTF-8 file of at most limit

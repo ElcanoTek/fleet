@@ -1482,15 +1482,17 @@ template's own questions it can ask who the email goes to and how it looks:
   select one to add it, or type any other address and choose **Add**. An
   address you type is offered again next time. Leave it empty to get a review
   copy yourself.
-- **Style** shows each look with its colors. **Custom colors** lets you pick a
+- **Style** shows each look with its colors, and the example email beside the
+  form takes on the look as you pick it. **Custom colors** lets you pick a
   client's header and accent colors instead, and **Recently used** brings back
   the looks you used last, so you set a client's colors once.
 
 Then choose **Use prompt**. Like a library prompt, this
 only puts a request in your draft; nothing is written or sent until you send
-the message. The assistant then writes the email to that template and shows
-you the draft; it is not sent until you say so, and sending still asks for
-your approval on a card that names the recipients. A draft that breaks the
+the message. The assistant then writes the email to that template and puts it
+on an approval card that shows the email and names the recipients. It is sent
+only when you choose **Send** on that card; reject it, or ask for changes, and
+nothing goes out. A draft that breaks the
 template, by running long or adding a section, is not built: the assistant is
 told what to fix and tries again, so what you get back fits the example.
 

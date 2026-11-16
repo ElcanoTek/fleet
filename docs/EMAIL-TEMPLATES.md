@@ -77,14 +77,26 @@ themes as swatches, or custom colors, with the ones used last offered first).
 Both only add a line to the prompt; the bundle's renderer is what applies and
 checks them.
 
-**Draft first.** Use prompt never sends anything: it fills the composer, and
-the person sends the message. The assistant then builds the email as a file and
-shows it. Sending is a separate `send_email` call, and in a chat every such
-call is staged on an approval card that names the recipients and waits for the
-person to choose Send ([AGENT-RUNTIME](AGENT-RUNTIME.md)). The exception is a
-conversation where the person themselves pre-approved sending. A bundle should
-still end its `promptTemplate` with the instruction to show the draft and wait,
-so the assistant does not stage a send the person did not ask for yet.
+**The example takes the picked look.** When the bundle ships
+`email_templates/previews/styles.json`, the single-template read returns it as
+`preview_styles`: for each value of the form's `palette` field, which #RRGGBB
+colors of the preview become which (`options`), and for each custom color, the
+preview colors it replaces (`custom`). As the person picks a style, the dialog
+swaps those colors in the preview markup in one pass
+(`web/src/app/shared/lib/emailPreviewStyle.ts`). Fleet does not know what a
+theme is; the table is the bundle's, and a table holding anything but #RRGGBB
+values is reported and not served, since its values are written into the
+preview.
+
+**Nothing is sent without the approval card.** Use prompt never sends anything:
+it fills the composer, and the person sends the message. When the assistant
+then calls `send_email`, a chat stages that call on an approval card that shows
+the email and names the recipients, and it goes out only when the person
+chooses Send ([AGENT-RUNTIME](AGENT-RUNTIME.md)). The exception is a
+conversation where the person themselves pre-approved sending. So a bundle's
+`promptTemplate` can end by telling the assistant to call `send_email` as soon
+as the email is built: the card is the review step, and a display-only
+`preview_email` first only adds a turn.
 
 **The preview is untrusted markup.** It comes from the bundle, which is trusted
 content, but it is an HTML document all the same, so it is shown in an
