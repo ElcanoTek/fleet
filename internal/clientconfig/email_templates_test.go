@@ -96,11 +96,30 @@ func TestReadEmailTemplates(t *testing.T) {
 	if !ok || len(problems) != 0 || one.PreviewHTML != "<!doctype html><p>Hi Team,</p>" || one.Name != w.Name {
 		t.Errorf("ReadEmailTemplate = %+v ok=%v problems=%v", one, ok, problems)
 	}
-	if one.PreviewStyles != nil {
+	for _, id := range []string{"missing", "../weekly-update", "previews/weekly-update", "README", ""} {
+		if _, ok, _ := ReadEmailTemplate(dir, id); ok {
+			t.Errorf("ReadEmailTemplate(%q) found a template; an id is matched, never used as a path", id)
+		}
+	}
+	if len(w.Fields) != 1 || w.PromptTemplate != "Write the update for {campaign}." {
+		t.Errorf("form = %+v / %q", w.Fields, w.PromptTemplate)
+	}
+	if got[0].HasPreview || got[0].Fields != nil {
+		t.Errorf("a template without a preview or form carries neither: %+v", got[0])
+	}
+}
+
+// The bundle's recolor table rides with the preview, never with the list, and
+// only when it holds nothing but colors.
+func TestReadEmailTemplatePreviewStyles(t *testing.T) {
+	dir := t.TempDir()
+	writeEmailTemplateFile(t, dir, "weekly-update.yaml", emailTemplateYAML)
+	writeEmailTemplateFile(t, dir, "previews/weekly-update.html", "<!doctype html><p>Hi Team,</p>")
+	one, ok, problems := ReadEmailTemplate(dir, "weekly-update")
+	if !ok || len(problems) != 0 || one.PreviewStyles != nil {
 		t.Errorf("no styles.json, so no recolor table: %+v", one.PreviewStyles)
 	}
 
-	// The bundle's recolor table rides with the preview, never with the list.
 	writeEmailTemplateFile(t, dir, "previews/styles.json",
 		`{"options": {"amazon": {"#1A0B1E": "#333E48"}, "elcano": {}}, "custom": {"Header": ["#1A0B1E"]}}`)
 	one, _, problems = ReadEmailTemplate(dir, "weekly-update")
@@ -108,7 +127,7 @@ func TestReadEmailTemplates(t *testing.T) {
 		one.PreviewStyles.Options["amazon"]["#1A0B1E"] != "#333E48" || one.PreviewStyles.Custom["Header"][0] != "#1A0B1E" {
 		t.Errorf("preview styles = %+v problems=%v", one.PreviewStyles, problems)
 	}
-	if listed, _ := ReadEmailTemplates(dir); listed[1].PreviewStyles != nil || listed[0].PreviewStyles != nil {
+	if listed, _ := ReadEmailTemplates(dir); len(listed) != 1 || listed[0].PreviewStyles != nil {
 		t.Error("the list must not carry the recolor table")
 	}
 	// Anything but #RRGGBB colors could be markup once swapped into the preview.
@@ -123,17 +142,6 @@ func TestReadEmailTemplates(t *testing.T) {
 		if !ok || one.PreviewStyles != nil || one.PreviewHTML == "" || len(problems) != 1 || !strings.Contains(problems[0], "previews/styles.json") {
 			t.Errorf("styles %q: styles=%+v problems=%v", bad, one.PreviewStyles, problems)
 		}
-	}
-	for _, id := range []string{"missing", "../weekly-update", "previews/weekly-update", "README", ""} {
-		if _, ok, _ := ReadEmailTemplate(dir, id); ok {
-			t.Errorf("ReadEmailTemplate(%q) found a template; an id is matched, never used as a path", id)
-		}
-	}
-	if len(w.Fields) != 1 || w.PromptTemplate != "Write the update for {campaign}." {
-		t.Errorf("form = %+v / %q", w.Fields, w.PromptTemplate)
-	}
-	if got[0].HasPreview || got[0].Fields != nil {
-		t.Errorf("a template without a preview or form carries neither: %+v", got[0])
 	}
 }
 
