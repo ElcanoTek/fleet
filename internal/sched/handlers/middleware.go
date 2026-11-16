@@ -92,7 +92,8 @@ func refuseReadonlyUserMutation(w http.ResponseWriter, r *http.Request, user *mo
 // nil for not_a_member.
 //
 // The Prompt Library is shared with chat (composer picker, "Save as
-// workflow…", Settings → Prompts), so on /prompts a signed-in chat user with
+// workflow…", Settings → Prompts), and so is the Email templates library
+// (isPromptLibraryPath), so on those routes a signed-in chat user with
 // no — or only view — Operations Center access is authorized by their Fleet
 // role: member as run-like, viewer as view-like. That is the rule the old
 // chat-role seam applied, now read from the same row (#2049 M4). Pure, so the

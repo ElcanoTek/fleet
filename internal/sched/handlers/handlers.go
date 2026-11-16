@@ -151,6 +151,12 @@ type Handlers struct {
 	// library. Mutable private/workspace entries live in sched storage.
 	promptCatalog func() ([]clientconfig.Prompt, []string)
 
+	// emailTemplateCatalog returns the bundle's email templates
+	// (docs/EMAIL-TEMPLATES.md). nil → an empty library.
+	emailTemplateCatalog func() ([]clientconfig.EmailTemplate, []string)
+	// emailTemplateByID returns one template with its preview.
+	emailTemplateByID func(id string) (clientconfig.EmailTemplate, bool, []string)
+
 	// taskStreamLookup resolves a task's live SSE run-log buffer (#200), wired by
 	// cmd/fleet via SetTaskStreamProvider from the worker pool's registry. nil →
 	// no live stream is ever available (every task falls back to the persisted log

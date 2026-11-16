@@ -259,7 +259,32 @@ func TestSetAutoApprove_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get after clear: %v", err)
 	}
-	if got.AutoApprove {
-		t.Errorf("after clear AutoApprove = true, want false")
+	if got.AutoApprove || got.ApprovalMode != ConversationApprovalManual {
+		t.Errorf("after clear AutoApprove = %v ApprovalMode = %q, want false/manual", got.AutoApprove, got.ApprovalMode)
+	}
+
+	if err := s.SetApprovalMode(ctx, "alice@example.com", conv.ID, ConversationApprovalAutonomous); err != nil {
+		t.Fatalf("SetApprovalMode(autonomous): %v", err)
+	}
+	got, err = s.Get(ctx, "alice@example.com", conv.ID)
+	if err != nil {
+		t.Fatalf("Get after autonomous: %v", err)
+	}
+	if !got.AutoApprove || got.ApprovalMode != ConversationApprovalAutonomous {
+		t.Errorf("after autonomous AutoApprove = %v ApprovalMode = %q, want true/autonomous", got.AutoApprove, got.ApprovalMode)
+	}
+	// Legacy SetAutoApprove(true) must preserve an existing autonomous mode.
+	if err := s.SetAutoApprove(ctx, "alice@example.com", conv.ID, true); err != nil {
+		t.Fatalf("SetAutoApprove(true) on autonomous: %v", err)
+	}
+	got, err = s.Get(ctx, "alice@example.com", conv.ID)
+	if err != nil {
+		t.Fatalf("Get after legacy SetAutoApprove(true): %v", err)
+	}
+	if !got.AutoApprove || got.ApprovalMode != ConversationApprovalAutonomous {
+		t.Errorf("SetAutoApprove(true) downgraded autonomous: AutoApprove=%v ApprovalMode=%q", got.AutoApprove, got.ApprovalMode)
+	}
+	if err := s.SetApprovalMode(ctx, "alice@example.com", conv.ID, "bogus"); err == nil {
+		t.Error("SetApprovalMode(bogus) succeeded, want error")
 	}
 }

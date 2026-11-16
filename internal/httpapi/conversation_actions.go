@@ -214,6 +214,7 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, u
 		sanitized.ShareToken = ""
 		sanitized.ParentConversationID = ""
 		sanitized.AutoApprove = false
+		sanitized.ApprovalMode = ""
 		conv = &sanitized
 	} else if len(conv.OptionalMCPServersEnabled) > 0 {
 		sanitized := *conv
@@ -527,19 +528,40 @@ func (s *Server) handleApprovalTimeoutSet(w http.ResponseWriter, r *http.Request
 // handleAutoApproveGet serves GET /conversations/{id}/auto-approve.
 func (s *Server) handleAutoApproveGet(w http.ResponseWriter, r *http.Request, _, _ string, conv *store.Conversation) {
 	writeJSON(w, r, map[string]any{
-		"auto_approve": conv.AutoApprove,
+		"auto_approve":  conv.AutoApprove,
+		"approval_mode": conv.EffectiveApprovalMode(),
 	})
 }
 
 // handleAutoApproveSet serves POST /conversations/{id}/auto-approve.
+// Accepts either explicit approval_mode ("manual" | "auto" | "autonomous") or
+// legacy boolean auto_approve.
 func (s *Server) handleAutoApproveSet(w http.ResponseWriter, r *http.Request, user, id string) {
 	var req struct {
-		AutoApprove bool `json:"auto_approve"`
+		AutoApprove  *bool   `json:"auto_approve"`
+		ApprovalMode *string `json:"approval_mode"`
 	}
 	if !decodeJSONBody(w, r, &req) {
 		return
 	}
-	if err := s.store.SetAutoApprove(r.Context(), user, id, req.AutoApprove); err != nil {
+	if req.ApprovalMode != nil {
+		mode, ok := store.ParseConversationApprovalMode(*req.ApprovalMode)
+		if !ok {
+			http.Error(w, "invalid approval_mode: must be manual, auto, or autonomous", http.StatusBadRequest)
+			return
+		}
+		if err := s.store.SetApprovalMode(r.Context(), user, id, mode); err != nil {
+			writeConversationMutationError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	enabled := false
+	if req.AutoApprove != nil {
+		enabled = *req.AutoApprove
+	}
+	if err := s.store.SetAutoApprove(r.Context(), user, id, enabled); err != nil {
 		writeConversationMutationError(w, err)
 		return
 	}
@@ -617,6 +639,7 @@ func (s *Server) handleConversationExport(w http.ResponseWriter, r *http.Request
 		sanitized.ParentConversationID = ""
 		sanitized.MCPAccounts = nil
 		sanitized.AutoApprove = false
+		sanitized.ApprovalMode = ""
 		exportConv = &sanitized
 	} else if len(conv.OptionalMCPServersEnabled) > 0 {
 		sanitized := *conv

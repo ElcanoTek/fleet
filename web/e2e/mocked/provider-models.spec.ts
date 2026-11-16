@@ -61,7 +61,7 @@ test("a shadowed OpenRouter catch-all stays browsable and sends an explicit rout
     models: [],
   } }));
   await page.route("**/api/model-catalog", (route) => route.fulfill({ json: {
-    models: [{ slug: DEFAULT_MODEL, name: "Gemini 4 Argon", context_length: 100000,
+    models: [{ slug: DEFAULT_MODEL, name: "Gemini 4 Hydrogen", context_length: 100000,
       price_prompt: 0.000003, price_completion: 0.000015 }],
   } }));
   let sent = "";
@@ -76,13 +76,13 @@ test("a shadowed OpenRouter catch-all stays browsable and sends an explicit rout
   await page.goto("/chat");
   await page.getByRole("button", { name: "Choose a model", exact: true }).click();
   const list = page.locator("#composer-model-listbox");
-  await list.getByRole("option", { name: /router:.*Gemini 4 Argon/ }).click();
+  await list.getByRole("option", { name: /router:.*Gemini 4 Hydrogen/ }).click();
   const composer = page.getByRole("textbox").first();
   await composer.fill("Check the model route");
   await composer.press("Enter");
   await expect(page.getByText("Explicit OpenRouter route selected.")).toBeVisible();
   expect(sent).toBe(`router/${DEFAULT_MODEL}`);
-  await expect(page.getByTestId("composer-model-label-full")).toHaveText("router: Gemini 4 Argon");
+  await expect(page.getByTestId("composer-model-label-full")).toHaveText("router: Gemini 4 Hydrogen");
   await expect(page.locator("button[aria-haspopup='listbox']").first().locator(".model-cost")).toHaveAttribute("data-cost-tier", "3");
   await page.getByTestId("composer-more-button").click();
   await expect(page.getByRole("menuitem", { name: "Summarize earlier messages (10% full)" })).toBeVisible();

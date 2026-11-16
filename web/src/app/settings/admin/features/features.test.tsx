@@ -228,7 +228,25 @@ describe("FeaturesAdminPage", () => {
       if (init.method === "PUT" && url.includes("default_model")) {
         return {
           status: 200,
-          body: { ...DEFAULT_TIER, value: "acme/frontier-1", source: "admin" },
+          body: {
+            ...DEFAULT_TIER,
+            value: "acme/frontier-1",
+            source: "admin",
+            rollout: {
+              dry_run: false,
+              primary_model: "acme/frontier-1",
+              task_model: "acme/frontier-1",
+              lockdown_included: true,
+              chats_matched: 10,
+              chats_updated: 7,
+              chats_notified: 5,
+              tasks_scanned: 4,
+              tasks_updated: 3,
+              tasks_primary_updated: 3,
+              tasks_fallback_updated: 0,
+              tasks_recurring_updated: 2,
+            },
+          },
         };
       }
       return undefined;
@@ -250,7 +268,91 @@ describe("FeaturesAdminPage", () => {
     await waitFor(() => expect(input).toHaveValue("acme/frontier-1"));
     const put = fetchMock.mock.calls.find(([, init]) => init?.method === "PUT");
     expect(put?.[0]).toBe("/api/admin/settings/default_model");
-    expect(JSON.parse(String(put?.[1]?.body))).toEqual({ value: "acme/frontier-1" });
+    expect(JSON.parse(String(put?.[1]?.body))).toEqual({
+      value: "acme/frontier-1",
+      rollout: true,
+      notify_chats: true,
+    });
+    const controls = screen.getByTestId("model-rollout-controls");
+    expect(controls).toHaveTextContent("7 chats updated (5 notified)");
+    expect(controls).toHaveTextContent("3 scheduled tasks updated (2 recurring)");
+  });
+
+  it("allows turning off rollout-on-save and supports Preview + one-click Sync", async () => {
+    const fetchMock = mockFetch([DEFAULT_TIER], (url, init) => {
+      if (init.method === "PUT" && url.includes("default_model")) {
+        return {
+          status: 200,
+          body: { ...DEFAULT_TIER, value: "google/gemini-4-hydrogen", source: "admin" },
+        };
+      }
+      if (init.method === "POST" && url === "/api/admin/models/rollout") {
+        const parsed = JSON.parse(String(init.body)) as {
+          sync_current?: boolean;
+          notify_chats?: boolean;
+          dry_run?: boolean;
+        };
+        return {
+          status: 200,
+          body: {
+            dry_run: Boolean(parsed.dry_run),
+            primary_model: "google/gemini-4-hydrogen",
+            task_model: "google/gemini-4-hydrogen",
+            fallback_model: "anthropic/claude-opus-5.5",
+            lockdown_included: true,
+            chats_matched: 12,
+            chats_updated: 9,
+            chats_notified: parsed.notify_chats ? 6 : 0,
+            tasks_scanned: 5,
+            tasks_updated: 4,
+            tasks_primary_updated: 3,
+            tasks_fallback_updated: 2,
+            tasks_recurring_updated: 4,
+          },
+        };
+      }
+      return undefined;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<FeaturesAdminPage />);
+
+    const rolloutToggle = await screen.findByTestId("toggle-model-rollout-on-save");
+    expect(rolloutToggle).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(rolloutToggle);
+    expect(rolloutToggle).toHaveAttribute("aria-checked", "false");
+
+    const wrap = screen.getByTestId("model-picker-default_model");
+    const input = within(wrap).getByRole("combobox");
+    fireEvent.change(input, { target: { value: "google/gemini-4-hydrogen" } });
+    fireEvent.click(screen.getByTestId("save-default_model"));
+    await waitFor(() => expect(input).toHaveValue("google/gemini-4-hydrogen"));
+    const put = fetchMock.mock.calls.find(([, init]) => init?.method === "PUT");
+    expect(JSON.parse(String(put?.[1]?.body))).toEqual({ value: "google/gemini-4-hydrogen" });
+
+    // Preview dry-run counts without mutating anything.
+    fireEvent.click(screen.getByTestId("model-rollout-preview"));
+    const controls = screen.getByTestId("model-rollout-controls");
+    await waitFor(() =>
+      expect(controls).toHaveTextContent(
+        "Preview: 9 chats (6 active chats notified) · 4 scheduled tasks (4 recurring) would be updated.",
+      ),
+    );
+
+    // Toggle chat notifications off and trigger one-click sync.
+    fireEvent.click(screen.getByTestId("toggle-model-rollout-notify"));
+    fireEvent.click(screen.getByTestId("model-rollout-sync-now"));
+    await waitFor(() =>
+      expect(controls).toHaveTextContent("9 chats updated · 4 scheduled tasks updated (4 recurring)"),
+    );
+    const posts = fetchMock.mock.calls.filter(
+      ([u, init]) => u === "/api/admin/models/rollout" && init?.method === "POST",
+    );
+    expect(posts).toHaveLength(2);
+    expect(JSON.parse(String(posts[1]?.[1]?.body))).toEqual({
+      sync_current: true,
+      notify_chats: false,
+      dry_run: false,
+    });
   });
 
   // The task model's server default is usually empty, which means "follow

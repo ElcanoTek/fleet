@@ -178,6 +178,7 @@ func (s *Server) Routes() http.Handler {
 	// only, never secrets.
 	mux.Handle("/admin/settings", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminSettings)))))
 	mux.Handle("/admin/settings/", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminSettingItem)))))
+	mux.Handle("/admin/models/rollout", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminModelRollout)))))
 	// Admin-managed task notification settings (internal/notifyadmin): secrets
 	// are write-only + sealed at rest; the test endpoint sends one real
 	// delivery attempt host-side.

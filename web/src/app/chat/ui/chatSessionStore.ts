@@ -47,6 +47,10 @@ export type ChatSessionSnapshot = {
   // conversations (0 messages) so route unmounts (/settings) preserve an
   // unsent persona change when background revalidation reloads the chat.
   pendingPersonaByConv?: ReadonlyMap<string, string>;
+  // Per-conversation server-hydrated model slugs so an open tab returning from
+  // /settings after a model rollout distinguishes a passive echo (`base_model`)
+  // from an explicit user model selection.
+  serverModelByConv?: ReadonlyMap<string, string>;
   selectedModel: string;
   skills: SkillInfo[];
   serverConfig: ServerConfig;

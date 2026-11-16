@@ -43,6 +43,12 @@ type chatRequest struct {
 	// persisted; on an existing one it overrides whatever was stored. Empty
 	// = use whatever the conversation already has, or the configured default.
 	Model string `json:"model"`
+	// BaseModel is the server-stored model slug an open browser tab passively
+	// hydrated for this conversation before the user sent the message (omitted
+	// whenever the user explicitly picked a model). If a server-side model
+	// rollout or another tab updated conv.Model in the meantime and Model still
+	// equals BaseModel, the stale echo is ignored so conv.Model is preserved.
+	BaseModel string `json:"base_model,omitempty"`
 	// Attachments carries the metadata returned by a prior POST /attachments
 	// call. Paths are re-validated against the uploads root before use; any
 	// entry that fails validation is silently dropped.
@@ -63,8 +69,10 @@ type chatRequest struct {
 	// at conversation creation and immutable thereafter).
 	Lockdown bool `json:"lockdown,omitempty"`
 	// AutoApprove seeds or updates the per-conversation auto-approve toggle
-	// when provided on a chat turn.
-	AutoApprove *bool `json:"auto_approve,omitempty"`
+	// when provided on a chat turn; ApprovalMode selects the three-level
+	// approval posture ("manual", "auto", or "autonomous") directly.
+	AutoApprove  *bool   `json:"auto_approve,omitempty"`
+	ApprovalMode *string `json:"approval_mode,omitempty"`
 	// InputID is the caller's idempotency key (#785): a re-POST of the same
 	// (conversation, input_id) while queued returns the existing item instead
 	// of duplicating the input. Empty = server-generated.
@@ -206,7 +214,16 @@ func convOwnerEmail(conv *store.Conversation, fallback string) string {
 	return fallback
 }
 
-func (s *Server) applyTurnConversationFlags(w http.ResponseWriter, r *http.Request, user string, conv *store.Conversation, autoApprove *bool) bool {
+func (s *Server) applyTurnConversationFlags(w http.ResponseWriter, r *http.Request, user string, conv *store.Conversation, autoApprove *bool, approvalMode *string) bool {
+	var parsedMode string
+	if approvalMode != nil {
+		var ok bool
+		parsedMode, ok = store.ParseConversationApprovalMode(*approvalMode)
+		if !ok {
+			http.Error(w, "invalid approval_mode: must be manual, auto, or autonomous", http.StatusBadRequest)
+			return false
+		}
+	}
 	ownerEmail := convOwnerEmail(conv, user)
 	isOwner := strings.EqualFold(ownerEmail, user)
 	// Sending a message to an archived conversation un-archives it (#282) —
@@ -218,12 +235,26 @@ func (s *Server) applyTurnConversationFlags(w http.ResponseWriter, r *http.Reque
 		}
 		conv.ArchivedAt = nil
 	}
-	if autoApprove != nil && *autoApprove != conv.AutoApprove && isOwner {
+	if approvalMode != nil && isOwner && parsedMode != conv.EffectiveApprovalMode() {
+		if err := s.store.SetApprovalMode(r.Context(), ownerEmail, conv.ID, parsedMode); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return false
+		}
+		conv.ApprovalMode = parsedMode
+		conv.AutoApprove = parsedMode != store.ConversationApprovalManual
+	} else if approvalMode == nil && autoApprove != nil && *autoApprove != conv.AutoApprove && isOwner {
 		if err := s.store.SetAutoApprove(r.Context(), ownerEmail, conv.ID, *autoApprove); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return false
 		}
 		conv.AutoApprove = *autoApprove
+		if *autoApprove {
+			if conv.EffectiveApprovalMode() != store.ConversationApprovalAutonomous {
+				conv.ApprovalMode = store.ConversationApprovalAuto
+			}
+		} else {
+			conv.ApprovalMode = store.ConversationApprovalManual
+		}
 	}
 	return true
 }
@@ -403,7 +434,7 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 		// Seed the optional MCP server opt-in list (and seat overrides, #988)
 		// from the chat request so pre-chat Tools picker selections take
 		// effect on this first turn.
-		if !s.seedConversationMCP(w, r, user, conv, req.EnabledOptional, req.MCPAccounts, req.AutoApprove) {
+		if !s.seedConversationMCP(w, r, user, conv, req.EnabledOptional, req.MCPAccounts, req.AutoApprove, req.ApprovalMode) {
 			s.rollbackCreatedConversation(user, conv.ID)
 			return
 		}
@@ -488,10 +519,11 @@ func (s *Server) resolveExistingChatConversation(w http.ResponseWriter, r *http.
 	if s.replayAcceptedInput(w, r, user, conv.ID, *req) {
 		return nil, unlockFirst, false
 	}
-	if reqModel == conv.Model {
+	baseModel := strings.TrimSpace(req.BaseModel)
+	if reqModel == conv.Model || (conv.Model != "" && baseModel != "" && reqModel == baseModel && conv.Model != baseModel) {
 		reqModel = ""
 	}
-	if !s.applyTurnModelOverride(w, r, user, conv, reqModel) || !s.applyTurnConversationFlags(w, r, user, conv, req.AutoApprove) {
+	if !s.applyTurnModelOverride(w, r, user, conv, reqModel) || !s.applyTurnConversationFlags(w, r, user, conv, req.AutoApprove, req.ApprovalMode) {
 		return nil, unlockFirst, false
 	}
 	return conv, unlockFirst, true
@@ -865,11 +897,12 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	// user bubble from it so the chat doesn't appear as just a stranded
 	// "Thinking…" indicator with no question above it.
 	buf.Emit("conversation", map[string]any{
-		"id":           conv.ID,
-		"title":        conv.Title,
-		"persona":      conv.Persona,
-		"model":        conv.Model,
-		"auto_approve": conv.AutoApprove,
+		"id":            conv.ID,
+		"title":         conv.Title,
+		"persona":       conv.Persona,
+		"model":         conv.Model,
+		"auto_approve":  conv.AutoApprove,
+		"approval_mode": conv.EffectiveApprovalMode(),
 	})
 	turnStarted := map[string]any{
 		"turn_id": turnID,
@@ -1026,7 +1059,16 @@ func buildUserMessageEvent(message, inputKind, injected string, conv *store.Conv
 // toggleable) so a bad frontend can't persist garbage (mirrors POST
 // /conversations/{id}/mcp-servers); a seat the user does not hold is a 400
 // rather than a silent drop. Returns false after writing an error response.
-func (s *Server) seedConversationMCP(w http.ResponseWriter, r *http.Request, user string, conv *store.Conversation, enabledOptional []string, mcpAccounts map[string]string, autoApprove *bool) bool {
+func (s *Server) seedConversationMCP(w http.ResponseWriter, r *http.Request, user string, conv *store.Conversation, enabledOptional []string, mcpAccounts map[string]string, autoApprove *bool, approvalMode *string) bool {
+	var parsedMode string
+	if approvalMode != nil {
+		var ok bool
+		parsedMode, ok = store.ParseConversationApprovalMode(*approvalMode)
+		if !ok {
+			http.Error(w, "invalid approval_mode: must be manual, auto, or autonomous", http.StatusBadRequest)
+			return false
+		}
+	}
 	if enabledOptional != nil {
 		valid := s.optionalServerWhitelist(r.Context(), user)
 		seen := make(map[string]bool, len(enabledOptional))
@@ -1062,12 +1104,22 @@ func (s *Server) seedConversationMCP(w http.ResponseWriter, r *http.Request, use
 			conv.MCPAccounts = accounts
 		}
 	}
-	if autoApprove != nil && *autoApprove {
+	if approvalMode != nil {
+		if parsedMode != store.ConversationApprovalManual {
+			if err := s.store.SetApprovalMode(r.Context(), user, conv.ID, parsedMode); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return false
+			}
+		}
+		conv.ApprovalMode = parsedMode
+		conv.AutoApprove = parsedMode != store.ConversationApprovalManual
+	} else if autoApprove != nil && *autoApprove {
 		if err := s.store.SetAutoApprove(r.Context(), user, conv.ID, true); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return false
 		}
 		conv.AutoApprove = true
+		conv.ApprovalMode = store.ConversationApprovalAuto
 	}
 	return true
 }
@@ -1254,6 +1306,7 @@ func (s *Server) runTurnAsync(
 	if conv.Multiplayer || (conv.UserEmail != "" && !strings.EqualFold(conv.UserEmail, user)) {
 		senderEmail = user
 	}
+	injectedContext = appendTurnApprovalModeContext(injectedContext, conv, user)
 	res, err := s.agent.RunTurn(turnCtx, TurnInput{
 		UserMessage:                 userInput,
 		InjectedContext:             injectedContext,
@@ -1458,10 +1511,34 @@ func (s *Server) runTurnAsync(
 	escCancel()
 }
 
+func appendTurnApprovalModeContext(injectedContext string, conv *store.Conversation, user string) string {
+	if !strings.EqualFold(convOwnerEmail(conv, user), user) {
+		return injectedContext
+	}
+	var note string
+	switch conv.EffectiveApprovalMode() {
+	case store.ConversationApprovalAutonomous:
+		note = "[Conversation approval mode: autonomous. Routine workspace tools and bundle-declared checked plan executors run without blocking and leave a receipt card in chat; external emails and raw un-planned writes still stage an approval card.]"
+	case store.ConversationApprovalAuto:
+		note = "[Conversation approval mode: auto. Routine workspace tools run without approval cards; per-call external writes and checked plan executors still stage an approval card unless the owner switches this chat to Autonomous mode.]"
+	default:
+		return injectedContext
+	}
+	if injectedContext == "" {
+		return note
+	}
+	return injectedContext + "\n\n" + note
+}
+
 // newTurnStager builds the approval stager for one chat turn. The post-turn
 // escalation check builds a second one with a fresh context, so both stage
 // cards on the same stream under the same timeouts.
 func (s *Server) newTurnStager(ctx context.Context, conv *store.Conversation, user string, buf *turnBuffer) *approvalStager {
+	isOwner := strings.EqualFold(convOwnerEmail(conv, user), user)
+	initialMode := store.ConversationApprovalManual
+	if isOwner {
+		initialMode = conv.EffectiveApprovalMode()
+	}
 	return &approvalStager{
 		ctx:             ctx,
 		store:           s.store,
@@ -1475,9 +1552,10 @@ func (s *Server) newTurnStager(ctx context.Context, conv *store.Conversation, us
 		// construction so an edit governs the next staged card, no restart.
 		globalTimeoutSeconds: s.cfg.LiveApprovalTimeoutSeconds(),
 		convTimeoutSeconds:   conv.ApprovalTimeoutSeconds,
-		convAutoApprove:      strings.EqualFold(convOwnerEmail(conv, user), user) && conv.AutoApprove,
+		convAutoApprove:      isOwner && conv.AutoApprove,
+		convApprovalMode:     initialMode,
 		liveAutoApprove: func(c context.Context) bool {
-			if !strings.EqualFold(convOwnerEmail(conv, user), user) {
+			if !isOwner {
 				return false
 			}
 			latest, err := s.store.Get(c, convOwnerEmail(conv, user), conv.ID)
@@ -1485,6 +1563,16 @@ func (s *Server) newTurnStager(ctx context.Context, conv *store.Conversation, us
 				return false
 			}
 			return latest.AutoApprove
+		},
+		liveApprovalMode: func(c context.Context) string {
+			if !isOwner {
+				return store.ConversationApprovalManual
+			}
+			latest, err := s.store.Get(c, convOwnerEmail(conv, user), conv.ID)
+			if err != nil || latest == nil {
+				return store.ConversationApprovalManual
+			}
+			return latest.EffectiveApprovalMode()
 		},
 		autoApproveInTest: s.cfg.AutoApproveInTest,
 		push:              s.push,

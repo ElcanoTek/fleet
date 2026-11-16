@@ -698,6 +698,7 @@ func run() error {
 	// budget that would refuse the same user on POST /tasks (#601 part 2).
 	chatOpts = append(chatOpts, httpapi.WithTaskScheduler(taskSchedulerProvider(schedStorage, budgetEnforcer)))
 	chatOpts = append(chatOpts, httpapi.WithTaskManager(taskManagerProvider(schedStorage)))
+	chatOpts = append(chatOpts, httpapi.WithTaskModelRollout(schedStorage.RolloutTaskModels))
 	chatOpts = append(chatOpts, httpapi.WithSchedPing(schedStorage.DB().Ping))
 	chatOpts = append(chatOpts, httpapi.WithTaskWorkspaceSweeper(schedStorage.SweepTaskWorkspaces))
 	chatOpts = append(chatOpts, httpapi.WithTaskOutlierProvider(taskOutlierProvider(schedStorage)))
@@ -714,7 +715,7 @@ func run() error {
 	// from the workspace_settings table and apply LIVE (PII redactor swap,
 	// config live setters, agentcore holders) — both now, at boot, and after
 	// every admin edit.
-	chatOpts = appendWorkspaceSettingsOption(chatOpts, cfg, chatStore)
+	chatOpts, workspaceSettingsSvc := appendWorkspaceSettingsOption(chatOpts, cfg, chatStore)
 
 	// Admin-managed task notification settings (internal/notifyadmin): the
 	// admin Notifications panel. A persisted admin row hot-swaps the shared
@@ -814,6 +815,8 @@ func run() error {
 	// The hybrid prompt library reads bundle prompts/ live (Git-backed,
 	// read-only) and merges it with sched-DB private/workspace entries.
 	h.SetPromptCatalogProvider(bundle.Prompts)
+	emailTemplates := clientconfig.EmailTemplateLibrary{Bundle: bundle, TeamDir: agentcore.TeamEmailTemplatesDir(cfg.WorkspaceRoot)}
+	h.SetEmailTemplateCatalogProvider(emailTemplates.Templates, emailTemplates.Template)
 	// Identity — membership, roles, the Prompt Library fallback, session
 	// epochs and the adoption roster — needs no wiring: the Operations Center
 	// reads the one identity table, core.users, directly (#2049 M4, ADR-0105).
@@ -829,7 +832,12 @@ func run() error {
 	// surface (#601 part 2) — the SAME enforcer the chat schedule_task seam
 	// carries, so no create path can drift.
 	h.SetBudgetGate(budgetEnforcer)
-	orchHandler := buildOrchestratorMux(h, reloadConfigHandler(cfg), mcpReloadHandler(mgr), cfg.TrustedProxies)
+	orchHandler := buildOrchestratorMux(
+		h,
+		reloadConfigHandler(cfg, withReloadWorkspaceSettings(workspaceSettingsSvc, chatSrv.WithModelTierReloadLock)),
+		mcpReloadHandler(mgr),
+		cfg.TrustedProxies,
+	)
 
 	// ── scheduler ticker (promote scheduled→pending, recover leases, fire chat schedules) ──
 	sch.SetTickInterval(cfg.SchedTickSeconds)
@@ -1069,7 +1077,8 @@ func run() error {
 	// Config hot-reload on SIGUSR2 (#286): re-read the reloadable settings without
 	// a restart. Extracted to a helper so run() stays within the cyclomatic budget.
 	defer onSignal(ctx, syscall.SIGUSR2, "cmd.config-reload", func() {
-		logConfigReload(cfg.Reload(envreg.Get("FLEET_ENV_FILE")))
+		res, err := cfg.Reload(envreg.Get("FLEET_ENV_FILE"))
+		logConfigReload(ctx, res, err)
 	})()
 
 	// MCP hot-reload on SIGHUP (#218): re-read the bundle's MCP catalog and apply
@@ -1731,6 +1740,10 @@ func resolveSandboxInto(cfg *config.Config, bundle *clientconfig.Bundle) error {
 	}
 	if cfg.SandboxBackend == sandbox.BackendKubernetes {
 		slog.Info("sandbox: backend resolved (control plane and runners split)", "sandbox_backend", cfg.SandboxBackend, "namespace", defaultString(cfg.SandboxK8sNamespace, "fleet-sandboxes"))
+	} else if !cfg.MockMode {
+		if cgParent := sandbox.EnsureDelegatedCgroupSubgroup(); cgParent != "" {
+			slog.Info("sandbox: cgroup v2 delegated parent ready", "cgroup_parent", cgParent)
+		}
 	}
 	return nil
 }

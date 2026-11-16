@@ -63,14 +63,15 @@ const (
 	// providers, and prompt caches are per-upstream; and an alias slug defeats
 	// the send-side reasoning reconstruction (see isAliasModel).
 	//
-	// Google Gemini 4 Argon (2026-11-09, swapping roles with anthropic/claude-opus-5.5):
+	// Google Gemini 4 Hydrogen (2026-11-13, upgrading from google/gemini-4-argon):
+	// $1.50/M input, $7.50/M output, $0.075/M cache reads (95% cache discount),
 	// 1,048,576-token context window, 32K minimum output floor, served across
-	// Google Vertex AI ("Google") and Google AI Studio ("Google AI Studio") with
-	// soft-pinned first-party failover. Users start on our smartest frontier
-	// model by default, with Claude Opus 5.5 as the frontier fallback and
-	// operator-pinned free/cheaper models (`FLEET_PINNED_MODELS`) for spend
-	// optimization.
-	DefaultCoreModel = "google/gemini-4-argon"
+	// seven first-party Google endpoints on Google Vertex AI ("Google") and
+	// Google AI Studio ("Google AI Studio") with soft-pinned first-party failover.
+	// Users start on our smartest frontier model by default, with Claude Opus 5.5
+	// as the frontier fallback and operator-pinned free/cheaper models
+	// (`FLEET_PINNED_MODELS`) for spend optimization.
+	DefaultCoreModel = "google/gemini-4-hydrogen"
 	// DefaultFallbackModel is the frontier fallback model — the second pinned
 	// picker slot, the automatic cross-provider fallback for scheduled tasks and
 	// chat patrols, and the fallback switch target when a turn struggles. Exact
@@ -147,12 +148,14 @@ var modelContextWindows = []struct {
 	// accepts and hard-errors. Cold-start/offline only; a running fleet gets
 	// this from the live OpenRouter catalog.
 	//
-	// Gemini 4 Argon is the strong tier (DefaultMaxModel, 2026-10-14); exact
-	// slug for the same reason.
+	// Gemini 4 Hydrogen is the primary default tier (DefaultCoreModel, 2026-11-13);
+	// Gemini 4 Argon keeps its row alongside it so historical/override selections
+	// keep their full 1,048,576-token window.
 	//
 	// 3.7 keeps its row alongside 3.8: the slug stays
 	// selectable (and stays the fallback an admin-configured tier may point
 	// at), and both serve the same 1,048,576 window.
+	{"google/gemini-4-hydrogen", 1_048_576},
 	{"google/gemini-4-argon", 1_048_576},
 	{"google/gemini-3.8-flash", 1_048_576},
 	{"google/gemini-3.7-flash", 1_048_576},
@@ -406,4 +409,33 @@ func recordObservedContextWindow(ctx context.Context, key observedContextKey, to
 	}
 	observedContextWindows.m[key] = tokens
 	logging.From(ctx).Info("📏 Recorded ContextMaxTokens", "provider", key.providerName, "type", key.providerType, "model", key.slug, "tokens", tokens, "previous", existing)
+}
+
+// knownModelDisplayLabels maps well-known frontier and historical default model
+// slugs to their human-readable OpenRouter display labels for upgrade notices
+// and operator CLI/UI summaries. Unknown slugs fall back to the raw slug.
+var knownModelDisplayLabels = map[string]string{
+	"google/gemini-4-hydrogen":          "Google: Gemini 4 Hydrogen",
+	"google/gemini-4-argon":             "Google: Gemini 4 Argon",
+	"google/gemini-3.8-flash":           "Google: Gemini 3.8 Flash",
+	"google/gemini-3.7-flash":           "Google: Gemini 3.7 Flash",
+	"anthropic/claude-opus-5.5":         "Anthropic: Claude Opus 5.5",
+	"anthropic/claude-sonnet-4-6":       "Anthropic: Claude Sonnet 4.6",
+	"anthropic/claude-haiku-5.5":        "Anthropic: Claude Haiku 5.5",
+	"openai/gpt-6-luna-pro":             "OpenAI: GPT-6 Luna Pro",
+	"openai/gpt-5.4":                    "OpenAI: GPT-5.4",
+	"deepseek/deepseek-v4.1-flash-1017": "DeepSeek: DeepSeek V4.1 Flash",
+}
+
+// DisplayLabelForModel returns a human-friendly display name for known model
+// slugs, falling back to the trimmed slug when unknown.
+func DisplayLabelForModel(slug string) string {
+	s := strings.TrimSpace(slug)
+	if s == "" {
+		return ""
+	}
+	if label, ok := knownModelDisplayLabels[strings.ToLower(s)]; ok {
+		return label
+	}
+	return s
 }

@@ -1,6 +1,7 @@
 package models
 
 import (
+	"strings"
 	"time"
 )
 
@@ -108,6 +109,95 @@ type BulkModelUpdateResult struct {
 	UpdatedCount int     `json:"updated_count,omitempty"`
 	MatchedCount int     `json:"matched_count,omitempty"`
 	Tasks        []*Task `json:"tasks,omitempty"`
+}
+
+// TaskModelRollout describes an operator rollout of primary and/or fallback
+// models across upcoming scheduled and pending tasks (and in-flight recurring
+// chains when they spawn their next occurrence).
+type TaskModelRollout struct {
+	// Model, when non-nil and non-empty, updates the primary model on
+	// matching tasks.
+	Model *string `json:"model,omitempty"`
+	// FromModel restricts primary-model updates to tasks currently pinned
+	// to FromModel (empty updates all matching tasks whose model differs).
+	FromModel string `json:"from_model,omitempty"`
+	// FallbackModel, when non-nil, updates fallback_model on matching
+	// tasks ("" clears fallback_model to NULL).
+	FallbackModel *string `json:"fallback_model,omitempty"`
+	// FromFallbackModel restricts fallback_model updates to tasks currently
+	// using FromFallbackModel (empty updates all matching tasks whose
+	// fallback_model differs).
+	FromFallbackModel string `json:"from_fallback_model,omitempty"`
+	// OnlySetFallbacks, when true alongside FallbackModel, updates only tasks
+	// that already have a non-empty fallback_model, preserving NULL on bare
+	// API/CLI tasks created without a task fallback.
+	OnlySetFallbacks bool `json:"only_set_fallbacks,omitempty"`
+	// RecurringOnly, when true, restricts updates to tasks with a non-empty
+	// cron recurrence.
+	RecurringOnly bool `json:"recurring_only,omitempty"`
+}
+
+// ApplyToPointers computes the post-rollout (model, fallbackModel) pointers for
+// a single task and reports whether primary and/or fallback changed.
+func (r TaskModelRollout) ApplyToPointers(curModel, curFallback *string) (nextModel, nextFallback *string, primaryChanged, fallbackChanged bool) {
+	nextModel = cloneOptionalTrimmed(curModel)
+	nextFallback = cloneOptionalTrimmed(curFallback)
+
+	curM := derefTrimmed(curModel)
+	if r.Model != nil {
+		targetM := strings.TrimSpace(*r.Model)
+		fromM := strings.TrimSpace(r.FromModel)
+		if targetM != "" && (fromM == "" || curM == fromM) && curM != targetM {
+			v := targetM
+			nextModel = &v
+			primaryChanged = true
+		}
+	}
+
+	curFB := derefTrimmed(curFallback)
+	if r.FallbackModel != nil {
+		targetFB := strings.TrimSpace(*r.FallbackModel)
+		fromFB := strings.TrimSpace(r.FromFallbackModel)
+		if (!r.OnlySetFallbacks || curFB != "") && (fromFB == "" || curFB == fromFB) {
+			if targetFB == "" {
+				if curFB != "" {
+					nextFallback = nil
+					fallbackChanged = true
+				}
+			} else if curFB != targetFB {
+				v := targetFB
+				nextFallback = &v
+				fallbackChanged = true
+			}
+		}
+	}
+	return nextModel, nextFallback, primaryChanged, fallbackChanged
+}
+
+func derefTrimmed(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return strings.TrimSpace(*p)
+}
+
+func cloneOptionalTrimmed(p *string) *string {
+	v := derefTrimmed(p)
+	if v == "" {
+		return nil
+	}
+	return &v
+}
+
+// TaskModelRolloutResult summarizes a TaskModelRollout dry-run or execution.
+type TaskModelRolloutResult struct {
+	DryRun                bool    `json:"dry_run"`
+	ScannedCount          int     `json:"scanned_count"`
+	UpdatedCount          int     `json:"updated_count"`
+	PrimaryUpdatedCount   int     `json:"primary_updated_count"`
+	FallbackUpdatedCount  int     `json:"fallback_updated_count"`
+	RecurringUpdatedCount int     `json:"recurring_updated_count"`
+	Tasks                 []*Task `json:"tasks,omitempty"`
 }
 
 // DeleteKeyResponse is the response for API key deletion.

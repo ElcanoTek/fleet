@@ -73,7 +73,8 @@ The list is now the **allow-list on the request**. For a listed slug
 
 | slug | `order` | `only` (provider routing names) |
 |---|---|---|
-| `google/gemini-4-argon` (default frontier tier since 2026-11-09) | Google | Google, Google AI Studio |
+| `google/gemini-4-hydrogen` (default frontier tier since 2026-11-13) | Google | Google, Google AI Studio |
+| `google/gemini-4-argon` (default frontier tier 2026-11-09–2026-11-13) | Google | Google, Google AI Studio |
 | `anthropic/claude-opus-5.5` (fallback frontier tier since 2026-11-09; primary default 2026-10-28–2026-11-09) | Anthropic | Anthropic, Claude Platform on AWS, Amazon Bedrock, Azure, Google |
 | `anthropic/claude-haiku-5.5` (default 2026-10-15–2026-10-28) | Anthropic | Anthropic, Claude Platform on AWS, Amazon Bedrock, Azure, Google |
 | `openai/gpt-6-luna-pro` (default until 2026-10-15) | OpenAI | OpenAI, Azure, Amazon Bedrock |
@@ -128,6 +129,11 @@ pools were re-read from `GET /api/v1/models/{slug}/endpoints` on 2026-09-22:
 - `anthropic/claude-opus-5.5` — 11 endpoints, the same shape as Opus 5:
   Anthropic ×2 (`anthropic`, `anthropic/fast`), Claude Platform on AWS ×1,
   Amazon Bedrock ×3, Azure ×2, Google ×3.
+- `google/gemini-4-hydrogen` (read 2026-11-13) — 7 first-party Google endpoints:
+  Google ×4 (`google-vertex/global`, `google-vertex/eu`, `google-vertex/us`,
+  `google-vertex/global/priority`) and Google AI Studio ×3 (`google-ai-studio`,
+  `google-ai-studio/flex`, `google-ai-studio/priority`); quantization "unknown"
+  on all.
 
 Every endpoint in both pools is on the allow-list, so **`only` excludes nothing
 that exists today**: availability is identical to the previous open fallback,

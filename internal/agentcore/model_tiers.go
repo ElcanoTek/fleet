@@ -17,7 +17,7 @@ import (
 // built-in seed and for tests that pin the shipped values.
 //
 // Fleet puts the smartest frontier model first as the Default Model
-// (DefaultCoreModel = google/gemini-4-argon) so users get the best experience
+// (DefaultCoreModel = google/gemini-4-hydrogen) so users get the best experience
 // out of the box, pairs it with a second smart frontier Fallback Model from a
 // different provider family (DefaultFallbackModel = anthropic/claude-opus-5.5)
 // for automatic task/patrol failover and chat fallback, and exposes operator-
@@ -60,7 +60,7 @@ func CurrentAdvancedModel() string {
 // CurrentTaskModel returns the effective task-tier slug: what a scheduled task
 // with no pinned model runs on and what the Operations Center create form
 // pre-fills. It is the task-tier override when one is set, otherwise the
-// CURRENT default frontier tier (Gemini 4 Argon by default), so it is never empty.
+// CURRENT default frontier tier (Gemini 4 Hydrogen by default), so it is never empty.
 func CurrentTaskModel() string {
 	modelTiers.mu.RLock()
 	defer modelTiers.mu.RUnlock()

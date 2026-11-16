@@ -204,18 +204,114 @@ components:
               description: >
                 The form's template; each {key} token names one of fields.
                 Present exactly when fields is. content stays the raw file.
+    EmailTemplate:
+      type: object
+      description: >
+        One bundle-owned email template (docs/EMAIL-TEMPLATES.md): the fixed
+        shape of an email a team sends repeatedly. The bundle's mail connector
+        enforces the same file when it renders an email; fleet only presents it.
+      required: [id, name, path, source, subject, sections, has_preview]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        description: { type: string }
+        audience: { type: string, description: "client or internal." }
+        use_when: { type: string }
+        based_on: { type: string }
+        path: { type: string }
+        source:
+          type: string
+          enum: [bundle, team]
+          description: >
+            bundle for a template the bundle ships; team for one a person
+            added from chat through the bundle's mail connector.
+        created_by:
+          type: string
+          description: "Team templates only: who saved it, as the connector recorded."
+        created_at:
+          type: string
+          description: "Team templates only: when it was first saved (RFC 3339)."
+        max_words:
+          type: integer
+          description: Cap on the prose of the whole email. Absent means none.
+        subject:
+          type: object
+          properties:
+            instruction: { type: string }
+            max_chars: { type: integer }
+        rules: { type: array, items: { type: string } }
+        never_say:
+          type: array
+          description: >
+            Phrases the renderer refuses. A "re:" prefix marks a regular expression.
+          items: { type: string }
+        sections:
+          type: array
+          items: { $ref: "#/components/schemas/EmailTemplateSection" }
+        has_preview:
+          type: boolean
+          description: The bundle ships a rendered sample of this template.
+        preview_html:
+          type: string
+          description: >
+            The bundle's rendered sample of the template, a complete HTML
+            document. Only on a single-template read, never in the list.
+            Untrusted markup: show it only in a sandboxed frame.
+        preview_styles:
+          type: object
+          description: >
+            The bundle's recolor table for the preview, sent with preview_html
+            when the bundle ships one. options maps a value of the form's
+            palette field to {preview color: its color}; custom maps a custom
+            color's name to the preview colors the picked color replaces.
+            Every color is a #RRGGBB value.
+          properties:
+            options:
+              type: object
+              additionalProperties:
+                type: object
+                additionalProperties: { type: string }
+            custom:
+              type: object
+              additionalProperties: { type: array, items: { type: string } }
+        fields:
+          type: array
+          description: The optional form, in the form-prompt schema.
+          items: { $ref: "#/components/schemas/PromptField" }
+        prompt_template:
+          type: string
+          description: The text the library inserts; each {key} token names one of fields.
+    EmailTemplateSection:
+      type: object
+      required: [id, title, block, required]
+      properties:
+        id: { type: string }
+        title: { type: string }
+        heading: { type: string, description: The fixed heading the renderer sets. }
+        block: { type: string, description: "The mail connector's block type (text, table, chart, ...)." }
+        required: { type: boolean }
+        instruction: { type: string }
+        limits:
+          type: object
+          description: Enforced bounds by name (max_words, max_bullets, max_rows, ...).
+          additionalProperties: { type: integer }
     PromptField:
       type: object
       description: >
         One input of a form prompt. The same shape as an empty-state card field.
-        default takes the type's value shape: a string for text, textarea and
-        select (one of options), a number for number, a boolean for toggle, and
-        an object with from/to YYYY-MM-DD strings for daterange.
+        default takes the type's value shape: a string for text, textarea,
+        recipients, select and palette (the last two one of options), a number
+        for number, a boolean for toggle, and an object with from/to YYYY-MM-DD
+        strings for daterange. recipients and palette are pickers: recipients
+        collects email addresses (options are addresses to suggest) and yields
+        them joined with ", "; palette offers options drawn with their swatches
+        and, with custom, colors the person picks themselves, yielding an
+        option or "custom (Name #RRGGBB, ...)".
       required: [key, label, type]
       properties:
         key: { type: string, pattern: "^\\w+$" }
         label: { type: string }
-        type: { type: string, enum: [text, textarea, select, number, daterange, toggle] }
+        type: { type: string, enum: [text, textarea, select, number, daterange, toggle, recipients, palette] }
         required: { type: boolean }
         placeholder: { type: string }
         hint: { type: string }
@@ -223,6 +319,14 @@ components:
         options: { type: array, items: { type: string } }
         advanced: { type: boolean }
         min: { type: number }
+        swatches:
+          type: object
+          description: "palette only: the #RRGGBB colors (1 to 4) each option is drawn with."
+          additionalProperties: { type: array, items: { type: string } }
+        custom:
+          type: array
+          description: "palette only: names of the colors (1 to 3) the person may pick themselves."
+          items: { type: string }
     ErrorResponse:
       type: object
       properties:

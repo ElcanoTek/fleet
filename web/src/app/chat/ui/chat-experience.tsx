@@ -61,11 +61,14 @@ import {
 import {
   historyToMessages,
   hydrateResolvedApproval,
+  isNoticeOnlyMessage,
   parseApprovalCardData,
   parseApprovalNarrowable,
+  resolveApprovalMode,
   type Approval,
   type ApprovalStatus,
   type ChatSchedule,
+  type ConversationApprovalMode,
   type HistoryEntry,
   type MemoryProposal,
   type Message,
@@ -241,9 +244,9 @@ export type ConversationSummary = {
   // project"). In the rail a project conversation lives only under its
   // project, not in Pinned/Chats.
   project_id?: string;
-  // auto_approve opts this conversation into pre-approving executable critical
-  // tools without parking on an inline approval card.
+  // auto_approve / approval_mode set this conversation's tool approval posture.
   auto_approve?: boolean;
+  approval_mode?: ConversationApprovalMode;
 };
 
 export type ServerConfig = {
@@ -767,10 +770,35 @@ export function ChatExperience({
   // (picker, nudge, the transcript's switch card), cleared when a new chat
   // resets the composer.
   const modelTouchedRef = useRef(false);
-  const selectModelExplicitly = useCallback<Dispatch<SetStateAction<string>>>((value) => {
-    modelTouchedRef.current = true;
-    setSelectedModel(value);
+  // Tracks the model slug passively hydrated from the server for each
+  // conversation. When the user explicitly picks a model, the entry is cleared
+  // so submitPrompt omits `base_model` and overrides conv.Model on the server;
+  // when untouched, submitPrompt includes `base_model` so an open tab does not
+  // accidentally revert a server-side model rollout on the next message.
+  const serverModelByConvRef = useRef<Map<string, string>>(
+    new Map(restoredSession?.serverModelByConv ?? []),
+  );
+  const syncServerModelSnapshot = useCallback(() => {
+    const prevSession = readChatSession();
+    if (prevSession) {
+      writeChatSession({
+        ...prevSession,
+        serverModelByConv: new Map(serverModelByConvRef.current),
+      });
+    }
   }, []);
+  const selectModelExplicitly = useCallback<Dispatch<SetStateAction<string>>>(
+    (value) => {
+      modelTouchedRef.current = true;
+      const convId = activeConversationIdRef.current;
+      if (convId && !isPendingKey(convId)) {
+        serverModelByConvRef.current.delete(convId);
+        syncServerModelSnapshot();
+      }
+      setSelectedModel(value);
+    },
+    [syncServerModelSnapshot],
+  );
   const [modelRouting, setModelRouting] = useState<ModelRouting>(null);
   const [personaPickerOpen, setPersonaPickerOpen] = useState(false);
   // modelError includes local routing and /api/model-check rejections. When set,
@@ -893,8 +921,39 @@ export function ChatExperience({
     Record<string, boolean>
   >({});
   const pendingAutoApproveRef = useRef<Map<string, boolean>>(new Map());
+  const [pendingApprovalModeByKey, setPendingApprovalModeByKey] = useState<
+    Record<string, ConversationApprovalMode>
+  >({});
+  const pendingApprovalModeRef = useRef<Map<string, ConversationApprovalMode>>(
+    new Map(),
+  );
   const setPendingAutoApproveForKey = useCallback(
     (key: string, val: boolean) => {
+      pendingAutoApproveRef.current.set(key, val);
+      setPendingAutoApproveByKey((prev) =>
+        prev[key] === val ? prev : { ...prev, [key]: val },
+      );
+      if (!val) {
+        pendingApprovalModeRef.current.set(key, "manual");
+        setPendingApprovalModeByKey((prev) =>
+          (prev[key] ?? "manual") === "manual" ? prev : { ...prev, [key]: "manual" },
+        );
+      } else if ((pendingApprovalModeRef.current.get(key) ?? "manual") === "manual") {
+        pendingApprovalModeRef.current.set(key, "auto");
+        setPendingApprovalModeByKey((prev) =>
+          prev[key] === "auto" ? prev : { ...prev, [key]: "auto" },
+        );
+      }
+    },
+    [],
+  );
+  const setPendingApprovalModeForKey = useCallback(
+    (key: string, mode: ConversationApprovalMode) => {
+      pendingApprovalModeRef.current.set(key, mode);
+      setPendingApprovalModeByKey((prev) =>
+        prev[key] === mode ? prev : { ...prev, [key]: mode },
+      );
+      const val = mode !== "manual";
       pendingAutoApproveRef.current.set(key, val);
       setPendingAutoApproveByKey((prev) =>
         prev[key] === val ? prev : { ...prev, [key]: val },
@@ -1035,100 +1094,130 @@ export function ChatExperience({
       : isPendingKey(activeConversationId)
         ? activeConversationId
         : null;
-  const isAutoApprove = activeConversation
-    ? activeConversation.auto_approve === true
-    : activePendingKey !== null &&
-      pendingAutoApproveByKey[activePendingKey] === true;
+  const approvalMode: ConversationApprovalMode = activeConversation
+    ? resolveApprovalMode(
+        activeConversation.approval_mode,
+        activeConversation.auto_approve,
+      )
+    : activePendingKey !== null
+      ? resolveApprovalMode(
+          pendingApprovalModeByKey[activePendingKey],
+          pendingAutoApproveByKey[activePendingKey] === true,
+        )
+      : "manual";
+  const isAutoApprove = approvalMode !== "manual";
   const autoApproveSeqRef = useRef<Map<string, number>>(new Map());
   const autoApproveChainRef = useRef<Map<string, Promise<void>>>(new Map());
-  const autoApproveValueRef = useRef<Map<string, boolean>>(new Map());
-  const autoApproveDisplayedRef = useRef<Map<string, boolean>>(new Map());
-  const autoApproveCommittedRef = useRef<Map<string, boolean>>(new Map());
+  const autoApproveValueRef = useRef<Map<string, ConversationApprovalMode>>(new Map());
+  const autoApproveDisplayedRef = useRef<Map<string, ConversationApprovalMode>>(new Map());
+  const autoApproveCommittedRef = useRef<Map<string, ConversationApprovalMode>>(new Map());
   const autoApproveInFlightRef = useRef<Map<string, number>>(new Map());
-  const toggleAutoApprove = useCallback(() => {
-    if (!activeConversationId || isPendingKey(activeConversationId)) {
-      const key = activeConversationId ?? draftKeyRef.current;
-      setPendingAutoApproveForKey(key, !isAutoApprove);
-      return;
-    }
-    const convId = activeConversationId;
-    if (!autoApproveCommittedRef.current.has(convId)) {
-      autoApproveCommittedRef.current.set(convId, isAutoApprove);
-    }
-    const desired = autoApproveValueRef.current.get(convId) ?? isAutoApprove;
-    const next = !desired;
-    const seq = (autoApproveSeqRef.current.get(convId) ?? 0) + 1;
-    autoApproveSeqRef.current.set(convId, seq);
-    autoApproveValueRef.current.set(convId, next);
-    autoApproveInFlightRef.current.set(
-      convId,
-      (autoApproveInFlightRef.current.get(convId) ?? 0) + 1,
-    );
-    const applyState = (val: boolean) => {
-      setConversations((curr) =>
-        curr.map((c) => (c.id === convId ? { ...c, auto_approve: val } : c)),
-      );
-      setArchivedConversations((curr) =>
-        curr.map((c) => (c.id === convId ? { ...c, auto_approve: val } : c)),
-      );
-    };
-    if (next) {
-      autoApproveDisplayedRef.current.set(convId, true);
-      applyState(true);
-    } else {
-      // Keep showing Auto-approve as enabled until the disable POST commits on
-      // the server so the header never claims approval is required while a
-      // streaming turn still sees liveAutoApprove=true.
-      autoApproveDisplayedRef.current.set(convId, isAutoApprove);
-    }
-    const url = conversationApiUrl(convId, "/auto-approve");
-    if (!url) {
+  const changeApprovalMode = useCallback(
+    (next: ConversationApprovalMode) => {
+      if (!activeConversationId || isPendingKey(activeConversationId)) {
+        const key = activeConversationId ?? draftKeyRef.current;
+        setPendingApprovalModeForKey(key, next);
+        return;
+      }
+      const convId = activeConversationId;
+      if (!autoApproveCommittedRef.current.has(convId)) {
+        autoApproveCommittedRef.current.set(convId, approvalMode);
+      }
+      const currentDesired = autoApproveValueRef.current.get(convId) ?? approvalMode;
+      if (currentDesired === next) return;
+      const seq = (autoApproveSeqRef.current.get(convId) ?? 0) + 1;
+      autoApproveSeqRef.current.set(convId, seq);
+      autoApproveValueRef.current.set(convId, next);
       autoApproveInFlightRef.current.set(
         convId,
-        Math.max(0, (autoApproveInFlightRef.current.get(convId) ?? 1) - 1),
+        (autoApproveInFlightRef.current.get(convId) ?? 0) + 1,
       );
-      return;
-    }
-    const prev = autoApproveChainRef.current.get(convId) ?? Promise.resolve();
-    const run = prev.then(async () => {
-      try {
-        const res = await fetch(url, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ auto_approve: next }),
-        });
-        if (!res.ok) throw new Error(tr("HTTP {0}", [res.status]));
-        let committed = next;
-        try {
-          const body = (await res.json()) as { auto_approve?: boolean };
-          if (typeof body?.auto_approve === "boolean") {
-            committed = body.auto_approve;
-          }
-        } catch {
-          // ignore empty/non-JSON body
-        }
-        autoApproveCommittedRef.current.set(convId, committed);
-        if (autoApproveSeqRef.current.get(convId) === seq) {
-          autoApproveDisplayedRef.current.set(convId, committed);
-          autoApproveValueRef.current.set(convId, committed);
-          applyState(committed);
-        }
-      } catch {
-        if (autoApproveSeqRef.current.get(convId) === seq) {
-          const fallback = autoApproveCommittedRef.current.get(convId) ?? false;
-          autoApproveDisplayedRef.current.set(convId, fallback);
-          autoApproveValueRef.current.set(convId, fallback);
-          applyState(fallback);
-        }
-      } finally {
+      const applyState = (mode: ConversationApprovalMode) => {
+        const aa = mode !== "manual";
+        setConversations((curr) =>
+          curr.map((c) =>
+            c.id === convId ? { ...c, auto_approve: aa, approval_mode: mode } : c,
+          ),
+        );
+        setArchivedConversations((curr) =>
+          curr.map((c) =>
+            c.id === convId ? { ...c, auto_approve: aa, approval_mode: mode } : c,
+          ),
+        );
+      };
+      const rank = (m: ConversationApprovalMode) =>
+        m === "autonomous" ? 2 : m === "auto" ? 1 : 0;
+      if (rank(next) > rank(approvalMode)) {
+        autoApproveDisplayedRef.current.set(convId, next);
+        applyState(next);
+      } else {
+        // Keep showing the higher approval tier until the downgrade POST
+        // commits on the server so the header never claims approval is required
+        // while a streaming turn still sees the higher live tier.
+        autoApproveDisplayedRef.current.set(convId, approvalMode);
+      }
+      const url = conversationApiUrl(convId, "/auto-approve");
+      if (!url) {
         autoApproveInFlightRef.current.set(
           convId,
           Math.max(0, (autoApproveInFlightRef.current.get(convId) ?? 1) - 1),
         );
+        return;
       }
-    });
-    autoApproveChainRef.current.set(convId, run);
-  }, [isAutoApprove, activeConversationId, setPendingAutoApproveForKey]);
+      const prev = autoApproveChainRef.current.get(convId) ?? Promise.resolve();
+      const run = prev.then(async () => {
+        try {
+          const res = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              approval_mode: next,
+              auto_approve: next !== "manual",
+            }),
+          });
+          if (!res.ok) throw new Error(tr("HTTP {0}", [res.status]));
+          let committed: ConversationApprovalMode = next;
+          try {
+            const body = (await res.json()) as {
+              auto_approve?: boolean;
+              approval_mode?: ConversationApprovalMode;
+            };
+            if (body?.approval_mode || typeof body?.auto_approve === "boolean") {
+              committed = resolveApprovalMode(
+                body.approval_mode,
+                body.auto_approve ?? next !== "manual",
+              );
+            }
+          } catch {
+            // ignore empty/non-JSON body (204 No Content)
+          }
+          autoApproveCommittedRef.current.set(convId, committed);
+          if (autoApproveSeqRef.current.get(convId) === seq) {
+            autoApproveDisplayedRef.current.set(convId, committed);
+            autoApproveValueRef.current.set(convId, committed);
+            applyState(committed);
+          }
+        } catch {
+          if (autoApproveSeqRef.current.get(convId) === seq) {
+            const fallback = autoApproveCommittedRef.current.get(convId) ?? "manual";
+            autoApproveDisplayedRef.current.set(convId, fallback);
+            autoApproveValueRef.current.set(convId, fallback);
+            applyState(fallback);
+          }
+        } finally {
+          autoApproveInFlightRef.current.set(
+            convId,
+            Math.max(0, (autoApproveInFlightRef.current.get(convId) ?? 1) - 1),
+          );
+        }
+      });
+      autoApproveChainRef.current.set(convId, run);
+    },
+    [approvalMode, activeConversationId, setPendingApprovalModeForKey],
+  );
+  const toggleAutoApprove = useCallback(() => {
+    changeApprovalMode(approvalMode !== "manual" ? "manual" : "auto");
+  }, [approvalMode, changeApprovalMode]);
   const [isLoadingMcpServers, setIsLoadingMcpServers] = useState(false);
   const [schedulesByConv, setSchedulesByConv] = useState<
     Map<string, ChatSchedule[]>
@@ -1318,6 +1407,7 @@ export function ChatExperience({
       defaultPersona,
       selectedPersona,
       pendingPersonaByConv: new Map(pendingPersonaByConvRef.current),
+      serverModelByConv: new Map(serverModelByConvRef.current),
       selectedModel,
       skills,
       serverConfig,
@@ -2329,13 +2419,16 @@ export function ChatExperience({
             (inFlight || curSeq !== startSeq) &&
             autoApproveDisplayedRef.current.has(c.id)
           ) {
+            const displayed = autoApproveDisplayedRef.current.get(c.id) ?? "manual";
             return {
               ...c,
-              auto_approve: autoApproveDisplayedRef.current.get(c.id),
+              auto_approve: displayed !== "manual",
+              approval_mode: displayed,
             };
           }
-          autoApproveCommittedRef.current.set(c.id, c.auto_approve === true);
-          return c;
+          const serverMode = resolveApprovalMode(c.approval_mode, c.auto_approve);
+          autoApproveCommittedRef.current.set(c.id, serverMode);
+          return { ...c, approval_mode: serverMode };
         });
     try {
       // Active and archived lists in parallel (#282). The archived fetch is
@@ -2482,7 +2575,12 @@ export function ChatExperience({
             conv.persona ||
             defaultPersona,
         );
-        setSelectedModel(conv.model || currentDefaultModel());
+        const hydratedModel = conv.model || currentDefaultModel();
+        if (!options.background || serverModelByConvRef.current.has(conversationId)) {
+          serverModelByConvRef.current.set(conversationId, hydratedModel);
+          syncServerModelSnapshot();
+          setSelectedModel(hydratedModel);
+        }
       }
       if (!options.background && !options.restore) setSidebarOpen(false);
       // This navigation just superseded any load still in flight, whose
@@ -2682,7 +2780,12 @@ export function ChatExperience({
         // Enter-to-open shortcut armed after the user has already landed somewhere.
         setFocusedConversationId(null);
         setSelectedPersona(effectiveConvPersona);
-        setSelectedModel(hydratedConversation.model || currentDefaultModel());
+        const hydratedModel = hydratedConversation.model || currentDefaultModel();
+        if (!options.background || serverModelByConvRef.current.has(hydratedConversation.id)) {
+          serverModelByConvRef.current.set(hydratedConversation.id, hydratedModel);
+          syncServerModelSnapshot();
+          setSelectedModel(hydratedModel);
+        }
         // Reset compaction UI state so the freshly-loaded conversation
         // starts with pre-summary turns collapsed (when present) and
         // any prior error from another chat does not leak into this one.
@@ -3162,7 +3265,10 @@ export function ChatExperience({
 
   const lastAssistantMessageId = useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].role === "assistant") return messages[i].id;
+      const m = messages[i];
+      if (m.role === "assistant" && m.kind !== "summary" && !isNoticeOnlyMessage(m)) {
+        return m.id;
+      }
     }
     return null;
   }, [messages]);
@@ -4338,9 +4444,13 @@ export function ChatExperience({
     const originDraftKey = draftKeyRef.current;
     const originConvKey = currentConvKey;
     const pendingKey = activePendingKey ?? originDraftKey;
-    const hadPendingAutoApprove = Boolean(
-      pendingKey && pendingAutoApproveByKey[pendingKey],
-    );
+    const pendingApprovalMode: ConversationApprovalMode = pendingKey
+      ? resolveApprovalMode(
+          pendingApprovalModeByKey[pendingKey],
+          pendingAutoApproveByKey[pendingKey] === true,
+        )
+      : "manual";
+    const hadPendingAutoApprove = pendingApprovalMode !== "manual";
     const draftText = prompt.trim();
     const initialTitle = draftText
       ? draftText.length > 80
@@ -4369,6 +4479,8 @@ export function ChatExperience({
           mcp_accounts:
             Object.keys(mcpAccounts).length > 0 ? mcpAccounts : undefined,
           auto_approve: hadPendingAutoApprove || undefined,
+          approval_mode:
+            pendingApprovalMode === "autonomous" ? "autonomous" : undefined,
         }),
       });
       if (!response.ok) {
@@ -4416,19 +4528,25 @@ export function ChatExperience({
         await deleteStaleDraftWithRetry();
         return;
       }
-      let autoApprovePersisted = Boolean(created.auto_approve);
-      if (hadPendingAutoApprove && !autoApprovePersisted) {
+      let persistedMode: ConversationApprovalMode = resolveApprovalMode(
+        created.approval_mode,
+        created.auto_approve,
+      );
+      if (hadPendingAutoApprove && persistedMode !== pendingApprovalMode) {
         const autoUrl = conversationApiUrl(created.id, "/auto-approve");
         if (autoUrl) {
           try {
             const autoRes = await fetch(autoUrl, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ auto_approve: true }),
+              body: JSON.stringify({
+                approval_mode: pendingApprovalMode,
+                auto_approve: true,
+              }),
             });
-            autoApprovePersisted = autoRes.ok;
+            persistedMode = autoRes.ok ? pendingApprovalMode : "manual";
           } catch {
-            autoApprovePersisted = false;
+            persistedMode = "manual";
           }
         }
       }
@@ -4449,10 +4567,11 @@ export function ChatExperience({
         multiplayer: created.multiplayer,
         share_token: created.share_token,
         lockdown: created.lockdown ?? (isLockdown || undefined),
-        auto_approve: autoApprovePersisted,
+        auto_approve: persistedMode !== "manual",
+        approval_mode: persistedMode,
       };
       if (pendingKey && hadPendingAutoApprove) {
-        setPendingAutoApproveForKey(pendingKey, false);
+        setPendingApprovalModeForKey(pendingKey, "manual");
       }
       if (Array.isArray(created.optional_mcp_servers_enabled)) {
         const persisted = created.optional_mcp_servers_enabled.filter(
@@ -5023,7 +5142,7 @@ export function ChatExperience({
     const nextDraft = `__draft_${newChatDraftGenRef.current}__`;
     draftKeyRef.current = nextDraft;
     setDraftKey(nextDraft);
-    setPendingAutoApproveForKey(nextDraft, false);
+    setPendingApprovalModeForKey(nextDraft, "manual");
     // Lockdown chats are pinned to the allow-list. Default both modes
     // to the live default tier — for lockdown that's also the first
     // allowed slug, and for normal chat it's the workspace default.
@@ -5413,11 +5532,14 @@ export function ChatExperience({
     draftKeyRef,
     pendingAutoApproveRef,
     setPendingAutoApproveForKey,
+    pendingApprovalModeRef,
+    setPendingApprovalModeForKey,
     setSidebarOpen,
     setSpreadsheetNudgeDismissed,
     activeConversationIdRef,
     messagesByConvRef,
     pendingApprovalScrollRef,
+    serverModelByConvRef,
     selectedModel,
     selectedPersona,
     mcpServers,
@@ -5438,21 +5560,27 @@ export function ChatExperience({
     promoteStreamKey,
     streamingConvsRef,
     isStreaming,
-    onPatrolUpdated: (convId, schedules, autoApprove) => {
+    onPatrolUpdated: (convId, schedules, autoApprove, nextApprovalMode) => {
       setSchedulesByConv((prev) => {
         const next = new Map(prev);
         next.set(convId, schedules);
         return next;
       });
-      if (typeof autoApprove === "boolean") {
+      if (nextApprovalMode || typeof autoApprove === "boolean") {
+        const resolved = resolveApprovalMode(nextApprovalMode, autoApprove);
+        const aa = resolved !== "manual";
         setConversations((curr) =>
           curr.map((c) =>
-            c.id === convId ? { ...c, auto_approve: autoApprove } : c,
+            c.id === convId
+              ? { ...c, auto_approve: aa, approval_mode: resolved }
+              : c,
           ),
         );
         setArchivedConversations((curr) =>
           curr.map((c) =>
-            c.id === convId ? { ...c, auto_approve: autoApprove } : c,
+            c.id === convId
+              ? { ...c, auto_approve: aa, approval_mode: resolved }
+              : c,
           ),
         );
       }
@@ -5499,7 +5627,11 @@ export function ChatExperience({
 
   const applyScheduleResponse = (
     convId: string,
-    data: { schedules?: ChatSchedule[]; auto_approve?: boolean },
+    data: {
+      schedules?: ChatSchedule[];
+      auto_approve?: boolean;
+      approval_mode?: ConversationApprovalMode;
+    },
   ) => {
     if (Array.isArray(data.schedules)) {
       setSchedulesByConv((prev) => {
@@ -5508,26 +5640,39 @@ export function ChatExperience({
         return next;
       });
     }
-    if (typeof data.auto_approve === "boolean") {
-      const aa = data.auto_approve;
+    if (data.approval_mode || typeof data.auto_approve === "boolean") {
+      const resolved = resolveApprovalMode(
+        data.approval_mode,
+        data.auto_approve,
+      );
+      const aa = resolved !== "manual";
       setConversations((curr) =>
-        curr.map((c) => (c.id === convId ? { ...c, auto_approve: aa } : c)),
+        curr.map((c) =>
+          c.id === convId
+            ? { ...c, auto_approve: aa, approval_mode: resolved }
+            : c,
+        ),
       );
       setArchivedConversations((curr) =>
-        curr.map((c) => (c.id === convId ? { ...c, auto_approve: aa } : c)),
+        curr.map((c) =>
+          c.id === convId
+            ? { ...c, auto_approve: aa, approval_mode: resolved }
+            : c,
+        ),
       );
     }
   };
 
   const handleStartPatrol = async (input: CreatePatrolInput): Promise<boolean> => {
+    const requestedMode = resolveApprovalMode(
+      input.approvalMode,
+      input.autoApprove,
+    );
     const convId = activeConversationId;
     if (!convId || isPendingKey(convId)) {
-      // New empty chat: enable auto-approve if requested and ask the
-      // assistant to register the schedule via chat_patrol and run the
-      // initial check right away.
       const key = convId ?? draftKeyRef.current;
-      if (input.autoApprove) {
-        setPendingAutoApproveForKey(key, true);
+      if (requestedMode !== "manual") {
+        setPendingApprovalModeForKey(key, requestedMode);
       }
       const cadenceDesc = input.cron
         ? tr("cron \"{0}\" (timezone \"{1}\"{2})", [input.cron, input.timezone || "UTC", input.title ? tr(", title \"{0}\"", [input.title]) : ""])
@@ -5543,7 +5688,8 @@ export function ChatExperience({
         cron: input.cron,
         timezone: input.timezone,
         duration_seconds: input.durationSeconds,
-        auto_approve: input.autoApprove,
+        auto_approve: requestedMode !== "manual",
+        approval_mode: requestedMode,
       });
       applyScheduleResponse(convId, data);
       notify({
@@ -7377,8 +7523,10 @@ export function ChatExperience({
                 <PatrolBanner
                   schedules={activeSchedules}
                   isAutoApprove={isAutoApprove}
+                  approvalMode={approvalMode}
                   isStreaming={isStreaming}
                   onToggleAutoApprove={isActiveConversationOwner ? toggleAutoApprove : undefined}
+                  onChangeApprovalMode={isActiveConversationOwner ? changeApprovalMode : undefined}
                   onRunNow={(id) => void handleRunPatrolNow(id)}
                   onTogglePause={(id, status) =>
                     void handleTogglePausePatrol(id, status)
@@ -7417,6 +7565,8 @@ export function ChatExperience({
                 sealed={isLockdown}
                 isAutoApprove={isAutoApprove}
                 toggleAutoApprove={isActiveConversationOwner ? toggleAutoApprove : undefined}
+                approvalMode={approvalMode}
+                onChangeApprovalMode={isActiveConversationOwner ? changeApprovalMode : undefined}
                 isConversationOwner={isActiveConversationOwner}
                 isStreaming={isStreaming}
                 isUploadingAttachments={isUploadingAttachments}

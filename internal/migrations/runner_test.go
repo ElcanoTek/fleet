@@ -12,24 +12,29 @@ import (
 	"time"
 )
 
-// TestLoadEmbedded: the shipped set is legacy chat 1–99 then legacy sched
-// 101–177, in that order, every sched version with its down file, nothing at
-// 200 or above yet.
+// TestLoadEmbedded: the shipped set is legacy chat 1-99, legacy sched
+// 101-177, and new-layout migrations from 200 upward, in ascending order.
 func TestLoadEmbedded(t *testing.T) {
 	t.Parallel()
 	set, err := Embedded()
 	if err != nil {
 		t.Fatal(err)
 	}
-	var want []int
+	var wantPrefix []int
 	for v := 1; v <= 99; v++ {
-		want = append(want, v)
+		wantPrefix = append(wantPrefix, v)
 	}
 	for v := 101; v <= LegacyLatest; v++ {
-		want = append(want, v)
+		wantPrefix = append(wantPrefix, v)
 	}
-	if got := versionsOf(set); !reflect.DeepEqual(got, want) {
-		t.Fatalf("versions = %v\nwant %v", got, want)
+	got := versionsOf(set)
+	if len(got) < len(wantPrefix) || !reflect.DeepEqual(got[:len(wantPrefix)], wantPrefix) {
+		t.Fatalf("legacy prefix = %v\nwant %v", got, wantPrefix)
+	}
+	for i := len(wantPrefix); i < len(got); i++ {
+		if got[i] < FirstNew || (i > len(wantPrefix) && got[i] <= got[i-1]) {
+			t.Fatalf("new-layout versions must ascend from %d: %v", FirstNew, got[len(wantPrefix):])
+		}
 	}
 	for _, m := range set.list {
 		switch {
@@ -37,9 +42,13 @@ func TestLoadEmbedded(t *testing.T) {
 			if m.Stream != StreamChat || m.Down != "" || !strings.HasPrefix(m.Name, "chat/") || m.SearchPath() != "chat" {
 				t.Errorf("chat %d: %+v", m.Version, m.Name)
 			}
-		default:
+		case m.Version <= LegacyLatest:
 			if m.Stream != StreamSched || m.Down == "" || !strings.HasPrefix(m.Name, "sched/") || m.SearchPath() != "sched" {
 				t.Errorf("sched %d: %s (down %d bytes)", m.Version, m.Name, len(m.Down))
+			}
+		default:
+			if m.Stream != StreamNew || m.Down == "" || m.SearchPath() != "pg_catalog" {
+				t.Errorf("new %d: %+v (down %d bytes)", m.Version, m.Name, len(m.Down))
 			}
 		}
 		if len(m.Checksum) != 64 {
@@ -192,16 +201,16 @@ func TestUpFailedMigrationRecordsNothing(t *testing.T) {
 	db := emptyDB(t)
 	r := runnerFor(t, embeddedPlus(t, "fixture", "failing"))
 	err := r.up(context.Background(), db)
-	if err == nil || !strings.Contains(err.Error(), "migration 201 (0201_test_fails) failed") || !strings.Contains(err.Error(), "column \"no_such_column\" does not exist (line 3") {
-		t.Fatalf("up = %v, want 0201's failure with its line", err)
+	if err == nil || !strings.Contains(err.Error(), "migration 9901 (9901_test_fails) failed") || !strings.Contains(err.Error(), "column \"no_such_column\" does not exist (line 3") {
+		t.Fatalf("up = %v, want 9901's failure with its line", err)
 	}
 	got := ledgerVersions(t, db)
-	if got[len(got)-1] != 200 {
-		t.Fatalf("ledger ends at %d, want 200 (0201 recorded nothing)", got[len(got)-1])
+	if got[len(got)-1] != 9900 {
+		t.Fatalf("ledger ends at %d, want 9900 (9901 recorded nothing)", got[len(got)-1])
 	}
 	var half bool
 	if err := db.QueryRow(`SELECT to_regclass('core.m6_half_done') IS NOT NULL`).Scan(&half); err != nil || half {
-		t.Fatalf("0201's table survived its failure (%v, %v)", half, err)
+		t.Fatalf("9901's table survived its failure (%v, %v)", half, err)
 	}
 }
 
@@ -365,7 +374,7 @@ func TestDirtyAndForce(t *testing.T) {
 	}
 }
 
-// TestDownRoundTrip: the test-only 0200 goes down and up again; the legacy
+// TestDownRoundTrip: new-layout migrations go down and up again; the legacy
 // migrations never go down.
 func TestDownRoundTrip(t *testing.T) {
 	t.Parallel()
@@ -384,7 +393,7 @@ func TestDownRoundTrip(t *testing.T) {
 		return table, column
 	}
 	if tb, col := fixture(); !tb || !col {
-		t.Fatalf("0200 not applied: table %v column %v", tb, col)
+		t.Fatalf("9900 not applied: table %v column %v", tb, col)
 	}
 
 	for _, to := range []int{176, 100, 0} {
@@ -393,7 +402,7 @@ func TestDownRoundTrip(t *testing.T) {
 		}
 	}
 	plan, err := r.down(ctx, db, LegacyLatest, true)
-	if err != nil || len(plan.Steps) != 1 || plan.Steps[0].Version != 200 {
+	if err != nil || len(plan.Steps) == 0 || plan.Steps[0].Version != 9900 {
 		t.Fatalf("dry run = %+v, %v", plan, err)
 	}
 	if tb, _ := fixture(); !tb {
@@ -403,7 +412,7 @@ func TestDownRoundTrip(t *testing.T) {
 		t.Fatalf("down: %v", err)
 	}
 	if tb, col := fixture(); tb || col {
-		t.Fatalf("0200 not undone: table %v column %v", tb, col)
+		t.Fatalf("9900 not undone: table %v column %v", tb, col)
 	}
 	if got := ledgerVersions(t, db); got[len(got)-1] != LegacyLatest {
 		t.Fatalf("ledger ends at %d after down", got[len(got)-1])
@@ -415,11 +424,11 @@ func TestDownRoundTrip(t *testing.T) {
 		t.Fatalf("up after down: %v", err)
 	}
 	if tb, col := fixture(); !tb || !col {
-		t.Fatal("0200 not re-applied")
+		t.Fatal("9900 not re-applied")
 	}
 	var note string
 	if err := db.QueryRow(`SELECT note FROM core.m6_fixture WHERE id = 1`).Scan(&note); err != nil || note != "seeded by 0200" {
-		t.Fatalf("re-applied 0200's row = %q, %v", note, err)
+		t.Fatalf("re-applied 9900's row = %q, %v", note, err)
 	}
 }
 
@@ -439,7 +448,7 @@ func TestUpRefusesAnEditedMigration(t *testing.T) {
 		version int
 		set     string
 	}{
-		{200, `checksum = 'edited'`},
+		{9900, `checksum = 'edited'`},
 		{7, `checksum = md5('x')`},
 		{150, `name = 'sched/050_renamed'`},
 	} {
@@ -449,9 +458,9 @@ func TestUpRefusesAnEditedMigration(t *testing.T) {
 		t.Fatal("a ledger with edited rows read as current")
 	}
 	var ce ChecksumError
-	if err := r.up(ctx, db); !errors.As(err, &ce) || len(ce.Rows) != 3 || ce.Rows[0].Version != 7 || ce.Rows[2].Version != 200 ||
+	if err := r.up(ctx, db); !errors.As(err, &ce) || len(ce.Rows) != 3 || ce.Rows[0].Version != 7 || ce.Rows[2].Version != 9900 ||
 		!strings.Contains(err.Error(), "append-only") {
-		t.Fatalf("up = %v, want a ChecksumError naming 7, 150 and 200", err)
+		t.Fatalf("up = %v, want a ChecksumError naming 7, 150 and 9900", err)
 	}
 	// Status reports what Up refuses (Codex 4506166386).
 	rep, err := r.status(ctx, db)
@@ -461,7 +470,7 @@ func TestUpRefusesAnEditedMigration(t *testing.T) {
 	if _, err := r.down(ctx, db, LegacyLatest, true); !errors.As(err, &ce) {
 		t.Fatalf("down over an edited ledger = %v, want the same refusal", err)
 	}
-	if err := r.force(ctx, db, 200); err != nil {
+	if err := r.force(ctx, db, 9900); err != nil {
 		t.Fatal(err)
 	}
 	if !r.current(ctx, db) {
@@ -475,13 +484,15 @@ func TestStatus(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	r := testEmbeddedRunner(t)
+	totalShipped := len(r.set.list)
+	latestShipped := r.set.list[totalShipped-1].Version
 
 	fresh := emptyDB(t)
 	rep, err := r.status(ctx, fresh)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rep.Adopted || len(rep.Applied) != 0 || len(rep.Pending) != 99+77 || rep.CurrentVersion != nil || rep.Layout != "unified" {
+	if rep.Adopted || len(rep.Applied) != 0 || len(rep.Pending) != totalShipped || rep.CurrentVersion != nil || rep.Layout != "unified" {
 		t.Fatalf("fresh: %+v", rep)
 	}
 	if hasLedger(t, fresh) {
@@ -496,7 +507,7 @@ func TestStatus(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !rep.Adopted || len(rep.Applied) != 99+70 || len(rep.Pending) != 7 || *rep.CurrentVersion != 170 {
+	if !rep.Adopted || len(rep.Applied) != 99+70 || len(rep.Pending) != totalShipped-(99+70) || *rep.CurrentVersion != 170 {
 		t.Fatalf("partial 170: adopted %v applied %d pending %d current %v", rep.Adopted, len(rep.Applied), len(rep.Pending), rep.CurrentVersion)
 	}
 	if sv := rep.Sched(); *sv.CurrentVersion != 70 || len(sv.Applied) != 70 || len(sv.Pending) != 7 || sv.Pending[0].Name != "071_recurrence_unspawned_includes_dead_lettered" {
@@ -513,7 +524,7 @@ func TestStatus(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !rep.Adopted || len(rep.Pending) != 0 || *rep.CurrentVersion != LegacyLatest || rep.Dirty {
+	if !rep.Adopted || len(rep.Pending) != 0 || *rep.CurrentVersion != latestShipped || rep.Dirty {
 		t.Fatalf("migrated: %+v", rep)
 	}
 	if sv := rep.Sched(); *sv.CurrentVersion != 77 || sv.Runner != "golang-migrate" {
@@ -543,18 +554,18 @@ func TestForceDropsUnshippedRowsAndWaitsForLocks(t *testing.T) {
 		t.Fatal(held, err)
 	}
 	r.lockTimeout = 300 * time.Millisecond
-	if err := r.force(ctx, db, 200); err == nil || !strings.Contains(err.Error(), "legacy chat migration lock") {
+	if err := r.force(ctx, db, 9900); err == nil || !strings.Contains(err.Error(), "legacy chat migration lock") {
 		t.Fatalf("force while a pre-M6 binary holds its lock = %v", err)
 	}
 	_, _ = holder.ExecContext(ctx, `SELECT pg_advisory_unlock($1)`, legacyChatLockKey)
 	_ = holder.Close()
 	r.lockTimeout = 20 * time.Second
 
-	if err := r.force(ctx, db, 200); err != nil {
+	if err := r.force(ctx, db, 9900); err != nil {
 		t.Fatal(err)
 	}
-	if got := ledgerVersions(t, db); got[len(got)-1] != 200 || len(got) != 177 {
-		t.Fatalf("after force 200 the ledger ends at %d with %d rows (the unshipped row must go)", got[len(got)-1], len(got))
+	if got := ledgerVersions(t, db); got[len(got)-1] != 9900 || len(got) != len(r.set.list) {
+		t.Fatalf("after force 9900 the ledger ends at %d with %d rows (the unshipped row must go)", got[len(got)-1], len(got))
 	}
 }
 

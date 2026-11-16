@@ -75,8 +75,11 @@ than once, so that pattern leaves the card for you to decide. For the built-in
 browser tools, an `action=` pattern also matches the action's usual name, and another name for
 the same action in a pattern stands for it (for `playwright_browser`,
 `action=start_session` also covers `live`). Spaces are allowed in globs, and a
-matching deny takes precedence over approvals. `/approvals` shows the available
-handler-only pattern arguments; this requires a server that supplies them.
+matching deny takes precedence over approvals. In a deny, `*` and `?` also
+match `/`, so `command=rm *` covers `rm -rf /tmp/x`; in an approval they stop at
+`/`, so `command=ls *` covers `ls -la` but not `ls /tmp`. `/approvals` shows
+the available handler-only pattern arguments; this requires a server that
+supplies them.
 Executable-tool policies reset on server restart. Scheduled-task and other
 handler-only card policies last for this terminal session and still resolve each
 card through the server's approval endpoint. `/resume <id>` switches conversation and
@@ -203,12 +206,17 @@ When a conversation has an active or paused patrol or timer, the **Patrol bar**
 appears at the top of the thread showing the schedule's status (**Patrol
 active**, **Timer armed**, or **Paused**), cadence, run count, and countdown to
 the next run, along with **Run now**, **Pause / Resume**, and **Stop** buttons.
-Enabling **⚡ Auto-approve** (in the Patrol popover, Patrol bar, or **More
-options** in the composer) lets session-approvable tool calls run hands-free
-while you are away; if a patrol turn does stage an approval card, the card stays
-open for 24 hours and automatically resumes the patrol turn as soon as you
-approve it. Conversations with an active or paused patrol are exempt from
-retention sweeps until the patrol is stopped.
+Choosing **⚡ Auto-approve** (in the Patrol popover, Patrol bar, or **Approval
+mode** under **More options** in the composer) lets session-approvable tool
+calls run hands-free while you are away, while **Autonomous** also runs
+deployment-allowlisted checked plans (`agent_policy.critical_tool_autonomous`)
+without pausing and leaves durable receipt cards in the transcript (outbound
+email, scheduled-task cards, and non-allowlisted per-call actions still ask, and
+only turns triggered by the conversation owner use Auto-approve or Autonomous).
+If a patrol turn does stage an approval card, the card stays open for 24 hours
+and automatically resumes the patrol turn as soon as you approve it.
+Conversations with an active or paused patrol are exempt from retention sweeps
+until the patrol is stopped.
 
 A patrol runs as the chat's persona, so a persona of your own — a digital twin,
 say — can keep watch for you: press **Start patrol** on one of its suggested
@@ -333,8 +341,9 @@ folds it. Hovering a project shows its menu: **Open project**, **New chat**,
 owner, **Share…** and **Project settings…**. See [Keeping, shaping, and sharing conversations](#8-keeping-shaping-and-sharing-conversations).
 
 Your account menu at the foot of the rail switches between **Light**, **Dark**,
-and **System** appearance and opens **Settings** and **Guides** (these user
-guides). Its **Sign out** asks you to
+and **System** appearance and opens **Settings**, **Guides** (these user
+guides) and **Context & Connections**; administrators also find **Admin
+Settings** and **Analytics** there. Its **Sign out** asks you to
 confirm first, because it also signs you out of every app that shares your
 sign-in.
 
@@ -449,7 +458,7 @@ The toolbar beneath the message box keeps everyday controls upfront and groups s
 | Model selector | Shows the model this conversation runs on, with a cost band from `$` to `$$$$` where its pricing is known. Click to change it. See [Picking the model](#picking-the-model). |
 | Attach files | Add files to your next message. Dragging a file anywhere onto the conversation does the same. |
 | Tools | The wrench. Its badge counts the connectors on in this conversation, **Always on** ones included; hover it for "Tools, N on". See [Connectors in a conversation](#5-connectors-in-a-conversation). |
-| More options (`•••`) | Opens a labeled menu organized into three groups: **Prompt library**, **Persona** (active on any new or empty chat before the first message is sent, and shown disabled with *"Personas can only be changed in a new chat"* once chatting has started), and **Memories**; **Share this chat**, **Patrol & schedule**, **Auto-approve tools**, and **Summarize earlier messages** (once a conversation has messages, showing how full the chat is); and **Show details**, **Dashboard view**, and **Send on Enter**. When a non-default persona, a patrol schedule, sharing (**Multiplayer**, team sharing, or a public link), or **Auto-approve** is active, **More options** shows an accent dot, and on desktop screens a quick status pill or indicator also appears directly on the toolbar so you can see or change it in one click. |
+| More options (`•••`) | Opens a labeled menu organized into three groups: **Prompt library**, **Email templates** (only when your deployment has any), **Persona** (active on any new or empty chat before the first message is sent, and shown disabled with *"Personas can only be changed in a new chat"* once chatting has started), and **Memories**; **Share this chat**, **Patrol & schedule**, **Approval mode** (**Manual**, **Auto-approve**, or **Autonomous**), and **Summarize earlier messages** (once a conversation has messages, showing how full the chat is); and **Show details**, **Dashboard view**, and **Send on Enter**. When a non-default persona, a patrol schedule, sharing (**Multiplayer**, team sharing, or a public link), **Auto-approve**, or **Autonomous** is active, **More options** shows an accent dot, and on desktop screens a quick status pill or indicator also appears directly on the toolbar so you can see or change it in one click. |
 | Send | At the far right. While the assistant is working it becomes **Stop**. |
 
 ### Dashboard view
@@ -535,9 +544,11 @@ frontier model, which every new conversation starts on so you get the best
 reasoning and tool use out of the box — and the second is the **fallback model**,
 another smart frontier model from a different provider family that tasks and
 patrols fail over to automatically and that the assistant offers to switch to if
-a turn struggles. By default those two are **Gemini 4 Argon** (new conversations
+a turn struggles. By default those two are **Gemini 4 Hydrogen** (new conversations
 start on it) and **Claude Opus 5.5** (the frontier fallback model); your admin
-can point either slot at a different model. When you want to optimize your spend
+can point either slot at a different model, and when your admin upgrades the
+workspace's primary or fallback model, existing conversations and recurring
+tasks can move to the new model automatically with a short note in active chats. When you want to optimize your spend
 on routine pulls, checks, or formatting, you can switch to a cheaper or free
 model in the picker. Your admin can also pin models just below the two
 recommended frontier models, sometimes under their own name and with a tag such
@@ -1011,12 +1022,16 @@ same kind in this conversation, turning the button into **Approve + allow all**.
 Leave it unticked unless you know exactly what the rest of the conversation will
 do. A deployment can turn the checkbox off for actions that need your decision
 every time; their cards have no checkbox, and each call shows its own card. You
-can also turn on **Auto-approve** for the current conversation from **More
-options** (`•••`) in the composer toolbar (even while a reply is streaming; once
-on, a lightning-bolt badge stays visible on the toolbar for one-click turn-off)
-so executable connector actions and shell commands run without stopping on a
-card, while outbound email, scheduled-task cards, and actions that require a
-decision every time still ask. Cards are not for exploring what an action would change; ask the assistant to
+can also set the conversation's **Approval mode** under **More options** (`•••`)
+in the composer toolbar (even while a reply is streaming): **Manual** asks on
+every critical tool, **Auto-approve** shows a lightning-bolt badge on the
+toolbar and runs session-approvable connector actions and shell commands without
+stopping on a card, and **Autonomous** shows an amber **Autonomous** badge and
+also runs deployment-allowlisted checked plans
+(`agent_policy.critical_tool_autonomous`) without pausing while recording
+durable receipt and result cards in the chat (outbound email, scheduled-task
+cards, and non-allowlisted per-call actions still ask, and only turns sent by
+the conversation owner use Auto-approve or Autonomous). Cards are not for exploring what an action would change; ask the assistant to
 describe the change first, then approve the card once you agree with it.
 
 Which tools are gated and which merely report is set per deployment, not by the
@@ -1072,7 +1087,8 @@ card helps; you can also simply ask for one ("give me a form for this").
   card unlocks by itself and says **Not sent. Try again.**
 - **An optional single choice can be undone.** A list of round options shows
   **Clear choice** once you pick one, and a table you pick one row from shows
-  **Clear selection**, if the question is optional.
+  **Clear selection**, if the question is optional. A table where you can pick
+  several rows has a checkbox in its header to select or clear every row at once.
 - **Updated cards replace older ones.** When the assistant checks your answers
   and comes back with a corrected version, the earlier card collapses to a
   one-line note (**Show** opens it), with any problems marked on the new card's
@@ -1455,6 +1471,54 @@ it is the whole of your prompt work in one file.
 > quietly stops being true. The task's other settings — its schedule, its
 > recipients, the connectors it may use — are fields of their own on the task
 > form, and inserting a prompt there does not disturb them.
+
+### Email templates
+
+If your deployment has standard emails, **More options** (`•••`) also lists
+**Email templates**. A template is the fixed shape of an email the team sends
+again and again, such as a weekly client update: the same sections, in the same
+order, at the same length, whoever asks for it and in whichever chat. The entry
+is not shown on a deployment that has none.
+
+Select a template to see two things side by side: an **example email** built
+from sample data, and the template's **sections in order**, each with what
+belongs in it and its limits (for example *Up to 3 bullets*). Below them are the
+rules for the whole email and the phrases it never uses. Some templates come
+with your deployment; others are ones your team added, marked **Team** with
+the name of whoever added them.
+
+Choose **Use this template** and fill in the short form. Besides the
+template's own questions it can ask who the email goes to and how it looks:
+
+- **Send to** lists the addresses you mail most under **Frequently used**;
+  select one to add it, or type any other address and choose **Add**. An
+  address you type is offered again next time. Leave it empty to get a review
+  copy yourself.
+- **Style** shows each look with its colors, and the example email beside the
+  form takes on the look as you pick it. **Custom colors** lets you pick a
+  client's header and accent colors instead, and **Recently used** brings back
+  the looks you used last, so you set a client's colors once.
+
+Then choose **Use prompt**. Like a library prompt, this
+only puts a request in your draft; nothing is written or sent until you send
+the message. The assistant then writes the email to that template and puts it
+on an approval card that shows the email and names the recipients. It is sent
+only when you choose **Send** on that card; reject it, or ask for changes, and
+nothing goes out. A draft that breaks the
+template, by running long or adding a section, is not built: the assistant is
+told what to fix and tries again, so what you get back fits the example.
+
+**Adding a template.** When an email came out the way you want it every time,
+ask the assistant to keep it: *"Save this email as a template called Monthly
+QBR recap."* Or choose **New template** in the library, which writes that
+request into your draft for you to finish. The assistant builds the template
+from the email in the chat (its sections, their order and their length), checks
+it, and asks you to approve it on a card. Once approved it is in the library
+for your whole team, with that email as its example. The example is visible to
+everyone, so ask for invented names and numbers if the real ones should not be
+shown. To change a team template, save a new version under the same name; to
+remove one, ask the assistant by name. Templates that came with your
+deployment cannot be changed from chat.
 
 ## 10. From chat to a task
 

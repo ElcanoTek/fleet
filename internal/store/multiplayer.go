@@ -454,6 +454,7 @@ func (s *Store) GetMultiplayerConversation(ctx context.Context, callerEmail, con
 		c.ParentConversationID = ""
 		c.MCPAccounts = filterParticipantMCPAccounts(c.RawMCPAccounts, callerEmail)
 		c.AutoApprove = false
+		c.ApprovalMode = ""
 	}
 	return &c, nil
 }
@@ -636,7 +637,7 @@ func (s *Store) ListSharedAndMultiplayerConversations(ctx context.Context, calle
 			&c.CreatedAt, &c.UpdatedAt, &c.ArchivedAt, &c.TitleLocked, &optionalRaw,
 			textArray{&c.Labels}, &approvalTimeout, &c.ShareToken, &c.ParentConversationID,
 			&c.BranchPointMessageID, &thinkingRaw, &c.ProjectID, &accountsRaw,
-			&c.TeamVisible, &c.AutoApprove, &c.Multiplayer, &mpParticipantsRaw, &mpExcludedRaw,
+			&c.TeamVisible, &c.AutoApprove, &c.ApprovalMode, &c.Multiplayer, &mpParticipantsRaw, &mpExcludedRaw,
 			&sharedTeam, &sharedTeamID,
 		); err != nil {
 			return nil, err
@@ -659,6 +660,7 @@ func (s *Store) ListSharedAndMultiplayerConversations(ctx context.Context, calle
 		c.ParentConversationID = ""
 		c.MCPAccounts = nil
 		c.AutoApprove = false
+		c.ApprovalMode = ""
 		c.MultiplayerParticipants = nil
 		c.MultiplayerExcluded = nil
 		out = append(out, c)

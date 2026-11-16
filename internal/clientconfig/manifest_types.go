@@ -152,7 +152,10 @@ type Bundle struct {
 	// Entries are read on demand so a config-repo pull is visible without a
 	// fleet restart. See ReadPrompts and Bundle.Prompts.
 	PromptsDir string
-	SkillsDir  string
+	// EmailTemplatesDir is the bundle-owned email template library, read on
+	// demand like PromptsDir. See ReadEmailTemplates and Bundle.EmailTemplates.
+	EmailTemplatesDir string
+	SkillsDir         string
 	// BundleSkillsDir is the bundle's OWN skills/ dir (the author-owned
 	// source). SkillsDir may point at the merged bundle+builtin dir instead —
 	// see builtin_skills.go. Validation always runs against this one.
@@ -309,6 +312,18 @@ type AgentPolicy struct {
 	//	agent_policy:
 	//	  critical_tool_no_session_approval: [create_deal, update_deal]
 	CriticalToolNoSessionApproval []string `yaml:"critical_tool_no_session_approval"`
+	// CriticalToolAutonomous is an OPTIONAL list of critical suffixes (same
+	// suffix matching as critical_tools) that a conversation owner may authorize
+	// to run without blocking on an approval card by setting that conversation's
+	// approval_mode to "autonomous" (for example, checked SSP deal-plan
+	// executors such as execute_plan and apply_first_party_plan). Each call in
+	// Autonomous mode writes a durable record in chat.approvals and renders a
+	// muted "ran without asking" receipt card. Members must be in critical_tools
+	// and must NOT be outbound email tools.
+	//
+	//	agent_policy:
+	//	  critical_tool_autonomous: [execute_plan, apply_first_party_plan]
+	CriticalToolAutonomous []string `yaml:"critical_tool_autonomous"`
 	// CriticalToolCardDescribers is an OPTIONAL map from a critical suffix to
 	// a read-only "describer" tool suffix on the same server. When a matching
 	// call is staged for approval, fleet calls the describer with the same

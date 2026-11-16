@@ -54,6 +54,41 @@ func TestNoSessionApprovalProblems(t *testing.T) {
 	}
 }
 
+func TestAutonomousApprovalAllowed(t *testing.T) {
+	t.Cleanup(func() { ConfigureAgentPolicy(AgentPolicy{}) })
+
+	ConfigureAgentPolicy(AgentPolicy{})
+	if AutonomousApprovalAllowed("mcp_openx_ox_execute_plan") {
+		t.Fatal("with no declaration no tool may run under Autonomous mode")
+	}
+
+	p := AgentPolicy{
+		CriticalToolSuffixes:          []string{"execute_plan", "apply_first_party_plan", "create_deal"},
+		CriticalToolNoSessionApproval: []string{"execute_plan", "apply_first_party_plan", "create_deal"},
+		CriticalToolAutonomous:        []string{" execute_plan ", "apply_first_party_plan", "send_email", "typo_plan"},
+	}
+	problems := strings.Join(AutonomousApprovalProblems(p), "\n")
+	for _, want := range []string{`"send_email"`, `"typo_plan"`} {
+		if !strings.Contains(problems, want) {
+			t.Errorf("AutonomousApprovalProblems missing %s:\n%s", want, problems)
+		}
+	}
+	ConfigureAgentPolicy(p)
+	for _, tool := range []string{"execute_plan", "mcp_openx_ox_execute_plan", "mcp_magnite_client_a_apply_first_party_plan"} {
+		if !AutonomousApprovalAllowed(tool) {
+			t.Errorf("%s: want AutonomousApprovalAllowed=true", tool)
+		}
+	}
+	for _, tool := range []string{"mcp_openx_ox_create_deal", "mcp_sendgrid_send_email", "send_email", "mcp_x_typo_plan"} {
+		if AutonomousApprovalAllowed(tool) {
+			t.Errorf("%s: want AutonomousApprovalAllowed=false", tool)
+		}
+	}
+	if got := AutonomousToolSuffixes(); len(got) != 2 || got[0] != "apply_first_party_plan" || got[1] != "execute_plan" {
+		t.Errorf("AutonomousToolSuffixes = %v, want [apply_first_party_plan execute_plan]", got)
+	}
+}
+
 // critical_tool_card_describers keeps an entry only when the key is critical
 // and the describer is a parallel-safe, non-critical tool. A critical
 // describer would run a write without approval, so it is always dropped.

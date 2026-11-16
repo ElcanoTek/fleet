@@ -2289,3 +2289,76 @@ describe("a confirmation and Escape", () => {
     expect(screen.queryByTestId("genui-reset")).toBeNull();
   });
 });
+
+describe("multi-select table header checkbox", () => {
+  const multiTable = (value: string[] = ["r1", "r2", "r3"], extra: Record<string, unknown> = {}) =>
+    spec({
+      title: "Recommendations",
+      components: [
+        {
+          type: "table",
+          id: "selected",
+          label: "Apply here",
+          select: "multi",
+          row_key: "row",
+          columns: [
+            { key: "row", label: "#" },
+            { key: "change", label: "Change" },
+          ],
+          rows: [
+            { row: "r1", change: "Raise floor" },
+            { row: "r2", change: "Remove dead domains" },
+            { row: "r3", change: "Pause zero-bid deal" },
+          ],
+          value,
+          ...extra,
+        },
+      ],
+      actions: [{ id: "set_up", label: "Set up selected" }],
+    });
+
+  it("clears all rows when all are selected, enters indeterminate when partial, and selects all again", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn().mockResolvedValue(true);
+    render(<GenerativeCard cardId="mt" spec={multiTable()} onSubmit={onSubmit} />);
+
+    const deselectAll = screen.getByRole("checkbox", { name: "Deselect all rows" }) as HTMLInputElement;
+    expect(deselectAll.checked).toBe(true);
+    expect(deselectAll.indeterminate).toBe(false);
+    expect(screen.getByText("3 of 3 selected")).toBeTruthy();
+
+    // Clear all in one click so the user can tick only the rows they want.
+    await user.click(deselectAll);
+    const selectAll = screen.getByRole("checkbox", { name: "Select all rows" }) as HTMLInputElement;
+    expect(selectAll.checked).toBe(false);
+    expect(selectAll.indeterminate).toBe(false);
+    expect(screen.getByText("0 of 3 selected")).toBeTruthy();
+
+    // Ticking a single row makes the header checkbox indeterminate.
+    await user.click(screen.getByRole("checkbox", { name: "Select r2" }));
+    expect(selectAll.checked).toBe(false);
+    expect(selectAll.indeterminate).toBe(true);
+    expect(screen.getByText("1 of 3 selected")).toBeTruthy();
+
+    // Clicking the indeterminate header checkbox selects every row in table order.
+    await user.click(selectAll);
+    expect((screen.getByRole("checkbox", { name: "Deselect all rows" }) as HTMLInputElement).checked).toBe(true);
+    expect(selectAll.indeterminate).toBe(false);
+    expect(screen.getByText("3 of 3 selected")).toBeTruthy();
+
+    await user.click(screen.getByRole("checkbox", { name: "Deselect all rows" }));
+    await user.click(screen.getByRole("checkbox", { name: "Select r3" }));
+    await user.click(screen.getByRole("button", { name: "Set up selected" }));
+    expect(parseSubmissionMessage(onSubmit.mock.calls[0][0])?.values).toEqual({ selected: ["r3"] });
+  });
+
+  it("disables the header checkbox when the table or card is locked or disabled", async () => {
+    const user = userEvent.setup();
+    render(<GenerativeCard cardId="mt_dis" spec={multiTable(["r1"], { disabled: true })} onSubmit={() => {}} />);
+    const header = screen.getByRole("checkbox", { name: "Select all rows" }) as HTMLInputElement;
+    expect(header).toBeDisabled();
+    expect(header.indeterminate).toBe(true);
+    await user.click(header);
+    expect(screen.getByText("1 of 3 selected")).toBeTruthy();
+  });
+});

@@ -545,3 +545,66 @@ func TestPoliciesAccumulatePerTool(t *testing.T) {
 		t.Fatalf("accumulated %+v", got)
 	}
 }
+
+// A terminal pattern is read as the server reads one: in a deny, '*' and '?'
+// match '/' too ("cron=*" covers a stepped expression, "prompt=summarize *" a
+// prompt naming a URL); in an approve they stop at '/', as before.
+func TestCardPatternGlobsReadASlashByMode(t *testing.T) {
+	a := pendingApproval{tool: "schedule_task", patternArgs: map[string]string{
+		"cron":   "*/15 * * * *",
+		"prompt": "summarize https://example.com/a/b",
+	}}
+	for _, c := range []struct {
+		pattern       string
+		deny, approve bool
+	}{
+		{"cron=*", true, false},
+		{"cron=*/15 *", true, true},
+		{"prompt=summarize *", true, false},
+		{"prompt=summarize https:?/*", true, false},
+		{"prompt=summarize https://example.com/*", true, false},
+		{"prompt=summarize https://example.com/*/*", true, true},
+		{"cron=0 *", false, false},
+		{"prompt=summarize https://example.org/*", false, false},
+		{"prompt=[a", false, false},
+	} {
+		for _, approved := range []bool{false, true} {
+			want := c.deny
+			if approved {
+				want = c.approve
+			}
+			if got := policyMatchesCard(ApprovalDecision{Approved: approved, Scope: "pattern", Pattern: c.pattern}, a); got != want {
+				t.Errorf("%s (approved=%v): matched %v, want %v", c.pattern, approved, got, want)
+			}
+		}
+	}
+}
+
+// A malformed glob is refused before anything is sent, wherever its error
+// is: the check no longer passes "a*[" because it starts with a character
+// the empty value doesn't have.
+func TestMalformedPatternIsRefused(t *testing.T) {
+	posts := 0
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		posts++
+		fmt.Fprint(w, `{"status":"approved","result_text":"ok"}`)
+	}))
+	defer s.Close()
+	for _, pattern := range []string{"cron=[", "cron=0 9 * * [", "name=a*["} {
+		m := newModel(Config{ServerURL: s.URL})
+		m.convID = "c"
+		m.pending = []pendingApproval{withFrozen(pendingApproval{id: "a", tool: "schedule_task", patternArgs: map[string]string{"name": "n"}}, nil)}
+		if cmd := m.runSlash("/approve pattern " + pattern); cmd != nil {
+			cmd()
+		}
+		if joined := strings.Join(m.history, "\n"); !strings.Contains(joined, "Invalid arg=glob pattern.") {
+			t.Errorf("%s: %s", pattern, joined)
+		}
+		if got := m.cardPolicies["c"]["schedule_task"]; len(got) != 0 {
+			t.Errorf("%s: registered %+v", pattern, got)
+		}
+	}
+	if posts != 0 {
+		t.Errorf("%d approvals were sent", posts)
+	}
+}

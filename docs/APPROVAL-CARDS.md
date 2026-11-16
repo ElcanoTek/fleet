@@ -50,10 +50,11 @@ as before → after, and flags, with the raw arguments under "Details". Any
 describer failure leaves this generic card. See
 [APPROVAL-CARD-DESCRIBERS.md](APPROVAL-CARD-DESCRIBERS.md).
 
-A **notify-mode record** (#1153) renders on the same chrome in an
-informational form: muted border, title "… · ran without asking", no buttons,
-and the persisted record text — including the bundle-authored undo hint — as
-its body. It never masquerades as a past human approval.
+A **notify-mode record** (#1153) or an **Autonomous-mode checked plan receipt**
+renders on the same chrome in an informational form: muted border, title
+"... · ran without asking", no buttons, and the persisted record text (plus any
+bundle-authored undo hint or structured `result_card`) as its body. It never
+masquerades as a past human click.
 
 ## Tools that need a decision per call (no apply-all)
 

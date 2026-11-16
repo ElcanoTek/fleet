@@ -411,6 +411,36 @@ func NewService(st Store, defaults map[string]string, hooks map[string]ApplyFunc
 	return s, nil
 }
 
+// ApplyKeys re-reads persisted workspace_settings rows and applies only the
+// specified setting keys in-memory (using their boot-time defaults when no
+// override row exists).
+func (s *Service) ApplyKeys(ctx context.Context, keys ...string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	overrides, err := s.st.WorkspaceSettings(ctx)
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrLoadFailed, err)
+	}
+	var errs []string
+	for _, key := range keys {
+		if _, ok := s.specs[key]; !ok {
+			return fmt.Errorf("%w: %s", ErrUnknownKey, key)
+		}
+		r := s.resolve(key, overrides)
+		if err := s.apply(key, r.Value, r.Source == SourceAdmin); err != nil {
+			s.applyErrs[key] = err.Error()
+			errs = append(errs, fmt.Sprintf("%s: %v", key, err))
+		} else {
+			delete(s.applyErrs, key)
+		}
+	}
+	if len(errs) > 0 {
+		sort.Strings(errs)
+		return fmt.Errorf("apply workspace settings: %s", strings.Join(errs, "; "))
+	}
+	return nil
+}
+
 // Snapshot returns every setting's resolved state in registry order — the
 // admin GET. No secret material: registry values are feature toggles and
 // bounds, never credentials.

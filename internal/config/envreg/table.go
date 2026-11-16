@@ -144,7 +144,7 @@ var table = []Entry{
 		Default:     "(the request's own origin — local development only)",
 		Description: "OIDC redirect URI, when it must differ from the one derived from the public origin."},
 	{Name: "FLEET_OIDC_AUTO_START", Group: GroupAuth, Scope: ScopeServer, Type: TypeBool, Default: "false",
-		Description: "An anonymous /login first tries SSO silently (prompt=none)."},
+		Description: "An anonymous /login first tries SSO silently (prompt=none). Where SSO is the only sign-in, /login always goes straight to the IdP."},
 	{Name: "FLEET_OIDC_ALLOW_PASSWORD", Group: GroupAuth, Scope: ScopeServer, Type: TypeBool, Default: "false",
 		Knob:        loader,
 		Description: "Break-glass: keep Fleet passwords working while central Auth SSO is configured."},
@@ -278,7 +278,7 @@ var table = []Entry{
 		Description: "Env default of the fallback frontier model tier (admin setting advanced_model)."},
 	{Name: "FLEET_PINNED_MODELS", Group: GroupModels, Scope: ScopeServer, Type: TypeString,
 		Description: "JSON array of `{\"slug\",\"label\",\"tag\",\"free\",\"input_price_per_mtok\",\"output_price_per_mtok\"}` pins: models both pickers list right after the recommended rows, with an optional display label, tag pill and displayed price. The real slug is sent and recorded; setting `free: true` (or both prices to `0`) also installs a runtime `$0.00` pricing override unless overridden in `manifest.yaml`. A malformed value refuses to boot (docs/PINNED-MODELS.md)."},
-	{Name: "FLEET_TITLE_MODEL", Group: GroupModels, Scope: ScopeServer, Type: TypeString, Default: "google/gemini-4-argon",
+	{Name: "FLEET_TITLE_MODEL", Group: GroupModels, Scope: ScopeServer, Type: TypeString, Default: "google/gemini-4-hydrogen",
 		Description: "Model that titles conversations."},
 	{Name: "FLEET_METADATA_MODEL", Group: GroupModels, Scope: ScopeServer, Type: TypeString, DefaultFrom: "FLEET_TITLE_MODEL",
 		Description: "Model for auxiliary metadata jobs."},
@@ -804,6 +804,8 @@ var table = []Entry{
 		Description: "Editor `fleet env edit` opens when VISUAL is unset."},
 	{Name: "NO_COLOR", Group: GroupPlatform, Scope: ScopeCLI, Type: TypeString, ProcessOnly: true,
 		Description: "Any value turns colour off in `fleet motd` (no-color.org)."},
+	{Name: "XDG_RUNTIME_DIR", Group: GroupPlatform, Scope: ScopeCLI, Type: TypePath, ProcessOnly: true,
+		Description: "Podman's runtime dir; when set but absent (fleet.service, which creates /run/fleet, is not running) `fleet cleanup` skips the podman prune."},
 	// libpq/pgx connection defaults (config.PGTargetEnv): they fill what a
 	// DSN leaves out — for fleet's own connections (config.ParseConnTarget),
 	// and for psql/pg_dump, which the scripts and backup/restore run.

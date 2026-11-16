@@ -3,7 +3,11 @@ import { t as tr } from "@/app/lib/i18n";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Icon } from "./Icon";
-import type { ChatSchedule } from "./history";
+import {
+  type ChatSchedule,
+  type ConversationApprovalMode,
+  resolveApprovalMode,
+} from "./history";
 import { CloseButton } from "@/app/shared/ui/CloseButton";
 import { StatusChip } from "@/app/shared/ui/StatusChip";
 import { useDialogA11y } from "@/app/shared/ui/useDialogA11y";
@@ -19,7 +23,6 @@ import {
   NativeSelect,
   NativeSelectOption,
 } from "@/components/ui/native-select";
-import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { openedByTouch } from "./toolsPicker";
 
@@ -74,20 +77,25 @@ export function formatCountdown(nextRunAt: number, nowSec: number): string {
 export function PatrolBanner({
   schedules,
   isAutoApprove,
+  approvalMode,
   isStreaming,
   onToggleAutoApprove,
+  onChangeApprovalMode,
   onRunNow,
   onTogglePause,
   onCancel,
 }: {
   schedules: ChatSchedule[];
   isAutoApprove?: boolean;
+  approvalMode?: ConversationApprovalMode;
   isStreaming?: boolean;
   onToggleAutoApprove?: () => void;
+  onChangeApprovalMode?: (mode: ConversationApprovalMode) => void;
   onRunNow: (scheduleId: string) => void | Promise<void>;
   onTogglePause: (scheduleId: string, currentStatus: ChatSchedule["status"]) => void | Promise<void>;
   onCancel: (scheduleId: string) => void | Promise<void>;
 }) {
+  const effectiveApprovalMode = resolveApprovalMode(approvalMode, isAutoApprove);
   const visible = schedules.filter((s) => s.status === "active" || s.status === "paused");
   const [nowSec, setNowSec] = useState<number>(() => Math.floor(Date.now() / 1000));
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -149,7 +157,70 @@ export function PatrolBanner({
             </div>
 
             <div className="flex shrink-0 flex-wrap items-center gap-1.5">
-              {onToggleAutoApprove ? (
+              {onChangeApprovalMode ? (
+                <div
+                  role="radiogroup"
+                  aria-label={tr("Patrol approval mode")}
+                  data-testid="patrol-approval-mode"
+                  className="inline-flex items-center gap-0.5 rounded-full border border-[var(--color-border)] bg-[var(--color-surface-1)] p-0.5"
+                >
+                  {(
+                    [
+                      {
+                        id: "manual" as const,
+                        label: tr("Manual"),
+                        title: tr("Manual: patrol runs wait on approval cards."),
+                      },
+                      {
+                        id: "auto" as const,
+                        label: tr("Auto-approve"),
+                        title: tr("Auto-approve: routine workspace tools run unattended; plans and emails still ask."),
+                      },
+                      {
+                        id: "autonomous" as const,
+                        label: tr("Autonomous"),
+                        title: tr("Autonomous: routine tools and checked plans run unattended with receipt cards; external emails still ask."),
+                      },
+                    ]
+                  ).map((opt) => {
+                    const selected = effectiveApprovalMode === opt.id;
+                    const activeClass =
+                      opt.id === "autonomous"
+                        ? "border-[var(--color-warning-border)] bg-[var(--color-warning-tint)] text-[var(--color-warning-text)]"
+                        : opt.id === "auto"
+                          ? "border-[color-mix(in_srgb,var(--color-accent)_45%,var(--color-border-strong))] bg-[color-mix(in_srgb,var(--color-accent)_16%,transparent)] text-[var(--color-accent)]"
+                          : "border-[var(--color-border-strong)] bg-[var(--color-surface-2)] text-[var(--color-text-primary)]";
+                    return (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        role="radio"
+                        aria-checked={selected}
+                        data-testid={`patrol-mode-${opt.id}`}
+                        title={opt.title}
+                        onClick={() => onChangeApprovalMode(opt.id)}
+                        className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[0.7rem] font-semibold transition ${
+                          selected
+                            ? activeClass
+                            : "border-transparent text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
+                        }`}
+                      >
+                        {opt.id !== "manual" ? (
+                          <Icon
+                            name="zap"
+                            className={`size-2.5 ${
+                              selected && opt.id === "autonomous"
+                                ? "text-[var(--color-warning-icon)]"
+                                : ""
+                            }`}
+                          />
+                        ) : null}
+                        <span>{opt.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : onToggleAutoApprove ? (
                 // A switch, not a status pill: "Auto-approve off" in a plain
                 // pill read as the current state, not as the control that turns
                 // it on (a Raptive trader, 2026-11-10). The label stays fixed;
@@ -274,6 +345,7 @@ export type CreatePatrolInput = {
   timezone?: string;
   durationSeconds?: number;
   autoApprove: boolean;
+  approvalMode?: ConversationApprovalMode;
 };
 
 export function PatrolPopover({
@@ -296,7 +368,8 @@ export function PatrolPopover({
     (initialPrompt ?? "").trim() ||
     tr("Check for new updates, verify key metrics, and summarize anything that needs attention."),
   );
-  const [autoApprove, setAutoApprove] = useState<boolean>(true);
+  const [patrolApprovalMode, setPatrolApprovalMode] =
+    useState<ConversationApprovalMode>("auto");
   const [submitting, setSubmitting] = useState<boolean>(false);
   const panelRef = useRef<HTMLDivElement | null>(null);
   const promptInputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -527,21 +600,64 @@ export function PatrolPopover({
             />
           </label>
 
-          <div className="picker-row picker-row--active m-0 items-center justify-between">
+          <div className="picker-row picker-row--active m-0 flex-col items-stretch gap-2">
             <div className="picker-row__body">
               <div className="picker-row__name">
-                <Icon name="zap" className="size-3.5 text-[var(--color-accent)]" />
-                <span>{tr("Auto-approve tools while patrolling")}</span>
+                <Icon
+                  name="zap"
+                  className={`size-3.5 ${
+                    patrolApprovalMode === "autonomous"
+                      ? "text-[var(--color-warning-icon)]"
+                      : "text-[var(--color-accent)]"
+                  }`}
+                />
+                <span>{tr("Approval mode while patrolling")}</span>
               </div>
               <div className="picker-row__desc">
-                {tr("Skip interactive approval cards during unattended patrol runs.")}
+                {patrolApprovalMode === "autonomous"
+                  ? tr("Runs routine workspace tools and checked plans unattended with receipt cards; external emails still ask.")
+                  : patrolApprovalMode === "auto"
+                    ? tr("Skips cards for routine workspace actions; checked plans and external emails still ask.")
+                    : tr("Waits on interactive approval cards for every critical action.")}
               </div>
             </div>
-            <Switch
-              checked={autoApprove}
-              onCheckedChange={setAutoApprove}
-              aria-label={tr("Auto-approve tools while patrolling")}
-            />
+            <div
+              role="radiogroup"
+              aria-label={tr("Approval mode while patrolling")}
+              className="grid grid-cols-3 gap-1.5"
+            >
+              {(
+                [
+                  { id: "manual" as const, label: tr("Manual") },
+                  { id: "auto" as const, label: tr("Auto-approve") },
+                  { id: "autonomous" as const, label: tr("Autonomous") },
+                ]
+              ).map((opt) => {
+                const selected = patrolApprovalMode === opt.id;
+                const activeTone =
+                  opt.id === "autonomous"
+                    ? "border-[var(--color-warning-border)] bg-[var(--color-warning-tint)] text-[var(--color-warning-text)]"
+                    : opt.id === "auto"
+                      ? "border-[color-mix(in_srgb,var(--color-accent)_45%,var(--color-border-strong))] bg-[color-mix(in_srgb,var(--color-accent)_16%,transparent)] text-[var(--color-accent)]"
+                      : "border-[var(--color-border-strong)] bg-[var(--color-surface-2)] text-[var(--color-text-primary)]";
+                return (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    role="radio"
+                    aria-checked={selected}
+                    onClick={() => setPatrolApprovalMode(opt.id)}
+                    className={`rounded-[var(--radius-md)] border px-2.5 py-1.5 text-center text-[0.75rem] font-semibold transition ${
+                      selected
+                        ? activeTone
+                        : "border-[var(--color-border)] bg-[var(--color-surface-1)] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                );
+              })}
+            </div>
           </div>
         </div>
 
@@ -577,7 +693,8 @@ export function PatrolPopover({
                     cron: effectiveCron,
                     timezone: tz,
                     durationSeconds: effectiveDurationSeconds,
-                    autoApprove,
+                    autoApprove: patrolApprovalMode !== "manual",
+                    approvalMode: patrolApprovalMode,
                   });
                   if (ok !== false) {
                     onClose();

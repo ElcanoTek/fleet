@@ -32,6 +32,12 @@ func stripLeakedToolCalls(text string) string {
 // invoke it for real.
 const leakedToolCallNudge = "It looks like you wrote a tool call as plain text (e.g. `call:...{...}`) instead of invoking it, so nothing ran. Tools are called through the function-call mechanism, not by typing them in your message. Make the call you intended now, then finish the task."
 
+// emptyTurnRetryNudge tells the model its response ended with neither visible
+// text nor a tool call (for example, a silent reasoning step or an aborted
+// function call that closed the stream cleanly with empty output) and asks it
+// to perform the turn with tools still available.
+const emptyTurnRetryNudge = "Your previous response was empty: no message text or tool call was produced, so nothing ran. Complete the request now, invoking any needed tools through the function-call mechanism and writing your response."
+
 // forceFinalSummaryNudge tells the model to turn the work it already did into
 // a written answer, without reaching for more tools. The conversation it is
 // appended to comes from agentcore.FinalizeInput.Messages (the finishing

@@ -1793,16 +1793,31 @@ function Table({ c, value, onChange, inputId }: Parameters<Renderer>[0]) {
   const mode = c.select === "single" || c.select === "multi" ? (c.select as string) : "none";
   const rowKey = str(c.row_key);
   const selected = wrapped ? value : undefined;
-  const isSel = (k: string) => (mode === "multi" ? Array.isArray(selected) && selected.includes(k) : selected === k);
+  const canToggle = wrapped && !locked && c.disabled !== true && item?.disabled !== true;
+  const keyAt = (r: Record<string, unknown>, i: number) => (rowKey && typeof r[rowKey] === "string" ? (r[rowKey] as string) : String(i));
+  const allKeys = mode === "multi" ? rows.map(keyAt) : [];
+  const selectedSet = new Set(mode === "multi" && Array.isArray(selected) ? (selected as string[]) : []);
+  const selectedCount = mode === "multi" ? allKeys.filter((k) => selectedSet.has(k)).length : 0;
+  const allSelected = mode === "multi" && allKeys.length > 0 && selectedCount === allKeys.length;
+  const someSelected = mode === "multi" && selectedCount > 0 && !allSelected;
+  const selectAllRef = useRef<HTMLInputElement | null>(null);
+  useEffect(() => {
+    if (selectAllRef.current) selectAllRef.current.indeterminate = someSelected;
+  }, [someSelected, allSelected]);
+  const isSel = (k: string) => (mode === "multi" ? selectedSet.has(k) : selected === k);
   const toggle = (k: string) => {
     // The row is clickable markup, not a form control, so the disabled
     // fieldset around it does not stop it: check every disabling source.
-    if (!wrapped || locked || c.disabled === true || item?.disabled === true) return;
+    if (!canToggle) return;
     if (mode === "single") onChange?.(selected === k ? "" : k);
     else {
       const cur = Array.isArray(selected) ? (selected as string[]) : [];
       onChange?.(cur.includes(k) ? cur.filter((x) => x !== k) : [...cur, k]);
     }
+  };
+  const toggleAll = () => {
+    if (!canToggle || mode !== "multi" || allKeys.length === 0) return;
+    onChange?.(allSelected ? [] : allKeys);
   };
   // A selectable table is one question: name the group by the field's label
   // (InputField draws it), so its row checkboxes are told apart from another
@@ -1819,7 +1834,24 @@ function Table({ c, value, onChange, inputId }: Parameters<Renderer>[0]) {
         >
           <thead className="sticky top-0 bg-[var(--color-bg)]">
             <tr>
-              {mode !== "none" ? <th className="w-8 border-b border-[var(--color-border)]" aria-label={tr("Select")} /> : null}
+              {mode === "multi" && allKeys.length > 0 ? (
+                <th className="w-8 border-b border-[var(--color-border)] px-2 text-center">
+                  <input
+                    ref={(el) => {
+                      selectAllRef.current = el;
+                      if (el) el.indeterminate = someSelected;
+                    }}
+                    type="checkbox"
+                    checked={allSelected}
+                    disabled={!canToggle}
+                    aria-label={allSelected ? tr("Deselect all rows") : tr("Select all rows")}
+                    onChange={toggleAll}
+                    className="accent-[var(--color-primary)]"
+                  />
+                </th>
+              ) : mode !== "none" ? (
+                <th className="w-8 border-b border-[var(--color-border)]" aria-label={tr("Select")} />
+              ) : null}
               {cols.map((col) => (
                 <th
                   key={col.key}
@@ -1835,7 +1867,7 @@ function Table({ c, value, onChange, inputId }: Parameters<Renderer>[0]) {
             {rows.map((r, i) => {
               // The validator requires a unique string row_key per row on a
               // selectable table; submit that exact value, never display text.
-              const k = rowKey && typeof r[rowKey] === "string" ? (r[rowKey] as string) : String(i);
+              const k = keyAt(r, i);
               const on = mode !== "none" && isSel(k);
               return (
                 <tr

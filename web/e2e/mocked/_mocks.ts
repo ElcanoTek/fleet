@@ -128,6 +128,9 @@ export async function mockChatBoot(page: Page, opts: ChatBootOptions = {}) {
     }),
   );
   await page.route("**/api/mcp-servers", (r: Route) => r.fulfill({ json: { servers: [] } }));
+  // No email templates by default (the generic bundle ships none), so the
+  // composer menu has no Email templates entry unless a spec provides some.
+  await page.route("**/api/orchestrator/email-templates", (r: Route) => r.fulfill({ json: [] }));
   const seededConversations = (opts.conversations ?? []).map((c, i) => ({
     persona: personaDefault,
     model: "test-model",

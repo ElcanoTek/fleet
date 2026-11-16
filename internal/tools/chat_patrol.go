@@ -57,12 +57,13 @@ type ChatPatrolScheduleView struct {
 
 // ChatPatrolResult is the structured result returned by a ChatPatrolHandler.
 type ChatPatrolResult struct {
-	Status      string                   `json:"status"`
-	Action      string                   `json:"action"`
-	Message     string                   `json:"message"`
-	AutoApprove bool                     `json:"auto_approve"`
-	Schedule    *ChatPatrolScheduleView  `json:"schedule,omitempty"`
-	Schedules   []ChatPatrolScheduleView `json:"schedules,omitempty"`
+	Status       string                   `json:"status"`
+	Action       string                   `json:"action"`
+	Message      string                   `json:"message"`
+	AutoApprove  bool                     `json:"auto_approve"`
+	ApprovalMode string                   `json:"approval_mode,omitempty"`
+	Schedule     *ChatPatrolScheduleView  `json:"schedule,omitempty"`
+	Schedules    []ChatPatrolScheduleView `json:"schedules,omitempty"`
 }
 
 // ChatPatrolHandler executes chat_patrol actions against the conversation store
@@ -98,7 +99,7 @@ Use chat_patrol when a user asks you to:
 
 Best practices:
 1. Because chat_patrol executes immediately without ending your turn, when a user asks you to start a patrol AND do an initial check, call chat_patrol(action="create", ...) to arm the recurring schedule and also perform the initial check in the same turn.
-2. If auto_approve is false in the tool result and the patrol will invoke critical tools while the user is away, remind the user they can click "⚡ Enable Auto-approve" in the Patrol bar or composer so unattended runs execute without waiting on manual approval cards.`
+2. Check approval_mode in the tool result ("manual", "auto", or "autonomous"). In "manual" mode, critical tools pause on approval cards; in "auto" mode, routine workspace actions run without cards while checked external plan executors still pause; in "autonomous" mode, both routine workspace actions and bundle-declared checked plan executors run without blocking and leave a receipt card in chat (external emails and raw un-planned writes still stage a card). Tell the user which mode to select in the Patrol bar or composer when their patrol needs unattended actions.`
 
 // NewChatPatrolTool constructs the interactive chat_patrol tool.
 func NewChatPatrolTool() fantasy.AgentTool {

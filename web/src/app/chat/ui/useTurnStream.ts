@@ -18,11 +18,13 @@ import {
   parseApprovalNarrowable,
   parseApprovalResultCardData,
   parsePythonStream,
+  resolveApprovalMode,
   type Approval,
   type ApprovalStatus,
   type ChatSchedule,
   type ContextCompactedEventPayload,
   type ContextPressureEventPayload,
+  type ConversationApprovalMode,
   type HistoryEntry,
   type Message,
   type ModelRequiredEventPayload,
@@ -570,12 +572,18 @@ export interface TurnStreamDeps {
   draftKeyRef?: RefObject<string>;
   pendingAutoApproveRef?: RefObject<Map<string, boolean>>;
   setPendingAutoApproveForKey?: (key: string, val: boolean) => void;
+  pendingApprovalModeRef?: RefObject<Map<string, ConversationApprovalMode>>;
+  setPendingApprovalModeForKey?: (
+    key: string,
+    mode: ConversationApprovalMode,
+  ) => void;
   setSidebarOpen: Dispatch<SetStateAction<boolean>>;
   setSpreadsheetNudgeDismissed: Dispatch<SetStateAction<boolean>>;
   // Component-owned refs the loop reads/mutates.
   activeConversationIdRef: RefObject<string | null>;
   messagesByConvRef: RefObject<ReadonlyMap<string, Message[]>>;
   pendingApprovalScrollRef: RefObject<string | null>;
+  serverModelByConvRef?: RefObject<Map<string, string>>;
   // Component state values (read-only in the loop).
   selectedModel: string;
   selectedPersona: string;
@@ -602,6 +610,7 @@ export interface TurnStreamDeps {
     convId: string,
     schedules: ChatSchedule[],
     autoApprove?: boolean,
+    approvalMode?: ConversationApprovalMode,
   ) => void;
   onMcpServersUpdated?: (convId: string, enabledOptional: string[]) => void;
   // Cross-tab election for the recovery chain's beat (#1595). Omitted, the
@@ -743,11 +752,14 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     draftKeyRef,
     pendingAutoApproveRef,
     setPendingAutoApproveForKey,
+    pendingApprovalModeRef,
+    setPendingApprovalModeForKey,
     setSidebarOpen,
     setSpreadsheetNudgeDismissed,
     activeConversationIdRef,
     messagesByConvRef,
     pendingApprovalScrollRef,
+    serverModelByConvRef,
     selectedModel,
     selectedPersona,
     mcpServers,
@@ -2240,6 +2252,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     // subsequent "+ New chat" doesn't accidentally re-flag.
     setPendingLockdown(false);
     setPendingAutoApproveForKey?.(oldKey, false);
+    setPendingApprovalModeForKey?.(oldKey, "manual");
     // The user is looking at the slot that just got a real id — follow it, or
     // their view empties out onto a key nothing writes to any more. They may
     // instead have navigated away (submit → "+ New chat" race), and that is
@@ -2290,6 +2303,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         persona: string;
         model?: string;
         auto_approve?: boolean;
+        approval_mode?: ConversationApprovalMode;
       };
       // oldTarget is the per-submission pending key this turn was
       // launched with (e.g. "__pending__:1"). It's distinct from the
@@ -2312,6 +2326,12 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       // POST, so by the time this event lands the user's slot is either
       // still pk (match the second branch) or they moved on (don't
       // touch their view).
+      if (typeof p.model === "string") {
+        serverModelByConvRef?.current.set(
+          p.id,
+          p.model || currentDefaultModel(),
+        );
+      }
       if (currentActive === p.id || currentActive === oldTarget) {
         activeConversationIdRef.current = p.id;
         setActiveConversationId(p.id);
@@ -2329,14 +2349,20 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       // dot never painted.
       setConversations((curr) => {
         if (curr.some((c) => c.id === p.id)) {
-          return curr.map((c) =>
-            c.id === p.id &&
-            p.title &&
-            (!c.title || c.title === "New conversation")
-              ? { ...c, title: p.title }
-              : c,
-          );
+          return curr.map((c) => {
+            if (c.id !== p.id) return c;
+            const nextTitle =
+              p.title && (!c.title || c.title === "New conversation")
+                ? p.title
+                : c.title;
+            const nextModel =
+              typeof p.model === "string" ? p.model : c.model;
+            return nextTitle !== c.title || nextModel !== c.model
+              ? { ...c, title: nextTitle, model: nextModel }
+              : c;
+          });
         }
+        const resolvedMode = resolveApprovalMode(p.approval_mode, p.auto_approve);
         const optimistic: ConversationSummary = {
           id: p.id,
           title: p.title,
@@ -2344,7 +2370,8 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           model: typeof p.model === "string" ? p.model : "",
           pinned: false,
           updated_at: Math.floor(Date.now() / 1000),
-          auto_approve: p.auto_approve === true,
+          auto_approve: resolvedMode !== "manual",
+          approval_mode: resolvedMode,
         };
         return [optimistic, ...curr];
       });
@@ -2719,6 +2746,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         approval_id: string;
         tool: string;
         summary: Approval["summary"];
+        card?: unknown;
         undo_hint?: string;
         result_text?: string;
         mcp_server?: string;
@@ -2742,6 +2770,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
             id: p.approval_id,
             tool: p.tool,
             summary: p.summary,
+            card: parseApprovalCardData(p.card),
             status: "approved" as ApprovalStatus,
             resultText: (p.result_text ?? "").trim() || fallback,
             recorded: true,
@@ -2880,8 +2909,14 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       const p = payload as {
         schedules?: ChatSchedule[];
         auto_approve?: boolean;
+        approval_mode?: ConversationApprovalMode;
       };
-      deps.onPatrolUpdated?.(ctx.target, p.schedules ?? [], p.auto_approve);
+      deps.onPatrolUpdated?.(
+        ctx.target,
+        p.schedules ?? [],
+        p.auto_approve,
+        p.approval_mode,
+      );
       return;
     }
 
@@ -3889,12 +3924,19 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           activeConvKey: activeConversationIdRef.current,
           target,
         });
-        if (adoption.adoptIntoPicker) setSelectedModel(refusal.model);
+        if (adoption.adoptIntoPicker) {
+          if (target && !isPendingKey(target)) {
+            serverModelByConvRef?.current.set(target, refusal.model);
+          }
+          setSelectedModel(refusal.model);
+        }
         if (adoption.resend) {
+          const { base_model: _droppedBaseModel, ...retryBody } = body;
+          void _droppedBaseModel;
           return streamTurn(
             assistantId,
             abortController,
-            { ...body, model: refusal.model },
+            { ...retryBody, model: refusal.model },
             target,
             accepted,
             true,
@@ -4514,13 +4556,19 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     // real conv id when it lands.
     const isUnpromoted = !convId || isPendingKey(convId);
     const initialTarget = convId ?? nextPendingKey();
-    const submittedAutoApprove =
-      isUnpromoted &&
-      pendingAutoApproveRef?.current.get(originPendingKey) === true;
+    const submittedApprovalMode: ConversationApprovalMode = isUnpromoted
+      ? resolveApprovalMode(
+          pendingApprovalModeRef?.current.get(originPendingKey),
+          pendingAutoApproveRef?.current.get(originPendingKey) === true,
+        )
+      : "manual";
+    const submittedAutoApprove = submittedApprovalMode !== "manual";
     if (isUnpromoted && submittedAutoApprove) {
       setPendingAutoApproveForKey?.(initialTarget, true);
+      setPendingApprovalModeForKey?.(initialTarget, submittedApprovalMode);
       if (originPendingKey !== initialTarget) {
         setPendingAutoApproveForKey?.(originPendingKey, false);
+        setPendingApprovalModeForKey?.(originPendingKey, "manual");
       }
     }
     // This submission's identity (#1592). The server stamps it on the turn it
@@ -4570,6 +4618,12 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     }
     if (convId && !isPendingKey(convId)) {
       body.conversation_id = convId;
+      if (opts?.model === undefined) {
+        const baseModel = serverModelByConvRef?.current.get(convId)?.trim();
+        if (baseModel && baseModel === trimmedModel) {
+          body.base_model = baseModel;
+        }
+      }
     } else {
       body.title = value.length > 80 ? value.slice(0, 80) + "…" : value;
       // Pre-chat tool toggles — the backend persists these onto the
@@ -4589,6 +4643,9 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       }
       if (submittedAutoApprove) {
         body.auto_approve = true;
+        if (submittedApprovalMode === "autonomous") {
+          body.approval_mode = "autonomous";
+        }
       }
     }
 
@@ -4911,6 +4968,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       draftKeyRef?.current === originPendingKey
     ) {
       setPendingAutoApproveForKey?.(originPendingKey, true);
+      setPendingApprovalModeForKey?.(originPendingKey, submittedApprovalMode);
     }
     // A direct send the server queued instead (it knew a turn was running).
     if (accepted.queued && fromCard && opts?.onUnsent) {

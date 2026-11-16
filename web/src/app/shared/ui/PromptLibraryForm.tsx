@@ -1,6 +1,6 @@
 import { rich } from "@/app/lib/i18n/rich";
 import { t as tr } from "@/app/lib/i18n";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { FormFields } from "./FormFields";
 import { Icon } from "./Icon";
 import {
@@ -13,6 +13,7 @@ import {
   type PillValues,
 } from "@/app/chat/ui/protocolPills";
 import type { PromptLibraryItem } from "@/app/shared/lib/orchestratorApi";
+import { rememberPickerValues } from "@/app/shared/lib/formPickers";
 
 // A Prompt Library FORM prompt: a Git YAML prompt that declares `fields` and a
 // `promptTemplate` (docs/PROMPT-LIBRARY.md, "Form prompts"). Selecting one in
@@ -70,12 +71,16 @@ export function PromptLibraryForm({
   prompt,
   note,
   onUse,
+  onValuesChange,
 }: {
   prompt: FormPromptItem;
   /** Provenance line shown beside the actions ("Tracked in prompts/…"). */
   note: string;
   /** Receives the text to insert: the rendered prompt, or the raw template. */
   onUse: (text: string) => void;
+  /** Told the form's values as they change (and once on open), for a caller
+   *  that shows their effect somewhere, as the email templates' example does. */
+  onValuesChange?: (values: PillValues) => void;
 }) {
   const shape: PillFormShape = {
     title: prompt.name,
@@ -85,6 +90,9 @@ export function PromptLibraryForm({
   const [values, setValues] = useState<PillValues>(() => libraryFormInitialValues(shape));
   const set = (key: string, value: PillFieldValue) =>
     setValues((prev) => ({ ...prev, [key]: value }));
+  useEffect(() => {
+    onValuesChange?.(values);
+  }, [values, onValuesChange]);
 
   const rendered = pillToPrompt(shape, values, { dropBlankLines: true });
   const requiredFilled = isPillReady(shape, values);
@@ -139,7 +147,12 @@ export function PromptLibraryForm({
             type="button"
             className="btn btn-primary"
             disabled={!ready}
-            onClick={() => ready && onUse(rendered)}
+            onClick={() => {
+              if (!ready) return;
+              // So the next form offers these recipients and this style again.
+              rememberPickerValues(prompt.fields, values);
+              onUse(rendered);
+            }}
           >
             <Icon name="arrow-up" className="mr-1.5 size-3.5 rotate-90" />
             {tr("Use prompt")}

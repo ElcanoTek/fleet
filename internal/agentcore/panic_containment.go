@@ -364,7 +364,7 @@ func finalizeWithPanicBoundary(
 	}
 	if err != nil {
 		logging.From(ctx).Error("finalize hook error", "err", err)
-		return in.FinalText, nil
+		return recovered, err
 	}
 	if recovered != "" {
 		return recovered, nil

@@ -13,6 +13,7 @@ DELETE /api/admin/llm-providers/{id}
 POST /api/admin/llm-providers/{id}/test
 GET /api/admin/llm-providers
 POST /api/admin/llm-providers
+POST /api/admin/models/rollout
 GET /api/admin/notify-settings
 PUT /api/admin/notify-settings
 DELETE /api/admin/notify-settings

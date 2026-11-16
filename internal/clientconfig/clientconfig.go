@@ -270,6 +270,7 @@ func Load(dir string) (*Bundle, error) {
 		PersonasDir:                    filepath.Join(abs, "personas"),
 		ProtocolsDir:                   filepath.Join(abs, "protocols"),
 		PromptsDir:                     filepath.Join(abs, "prompts"),
+		EmailTemplatesDir:              filepath.Join(abs, "email_templates"),
 		SkillsDir:                      filepath.Join(abs, "skills"),
 		MCPDir:                         filepath.Join(abs, "mcp"),
 	}
@@ -762,6 +763,7 @@ func (b *Bundle) AgentPolicy() AgentPolicy {
 		EmailLastTools:                append([]string(nil), b.AgentPolicyConfig.EmailLastTools...),
 		SettleableCreateTools:         append([]string(nil), b.AgentPolicyConfig.SettleableCreateTools...),
 		CriticalToolNoSessionApproval: append([]string(nil), b.AgentPolicyConfig.CriticalToolNoSessionApproval...),
+		CriticalToolAutonomous:        append([]string(nil), b.AgentPolicyConfig.CriticalToolAutonomous...),
 		CriticalToolResume:            append([]string(nil), b.AgentPolicyConfig.CriticalToolResume...),
 		CriticalToolResumeMaxPerHour:  b.AgentPolicyConfig.CriticalToolResumeMaxPerHour,
 		CriticalToolGroupApproval:     append([]string(nil), b.AgentPolicyConfig.CriticalToolGroupApproval...),

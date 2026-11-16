@@ -47,6 +47,7 @@ func TestConversationMutators_SoftDeletedNotMutable(t *testing.T) {
 		{"SetOptionalMCPServers", func(id string) error { return s.SetOptionalMCPServers(ctx, owner, id, []string{"gamma"}) }},
 		{"SetApprovalTimeout", func(id string) error { return s.SetApprovalTimeout(ctx, owner, id, &seconds) }},
 		{"SetAutoApprove", func(id string) error { return s.SetAutoApprove(ctx, owner, id, true) }},
+		{"SetApprovalMode", func(id string) error { return s.SetApprovalMode(ctx, owner, id, ConversationApprovalAutonomous) }},
 	}
 	for _, m := range mutators {
 		if err := m.call(live.ID); err != nil {

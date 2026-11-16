@@ -336,7 +336,8 @@ type familyPin struct {
 }
 
 var canonicalUpstream = []familyPin{
-	// The default frontier tier (DefaultCoreModel, Gemini 4 Argon) lives here.
+	// The default frontier tier (DefaultCoreModel, Gemini 4 Hydrogen; previously
+	// Gemini 4 Argon) lives here.
 	// OpenRouter serves Gemini from two first-party Google upstreams — "Google"
 	// (Vertex AI) and "Google AI Studio". A soft pin prefers "Google" (Vertex AI)
 	// for implicit prompt-cache locality while allowing seamless failover onto
@@ -407,10 +408,23 @@ type officialPoolAllowlist struct {
 // Every name below must be OpenRouter's own routing name for the endpoint —
 // a misspelling narrows the pool to nothing.
 var officialPoolSlugs = map[string]officialPoolAllowlist{
+	// 2026-11-13: Google ×4 (google-vertex/global, google-vertex/eu,
+	// google-vertex/us, google-vertex/global/priority), Google AI Studio ×3
+	// (google-ai-studio, google-ai-studio/flex, google-ai-studio/priority) —
+	// seven first-party Google endpoints, every quantization "unknown".
+	// DefaultCoreModel.
+	"google/gemini-4-hydrogen": {
+		checked: "2026-11-13",
+		providers: []string{
+			upstreamProviderGoogle,
+			upstreamProviderGoogleAIStudio,
+		},
+	},
 	// 2026-11-09: Google ×3 (google-vertex/global, google-vertex/us,
 	// google-vertex/global/priority), Google AI Studio ×3 (google-ai-studio,
 	// google-ai-studio/flex, google-ai-studio/priority) — six first-party
-	// Google endpoints, every quantization "unknown". DefaultCoreModel.
+	// Google endpoints, every quantization "unknown". DefaultCoreModel until
+	// 2026-11-13.
 	"google/gemini-4-argon": {
 		checked: "2026-11-09",
 		providers: []string{

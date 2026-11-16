@@ -30,12 +30,25 @@ type FinalizeInput struct {
 	Messages []fantasy.Message
 	// RoundToolEvents counts the tool call/result events the finishing round
 	// committed to the run sink (0 = the round produced text/reasoning only).
+	// RunToolEvents counts the tool call/result events committed across the
+	// ENTIRE run, including earlier continuation rounds (such as an interactive
+	// FinishReasonLength continuation after Round 0 executed a tool).
 	// A finalize retry that re-drives from Messages with the governed roster
-	// could re-issue calls the round already executed and repeat their side
+	// could re-issue calls the run already executed and repeat their side
 	// effects — the exact hazard ADR-0035's side-effect mark gate suppresses
 	// in streamRoundWithResilience — so a hook must treat any committed tool
-	// event as "no blind re-drive" and degrade to a tool-less recovery path.
+	// event across the run as "no blind re-drive" and degrade to a tool-less
+	// recovery path.
 	RoundToolEvents int
+	RunToolEvents   int
+	// CarryResult extracts the replay-safe assistant/tool transcript from a
+	// with-tools finalize retry's AgentResult (with out-of-roster explanations
+	// applied and Gemini thought signatures stripped, matching Messages). When a
+	// retry executes tools and ends its own final step without prose, appending
+	// CarryResult(retryResult) to Messages lets a degraded forced-summary call
+	// summarize the retry's actual work instead of stale pre-retry context.
+	// Nil-safe: nil when unwired in direct unit tests.
+	CarryResult func(*fantasy.AgentResult) []fantasy.Message
 	// Tools is the already-governed final roster used by the main run. A finalize
 	// retry must reuse it rather than rebuilding raw driver tools outside policy,
 	// credential, output-screening, and panic boundaries.

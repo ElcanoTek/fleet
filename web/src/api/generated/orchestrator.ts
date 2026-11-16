@@ -855,6 +855,89 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/email-templates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the bundle's email templates.
+         * @description The read-only email template library: live-read files from the client bundle's email_templates/ directory, each with its sections and rules. preview_html is never included here (has_preview says one exists); read one template for it. Shared with chat like the prompt library.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description The email templates, by name. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["EmailTemplate"][];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/email-templates/{template_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                template_id: string;
+            };
+            cookie?: never;
+        };
+        /**
+         * Read one email template with its rendered preview.
+         * @description The template as listed, plus preview_html when the bundle ships a preview for it.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    template_id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description The email template. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["EmailTemplate"];
+                    };
+                };
+                404: components["responses"]["Error"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/files/{filename}": {
         parameters: {
             query?: never;
@@ -3346,12 +3429,75 @@ export interface components {
             /** @description The form's template; each {key} token names one of fields. Present exactly when fields is. content stays the raw file. */
             prompt_template?: string;
         };
-        /** @description One input of a form prompt. The same shape as an empty-state card field. default takes the type's value shape: a string for text, textarea and select (one of options), a number for number, a boolean for toggle, and an object with from/to YYYY-MM-DD strings for daterange. */
+        /** @description One bundle-owned email template (docs/EMAIL-TEMPLATES.md): the fixed shape of an email a team sends repeatedly. The bundle's mail connector enforces the same file when it renders an email; fleet only presents it. */
+        EmailTemplate: {
+            id: string;
+            name: string;
+            description?: string;
+            /** @description client or internal. */
+            audience?: string;
+            use_when?: string;
+            based_on?: string;
+            path: string;
+            /**
+             * @description bundle for a template the bundle ships; team for one a person added from chat through the bundle's mail connector.
+             * @enum {string}
+             */
+            source: "bundle" | "team";
+            /** @description Team templates only: who saved it, as the connector recorded. */
+            created_by?: string;
+            /** @description Team templates only: when it was first saved (RFC 3339). */
+            created_at?: string;
+            /** @description Cap on the prose of the whole email. Absent means none. */
+            max_words?: number;
+            subject: {
+                instruction?: string;
+                max_chars?: number;
+            };
+            rules?: string[];
+            /** @description Phrases the renderer refuses. A "re:" prefix marks a regular expression. */
+            never_say?: string[];
+            sections: components["schemas"]["EmailTemplateSection"][];
+            /** @description The bundle ships a rendered sample of this template. */
+            has_preview: boolean;
+            /** @description The bundle's rendered sample of the template, a complete HTML document. Only on a single-template read, never in the list. Untrusted markup: show it only in a sandboxed frame. */
+            preview_html?: string;
+            /** @description The bundle's recolor table for the preview, sent with preview_html when the bundle ships one. options maps a value of the form's palette field to {preview color: its color}; custom maps a custom color's name to the preview colors the picked color replaces. Every color is a #RRGGBB value. */
+            preview_styles?: {
+                options?: {
+                    [key: string]: {
+                        [key: string]: string;
+                    };
+                };
+                custom?: {
+                    [key: string]: string[];
+                };
+            };
+            /** @description The optional form, in the form-prompt schema. */
+            fields?: components["schemas"]["PromptField"][];
+            /** @description The text the library inserts; each {key} token names one of fields. */
+            prompt_template?: string;
+        };
+        EmailTemplateSection: {
+            id: string;
+            title: string;
+            /** @description The fixed heading the renderer sets. */
+            heading?: string;
+            /** @description The mail connector's block type (text, table, chart, ...). */
+            block: string;
+            required: boolean;
+            instruction?: string;
+            /** @description Enforced bounds by name (max_words, max_bullets, max_rows, ...). */
+            limits?: {
+                [key: string]: number;
+            };
+        };
+        /** @description One input of a form prompt. The same shape as an empty-state card field. default takes the type's value shape: a string for text, textarea, recipients, select and palette (the last two one of options), a number for number, a boolean for toggle, and an object with from/to YYYY-MM-DD strings for daterange. recipients and palette are pickers: recipients collects email addresses (options are addresses to suggest) and yields them joined with ", "; palette offers options drawn with their swatches and, with custom, colors the person picks themselves, yielding an option or "custom (Name #RRGGBB, ...)". */
         PromptField: {
             key: string;
             label: string;
             /** @enum {string} */
-            type: "text" | "textarea" | "select" | "number" | "daterange" | "toggle";
+            type: "text" | "textarea" | "select" | "number" | "daterange" | "toggle" | "recipients" | "palette";
             required?: boolean;
             placeholder?: string;
             hint?: string;
@@ -3359,6 +3505,12 @@ export interface components {
             options?: string[];
             advanced?: boolean;
             min?: number;
+            /** @description palette only: the #RRGGBB colors (1 to 4) each option is drawn with. */
+            swatches?: {
+                [key: string]: string[];
+            };
+            /** @description palette only: names of the colors (1 to 3) the person may pick themselves. */
+            custom?: string[];
         };
         ErrorResponse: {
             /** @description Human-readable error message (the handler's writeError body). */

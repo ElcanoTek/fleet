@@ -201,7 +201,22 @@ func chatRoutes() []chatRoute {
 		{"GET /api/admin/server-stats", fixed("/admin/server-stats"), noBody, textJSON},
 		{"GET /api/admin/settings", fixed("/admin/settings"), noBody, passthroughJSON},
 		{"PUT /api/admin/settings/{key}", func(r *http.Request) string { return "/admin/settings/" + p(r, "key") }, jsonBodyIfAny, passthroughJSON},
-		{"DELETE /api/admin/settings/{key}", func(r *http.Request) string { return "/admin/settings/" + p(r, "key") }, noBody, passthroughJSON},
+		{"DELETE /api/admin/settings/{key}", func(r *http.Request) string {
+			target := "/admin/settings/" + p(r, "key")
+			q := r.URL.Query()
+			var params []string
+			if v := q.Get("rollout"); v == "true" || v == "false" {
+				params = append(params, "rollout="+v)
+			}
+			if v := q.Get("notify_chats"); v == "true" || v == "false" {
+				params = append(params, "notify_chats="+v)
+			}
+			if len(params) > 0 {
+				return target + "?" + strings.Join(params, "&")
+			}
+			return target
+		}, noBody, passthroughJSON},
+		{"POST /api/admin/models/rollout", fixed("/admin/models/rollout"), jsonBodyAlways, passthroughJSON},
 		{"GET /api/admin/stats", fixed("/admin/stats"), noBody, textJSON},
 		{"GET /api/admin/storage", fixed("/admin/storage"), noBody, passthroughJSON},
 		{"POST /api/admin/storage/cleanup", fixed("/admin/storage/cleanup"), jsonBodyAlways, passthroughJSON},

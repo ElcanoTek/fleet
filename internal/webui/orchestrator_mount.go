@@ -44,6 +44,8 @@ var orchQueryPolicy = map[string][]string{
 	"GET /admin/usage/adoption":                        {"from", "to", "format"},
 	"GET /api/config":                                  nil,
 	"GET /api/me":                                      nil,
+	"GET /email-templates":                             nil,
+	"GET /email-templates/{template_id}":               nil,
 	"GET /logs/{task_id}":                              nil,
 	"GET /logs/{task_id}/subagents/{child_session_id}": nil,
 	"GET /mcp-servers":                                 nil,

@@ -100,7 +100,7 @@ client bundle's manifest names them, and fleet admits them at startup ([MCP-BUND
 | `FLEET_OIDC_ALLOWED_DOMAINS` | csv | — | server | Comma-separated email domains allowed to sign in through OIDC; empty allows any. |
 | `FLEET_OIDC_BUTTON_LABEL` | string | — | server | Label of the SSO button on the sign-in page. |
 | `FLEET_OIDC_REDIRECT_URI` | url | inherited from `FLEET_PUBLIC_BASE_URL` (derived); else (the request's own origin — local development only) | server | OIDC redirect URI, when it must differ from the one derived from the public origin. |
-| `FLEET_OIDC_AUTO_START` | bool | `false` | server | An anonymous /login first tries SSO silently (prompt=none). |
+| `FLEET_OIDC_AUTO_START` | bool | `false` | server | An anonymous /login first tries SSO silently (prompt=none). Where SSO is the only sign-in, /login always goes straight to the IdP. |
 | `FLEET_OIDC_ALLOW_PASSWORD` | bool | `false` | server | Break-glass: keep Fleet passwords working while central Auth SSO is configured. *Validated at boot*. |
 | `FLEET_OIDC_GENERIC` | bool | `false` | server | Marks the OIDC provider as a generic identity provider (Okta, Entra, …) rather than central Auth, so Fleet keeps its own passwords and account management. *Validated at boot*. |
 | `CATWALK_URL` | url | — | server | URL of the Catwalk app linked from the browser tier. |
@@ -172,7 +172,7 @@ client bundle's manifest names them, and fleet admits them at startup ([MCP-BUND
 | `FLEET_DEFAULT_MODEL` | string | — | server | Env default of the workspace's primary default frontier model tier (admin setting default_model). |
 | `FLEET_ADVANCED_MODEL` | string | — | server | Env default of the fallback frontier model tier (admin setting advanced_model). |
 | `FLEET_PINNED_MODELS` | string | — | server | JSON array of `{"slug","label","tag","free","input_price_per_mtok","output_price_per_mtok"}` pins: models both pickers list right after the recommended rows, with an optional display label, tag pill and displayed price. The real slug is sent and recorded; setting `free: true` (or both prices to `0`) also installs a runtime `$0.00` pricing override unless overridden in `manifest.yaml`. A malformed value refuses to boot (docs/PINNED-MODELS.md). |
-| `FLEET_TITLE_MODEL` | string | `google/gemini-4-argon` | server | Model that titles conversations. |
+| `FLEET_TITLE_MODEL` | string | `google/gemini-4-hydrogen` | server | Model that titles conversations. |
 | `FLEET_METADATA_MODEL` | string | inherited from `FLEET_TITLE_MODEL` | server | Model for auxiliary metadata jobs. |
 | `FLEET_ERROR_ANALYSIS_MODEL` | string | inherited from `FLEET_METADATA_MODEL` | server | Model that analyses failed runs. |
 | `FLEET_MEMORY_MODEL` | string | inherited from `FLEET_METADATA_MODEL` | server | Model for memory indexing. |
@@ -438,6 +438,7 @@ client bundle's manifest names them, and fleet admits them at startup ([MCP-BUND
 | `VISUAL` | string | — | cli | Editor `fleet env edit` opens (before EDITOR). *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `EDITOR` | string | — | cli | Editor `fleet env edit` opens when VISUAL is unset. *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `NO_COLOR` | string | — | cli | Any value turns colour off in `fleet motd` (no-color.org). *Process env only* (fleet's env-file loader does not admit it; export it). |
+| `XDG_RUNTIME_DIR` | path | — | cli | Podman's runtime dir; when set but absent (fleet.service, which creates /run/fleet, is not running) `fleet cleanup` skips the podman prune. *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `PGHOST` | string | — | cli | libpq/pgx default host for a DSN that names none. *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `PGPORT` | string | — | cli | libpq/pgx default port for a DSN that names none. *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `PGDATABASE` | string | — | cli | libpq/pgx default database for a DSN that names none. *Process env only* (fleet's env-file loader does not admit it; export it). |

@@ -101,9 +101,11 @@ Your task prompts, reports, and other saved content are not translated.
 | --- | --- |
 | **Recent Tasks** | The ledger. Every task, newest first, with its status and history. This is where you will spend most of your time, and the rest of this guide assumes it. |
 | **Upcoming** | A forecast, not a log: the runs the scheduler is about to perform, grouped by day (Today, Tomorrow, then dates). It is computed from the current schedules, so editing a schedule updates it immediately. |
-| **SLA**, **Usage**, **Adoption** | Tasks measured against an expected duration, and spend, prompt-cache efficiency, and activity reporting. In **Usage**, summary tiles include **Cache efficiency** (hit rate across chat prompt tokens, cached vs uncached input tokens), the bar chart can switch **Measure** to **Cache hit %**, and the breakdown table shows **Cached**, **Miss**, and **Hit %** alongside spend and token totals (**Settings → Admin** also provides a dedicated **Prompt Cache Efficiency** panel by date and by user). Admin-only: these tabs do not appear for other roles. |
+| **SLA** | Tasks measured against an expected duration. Admin-only: the tab does not appear for other roles. |
 
-None of the tabs beyond the first two are required for daily work.
+None of the tabs beyond the first two are required for daily work. Spend,
+usage and adoption reporting is not on this page: it is on the **Analytics**
+page, described below.
 
 Administrators assign access under **Settings → Admin → Users**, or in central
 Auth when your deployment signs in through it. Background tasks
@@ -187,6 +189,73 @@ regardless.
 > yesterday's, so the table is a true ledger of what ran and when. Filters and
 > search are how you work with it, not a workaround.
 
+### Analytics: spend, usage and budgets (admins)
+
+Administrators open **Analytics** from the account menu; it does not appear
+for other roles. The top of the page summarizes the current UTC month to date:
+token usage, the share used on included ($0) models, billed spend, the prompt
+cache hit rate, and an advisory monthly spend limit you can set with **Set
+monthly spend limit** (**Edit monthly spend limit** once one is set). The
+limit is measured against billed spend, so included models count $0, and it
+only colours this summary: nothing is refused when spend passes it.
+
+The tabs are **Models & Cost** (which models the spend went to), **Problem
+Chats & Friction** (the costliest and most troubled chats and tasks, and signs
+of people struggling), **Spend & Budgets**, **Team Adoption** (who is active,
+how often, against the previous period) and **Server & Live Agents** (agents
+running now and the host's resources).
+
+**Spend & Budgets** reports usage from chats and background tasks together.
+Pick a **Range** (last 7, 30 or 90 days), **Group by** (user, API key,
+project, model, day or week) and **Measure** (what the chart shows: cost,
+tokens or cache hit %). The tiles show total cost split between tasks and
+chat, prompt and completion tokens, **Cache efficiency** (cached against
+uncached chat prompt tokens) and work units (task iterations plus chat
+turns). The table lists every group with the same numbers, including
+**Cached (chat)**, **Cache miss** and **Cache hit %**. Dollar figures cover
+only models with a price; token totals are always complete, which the note
+under the tiles repeats. Rows such as **(unattributed)**, **(no API key)** and
+**(no project)** are real spend with nothing to group it by: for example, a
+task created with an API key has no user. **Settings → Admin** also has a
+**Prompt cache efficiency** panel by date and by user.
+
+**Download CSV** saves the table for the range and grouping on screen, with a
+TOTAL row, in a file named for the grouping and the first and last UTC day it
+covers, for example `fleet-usage-model-20261012-20261111.csv`. **Team
+Adoption** has its own **Download CSV**, named the same way
+(`fleet-adoption-20261012-20261111.csv`).
+
+Below the table, **Budgets** limit one person (by their account email) or one
+API key (by its key ID) per **day**, **week** or **month**. Windows are UTC
+calendar windows; weeks start on Monday. A budget has a soft bound, a hard
+bound or both, in dollars, tokens or both. A user budget counts that person's
+chats and tasks; a key budget counts only the tasks created with that key,
+because chat turns are not recorded against an API key. Saving is refused,
+with a message saying why, when no account has that email, or when the key
+does not exist, is revoked or expired, or cannot create tasks. There is no edit button: saving a budget for
+the same person or key and window replaces the old one and re-arms its alert.
+
+- **Soft** bound: the first time a task is created, or one is attempted, for
+  that person or key after its spend has reached the bound, one alert goes
+  out for the window. It is checked then, not the moment spending crosses the
+  bound. The alert uses the deployment's notifications (email or webhook,
+  when your operator set them up) and, for a user budget, reaches the person
+  as a browser notification if they turned those on (see the Chat guide).
+- At the **hard** bound, new background tasks for that person or key are
+  refused until the window rolls over: creating one, **Run now** on an
+  existing task (it starts a fresh copy) and scheduling one from a chat. Chat
+  itself, patrols included, is not stopped. A task already created still
+  runs, and runs that start without anyone creating them, such as the next
+  run of a recurring task, are not checked.
+- A hard bound never goes above the deployment's per-run ceilings (**Per-run
+  cost ceiling** and **Per-run token ceiling** under **Settings → Admin →
+  Features**), even though those cap a single run and a budget covers a whole
+  window. When it would, the table shows that ceiling, then yours after
+  **clamped from**.
+
+Each budget's **Status** is **ok**, **alerted** (this window's soft alert has
+gone out) or **exhausted** (hard bound reached). **Delete** removes it at once.
+
 ## 3. What a task is made of
 
 A task is a handful of decisions: what to call it, what it should do, when it
@@ -201,7 +270,7 @@ with it.
 | **Recipients** | The email addresses that receive each run's result. You set them here rather than in the library prompt, so the same prompt can serve different audiences, and the form keeps them across an edit — including when you re-insert a different prompt from the library. The field remembers addresses for you. When you click into it, it lists the addresses your tasks already send to, most used first. Typing narrows the list. Pick one with a click, or with the arrow keys and Enter. It draws on tasks created in the last six months that you can see: an administrator sees every task's recipients, and anyone else sees only their own. (They are delivered as an instruction the form writes into the task's prompt for you. That only matters if you drive the API directly: a client that replaces a task's prompt wholesale replaces that instruction too.) |
 | **Tools & files** | What the task may reach: mailboxes, connectors, files. Some connections are always on for every run; the rest are selected per task, so new tasks start with your deployment's recommended set and an existing task never silently gains new connections. Files can also be attached directly to the task, for work that runs against a fixed reference like a template or a lookup table. The form lists a connector's full set of tools, which can be more than the chat **Tools** menu shows: a deployment can reserve some tools (or every tool of a connector) for scheduled tasks and keep them out of Chat, and a task can still use them. At most eight of the owner's third-party connections (their own and any shared with them) mount in one run, the ones the task names first; a run that leaves some out is told which (the first ten by name, then a count), so its result can say so. |
 | **Context** | Notes that travel with the task for the people who operate it: why it exists, who owns it, what to do if it fails. These are shown to operators and never enter the assistant's instructions. Alongside them sit **tags** and the task's **persona**, which is left blank for the workspace default unless the task genuinely needs a different one. Tags are how you group related tasks: they show as chips on the board and it filters by them (see [Finding things](#finding-things)), so a tag you give a task here is a way back to the whole group later. |
-| **Advanced** | Further settings, including the model the task runs on and an option for a recurring task to carry a short summary of its previous run into the next one. A new task is pre-filled with your workspace's task model, which is the default frontier model by default (**Gemini 4 Argon** unless your admin has changed it in Settings), and, by default, **Claude Opus 5.5** as its fallback; it keeps both unless you change them here, even if you never open Advanced. Both Chat and scheduled tasks start on this frontier tier by default, with automatic failover to the fallback frontier model when needed. You can still pick a cheaper or free model here when you want to optimize spend on a routine job. |
+| **Advanced** | Further settings, including the model the task runs on and an option for a recurring task to carry a short summary of its previous run into the next one. A new task is pre-filled with your workspace's task model, which is the default frontier model by default (**Gemini 4 Hydrogen** unless your admin has changed it in Settings), and, by default, **Claude Opus 5.5** as its fallback; it keeps both unless you change them here or your admin rolls out a model tier update across existing tasks, even if you never open Advanced. Both Chat and scheduled tasks start on this frontier tier by default, with automatic failover to the fallback frontier model when needed. You can still pick a cheaper or free model here when you want to optimize spend on a routine job. |
 
 The model picker includes the deployment's configured **Workspace** models and
 filters public-catalog suggestions against the active provider routes once they

@@ -201,9 +201,9 @@ type TaskTransition struct {
 // pending→pending / scheduled→scheduled re-derivations on edit) are listed
 // because they are real guarded status writes; status-preserving writes that
 // never SET a different status (db.RecordSkip, db.PromoteStarvedTasks,
-// db.MarkSLABreached, db.SetErrorAnalysis, db.UpdateTasksModelBatch, the
-// targeted pending/scheduled field edits) are documented at their writers
-// and deliberately not edges.
+// db.MarkSLABreached, db.SetErrorAnalysis, db.UpdateTasksModelBatch,
+// db.RolloutTaskModels, the targeted pending/scheduled field edits) are
+// documented at their writers and deliberately not edges.
 //
 // Deliberately OUTSIDE the model — out-of-model restore surgery: two
 // operator import paths write a task's status verbatim through db.AddTask's

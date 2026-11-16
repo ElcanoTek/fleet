@@ -36,6 +36,20 @@ fields:
     type: toggle
     default: true
     advanced: true
+  # The two pickers: addresses as chips, and a color choice drawn as swatches.
+  - key: attendees
+    label: Who it goes to
+    type: recipients
+    advanced: true
+  - key: accent
+    label: Accent color, if it becomes an email
+    type: palette
+    options: [navy, forest]
+    swatches:
+      navy: ["#1F3A5F"]
+      forest: ["#0B3D2E"]
+    custom: [Accent]
+    advanced: true
   - key: extra
     label: Anything else
     type: textarea
@@ -48,4 +62,6 @@ promptTemplate: |-
   Target length: about {words} words
   Follow-up window: {window}
   Include an action-items table with owners and due dates: {actions}
+  It goes to: {attendees}
+  Accent color if you format it as an email: {accent}
   Also: {extra}

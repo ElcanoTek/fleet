@@ -122,15 +122,40 @@ const InputKindChatPatrol = "chat_patrol"
 
 // EntryTypeNotice is a UI-only history entry fleet writes to tell the reader
 // something happened that is not a turn, e.g. an automatic resume that was
-// skipped or dropped. Its content is NoticeContent; replay never sends it to
-// the model.
+// skipped or dropped, or a workspace model upgrade. Its content is
+// NoticeContent; replay never sends it to the model.
 const EntryTypeNotice = "notice"
+
+// NoticeKindModelUpgraded marks a conversation-level model upgrade notice
+// inserted when an operator rolls out a primary or fallback model upgrade.
+const NoticeKindModelUpgraded = "model_upgraded"
 
 // NoticeContent for Type=notice.
 type NoticeContent struct {
-	// Kind is a stable machine-readable class, e.g. "approval_resume_skipped".
-	Kind string `json:"kind"`
-	Text string `json:"text"`
+	// Kind is a stable machine-readable class, e.g. "approval_resume_skipped"
+	// or "model_upgraded".
+	Kind      string `json:"kind"`
+	Text      string `json:"text"`
+	FromModel string `json:"from_model,omitempty"`
+	ToModel   string `json:"to_model,omitempty"`
+}
+
+// FormatModelUpgradeNotice builds a NoticeContent announcing that a
+// conversation's pinned model was upgraded by an operator rollout.
+func FormatModelUpgradeNotice(fromModel, toModel string) NoticeContent {
+	from := strings.TrimSpace(fromModel)
+	to := strings.TrimSpace(toModel)
+	toLabel := agentcore.DisplayLabelForModel(to)
+	text := fmt.Sprintf("Model upgraded to %s.", toLabel)
+	if from != "" && !strings.EqualFold(from, to) {
+		text = fmt.Sprintf("Model upgraded from %s to %s.", agentcore.DisplayLabelForModel(from), toLabel)
+	}
+	return NoticeContent{
+		Kind:      NoticeKindModelUpgraded,
+		Text:      text,
+		FromModel: from,
+		ToModel:   to,
+	}
 }
 
 // ImageRefMeta is a pointer to an image file the user attached. Path is the

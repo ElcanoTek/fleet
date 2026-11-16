@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -39,6 +40,29 @@ func (s *scheduleFakeStore) SetAutoApprove(_ context.Context, userEmail, convID 
 		return store.ErrConversationNotFound
 	}
 	c.AutoApprove = enabled
+	if enabled {
+		if c.EffectiveApprovalMode() != store.ConversationApprovalAutonomous {
+			c.ApprovalMode = store.ConversationApprovalAuto
+		}
+	} else {
+		c.ApprovalMode = store.ConversationApprovalManual
+	}
+	return nil
+}
+
+func (s *scheduleFakeStore) SetApprovalMode(_ context.Context, userEmail, convID, mode string) error {
+	normalized, ok := store.ParseConversationApprovalMode(mode)
+	if !ok {
+		return fmt.Errorf("invalid approval_mode %q", mode)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c, ok := s.convs[convID]
+	if !ok || c.UserEmail != userEmail {
+		return store.ErrConversationNotFound
+	}
+	c.ApprovalMode = normalized
+	c.AutoApprove = normalized != store.ConversationApprovalManual
 	return nil
 }
 

@@ -48,14 +48,14 @@ func TestChatSetModel_DryRunAndApply(t *testing.T) {
 	}
 
 	var outBuf, errBuf bytes.Buffer
-	code := runChatSetModel(context.Background(), st, &outBuf, &errBuf, "google/gemini-4-argon", "", true, false)
+	code := runChatSetModel(context.Background(), st, &outBuf, &errBuf, "google/gemini-4-hydrogen", "", true, false)
 	if code != 0 {
 		t.Fatalf("dry-run code = %d, want 0 (stderr=%s)", code, errBuf.String())
 	}
-	if !strings.Contains(outBuf.String(), "conv-1\talice@example.com\tmodel anthropic/claude-opus-5.5 → google/gemini-4-argon") {
+	if !strings.Contains(outBuf.String(), "conv-1\talice@example.com\tmodel anthropic/claude-opus-5.5 → google/gemini-4-hydrogen") {
 		t.Errorf("dry-run stdout missing conv-1 line: %s", outBuf.String())
 	}
-	if !strings.Contains(outBuf.String(), "conv-2\tbob@example.com\tmodel <none> → google/gemini-4-argon") {
+	if !strings.Contains(outBuf.String(), "conv-2\tbob@example.com\tmodel <none> → google/gemini-4-hydrogen") {
 		t.Errorf("dry-run stdout missing conv-2 line: %s", outBuf.String())
 	}
 	if !strings.Contains(errBuf.String(), "dry-run: 2 conversation(s) would be re-assigned") {
@@ -67,12 +67,12 @@ func TestChatSetModel_DryRunAndApply(t *testing.T) {
 
 	outBuf.Reset()
 	errBuf.Reset()
-	code = runChatSetModel(context.Background(), st, &outBuf, &errBuf, "google/gemini-4-argon", "anthropic/claude-opus-5.5", false, true)
+	code = runChatSetModel(context.Background(), st, &outBuf, &errBuf, "google/gemini-4-hydrogen", "anthropic/claude-opus-5.5", false, true)
 	if code != 0 {
 		t.Fatalf("apply code = %d, want 0 (stderr=%s)", code, errBuf.String())
 	}
-	if st.lastModel != "google/gemini-4-argon" || st.lastFrom != "anthropic/claude-opus-5.5" {
-		t.Errorf("store call = (%q, %q), want (google/gemini-4-argon, anthropic/claude-opus-5.5)", st.lastModel, st.lastFrom)
+	if st.lastModel != "google/gemini-4-hydrogen" || st.lastFrom != "anthropic/claude-opus-5.5" {
+		t.Errorf("store call = (%q, %q), want (google/gemini-4-hydrogen, anthropic/claude-opus-5.5)", st.lastModel, st.lastFrom)
 	}
 	if !strings.Contains(errBuf.String(), "re-assigned model on 2 conversation(s)") {
 		t.Errorf("apply stderr = %s", errBuf.String())
@@ -108,5 +108,60 @@ func TestChatSetModel_SkipsLockdownWhenDisallowed(t *testing.T) {
 	}
 	if !strings.Contains(errBuf.String(), "excluding lockdown conversations") {
 		t.Errorf("stderr missing lockdown exclusion note: %s", errBuf.String())
+	}
+}
+
+type fakeNotifiedChatModelStore struct {
+	*fakeChatModelStore
+}
+
+func (f *fakeNotifiedChatModelStore) RolloutConversationModel(_ context.Context, model, fromModel string, includeLockdown, notify bool) (store.ConversationModelRolloutResult, error) {
+	f.lastModel = model
+	f.lastFrom = fromModel
+	f.lastIncludeLockdown = includeLockdown
+	var res store.ConversationModelRolloutResult
+	for _, e := range f.entries {
+		if !includeLockdown && e.Lockdown {
+			continue
+		}
+		if fromModel != "" && e.Model != fromModel {
+			continue
+		}
+		res.MatchedCount++
+		if strings.TrimSpace(e.Model) == model {
+			continue
+		}
+		res.UpdatedCount++
+		if notify && e.HasMessages {
+			res.NotifiedCount++
+		}
+	}
+	return res, nil
+}
+
+func TestChatSetModelWithNotify_DryRunMatchesExecution(t *testing.T) {
+	st := &fakeNotifiedChatModelStore{
+		fakeChatModelStore: &fakeChatModelStore{
+			entries: []store.ConversationModelEntry{
+				{ID: "conv-same", UserEmail: "alice@example.com", Model: "google/gemini-4-hydrogen", HasMessages: true},
+				{ID: "conv-active", UserEmail: "bob@example.com", Model: "google/gemini-4-argon", HasMessages: true},
+				{ID: "conv-empty", UserEmail: "carol@example.com", Model: "google/gemini-4-argon", HasMessages: false},
+			},
+		},
+	}
+
+	var outBuf, errBuf bytes.Buffer
+	code := runChatSetModelWithNotify(context.Background(), st, &outBuf, &errBuf, "google/gemini-4-hydrogen", "", true, true, false)
+	if code != 0 {
+		t.Fatalf("dry-run code = %d, want 0 (stderr=%s)", code, errBuf.String())
+	}
+	if strings.Contains(outBuf.String(), "conv-same") {
+		t.Errorf("notified dry-run should skip unchanged conversation: %s", outBuf.String())
+	}
+	if !strings.Contains(outBuf.String(), "conv-active") || !strings.Contains(outBuf.String(), "conv-empty") {
+		t.Errorf("notified dry-run missing changed conversations: %s", outBuf.String())
+	}
+	if !strings.Contains(errBuf.String(), "dry-run: 2 conversation(s) would be re-assigned (1 notified)") {
+		t.Errorf("notified dry-run stderr = %s", errBuf.String())
 	}
 }

@@ -480,6 +480,29 @@ func (s *streamSink) replaceVisibleText(text string) {
 	s.emit(evtTextReplace, map[string]any{evtFieldText: text})
 }
 
+// replaceFinalTextFrom overwrites s.finalText from offset onward with text.
+// Used when a finalize hook stops on cancellation, budget ceiling, or error:
+// finalize streams directly to the observer rather than through s.finalText,
+// and the finishing round's s.finalText may hold a stripped leaked call or be
+// empty while the finalize retry streamed partial prose before stopping.
+func (s *streamSink) replaceFinalTextFrom(offset int, text string) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	prefix := s.finalText.String()
+	if offset < 0 {
+		offset = 0
+	}
+	if offset < len(prefix) {
+		prefix = prefix[:offset]
+	}
+	s.finalText.Reset()
+	s.finalText.WriteString(prefix)
+	s.finalText.WriteString(text)
+}
+
 // snapshot returns a copy of the accumulated entries plus the accumulated final
 // text. Safe to call after the run completes.
 func (s *streamSink) snapshot() ([]RunEntry, string) {

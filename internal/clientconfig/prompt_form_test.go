@@ -170,6 +170,43 @@ promptTemplate: "{days} {lookback} {flight} {note}"
 	}
 }
 
+func TestPromptFormPickers(t *testing.T) {
+	body := `name: Pickers
+fields:
+  - {key: to, label: Send to, type: recipients, options: [team@example.com], hint: Who gets it, default: "Team@example.com;desk@example.com"}
+  - key: style
+    label: Style
+    type: palette
+    options: [brand, plain]
+    swatches: {brand: ["#1a0b1e", "#6262A0"], plain: ["#333E48"]}
+    custom: [Header, Accent]
+    default: plain
+  - {key: cc, label: Copy, type: recipients}
+promptTemplate: "{to} {style} {cc}"
+`
+	fields, _, issues := parsePromptForm([]byte(body))
+	if len(issues) != 0 {
+		t.Fatalf("issues = %v", issues)
+	}
+	if !reflect.DeepEqual(fields[0].Options, []string{"team@example.com"}) || fields[0].Default != "team@example.com, desk@example.com" {
+		t.Errorf("recipients field = %#v", fields[0])
+	}
+	wantSwatches := map[string][]string{"brand": {"#1A0B1E", "#6262A0"}, "plain": {"#333E48"}}
+	if !reflect.DeepEqual(fields[1].Swatches, wantSwatches) || !reflect.DeepEqual(fields[1].Custom, []string{"Header", "Accent"}) || fields[1].Default != "plain" {
+		t.Errorf("palette field = %#v", fields[1])
+	}
+	if fields[2].Options != nil || fields[2].Swatches != nil || fields[2].Custom != nil {
+		t.Errorf("bare recipients field = %#v", fields[2])
+	}
+	raw, err := json.Marshal(fields[2])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "swatches") || strings.Contains(string(raw), "custom") {
+		t.Errorf("picker properties leak into a field without them: %s", raw)
+	}
+}
+
 // TestReadPromptsInvalidFormDegradesToPlainPrompt covers each validation rule:
 // the file is still served (with its raw content and no form), and the problem
 // names the file and what is wrong with it.
@@ -198,7 +235,35 @@ promptTemplate: "{a}"`, `default "z" is not one of the options`},
 		{"duplicate option", `fields: [{key: a, label: A, type: select, options: [x, x]}]
 promptTemplate: "{a}"`, `option "x" is listed twice`},
 		{"options on a text field", `fields: [{key: a, label: A, type: text, options: [x]}]
-promptTemplate: "{a}"`, "options only apply to a select field"},
+promptTemplate: "{a}"`, "options only apply to a select, palette or recipients field"},
+		{"palette without options", `fields: [{key: a, label: A, type: palette, swatches: {x: ["#112233"]}}]
+promptTemplate: "{a}"`, "a palette field needs at least one option"},
+		{"palette without swatches", `fields: [{key: a, label: A, type: palette, options: [x]}]
+promptTemplate: "{a}"`, "a palette field needs swatches"},
+		{"palette option with no swatch", `fields: [{key: a, label: A, type: palette, options: [x, y], swatches: {x: ["#112233"]}}]
+promptTemplate: "{a}"`, `option "y" has no swatches`},
+		{"swatch for an unknown option", `fields: [{key: a, label: A, type: palette, options: [x], swatches: {x: ["#112233"], z: ["#112233"]}}]
+promptTemplate: "{a}"`, `swatches names "z", which is not one of the options`},
+		{"swatch that is not a hex color", `fields: [{key: a, label: A, type: palette, options: [x], swatches: {x: ["red"]}}]
+promptTemplate: "{a}"`, "each color must be a quoted #RRGGBB value"},
+		{"swatch with too many colors", `fields: [{key: a, label: A, type: palette, options: [x], swatches: {x: ["#111111", "#222222", "#333333", "#444444", "#555555"]}}]
+promptTemplate: "{a}"`, "must be a list of 1 to 4 colors"},
+		{"swatches on a select", `fields: [{key: a, label: A, type: select, options: [x], swatches: {x: ["#112233"]}}]
+promptTemplate: "{a}"`, "swatches only apply to a palette field"},
+		{"custom on a text field", `fields: [{key: a, label: A, type: text, custom: [Header]}]
+promptTemplate: "{a}"`, "custom only applies to a palette field"},
+		{"custom color name with a delimiter", `fields: [{key: a, label: A, type: palette, options: [x], swatches: {x: ["#112233"]}, custom: ["Header (top)"]}]
+promptTemplate: "{a}"`, "must not contain #, a comma or parentheses"},
+		{"too many custom colors", `fields: [{key: a, label: A, type: palette, options: [x], swatches: {x: ["#112233"]}, custom: [A, B, C, D]}]
+promptTemplate: "{a}"`, "custom must be a list of 1 to 3 color names"},
+		{"palette default outside options", `fields: [{key: a, label: A, type: palette, options: [x], swatches: {x: ["#112233"]}, default: z}]
+promptTemplate: "{a}"`, `default "z" is not one of the options`},
+		{"recipients default that is not an address", `fields: [{key: a, label: A, type: recipients, default: "ok@example.com, team.example.com"}]
+promptTemplate: "{a}"`, `default "team.example.com" is not an email address`},
+		{"recipients option that is not an address", `fields: [{key: a, label: A, type: recipients, options: [nobody]}]
+promptTemplate: "{a}"`, `option "nobody" is not an email address`},
+		{"placeholder on recipients", `fields: [{key: a, label: A, type: recipients, placeholder: who}]
+promptTemplate: "{a}"`, "placeholder only applies to a text or textarea field"},
 		{"min on a text field", `fields: [{key: a, label: A, type: text, min: 1}]
 promptTemplate: "{a}"`, "min only applies to a number field"},
 		{"number default below min", `fields: [{key: a, label: A, type: number, min: 5, default: 2}]

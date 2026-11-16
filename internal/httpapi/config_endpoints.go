@@ -93,10 +93,10 @@ type clientConfigModels struct {
 	// Operations Center create form pre-fills as a new task's primary model.
 	// Never empty — with no override it is the advanced tier.
 	TaskModel string `json:"task_model"`
-	// TaskFallbackModel is the scheduler's fallback model (FLEET_TASK_FALLBACK_MODEL)
-	// when the operator set one, so the Operations Center's create form
-	// pre-fills the same fallback an unpinned scheduled task would get. Omitted
-	// when unset; the web then keeps its compiled-in fallback.
+	// TaskFallbackModel is the scheduler's explicit fallback model override
+	// (FLEET_TASK_FALLBACK_MODEL) when the operator set one, so the Operations
+	// Center's create form pre-fills that override. Omitted when unset; the web
+	// then follows AdvancedModel (the workspace's live fallback tier).
 	TaskFallbackModel string `json:"task_fallback_model,omitempty"`
 	// Pinned are the operator's extra picker rows (FLEET_PINNED_MODELS): slugs
 	// the chat and task pickers list under the recommended tiers, with an

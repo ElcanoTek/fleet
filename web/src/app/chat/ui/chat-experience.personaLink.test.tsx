@@ -103,9 +103,13 @@ describe("persona new-chat link", () => {
     const composer = await screen.findByDisplayValue("Draft before sharing");
     expect(composer.tagName).toBe("TEXTAREA");
 
-    // Enable auto-approve before clicking Share to verify pre-chat options are seeded.
+    // Enable Autonomous mode before clicking Share to verify pre-chat approval_mode + auto_approve are seeded.
     fireEvent.click(screen.getByTestId("composer-more-button"));
-    fireEvent.click(screen.getByRole("menuitemcheckbox", { name: /Auto-approve tools in this chat/ }));
+    fireEvent.click(
+      screen.getByRole("menuitemradio", {
+        name: /Autonomous mode: also run checked plans without asking/,
+      }),
+    );
 
     const shareBtn = screen.getByTestId("composer-share-button");
     fireEvent.click(shareBtn);
@@ -116,6 +120,7 @@ describe("persona new-chat link", () => {
       title: "Draft before sharing",
       persona: "user:my-twin",
       auto_approve: true,
+      approval_mode: "autonomous",
     });
     // Draft stays intact in the composer after promoting onto the materialized conversation.
     expect(screen.getByDisplayValue("Draft before sharing")).toBeInTheDocument();

@@ -1,0 +1,571 @@
+package httpapi
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net/http"
+	"strings"
+
+	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/logging"
+	"github.com/ElcanoTek/fleet/internal/safe"
+	"github.com/ElcanoTek/fleet/internal/sched/models"
+)
+
+type rolloutPendingFallbackStore interface {
+	PendingFallbackRolloutFrom(ctx context.Context) (string, bool, error)
+	SetPendingFallbackRolloutFrom(ctx context.Context, from string) error
+}
+
+// TaskModelRolloutFunc upgrades primary and/or fallback models across upcoming
+// scheduled and pending tasks (satisfied by (*sched/storage.Storage).RolloutTaskModels).
+type TaskModelRolloutFunc func(ctx context.Context, opts models.TaskModelRollout, dryRun bool) (models.TaskModelRolloutResult, error)
+
+type modelRolloutAdvisoryLocker interface {
+	AcquireModelRolloutLock(ctx context.Context) (func(), error)
+}
+
+func isModelTierSettingKey(key string) bool {
+	return key == "default_model" || key == "advanced_model" || key == "task_model"
+}
+
+func (s *Server) configuredTaskFallbackModel() string {
+	if s.cfg == nil {
+		return ""
+	}
+	return strings.TrimSpace(s.cfg.TaskFallbackModel)
+}
+
+func (s *Server) acquireModelRolloutLock(ctx context.Context) (func(), error) {
+	s.modelRolloutQueueMu.Lock()
+	if locker, ok := s.store.(modelRolloutAdvisoryLocker); ok {
+		releaseDB, err := locker.AcquireModelRolloutLock(ctx)
+		if err != nil {
+			s.modelRolloutQueueMu.Unlock()
+			return nil, err
+		}
+		s.modelRolloutMu.Lock()
+		return func() {
+			s.modelRolloutMu.Unlock()
+			releaseDB()
+			s.modelRolloutQueueMu.Unlock()
+		}, nil
+	}
+	s.modelRolloutMu.Lock()
+	return func() {
+		s.modelRolloutMu.Unlock()
+		s.modelRolloutQueueMu.Unlock()
+	}, nil
+}
+
+// WithModelTierReloadLock runs fn under the server's in-process model-rollout
+// mutex without acquiring the PostgreSQL advisory lock (which an external CLI
+// caller already holds). Because acquireModelRolloutLock acquires the DB
+// advisory lock BEFORE modelRolloutMu, this lock order is deadlock-free while
+// serializing tier refreshes against in-process rollouts (e.g. sync_current).
+func (s *Server) WithModelTierReloadLock(fn func() error) error {
+	if s == nil {
+		return fn()
+	}
+	s.modelRolloutMu.Lock()
+	defer s.modelRolloutMu.Unlock()
+	return fn()
+}
+
+// WithTaskModelRollout wires the scheduler storage's task model rollout into
+// the admin model-rollout and settings endpoints.
+func WithTaskModelRollout(fn TaskModelRolloutFunc) Option {
+	return func(s *Server) { s.taskModelRollout = fn }
+}
+
+// ModelRolloutRequest is the body of POST /admin/models/rollout.
+type ModelRolloutRequest struct {
+	// SyncCurrent, when true, upgrades all existing chats to CurrentDefaultModel
+	// and all upcoming scheduled/pending tasks to CurrentTaskModel +
+	// the effective task fallback (FLEET_TASK_FALLBACK_MODEL if set, else
+	// CurrentFallbackModel).
+	SyncCurrent bool `json:"sync_current"`
+	// Model, when non-empty, upgrades matching chats and task primary models.
+	Model string `json:"model"`
+	// ChatModel, when non-empty and Model is empty, upgrades only chat
+	// conversations without changing scheduled tasks.
+	ChatModel string `json:"chat_model,omitempty"`
+	// TaskModel, when non-empty and Model is empty, upgrades only task primary
+	// models without changing chat conversations.
+	TaskModel string `json:"task_model"`
+	// FromModel restricts chat and primary-task updates to items currently on
+	// FromModel (empty updates all items whose model differs).
+	FromModel string `json:"from_model"`
+	// FallbackModel, when non-nil, updates fallback_model on upcoming tasks
+	// ("" clears fallback_model to NULL).
+	FallbackModel *string `json:"fallback_model"`
+	// FromFallbackModel restricts fallback_model updates to tasks currently on
+	// FromFallbackModel.
+	FromFallbackModel string `json:"from_fallback_model"`
+	// OnlySetFallbacks, when true alongside FallbackModel, updates only tasks
+	// that already have a non-empty fallback_model (preserving NULL on bare API
+	// tasks).
+	OnlySetFallbacks bool `json:"only_set_fallbacks,omitempty"`
+	// UpgradeFromFallback, when non-empty alongside a non-empty FallbackModel,
+	// also upgrades chats and task primary models currently pinned to this
+	// previous fallback slug onto the new FallbackModel.
+	UpgradeFromFallback string `json:"upgrade_from_fallback"`
+	// NotifyChats controls whether non-empty chats whose model changes receive
+	// a UI-only model_upgraded notice entry. Defaults to true when omitted.
+	NotifyChats *bool `json:"notify_chats"`
+	// RecurringOnly restricts task updates to recurring cron tasks.
+	RecurringOnly bool `json:"recurring_only"`
+	// DryRun computes exact counts without mutating chats or tasks.
+	DryRun bool `json:"dry_run"`
+}
+
+// ModelRolloutResponse summarizes a dry-run or executed model rollout across
+// chats and scheduled/recurring tasks.
+type ModelRolloutResponse struct {
+	DryRun                bool    `json:"dry_run"`
+	PrimaryModel          string  `json:"primary_model,omitempty"`
+	TaskModel             string  `json:"task_model,omitempty"`
+	FallbackModel         *string `json:"fallback_model,omitempty"`
+	LockdownIncluded      bool    `json:"lockdown_included"`
+	ChatsMatched          int     `json:"chats_matched"`
+	ChatsUpdated          int     `json:"chats_updated"`
+	ChatsNotified         int     `json:"chats_notified"`
+	TasksScanned          int     `json:"tasks_scanned"`
+	TasksUpdated          int     `json:"tasks_updated"`
+	TasksPrimaryUpdated   int     `json:"tasks_primary_updated"`
+	TasksFallbackUpdated  int     `json:"tasks_fallback_updated"`
+	TasksRecurringUpdated int     `json:"tasks_recurring_updated"`
+	PartialError          string  `json:"partial_error,omitempty"`
+}
+
+func validateRolloutModelSlug(field, raw string) (string, error) {
+	v := strings.TrimSpace(raw)
+	if v == "" || len(v) > 200 || strings.ContainsAny(v, " \t\n") {
+		return "", fmt.Errorf("%s: want a model slug like provider/model, got %q", field, raw)
+	}
+	if i := strings.Index(v, "/"); i <= 0 || i == len(v)-1 {
+		return "", fmt.Errorf("%s: want a model slug like provider/model, got %q", field, raw)
+	}
+	return v, nil
+}
+
+// handleAdminModelRollout serves POST /admin/models/rollout.
+func (s *Server) handleAdminModelRollout(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.store == nil {
+		http.Error(w, "chat store unavailable", http.StatusNotImplemented)
+		return
+	}
+	var req ModelRolloutRequest
+	if !decodeJSONBody(w, r, &req) {
+		return
+	}
+	res, status, err := s.executeModelRollout(r.Context(), req)
+	if err != nil {
+		http.Error(w, err.Error(), status)
+		return
+	}
+	writeJSONStatus(w, r, status, res)
+}
+
+type resolvedRolloutTargets struct {
+	chatTarget        string
+	chatFrom          string
+	taskPrimaryTarget *string
+	taskPrimaryFrom   string
+	taskFallback      *string
+	taskFallbackFrom  string
+	onlySetFallbacks  bool
+	notifyChats       bool
+}
+
+func (s *Server) resolveRolloutTargets(req ModelRolloutRequest) (resolvedRolloutTargets, error) {
+	t := resolvedRolloutTargets{
+		chatFrom:         strings.TrimSpace(req.FromModel),
+		taskPrimaryFrom:  strings.TrimSpace(req.FromModel),
+		taskFallbackFrom: strings.TrimSpace(req.FromFallbackModel),
+		onlySetFallbacks: req.OnlySetFallbacks,
+		notifyChats:      req.NotifyChats == nil || *req.NotifyChats,
+	}
+
+	if req.SyncCurrent {
+		def := agentcore.CurrentDefaultModel()
+		tm := agentcore.CurrentTaskModel()
+		fb := s.configuredTaskFallbackModel()
+		if fb == "" {
+			fb = agentcore.CurrentFallbackModel()
+		}
+		t.chatTarget = def
+		t.taskPrimaryTarget = &tm
+		t.taskFallback = &fb
+		t.onlySetFallbacks = true
+	} else {
+		if err := s.resolveExplicitRolloutSlugs(req, &t); err != nil {
+			return resolvedRolloutTargets{}, err
+		}
+	}
+
+	if t.chatTarget == "" && t.taskPrimaryTarget == nil && t.taskFallback == nil {
+		return resolvedRolloutTargets{}, fmt.Errorf("specify model, chat_model, task_model, fallback_model, or sync_current=true")
+	}
+	return t, nil
+}
+
+func (s *Server) resolveExplicitRolloutSlugs(req ModelRolloutRequest, t *resolvedRolloutTargets) error {
+	if strings.TrimSpace(req.Model) != "" {
+		v, err := validateRolloutModelSlug("model", req.Model)
+		if err != nil {
+			return err
+		}
+		t.chatTarget = v
+		t.taskPrimaryTarget = &v
+	} else {
+		if strings.TrimSpace(req.ChatModel) != "" {
+			v, err := validateRolloutModelSlug("chat_model", req.ChatModel)
+			if err != nil {
+				return err
+			}
+			t.chatTarget = v
+		}
+		if strings.TrimSpace(req.TaskModel) != "" {
+			v, err := validateRolloutModelSlug("task_model", req.TaskModel)
+			if err != nil {
+				return err
+			}
+			t.taskPrimaryTarget = &v
+		}
+	}
+
+	if req.FallbackModel != nil {
+		trimmed := strings.TrimSpace(*req.FallbackModel)
+		if trimmed == "" {
+			empty := ""
+			t.taskFallback = &empty
+		} else {
+			v, err := validateRolloutModelSlug("fallback_model", trimmed)
+			if err != nil {
+				return err
+			}
+			t.taskFallback = &v
+			if upFrom := strings.TrimSpace(req.UpgradeFromFallback); upFrom != "" && upFrom != v && t.chatTarget == "" {
+				t.chatTarget = v
+				t.chatFrom = upFrom
+				if t.taskPrimaryTarget == nil && upFrom != agentcore.CurrentTaskModel() {
+					t.taskPrimaryTarget = &v
+					t.taskPrimaryFrom = upFrom
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func (s *Server) executeModelRollout(ctx context.Context, req ModelRolloutRequest) (ModelRolloutResponse, int, error) {
+	if !req.DryRun {
+		// Pre-validate explicit slugs before acquiring the cross-store lock so
+		// invalid inputs fail fast with 400.
+		if !req.SyncCurrent {
+			if _, err := s.resolveRolloutTargets(req); err != nil {
+				return ModelRolloutResponse{}, http.StatusBadRequest, err
+			}
+		}
+		release, err := s.acquireModelRolloutLock(ctx)
+		if err != nil {
+			return ModelRolloutResponse{}, http.StatusInternalServerError, err
+		}
+		defer release()
+	}
+	return s.executeModelRolloutLocked(ctx, req)
+}
+
+func (s *Server) executeModelRolloutLocked(ctx context.Context, req ModelRolloutRequest) (ModelRolloutResponse, int, error) {
+	t, err := s.resolveRolloutTargets(req)
+	if err != nil {
+		return ModelRolloutResponse{}, http.StatusBadRequest, err
+	}
+
+	out := ModelRolloutResponse{
+		DryRun:       req.DryRun,
+		PrimaryModel: t.chatTarget,
+	}
+	if t.taskPrimaryTarget != nil {
+		out.TaskModel = *t.taskPrimaryTarget
+	}
+	if t.taskFallback != nil {
+		fbCopy := *t.taskFallback
+		out.FallbackModel = &fbCopy
+	}
+
+	// Run the scheduler task phase BEFORE the chat phase so a scheduler failure
+	// rolls back cleanly without having mutated conversations or posted chat
+	// upgrade notices. If the task phase commits changes and the subsequent chat
+	// phase fails, return HTTP 207 Multi-Status with the committed task counts
+	// and PartialError so operators know tasks succeeded and can safely re-run.
+	if err := s.runTaskRolloutPhase(ctx, t, req.RecurringOnly, req.DryRun, &out); err != nil {
+		return ModelRolloutResponse{}, http.StatusInternalServerError, err
+	}
+	if err := s.runChatRolloutPhase(ctx, t, req.DryRun, &out); err != nil {
+		if !req.DryRun && out.TasksUpdated > 0 {
+			out.PartialError = fmt.Sprintf("%s (%d scheduled task(s) updated before chat rollout failed)", err.Error(), out.TasksUpdated)
+			logging.From(ctx).Warn("Model rollout partially completed",
+				"actor", safe.LogSafe(userFromCtx(ctx)),
+				"tasks_updated", out.TasksUpdated,
+				"err", safe.LogSafe(err.Error()),
+			)
+			return out, http.StatusMultiStatus, nil
+		}
+		return ModelRolloutResponse{}, http.StatusInternalServerError, err
+	}
+
+	if !req.DryRun {
+		pending, perr := s.loadPendingFallbackFromLocked(ctx)
+		if perr != nil {
+			if out.TasksUpdated > 0 || out.ChatsUpdated > 0 {
+				out.PartialError = fmt.Sprintf("read pending fallback rollout state: %s", perr.Error())
+				return out, http.StatusMultiStatus, nil
+			}
+			return ModelRolloutResponse{}, http.StatusInternalServerError, fmt.Errorf("read pending fallback rollout state: %w", perr)
+		}
+		if req.SyncCurrent || (t.chatTarget != "" && (t.chatFrom == "" || (pending != "" && t.chatFrom == pending))) {
+			if cerr := s.clearPendingFallbackFromLocked(ctx); cerr != nil {
+				if out.TasksUpdated > 0 || out.ChatsUpdated > 0 {
+					out.PartialError = fmt.Sprintf("clear pending fallback rollout state: %s", cerr.Error())
+					return out, http.StatusMultiStatus, nil
+				}
+				return ModelRolloutResponse{}, http.StatusInternalServerError, fmt.Errorf("clear pending fallback rollout state: %w", cerr)
+			}
+		}
+		fbLog := ""
+		if out.FallbackModel != nil {
+			fbLog = *out.FallbackModel
+		}
+		logging.From(ctx).Info("Model rollout completed",
+			"actor", safe.LogSafe(userFromCtx(ctx)),
+			"primary_model", safe.LogSafe(out.PrimaryModel),
+			"task_model", safe.LogSafe(out.TaskModel),
+			"fallback_model", safe.LogSafe(fbLog),
+			"chats_updated", out.ChatsUpdated,
+			"chats_notified", out.ChatsNotified,
+			"tasks_updated", out.TasksUpdated,
+		)
+	}
+	return out, http.StatusOK, nil
+}
+
+func (s *Server) runChatRolloutPhase(ctx context.Context, t resolvedRolloutTargets, dryRun bool, out *ModelRolloutResponse) error {
+	if t.chatTarget == "" || s.store == nil {
+		return nil
+	}
+	includeLockdown := true
+	if s.cfg != nil {
+		if allow := s.cfg.LockdownModels(); len(allow) > 0 {
+			includeLockdown = config.ModelAllowed(t.chatTarget, allow)
+		}
+	}
+	out.LockdownIncluded = includeLockdown
+	if dryRun {
+		convs, err := s.store.ListConversationsForModelUpdate(ctx, t.chatFrom, includeLockdown)
+		if err != nil {
+			return fmt.Errorf("list conversations: %w", err)
+		}
+		out.ChatsMatched = len(convs)
+		for _, c := range convs {
+			if strings.TrimSpace(c.Model) != t.chatTarget {
+				out.ChatsUpdated++
+				if t.notifyChats && c.HasMessages {
+					out.ChatsNotified++
+				}
+			}
+		}
+		return nil
+	}
+	chatRes, err := s.store.RolloutConversationModel(ctx, t.chatTarget, t.chatFrom, includeLockdown, t.notifyChats)
+	if err != nil {
+		return fmt.Errorf("rollout conversations: %w", err)
+	}
+	out.ChatsMatched = chatRes.MatchedCount
+	out.ChatsUpdated = chatRes.UpdatedCount
+	out.ChatsNotified = chatRes.NotifiedCount
+	return nil
+}
+
+func (s *Server) runTaskRolloutPhase(ctx context.Context, t resolvedRolloutTargets, recurringOnly, dryRun bool, out *ModelRolloutResponse) error {
+	if (t.taskPrimaryTarget == nil && t.taskFallback == nil) || s.taskModelRollout == nil {
+		return nil
+	}
+	taskRes, err := s.taskModelRollout(ctx, models.TaskModelRollout{
+		Model:             t.taskPrimaryTarget,
+		FromModel:         t.taskPrimaryFrom,
+		FallbackModel:     t.taskFallback,
+		FromFallbackModel: t.taskFallbackFrom,
+		OnlySetFallbacks:  t.onlySetFallbacks,
+		RecurringOnly:     recurringOnly,
+	}, dryRun)
+	if err != nil {
+		return fmt.Errorf("rollout tasks: %w", err)
+	}
+	out.TasksScanned = taskRes.ScannedCount
+	out.TasksUpdated = taskRes.UpdatedCount
+	out.TasksPrimaryUpdated = taskRes.PrimaryUpdatedCount
+	out.TasksFallbackUpdated = taskRes.FallbackUpdatedCount
+	out.TasksRecurringUpdated = taskRes.RecurringUpdatedCount
+	return nil
+}
+
+// rolloutAfterSettingChangeLocked builds and executes the appropriate rollout
+// when an admin updates default_model, advanced_model, or task_model with
+// rollout=true. Caller holds s.acquireModelRolloutLock.
+func (s *Server) rolloutAfterSettingChangeLocked(ctx context.Context, key, prevFallback, prevTask string, notifyChats *bool) (*ModelRolloutResponse, *ModelRolloutRequest, error) {
+	req := ModelRolloutRequest{NotifyChats: notifyChats}
+	var pendingFallbackCandidate string
+
+	switch key {
+	case "default_model":
+		nextDefault := agentcore.CurrentDefaultModel()
+		nextTask := agentcore.CurrentTaskModel()
+		// Upgrade all chats to the new primary model, and upgrade task primary
+		// models too whenever task_model follows default_model (or matches it).
+		if nextTask == nextDefault {
+			req.Model = nextDefault
+		} else {
+			req.ChatModel = nextDefault
+		}
+	case "advanced_model":
+		nextFallback := agentcore.CurrentFallbackModel()
+		curDefault := agentcore.CurrentDefaultModel()
+		curTask := agentcore.CurrentTaskModel()
+		pending, perr := s.loadPendingFallbackFromLocked(ctx)
+		if perr != nil {
+			return nil, nil, fmt.Errorf("read pending fallback rollout state: %w", perr)
+		}
+		fromFallback := prevFallback
+		if pending != "" && pending != nextFallback && pending != curDefault && (fromFallback == "" || fromFallback == nextFallback) {
+			fromFallback = pending
+		}
+		if s.configuredTaskFallbackModel() == "" {
+			// When FLEET_TASK_FALLBACK_MODEL is unset, task fallback follows
+			// advanced_model: update existing tasks that have a fallback_model
+			// configured while preserving NULL on bare API tasks.
+			req.FallbackModel = &nextFallback
+			req.OnlySetFallbacks = true
+			if fromFallback != "" && fromFallback != nextFallback && fromFallback != curDefault {
+				req.UpgradeFromFallback = fromFallback
+				pendingFallbackCandidate = fromFallback
+			}
+		} else {
+			// Explicit FLEET_TASK_FALLBACK_MODEL owns task fallbacks, so do not
+			// overwrite task fallback_model from advanced_model. Still upgrade
+			// chats (and task primaries unless task_model matches fromFallback)
+			// that were explicitly pinned to fromFallback.
+			if fromFallback == "" || fromFallback == nextFallback || fromFallback == curDefault {
+				if cerr := s.clearPendingFallbackFromLocked(ctx); cerr != nil {
+					return nil, nil, fmt.Errorf("clear pending fallback rollout state: %w", cerr)
+				}
+				return nil, nil, nil
+			}
+			pendingFallbackCandidate = fromFallback
+			req.FromModel = fromFallback
+			if fromFallback != curTask {
+				req.Model = nextFallback
+			} else {
+				req.ChatModel = nextFallback
+			}
+		}
+	case "task_model":
+		nextTask := agentcore.CurrentTaskModel()
+		if nextTask == "" && prevTask == "" {
+			return nil, nil, nil
+		}
+		req.TaskModel = nextTask
+	default:
+		return nil, nil, nil
+	}
+
+	res, _, err := s.executeModelRolloutLocked(ctx, req)
+	if err != nil {
+		if pendingFallbackCandidate != "" {
+			if serr := s.savePendingFallbackFromLocked(ctx, pendingFallbackCandidate); serr != nil {
+				err = fmt.Errorf("%w (also failed saving fallback retry state: %w)", err, serr)
+			}
+		}
+		retryCopy := req
+		return nil, &retryCopy, err
+	}
+	if res.PartialError != "" {
+		if pendingFallbackCandidate != "" {
+			if serr := s.savePendingFallbackFromLocked(ctx, pendingFallbackCandidate); serr != nil {
+				res.PartialError = fmt.Sprintf("%s (also failed saving fallback retry state: %v)", res.PartialError, serr)
+			}
+		}
+		retryCopy := req
+		return &res, &retryCopy, errors.New(res.PartialError)
+	}
+	if key == "advanced_model" {
+		if cerr := s.clearPendingFallbackFromLocked(ctx); cerr != nil {
+			retryCopy := req
+			return &res, &retryCopy, fmt.Errorf("clear pending fallback rollout state: %w", cerr)
+		}
+	}
+	return &res, nil, nil
+}
+
+func (s *Server) preparePendingFallbackBeforeTierWriteLocked(ctx context.Context, prevFallback, targetFallback string) error {
+	pending, err := s.loadPendingFallbackFromLocked(ctx)
+	if err != nil {
+		return fmt.Errorf("read pending fallback rollout state: %w", err)
+	}
+	curDefault := agentcore.CurrentDefaultModel()
+	fromFallback := prevFallback
+	if pending != "" && pending != targetFallback && pending != curDefault && (fromFallback == "" || fromFallback == targetFallback) {
+		fromFallback = pending
+	}
+	if fromFallback != "" && fromFallback != targetFallback && fromFallback != curDefault {
+		if err := s.savePendingFallbackFromLocked(ctx, fromFallback); err != nil {
+			return fmt.Errorf("save pending fallback rollout state: %w", err)
+		}
+	}
+	return nil
+}
+
+func (s *Server) loadPendingFallbackFromLocked(ctx context.Context) (string, error) {
+	if ws, ok := s.store.(rolloutPendingFallbackStore); ok {
+		v, backed, err := ws.PendingFallbackRolloutFrom(ctx)
+		if err != nil {
+			return "", err
+		}
+		if backed {
+			s.pendingFallbackFrom = v
+			return v, nil
+		}
+	}
+	return s.pendingFallbackFrom, nil
+}
+
+func (s *Server) savePendingFallbackFromLocked(ctx context.Context, from string) error {
+	from = strings.TrimSpace(from)
+	if from == "" {
+		return nil
+	}
+	if ws, ok := s.store.(rolloutPendingFallbackStore); ok {
+		if err := ws.SetPendingFallbackRolloutFrom(ctx, from); err != nil {
+			return err
+		}
+	}
+	s.pendingFallbackFrom = from
+	return nil
+}
+
+func (s *Server) clearPendingFallbackFromLocked(ctx context.Context) error {
+	if ws, ok := s.store.(rolloutPendingFallbackStore); ok {
+		if err := ws.SetPendingFallbackRolloutFrom(ctx, ""); err != nil {
+			return err
+		}
+	}
+	s.pendingFallbackFrom = ""
+	return nil
+}
