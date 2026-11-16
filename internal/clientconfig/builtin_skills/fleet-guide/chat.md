@@ -206,12 +206,17 @@ When a conversation has an active or paused patrol or timer, the **Patrol bar**
 appears at the top of the thread showing the schedule's status (**Patrol
 active**, **Timer armed**, or **Paused**), cadence, run count, and countdown to
 the next run, along with **Run now**, **Pause / Resume**, and **Stop** buttons.
-Enabling **⚡ Auto-approve** (in the Patrol popover, Patrol bar, or **More
-options** in the composer) lets session-approvable tool calls run hands-free
-while you are away; if a patrol turn does stage an approval card, the card stays
-open for 24 hours and automatically resumes the patrol turn as soon as you
-approve it. Conversations with an active or paused patrol are exempt from
-retention sweeps until the patrol is stopped.
+Choosing **⚡ Auto-approve** (in the Patrol popover, Patrol bar, or **Approval
+mode** under **More options** in the composer) lets session-approvable tool
+calls run hands-free while you are away, while **Autonomous** also runs
+deployment-allowlisted checked plans (`agent_policy.critical_tool_autonomous`)
+without pausing and leaves durable receipt cards in the transcript (outbound
+email, scheduled-task cards, and non-allowlisted per-call actions still ask, and
+only turns triggered by the conversation owner use Auto-approve or Autonomous).
+If a patrol turn does stage an approval card, the card stays open for 24 hours
+and automatically resumes the patrol turn as soon as you approve it.
+Conversations with an active or paused patrol are exempt from retention sweeps
+until the patrol is stopped.
 
 A patrol runs as the chat's persona, so a persona of your own — a digital twin,
 say — can keep watch for you: press **Start patrol** on one of its suggested
@@ -452,7 +457,7 @@ The toolbar beneath the message box keeps everyday controls upfront and groups s
 | Model selector | Shows the model this conversation runs on, with a cost band from `$` to `$$$$` where its pricing is known. Click to change it. See [Picking the model](#picking-the-model). |
 | Attach files | Add files to your next message. Dragging a file anywhere onto the conversation does the same. |
 | Tools | The wrench. Its badge counts the connectors on in this conversation, **Always on** ones included; hover it for "Tools, N on". See [Connectors in a conversation](#5-connectors-in-a-conversation). |
-| More options (`•••`) | Opens a labeled menu organized into three groups: **Prompt library**, **Email templates** (only when your deployment has any), **Persona** (active on any new or empty chat before the first message is sent, and shown disabled with *"Personas can only be changed in a new chat"* once chatting has started), and **Memories**; **Share this chat**, **Patrol & schedule**, **Auto-approve tools**, and **Summarize earlier messages** (once a conversation has messages, showing how full the chat is); and **Show details**, **Dashboard view**, and **Send on Enter**. When a non-default persona, a patrol schedule, sharing (**Multiplayer**, team sharing, or a public link), or **Auto-approve** is active, **More options** shows an accent dot, and on desktop screens a quick status pill or indicator also appears directly on the toolbar so you can see or change it in one click. |
+| More options (`•••`) | Opens a labeled menu organized into three groups: **Prompt library**, **Email templates** (only when your deployment has any), **Persona** (active on any new or empty chat before the first message is sent, and shown disabled with *"Personas can only be changed in a new chat"* once chatting has started), and **Memories**; **Share this chat**, **Patrol & schedule**, **Approval mode** (**Manual**, **Auto-approve**, or **Autonomous**), and **Summarize earlier messages** (once a conversation has messages, showing how full the chat is); and **Show details**, **Dashboard view**, and **Send on Enter**. When a non-default persona, a patrol schedule, sharing (**Multiplayer**, team sharing, or a public link), **Auto-approve**, or **Autonomous** is active, **More options** shows an accent dot, and on desktop screens a quick status pill or indicator also appears directly on the toolbar so you can see or change it in one click. |
 | Send | At the far right. While the assistant is working it becomes **Stop**. |
 
 ### Dashboard view
@@ -1016,12 +1021,16 @@ same kind in this conversation, turning the button into **Approve + allow all**.
 Leave it unticked unless you know exactly what the rest of the conversation will
 do. A deployment can turn the checkbox off for actions that need your decision
 every time; their cards have no checkbox, and each call shows its own card. You
-can also turn on **Auto-approve** for the current conversation from **More
-options** (`•••`) in the composer toolbar (even while a reply is streaming; once
-on, a lightning-bolt badge stays visible on the toolbar for one-click turn-off)
-so executable connector actions and shell commands run without stopping on a
-card, while outbound email, scheduled-task cards, and actions that require a
-decision every time still ask. Cards are not for exploring what an action would change; ask the assistant to
+can also set the conversation's **Approval mode** under **More options** (`•••`)
+in the composer toolbar (even while a reply is streaming): **Manual** asks on
+every critical tool, **Auto-approve** shows a lightning-bolt badge on the
+toolbar and runs session-approvable connector actions and shell commands without
+stopping on a card, and **Autonomous** shows an amber **Autonomous** badge and
+also runs deployment-allowlisted checked plans
+(`agent_policy.critical_tool_autonomous`) without pausing while recording
+durable receipt and result cards in the chat (outbound email, scheduled-task
+cards, and non-allowlisted per-call actions still ask, and only turns sent by
+the conversation owner use Auto-approve or Autonomous). Cards are not for exploring what an action would change; ask the assistant to
 describe the change first, then approve the card once you agree with it.
 
 Which tools are gated and which merely report is set per deployment, not by the

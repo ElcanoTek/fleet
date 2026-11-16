@@ -5778,5 +5778,7 @@
   "⚡ Act for me": "⚡ Actuar por mí",
   "✓ {0} done": "✓ {0} completados",
   "✨ new": "✨ nuevo",
-  "🔗 Read-only shared conversation — anyone with this link can view it.": "🔗 Conversación compartida de solo lectura: cualquiera que tenga este enlace puede verla."
+  "🔗 Read-only shared conversation — anyone with this link can view it.": "🔗 Conversación compartida de solo lectura: cualquiera que tenga este enlace puede verla.",
+  "approval store is not configured": "el almacén de aprobaciones no está configurado",
+  "invalid approval_mode: must be manual, auto, or autonomous": "approval_mode no válido: debe ser manual, auto o autonomous"
 }
