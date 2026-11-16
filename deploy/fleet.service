@@ -190,8 +190,15 @@ RuntimeDirectoryMode=0700
 # crun manages cgroups for the sandbox containers. Delegate=yes hands the service a
 # writable cgroup subtree so the cgroupfs manager (set in the fleet user's
 # ~/.config/containers/containers.conf, created by bootstrap) applies per-container
-# limits without needing a systemd user D-Bus session.
+# limits without needing a systemd user D-Bus session. On systemd >= 254,
+# DelegateSubgroup=supervisor places the fleet daemon into fleet.service/supervisor
+# at exec time; on older systemd releases (such as RHEL 9's systemd 252, which
+# ignores unknown unit keys), EnsureDelegatedCgroupSubgroup in
+# internal/sandbox/cgroup_parent.go creates fleet.service/supervisor and moves
+# the service PIDs into it at startup so fleet.service/cgroup.procs is empty and
+# cgroup v2 allows +memory +cpu +pids for sibling container cgroups.
 Delegate=yes
+DelegateSubgroup=supervisor
 
 # Hardening. StateDirectory=fleet provides /var/lib/fleet (auto-created + chowned to
 # fleet, persistent, read-write) — it is HOME, the data dir, and the workspace root

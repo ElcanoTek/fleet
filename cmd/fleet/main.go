@@ -1740,6 +1740,10 @@ func resolveSandboxInto(cfg *config.Config, bundle *clientconfig.Bundle) error {
 	}
 	if cfg.SandboxBackend == sandbox.BackendKubernetes {
 		slog.Info("sandbox: backend resolved (control plane and runners split)", "sandbox_backend", cfg.SandboxBackend, "namespace", defaultString(cfg.SandboxK8sNamespace, "fleet-sandboxes"))
+	} else if !cfg.MockMode {
+		if cgParent := sandbox.EnsureDelegatedCgroupSubgroup(); cgParent != "" {
+			slog.Info("sandbox: cgroup v2 delegated parent ready", "cgroup_parent", cgParent)
+		}
 	}
 	return nil
 }
