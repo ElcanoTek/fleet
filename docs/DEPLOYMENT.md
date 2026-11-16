@@ -368,7 +368,9 @@ each piece yourself):
    > `FLEET_OIDC_ALLOWED_DOMAINS`, `FLEET_OIDC_BUTTON_LABEL`,
    > `FLEET_OIDC_REDIRECT_URI`, and `FLEET_OIDC_AUTO_START=1` to try SSO
    > silently on an anonymous visit and only show the login card when the IdP
-   > has no session; `/login?manual=1` always shows the card). **Setting up (3)
+   > has no session; where SSO is the only sign-in, `/login` always goes
+   > straight to the IdP's sign-in page; `/login?manual=1` always shows the
+   > card). **Setting up (3)
    > turns (1) off**: a Fleet that signs in through central Auth has no
    > passwords of its own, in the web UI or the Operations Center, and its
    > accounts, roles and teams are managed in Auth (with Auth's team sync on).
