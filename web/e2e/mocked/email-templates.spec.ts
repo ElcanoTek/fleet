@@ -128,7 +128,17 @@ test("the form picks who it goes to and how it looks, and asks for a draft", asy
   await mockChatBoot(page);
   await page.route("**/api/orchestrator/email-templates", (r: Route) => r.fulfill({ json: [withPickers] }));
   await page.route("**/api/orchestrator/email-templates/weekly-optimization-update", (r: Route) =>
-    r.fulfill({ json: { ...withPickers, preview_html: weeklyPreview } }),
+    r.fulfill({
+      json: {
+        ...withPickers,
+        preview_html:
+          '<!doctype html><html><body><table><tr><td id="band" bgcolor="#1A0B1E" style="background-color:#1A0B1E;color:#FAFAFA">Acme Outfitters</td></tr></table></body></html>',
+        preview_styles: {
+          options: { elcano: {}, amazon: { "#1A0B1E": "#333E48" } },
+          custom: { Header: ["#1A0B1E"], Accent: ["#6262A0"] },
+        },
+      },
+    }),
   );
   await page.route("**/api/orchestrator/tasks/recipients", (r: Route) =>
     r.fulfill({
@@ -154,8 +164,13 @@ test("the form picks who it goes to and how it looks, and asks for a draft", asy
   await dialog.getByRole("button", { name: "Add", exact: true }).click();
   await expect(dialog.getByTestId("recipient-chosen").getByRole("listitem")).toHaveCount(2);
 
+  // The example takes on the look as it is picked.
+  const band = dialog.frameLocator("iframe").locator("#band");
+  await expect(band).toHaveCSS("background-color", "rgb(26, 11, 30)");
   await dialog.getByRole("radio", { name: "amazon" }).click();
+  await expect(band).toHaveCSS("background-color", "rgb(51, 62, 72)");
   await dialog.getByRole("radio", { name: "Custom colors" }).click();
+  await expect(band).toHaveCSS("background-color", "rgb(31, 58, 95)");
   await dialog.getByLabel("Accent", { exact: true }).fill("#c2410c");
   if (process.env.E2E_PICKER_SHOT) await page.screenshot({ path: process.env.E2E_PICKER_SHOT });
   await dialog.getByRole("button", { name: "Use prompt" }).click();

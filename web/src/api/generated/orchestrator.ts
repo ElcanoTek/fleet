@@ -3453,6 +3453,17 @@ export interface components {
             has_preview: boolean;
             /** @description The bundle's rendered sample of the template, a complete HTML document. Only on a single-template read, never in the list. Untrusted markup: show it only in a sandboxed frame. */
             preview_html?: string;
+            /** @description The bundle's recolor table for the preview, sent with preview_html when the bundle ships one. options maps a value of the form's palette field to {preview color: its color}; custom maps a custom color's name to the preview colors the picked color replaces. Every color is a #RRGGBB value. */
+            preview_styles?: {
+                options?: {
+                    [key: string]: {
+                        [key: string]: string;
+                    };
+                };
+                custom?: {
+                    [key: string]: string[];
+                };
+            };
             /** @description The optional form, in the form-prompt schema. */
             fields?: components["schemas"]["PromptField"][];
             /** @description The text the library inserts; each {key} token names one of fields. */

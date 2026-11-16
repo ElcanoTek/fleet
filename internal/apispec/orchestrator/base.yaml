@@ -245,6 +245,23 @@ components:
             The bundle's rendered sample of the template, a complete HTML
             document. Only on a single-template read, never in the list.
             Untrusted markup: show it only in a sandboxed frame.
+        preview_styles:
+          type: object
+          description: >
+            The bundle's recolor table for the preview, sent with preview_html
+            when the bundle ships one. options maps a value of the form's
+            palette field to {preview color: its color}; custom maps a custom
+            color's name to the preview colors the picked color replaces.
+            Every color is a #RRGGBB value.
+          properties:
+            options:
+              type: object
+              additionalProperties:
+                type: object
+                additionalProperties: { type: string }
+            custom:
+              type: object
+              additionalProperties: { type: array, items: { type: string } }
         fields:
           type: array
           description: The optional form, in the form-prompt schema.

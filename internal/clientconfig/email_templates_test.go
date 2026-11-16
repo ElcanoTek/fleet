@@ -109,6 +109,42 @@ func TestReadEmailTemplates(t *testing.T) {
 	}
 }
 
+// The bundle's recolor table rides with the preview, never with the list, and
+// only when it holds nothing but colors.
+func TestReadEmailTemplatePreviewStyles(t *testing.T) {
+	dir := t.TempDir()
+	writeEmailTemplateFile(t, dir, "weekly-update.yaml", emailTemplateYAML)
+	writeEmailTemplateFile(t, dir, "previews/weekly-update.html", "<!doctype html><p>Hi Team,</p>")
+	one, ok, problems := ReadEmailTemplate(dir, "weekly-update")
+	if !ok || len(problems) != 0 || one.PreviewStyles != nil {
+		t.Errorf("no styles.json, so no recolor table: %+v", one.PreviewStyles)
+	}
+
+	writeEmailTemplateFile(t, dir, "previews/styles.json",
+		`{"options": {"amazon": {"#1A0B1E": "#333E48"}, "elcano": {}}, "custom": {"Header": ["#1A0B1E"]}}`)
+	one, _, problems = ReadEmailTemplate(dir, "weekly-update")
+	if len(problems) != 0 || one.PreviewStyles == nil ||
+		one.PreviewStyles.Options["amazon"]["#1A0B1E"] != "#333E48" || one.PreviewStyles.Custom["Header"][0] != "#1A0B1E" {
+		t.Errorf("preview styles = %+v problems=%v", one.PreviewStyles, problems)
+	}
+	if listed, _ := ReadEmailTemplates(dir); len(listed) != 1 || listed[0].PreviewStyles != nil {
+		t.Error("the list must not carry the recolor table")
+	}
+	// Anything but #RRGGBB colors could be markup once swapped into the preview.
+	for _, bad := range []string{
+		`{"options": {"x": {"#1A0B1E": "red;background:url(//evil)"}}}`,
+		`{"options": {"x": {"</style>": "#333E48"}}}`,
+		`{"custom": {"Header": ["#12345"]}}`,
+		`not json`,
+	} {
+		writeEmailTemplateFile(t, dir, "previews/styles.json", bad)
+		one, ok, problems = ReadEmailTemplate(dir, "weekly-update")
+		if !ok || one.PreviewStyles != nil || one.PreviewHTML == "" || len(problems) != 1 || !strings.Contains(problems[0], "previews/styles.json") {
+			t.Errorf("styles %q: styles=%+v problems=%v", bad, one.PreviewStyles, problems)
+		}
+	}
+}
+
 func TestReadEmailTemplatesReportsAndKeepsGoing(t *testing.T) {
 	dir := t.TempDir()
 	writeEmailTemplateFile(t, dir, "good.yaml", "name: Good\nsections:\n  - {id: a, block: text}\n")

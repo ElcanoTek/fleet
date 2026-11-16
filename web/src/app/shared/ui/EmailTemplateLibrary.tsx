@@ -6,6 +6,8 @@ import { Icon } from "./Icon";
 import { orchestratorApi, type EmailTemplate } from "@/app/shared/lib/orchestratorApi";
 import { blockLabel, limitPhrases, neverSayLabel } from "@/app/shared/lib/emailTemplateRules";
 import { PromptLibraryForm, type FormPromptItem } from "./PromptLibraryForm";
+import { previewRecolorTable, recolorPreview, type PreviewStyles } from "@/app/shared/lib/emailPreviewStyle";
+import type { PillValues } from "@/app/chat/ui/protocolPills";
 import { useDialogA11y } from "./useDialogA11y";
 import { errorMessage } from "@/app/shared/lib/errorMessage";
 
@@ -112,6 +114,10 @@ export function EmailTemplateLibrary({ onInsert, renderTrigger, returnFocusRef }
   // the list never carries them, so opening the menu or the library does not
   // download every example. null = the read failed or found none.
   const [previews, setPreviews] = useState<Record<string, string | null>>({});
+  // The recolor table that came with each preview, and what the open form
+  // holds, so the example shows the style being picked.
+  const [previewStyles, setPreviewStyles] = useState<Record<string, PreviewStyles | null>>({});
+  const [formValues, setFormValues] = useState<PillValues | null>(null);
   const modalRef = useRef<HTMLDivElement | null>(null);
   const searchRef = useRef<HTMLInputElement | null>(null);
 
@@ -128,6 +134,7 @@ export function EmailTemplateLibrary({ onInsert, renderTrigger, returnFocusRef }
       setItems(next);
       // A reopened library reads its examples again: the bundle may have changed.
       setPreviews({});
+      setPreviewStyles({});
       setSelectedID((id) => (id && next.some((t) => t.id === id) ? id : (next[0]?.id ?? null)));
     } catch (err) {
       setError(errorMessage(err, tr("Could not load email templates")));
@@ -152,16 +159,28 @@ export function EmailTemplateLibrary({ onInsert, renderTrigger, returnFocusRef }
     let live = true;
     void orchestratorApi
       .emailTemplate(wantPreview)
-      .then((t) => t.preview_html || null)
-      .catch(() => null)
-      .then((html) => {
-        if (live) setPreviews((prev) => ({ ...prev, [wantPreview]: html }));
+      .then((t) => ({ html: t.preview_html || null, styles: t.preview_styles ?? null }))
+      .catch(() => ({ html: null, styles: null }))
+      .then(({ html, styles }) => {
+        if (!live) return;
+        setPreviewStyles((prev) => ({ ...prev, [wantPreview]: styles }));
+        setPreviews((prev) => ({ ...prev, [wantPreview]: html }));
       });
     return () => {
       live = false;
     };
   }, [wantPreview, previews]);
-  const preview = selected ? previews[selected.id] : undefined;
+  const basePreview = selected ? previews[selected.id] : undefined;
+  // The form's values count only while it is open on this template.
+  const styled = using && selected ? formValues : null;
+  const styles = selected ? previewStyles[selected.id] : null;
+  const preview = useMemo(
+    () =>
+      basePreview
+        ? recolorPreview(basePreview, previewRecolorTable(styles, selected?.fields, styled))
+        : basePreview,
+    [basePreview, styles, selected?.fields, styled],
+  );
 
   const use = (text: string) => {
     onInsert(text);
@@ -324,6 +343,7 @@ export function EmailTemplateLibrary({ onInsert, renderTrigger, returnFocusRef }
                               prompt={form}
                               note={tr("Tracked in {0}", [selected.path])}
                               onUse={use}
+                              onValuesChange={setFormValues}
                             />
                           </>
                         ) : (
@@ -335,7 +355,12 @@ export function EmailTemplateLibrary({ onInsert, renderTrigger, returnFocusRef }
                               <button
                                 type="button"
                                 className="btn btn-primary"
-                                onClick={() => (form ? setUsing(true) : use(defaultTemplatePrompt(selected)))}
+                                onClick={() => {
+                                  if (!form) return use(defaultTemplatePrompt(selected));
+                                  // The form reports its own values once it is open.
+                                  setFormValues(null);
+                                  setUsing(true);
+                                }}
                               >
                                 <Icon name="arrow-up" className="mr-1.5 size-3.5 rotate-90" />
                                 {tr("Use this template")}
