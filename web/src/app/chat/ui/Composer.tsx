@@ -39,7 +39,11 @@ import { compactModelLabel } from "@/app/shared/lib/models";
 import type { ModelPrices } from "@/app/shared/lib/modelCost";
 import type { ContextUsage } from "@/app/lib/contextUsage";
 import type { NudgeDecision } from "@/app/lib/spreadsheetNudge";
-import type { Message } from "./history";
+import {
+  type ConversationApprovalMode,
+  type Message,
+  resolveApprovalMode,
+} from "./history";
 import type { MCPServerInfo } from "./chat-experience";
 import type { ComposerModelCatalog } from "./useChatModelCatalog";
 import {
@@ -155,10 +159,11 @@ export type ComposerProps = {
   // pending "new sealed chat", and lockdown-only servers.
   sealed: boolean;
 
-  // Per-conversation auto-approve toggle: pre-approves executable critical
-  // tools in this chat without parking on an approval card.
+  // Per-conversation approval posture ("manual" | "auto" | "autonomous").
   isAutoApprove?: boolean;
   toggleAutoApprove?: () => void;
+  approvalMode?: ConversationApprovalMode;
+  onChangeApprovalMode?: (mode: ConversationApprovalMode) => void;
   isConversationOwner?: boolean;
 
   // Turn / upload gating
@@ -297,6 +302,8 @@ export function Composer({
   sealed,
   isAutoApprove = false,
   toggleAutoApprove,
+  approvalMode,
+  onChangeApprovalMode,
   isConversationOwner = true,
   isStreaming,
   isUploadingAttachments,
@@ -1367,8 +1374,12 @@ export function Composer({
                 setPatrolPopoverOpen(false);
                 onOpenShare?.();
               };
+              const effectiveApprovalMode = resolveApprovalMode(
+                approvalMode,
+                isAutoApprove,
+              );
               const hasActiveSecondary =
-                isAutoApprove ||
+                effectiveApprovalMode !== "manual" ||
                 activePatrolCount > 0 ||
                 (!personaLocked && isNonDefaultPersona) ||
                 isSharedAny;
@@ -1590,7 +1601,7 @@ export function Composer({
                           </button>
                         ) : null}
 
-                        {onOpenShare || (onStartPatrol && !sealed) || toggleAutoApprove || canCompact ? (
+                        {onOpenShare || (onStartPatrol && !sealed) || onChangeApprovalMode || toggleAutoApprove || canCompact ? (
                           <div aria-hidden="true" className="my-0.5 h-px bg-[var(--color-border)]" />
                         ) : null}
 
@@ -1689,7 +1700,83 @@ export function Composer({
                           </button>
                         ) : null}
 
-                        {toggleAutoApprove ? (
+                        {onChangeApprovalMode ? (
+                          <div
+                            role="group"
+                            aria-label={tr("Approval mode")}
+                            className="my-0.5 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-1)] p-1.5"
+                          >
+                            <div className="mb-1 flex items-center justify-between px-1">
+                              <span className="flex items-center gap-1.5 text-[0.72rem] font-semibold text-[var(--color-text-secondary)]">
+                                <Icon
+                                  name="zap"
+                                  className={`size-3.5 ${
+                                    effectiveApprovalMode === "autonomous"
+                                      ? "text-[var(--color-warning-icon)]"
+                                      : effectiveApprovalMode === "auto"
+                                        ? "text-[var(--color-accent)]"
+                                        : "text-[var(--color-text-muted)]"
+                                  }`}
+                                />
+                                {tr("Approval mode")}
+                              </span>
+                            </div>
+                            <div className="grid grid-cols-3 gap-1">
+                              {(
+                                [
+                                  {
+                                    id: "manual" as const,
+                                    label: tr("Manual"),
+                                    aria: tr("Manual approvals: ask before every critical action"),
+                                  },
+                                  {
+                                    id: "auto" as const,
+                                    label: tr("Auto-approve"),
+                                    aria: tr("Auto-approve routine workspace actions"),
+                                  },
+                                  {
+                                    id: "autonomous" as const,
+                                    label: tr("Autonomous"),
+                                    aria: tr("Autonomous mode: also run checked plans without asking"),
+                                  },
+                                ]
+                              ).map((opt) => {
+                                const selected = effectiveApprovalMode === opt.id;
+                                const activeTone =
+                                  opt.id === "autonomous"
+                                    ? "border-[var(--color-warning-border)] bg-[var(--color-warning-tint)] text-[var(--color-warning-text)]"
+                                    : opt.id === "auto"
+                                      ? "border-[color-mix(in_srgb,var(--color-accent)_45%,var(--color-border-strong))] bg-[color-mix(in_srgb,var(--color-accent)_16%,transparent)] text-[var(--color-accent)]"
+                                      : "border-[var(--color-border-strong)] bg-[var(--color-surface-2)] text-[var(--color-text-primary)]";
+                                return (
+                                  <button
+                                    key={opt.id}
+                                    type="button"
+                                    role="menuitemradio"
+                                    aria-checked={selected}
+                                    aria-label={opt.aria}
+                                    data-testid={`composer-approval-mode-${opt.id}`}
+                                    onClick={() => onChangeApprovalMode(opt.id)}
+                                    className={`rounded-[var(--radius-sm)] border px-2 py-1 text-center text-[0.7rem] font-semibold transition ${
+                                      selected
+                                        ? activeTone
+                                        : "border-transparent text-[var(--color-text-muted)] hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
+                                    }`}
+                                  >
+                                    {opt.label}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                            <p className="mt-1 px-1 text-[0.68rem] leading-snug text-[var(--color-text-muted)]">
+                              {effectiveApprovalMode === "autonomous"
+                                ? tr("Runs routine tools and checked plans with a receipt card; external emails still ask.")
+                                : effectiveApprovalMode === "auto"
+                                  ? tr("Skips cards for routine workspace actions; external plans and emails still ask.")
+                                  : tr("Asks for confirmation before every critical action.")}
+                            </p>
+                          </div>
+                        ) : toggleAutoApprove ? (
                           <button
                             type="button"
                             role="menuitemcheckbox"
@@ -2074,11 +2161,31 @@ export function Composer({
                     </div>
                   ) : null}
 
-                  {/* Active Auto-approve indicator: shown directly on the desktop toolbar when
-                      Auto-approve is ON so the user always sees it at a glance and can
-                      turn it off in a single tap (on phone viewports More options carries
-                      the active dot and toggle to avoid crowding Send). */}
-                  {toggleAutoApprove && isAutoApprove ? (
+                  {/* Active Approval-mode indicator: shown directly on the desktop toolbar when
+                      Auto-approve or Autonomous mode is ON so the owner always sees the posture
+                      at a glance (amber pill for Autonomous, accent zap button for Auto-approve)
+                      and can reset to Manual in a single click. */}
+                  {(onChangeApprovalMode || toggleAutoApprove) &&
+                  effectiveApprovalMode === "autonomous" ? (
+                    <button
+                      type="button"
+                      disabled={shareBusy}
+                      data-testid="composer-autonomous-indicator"
+                      aria-label={tr("Autonomous mode in this chat is on (click to turn off)")}
+                      data-tip-top="Autonomous mode on for this chat"
+                      aria-pressed={true}
+                      className="hidden h-8 shrink-0 items-center gap-1.5 rounded-[var(--radius-md)] border border-[var(--color-warning-border)] bg-[var(--color-warning-tint)] px-2.5 text-[0.72rem] font-semibold text-[var(--color-warning-text)] transition hover:opacity-90 disabled:opacity-40 sm:inline-flex"
+                      onClick={() =>
+                        onChangeApprovalMode
+                          ? onChangeApprovalMode("manual")
+                          : toggleAutoApprove?.()
+                      }
+                    >
+                      <Icon name="zap" className="size-3.5 text-[var(--color-warning-icon)]" />
+                      <span>{tr("Autonomous")}</span>
+                    </button>
+                  ) : (onChangeApprovalMode || toggleAutoApprove) &&
+                    effectiveApprovalMode === "auto" ? (
                     <button
                       type="button"
                       disabled={shareBusy}
@@ -2086,7 +2193,11 @@ export function Composer({
                       data-tip-top="Auto-approve on for this chat"
                       aria-pressed={true}
                       className={`hidden sm:inline-flex ${TOOL_BTN} ${TOOL_BTN_ACTIVE}`}
-                      onClick={toggleAutoApprove}
+                      onClick={() =>
+                        onChangeApprovalMode
+                          ? onChangeApprovalMode("manual")
+                          : toggleAutoApprove?.()
+                      }
                     >
                       <Icon name="zap" className="size-3.5" />
                       <span className="sr-only">{tr("Auto-approve on")}</span>

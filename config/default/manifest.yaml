@@ -540,6 +540,7 @@ agent_policy:
   parallel_safe_tools: []
   critical_tools: []
   critical_tool_substitutes: {}
+  critical_tool_autonomous: []
 
 # Custom model-pricing overrides (#297). Cost accounting normally trusts the USD
 # figure OpenRouter returns per step. Operators on negotiated / enterprise rates

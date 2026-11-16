@@ -10,6 +10,19 @@ import { joinTextSegments } from "./textSegments";
 
 export type ToolCallState = "pending" | "done" | "error";
 
+export type ConversationApprovalMode = "manual" | "auto" | "autonomous";
+
+export function resolveApprovalMode(
+  mode?: string | null,
+  autoApprove?: boolean | null,
+): ConversationApprovalMode {
+  const normalized = (mode ?? "").trim().toLowerCase();
+  if (normalized === "autonomous") return "autonomous";
+  if (normalized === "auto") return "auto";
+  if (normalized === "manual") return autoApprove === true ? "auto" : "manual";
+  return autoApprove === true ? "auto" : "manual";
+}
+
 export type ToolCall = {
   id: string;
   name: string;

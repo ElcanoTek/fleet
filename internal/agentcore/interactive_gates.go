@@ -247,6 +247,13 @@ func (o *orchestrationState) checkCriticalToolApproval(toolName, toolCallID, raw
 	case PreApprovedSentinel:
 		// Session pre-approval (#300): run the tool without a card.
 		return false, ""
+	case RecordedSentinel:
+		// Autonomous mode: recorded in chat.approvals with a receipt card; attach
+		// the tool's outcome result_card once the call returns.
+		if _, ok := o.approvalSink.(ActionResultRecorder); ok && ApprovalResultCard(toolName) {
+			o.notifyRecordedCalls = append(o.notifyRecordedCalls, notifyRecordedCall{tool: toolName, rawInput: rawInput, toolCallID: toolCallID})
+		}
+		return false, ""
 	case PreDeniedSentinel:
 		return true, fmt.Sprintf("APPROVAL_DENIED: the user pre-denied %s for this conversation (session policy). Do NOT retry; tell the user it was blocked by their own pre-approval setting.", toolName)
 	}

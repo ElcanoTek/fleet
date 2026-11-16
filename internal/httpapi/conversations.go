@@ -56,6 +56,7 @@ type createConversationRequest struct {
 	EnabledOptional []string          `json:"enabled_optional,omitempty"`
 	MCPAccounts     map[string]string `json:"mcp_accounts,omitempty"`
 	AutoApprove     *bool             `json:"auto_approve,omitempty"`
+	ApprovalMode    *string           `json:"approval_mode,omitempty"`
 }
 
 // seedMaxChars bounds a seeded first message so a pathological caller can't
@@ -297,7 +298,7 @@ func (s *Server) createConversation(w http.ResponseWriter, r *http.Request, user
 	if !ok {
 		return
 	}
-	if !s.seedConversationMCP(w, r, user, conv, req.EnabledOptional, req.MCPAccounts, req.AutoApprove) {
+	if !s.seedConversationMCP(w, r, user, conv, req.EnabledOptional, req.MCPAccounts, req.AutoApprove, req.ApprovalMode) {
 		s.rollbackCreatedConversation(user, conv.ID)
 		return
 	}

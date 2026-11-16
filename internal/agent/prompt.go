@@ -593,7 +593,12 @@ func (m *Manager) buildSystemPrompt(persona string, layer *UserPersonaLayer, con
 		sb.WriteString("- When a patrol or timer fires, Fleet wakes you up right here in the same conversation with the full transcript, workspace files, persistent Python state, and enabled connectors intact.\n")
 		sb.WriteString("- Use `chat_patrol` (`action=\"create\"`) whenever the user asks you to patrol every N hours in chat (e.g. `cron=\"0 */2 * * *\"` for every 2 hours), monitor deals/pacing/pages on a loop in this thread, or check back after a delay (`duration_seconds=1800` for 30 minutes).\n")
 		sb.WriteString("- Because `chat_patrol` executes immediately without ending your turn, when a user asks to start a patrol, call `chat_patrol(action=\"create\", ...)` and also run the initial check in the same turn unless they asked you to wait.\n")
-		sb.WriteString("- If `auto_approve` is false in the result and the patrol will invoke critical tools while the user is away, let the user know they can toggle **⚡ Auto-approve** in the Patrol bar or composer.\n")
+		sb.WriteString("- Each conversation has a three-level approval posture selectable by the owner in the composer or Patrol bar: **Manual** (asks before every critical action), **Auto-approve** (runs routine workspace actions without cards, while per-call external writes still stage a card), and **Autonomous** (also runs bundle-declared checked plan executors without blocking and posts a receipt card in chat; external emails and raw un-planned writes always stage an approval card).\n")
+		if autoSuffixes := agentcore.AutonomousToolSuffixes(); len(autoSuffixes) > 0 {
+			fmt.Fprintf(&sb, "- In this workspace, **Autonomous** mode unlocks checked plan tools matching `%s`; if a patrol needs unattended plan execution and `approval_mode` is not `\"autonomous\"`, let the user know they can switch the chat to **Autonomous** in the Patrol bar or composer.\n", strings.Join(autoSuffixes, "`, `"))
+		} else {
+			sb.WriteString("- If `approval_mode` is `\"manual\"` in the result and the patrol will invoke routine critical tools while the user is away, let the user know they can switch to **Auto-approve** in the Patrol bar or composer.\n")
+		}
 		sb.WriteString("- Use `chat_patrol` (`action=\"list\"`, `\"update\"`, `\"pause\"`, `\"resume\"`, or `\"cancel\"`) to inspect or adjust this conversation's active patrol.\n\n")
 	}
 

@@ -166,6 +166,11 @@ type Conversation struct {
 	// outbound email (send_email), and bundle-declared critical_tool_no_session_approval
 	// tools still stage cards. Set via POST /conversations/{id}/auto-approve.
 	AutoApprove bool `json:"auto_approve,omitempty"`
+	// ApprovalMode is the three-level per-conversation approval posture
+	// ("manual", "auto", or "autonomous"; migration 0200). Kept in lockstep
+	// with AutoApprove (true for "auto" and "autonomous", false for "manual"),
+	// and cleared to "" when redacting owner-private fields for non-owners.
+	ApprovalMode string `json:"approval_mode,omitempty"`
 	// ShareToken is the opt-in public read-only share token (#226). Empty = not
 	// shared; non-empty = anyone with /shared/{ShareToken} can view a read-only
 	// snapshot. Surfaced to the owner's own GET /conversations so the sidebar can
@@ -396,6 +401,7 @@ func insertConversation(ctx context.Context, db interface {
 		CreatedAt:                 now,
 		UpdatedAt:                 now,
 		OptionalMCPServersEnabled: nil,
+		ApprovalMode:              ConversationApprovalManual,
 	}, nil
 }
 
@@ -1294,11 +1300,73 @@ func (s *Store) SetApprovalTimeout(ctx context.Context, userEmail, convID string
 	return s.updateOwnedConversation(ctx, userEmail, convID, "approval_timeout_seconds = $1", arg)
 }
 
-// SetAutoApprove sets the per-conversation auto-approve toggle. Scoped by
-// user_email so a caller can only touch their own conversations. A soft-deleted
-// conversation is not mutable (deleted_at IS NULL, #596).
+// Per-conversation approval modes (migration 0200).
+const (
+	ConversationApprovalManual     = "manual"
+	ConversationApprovalAuto       = "auto"
+	ConversationApprovalAutonomous = "autonomous"
+)
+
+// ParseConversationApprovalMode normalizes and validates a per-conversation
+// approval mode ("manual", "auto", or "autonomous").
+func ParseConversationApprovalMode(raw string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case ConversationApprovalManual:
+		return ConversationApprovalManual, true
+	case ConversationApprovalAuto:
+		return ConversationApprovalAuto, true
+	case ConversationApprovalAutonomous:
+		return ConversationApprovalAutonomous, true
+	default:
+		return "", false
+	}
+}
+
+// EffectiveApprovalMode returns the canonical approval mode for c, reconciling
+// legacy/in-memory callers that only populated AutoApprove.
+func (c *Conversation) EffectiveApprovalMode() string {
+	if c == nil {
+		return ConversationApprovalManual
+	}
+	switch strings.ToLower(strings.TrimSpace(c.ApprovalMode)) {
+	case ConversationApprovalAutonomous:
+		return ConversationApprovalAutonomous
+	case ConversationApprovalAuto:
+		return ConversationApprovalAuto
+	default:
+		if c.AutoApprove {
+			return ConversationApprovalAuto
+		}
+		return ConversationApprovalManual
+	}
+}
+
+// SetAutoApprove sets the per-conversation auto-approve toggle while keeping
+// approval_mode in lockstep (true preserves an existing "autonomous" mode or
+// sets "auto"; false resets to "manual"). Scoped by user_email so a caller can
+// only touch their own conversations. A soft-deleted conversation is not
+// mutable (deleted_at IS NULL, #596).
 func (s *Store) SetAutoApprove(ctx context.Context, userEmail, convID string, enabled bool) error {
-	return s.updateOwnedConversation(ctx, userEmail, convID, "auto_approve = $1", enabled)
+	if enabled {
+		return s.updateOwnedConversation(
+			ctx,
+			userEmail,
+			convID,
+			"auto_approve = TRUE, approval_mode = CASE WHEN approval_mode = 'autonomous' THEN 'autonomous' ELSE 'auto' END",
+		)
+	}
+	return s.updateOwnedConversation(ctx, userEmail, convID, "auto_approve = FALSE, approval_mode = 'manual'")
+}
+
+// SetApprovalMode sets the per-conversation approval mode ("manual", "auto",
+// or "autonomous") and keeps auto_approve in lockstep. Scoped by user_email.
+func (s *Store) SetApprovalMode(ctx context.Context, userEmail, convID, mode string) error {
+	normalized, ok := ParseConversationApprovalMode(mode)
+	if !ok {
+		return fmt.Errorf("invalid approval_mode %q: must be manual, auto, or autonomous", mode)
+	}
+	autoApprove := normalized != ConversationApprovalManual
+	return s.updateOwnedConversation(ctx, userEmail, convID, "approval_mode = $1, auto_approve = $2", normalized, autoApprove)
 }
 
 // SharedConversation is the read-only public snapshot returned for a valid
@@ -1700,7 +1768,7 @@ func (s *Store) ListFiltered(ctx context.Context, userEmail string, f ListFilter
 // conversationColumns is the SELECT list (in scan order) every conversation query
 // shares, so Get, ListFiltered and ListTeamConversations stay in lockstep with
 // scanConversation. (Bare column names, so a `c.`-aliased query can use it too.)
-const conversationColumns = `id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, title_locked, optional_mcp_servers_enabled, labels, approval_timeout_seconds, COALESCE(share_token, ''), COALESCE(parent_conversation_id, ''), COALESCE(branch_point_message_id, 0), thinking_config, COALESCE(project_id, ''), mcp_accounts, team_visible, auto_approve, multiplayer, COALESCE(multiplayer_participants, '[]'), COALESCE(multiplayer_excluded, '[]')`
+const conversationColumns = `id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, title_locked, optional_mcp_servers_enabled, labels, approval_timeout_seconds, COALESCE(share_token, ''), COALESCE(parent_conversation_id, ''), COALESCE(branch_point_message_id, 0), thinking_config, COALESCE(project_id, ''), mcp_accounts, team_visible, auto_approve, approval_mode, multiplayer, COALESCE(multiplayer_participants, '[]'), COALESCE(multiplayer_excluded, '[]')`
 
 // teamConversationColumns is conversationColumns with everything a teammate
 // has no business reading blanked out. Column count and scan order stay
@@ -1721,7 +1789,7 @@ const conversationColumns = `id, user_email, title, persona, model, pinned, lock
 //   - optional_mcp_servers_enabled — the owner's per-chat connector loadout.
 //   - parent_conversation_id — reveals that a shared chat was branched from a
 //     private one, and hands over that private chat's id.
-const teamConversationColumns = `id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, title_locked, FALSE AS optional_mcp_servers_enabled, NULL::text[] AS labels, approval_timeout_seconds, '' AS share_token, '' AS parent_conversation_id, COALESCE(branch_point_message_id, 0), thinking_config, COALESCE(project_id, ''), NULL::jsonb AS mcp_accounts, team_visible, FALSE AS auto_approve, multiplayer, '[]' AS multiplayer_participants, COALESCE(multiplayer_excluded, '[]')`
+const teamConversationColumns = `id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, title_locked, FALSE AS optional_mcp_servers_enabled, NULL::text[] AS labels, approval_timeout_seconds, '' AS share_token, '' AS parent_conversation_id, COALESCE(branch_point_message_id, 0), thinking_config, COALESCE(project_id, ''), NULL::jsonb AS mcp_accounts, team_visible, FALSE AS auto_approve, '' AS approval_mode, multiplayer, '[]' AS multiplayer_participants, COALESCE(multiplayer_excluded, '[]')`
 
 // pgTypeMap is the pgx type map used to decode Postgres array literals reaching
 // this package over database/sql. It is read-only after init and safe for
@@ -1772,7 +1840,7 @@ func scanConversation(sc rowScanner) (Conversation, error) {
 	var thinkingRaw []byte
 	var accountsRaw []byte
 	var mpParticipantsRaw, mpExcludedRaw string
-	if err := sc.Scan(&c.ID, &c.UserEmail, &c.Title, &c.Persona, &c.Model, &c.Pinned, &c.Lockdown, &c.CreatedAt, &c.UpdatedAt, &c.ArchivedAt, &c.TitleLocked, &optionalRaw, textArray{&c.Labels}, &approvalTimeout, &c.ShareToken, &c.ParentConversationID, &c.BranchPointMessageID, &thinkingRaw, &c.ProjectID, &accountsRaw, &c.TeamVisible, &c.AutoApprove, &c.Multiplayer, &mpParticipantsRaw, &mpExcludedRaw); err != nil {
+	if err := sc.Scan(&c.ID, &c.UserEmail, &c.Title, &c.Persona, &c.Model, &c.Pinned, &c.Lockdown, &c.CreatedAt, &c.UpdatedAt, &c.ArchivedAt, &c.TitleLocked, &optionalRaw, textArray{&c.Labels}, &approvalTimeout, &c.ShareToken, &c.ParentConversationID, &c.BranchPointMessageID, &thinkingRaw, &c.ProjectID, &accountsRaw, &c.TeamVisible, &c.AutoApprove, &c.ApprovalMode, &c.Multiplayer, &mpParticipantsRaw, &mpExcludedRaw); err != nil {
 		return Conversation{}, err
 	}
 	c.OptionalMCPServersEnabled = scanOptionalMCPServers(optionalRaw)

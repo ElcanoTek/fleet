@@ -96,6 +96,17 @@ type AgentPolicy struct {
 	// matching tool. Members must be critical suffixes; see
 	// NoSessionApprovalProblems. Empty = every card keeps apply-all, as before.
 	CriticalToolNoSessionApproval []string
+	// CriticalToolAutonomous lists critical suffixes (typically checked plan
+	// executors such as execute_plan and apply_first_party_plan) that a
+	// conversation owner may authorize to run without blocking on an approval
+	// card by opting that single chat into Autonomous mode
+	// (conversations.approval_mode = "autonomous"). Even in Autonomous mode,
+	// each call writes a durable audit record in chat.approvals and renders a
+	// muted "ran without asking" receipt card in the chat transcript. Members
+	// must be critical suffixes and must NOT be non-reversible email suffixes
+	// (see AutonomousApprovalProblems); raw un-planned writes omitted from this
+	// list continue to stage an approval card even in Autonomous mode.
+	CriticalToolAutonomous []string
 	// CriticalToolCardDescribers maps a critical suffix to a read-only
 	// "describer" tool suffix on the same server. When a matching call is
 	// staged for approval, the stager calls the describer with the same
@@ -243,6 +254,10 @@ var (
 	// activeNoSessionApproval is the set of critical suffixes whose cards take
 	// one decision per call (no apply-all). Empty by default.
 	activeNoSessionApproval = map[string]bool{}
+	// activeAutonomousApproval is the set of critical suffixes eligible to run
+	// with a recorded receipt card when a chat's owner selects Autonomous mode.
+	// Empty by default.
+	activeAutonomousApproval = map[string]bool{}
 	// activeCardDescribers maps a critical suffix to its describer suffix.
 	// Empty by default: no card is described.
 	activeCardDescribers = map[string]string{}
@@ -390,6 +405,7 @@ func ConfigureAgentPolicy(p AgentPolicy) {
 		slog.Warn("agent_policy: config problem", "problem", problem)
 	}
 	activeNoSessionApproval = noSession
+	activeAutonomousApproval = installAutonomousSet(p.CriticalToolAutonomous, seen)
 
 	describers, describerProblems := buildCardDescribers(p.CriticalToolCardDescribers, critical, parallel)
 	for _, problem := range describerProblems {
@@ -584,6 +600,89 @@ func SessionApprovalAllowed(toolName string) bool {
 		}
 	}
 	return true
+}
+
+func installAutonomousSet(members []string, critical map[string]bool) map[string]bool {
+	set, problems := buildAutonomousApprovalSet(members, critical)
+	for _, problem := range problems {
+		slog.Warn("agent_policy: config problem", "problem", problem)
+	}
+	return set
+}
+
+func buildAutonomousApprovalSet(members []string, critical map[string]bool) (map[string]bool, []string) {
+	set := make(map[string]bool, len(members))
+	var problems []string
+	seen := make(map[string]bool, len(members))
+	for _, s := range members {
+		s = strings.TrimSpace(s)
+		if s == "" || seen[s] {
+			continue
+		}
+		seen[s] = true
+		if nonReversibleSuffixes[s] {
+			problems = append(problems, fmt.Sprintf("critical_tool_autonomous member %q is an outbound email tool; external emails cannot run without an approval card and the entry is ignored", s))
+			continue
+		}
+		if !critical[s] {
+			problems = append(problems, fmt.Sprintf("critical_tool_autonomous member %q is not in critical_tools, so it cannot be opted into Autonomous mode and the entry is ignored", s))
+			continue
+		}
+		set[s] = true
+	}
+	return set, problems
+}
+
+// AutonomousApprovalProblems is the preflight face of
+// buildAutonomousApprovalSet, for `fleet validate-config`: members of
+// p.CriticalToolAutonomous that are not critical suffixes or are outbound email
+// suffixes (both are dropped at boot so a typo fails closed).
+func AutonomousApprovalProblems(p AgentPolicy) []string {
+	critical := make(map[string]bool, len(baseCriticalToolSuffixes)+len(p.CriticalToolSuffixes))
+	for _, s := range baseCriticalToolSuffixes {
+		critical[s] = true
+	}
+	for _, s := range p.CriticalToolSuffixes {
+		if s != "" {
+			critical[s] = true
+		}
+	}
+	_, problems := buildAutonomousApprovalSet(p.CriticalToolAutonomous, critical)
+	return problems
+}
+
+// AutonomousApprovalAllowed reports whether toolName is declared in
+// agent_policy.critical_tool_autonomous and eligible to run with a recorded
+// receipt card when the conversation owner has enabled Autonomous mode.
+// Outbound email tools are unconditionally excluded.
+func AutonomousApprovalAllowed(toolName string) bool {
+	if IsOutboundEmailTool(toolName) {
+		return false
+	}
+	policyMu.RLock()
+	defer policyMu.RUnlock()
+	for suffix := range activeAutonomousApproval {
+		if suffixMatches(toolName, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+// AutonomousToolSuffixes returns the sorted list of installed
+// critical_tool_autonomous suffixes for system-prompt documentation.
+func AutonomousToolSuffixes() []string {
+	policyMu.RLock()
+	defer policyMu.RUnlock()
+	if len(activeAutonomousApproval) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(activeAutonomousApproval))
+	for s := range activeAutonomousApproval {
+		out = append(out, s)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // batchPerDealFor returns the per-record deal_ids batch budget for a

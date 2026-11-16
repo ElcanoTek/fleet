@@ -763,6 +763,7 @@ func (b *Bundle) AgentPolicy() AgentPolicy {
 		EmailLastTools:                append([]string(nil), b.AgentPolicyConfig.EmailLastTools...),
 		SettleableCreateTools:         append([]string(nil), b.AgentPolicyConfig.SettleableCreateTools...),
 		CriticalToolNoSessionApproval: append([]string(nil), b.AgentPolicyConfig.CriticalToolNoSessionApproval...),
+		CriticalToolAutonomous:        append([]string(nil), b.AgentPolicyConfig.CriticalToolAutonomous...),
 		CriticalToolResume:            append([]string(nil), b.AgentPolicyConfig.CriticalToolResume...),
 		CriticalToolResumeMaxPerHour:  b.AgentPolicyConfig.CriticalToolResumeMaxPerHour,
 		CriticalToolGroupApproval:     append([]string(nil), b.AgentPolicyConfig.CriticalToolGroupApproval...),

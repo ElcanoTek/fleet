@@ -12,7 +12,10 @@ import { t as tr } from "@/app/lib/i18n";
 // refused request (or an id the URL gate rejects, status 0), and with fetch's
 // own error when the server could not be reached.
 
-import type { ChatSchedule } from "@/app/chat/ui/history";
+import type {
+  ChatSchedule,
+  ConversationApprovalMode,
+} from "@/app/chat/ui/history";
 import { conversationApiPath } from "@/app/lib/conversationApiUrl";
 import { responseErrorText } from "@/app/lib/responseError";
 
@@ -22,6 +25,7 @@ export type PatrolResponse = {
   /** The conversation's schedules after the change. */
   schedules?: ChatSchedule[];
   auto_approve?: boolean;
+  approval_mode?: ConversationApprovalMode;
 };
 
 export type CreateScheduleBody = {
@@ -31,6 +35,7 @@ export type CreateScheduleBody = {
   timezone?: string;
   duration_seconds?: number;
   auto_approve?: boolean;
+  approval_mode?: ConversationApprovalMode;
 };
 
 export type ScheduleAction = "pause" | "resume" | "cancel";
