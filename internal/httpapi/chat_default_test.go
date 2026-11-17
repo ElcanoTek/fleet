@@ -247,6 +247,12 @@ func (s *fakeChatStore) ListConnectorPrefs(_ context.Context, _ string) (map[str
 	return nil, nil
 }
 
+// Home chat (docs/HOME-CHAT.md): the fake has none. The active
+// GET /conversations list reads it on every request.
+func (s *fakeChatStore) HomeConversation(_ context.Context, _ string) (*store.HomeConversation, error) {
+	return nil, nil
+}
+
 // User skills (docs/SKILLS.md phase 2/3): the fake has none — the turn path
 // lists them on every run.
 func (s *fakeChatStore) ListUserSkills(_ context.Context, _ string) ([]store.UserSkill, error) {

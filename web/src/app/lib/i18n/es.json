@@ -5782,5 +5782,20 @@
   "invalid chat_patrol action": "acción de chat_patrol no válida",
   "invalid json body": "cuerpo json no válido",
   "parse chat_patrol args: {0}": "analizar argumentos de chat_patrol: {0}",
-  "store unavailable": "almacén no disponible"
+  "store unavailable": "almacén no disponible",
+  "{0} is your home chat now. Fleet opens it first.": "{0} es ahora tu chat de inicio. Fleet lo abre primero.",
+  "{0} is your home chat now, instead of {1}.": "{0} es ahora tu chat de inicio, en lugar de {1}.",
+  "Couldn’t open your home chat.": "No se pudo abrir tu chat de inicio.",
+  "Couldn’t remove your home chat.": "No se pudo quitar tu chat de inicio.",
+  "Couldn’t set your home chat.": "No se pudo establecer tu chat de inicio.",
+  "Home": "Inicio",
+  "Remove as home": "Quitar como inicio",
+  "Removed your home chat. The chat itself is unchanged.": "Se quitó tu chat de inicio. El chat no ha cambiado.",
+  "Set as home": "Establecer como inicio",
+  "Unpinned. It is no longer your home chat.": "Desfijado. Ya no es tu chat de inicio.",
+  "Your home chat. Fleet opens it first.": "Tu chat de inicio. Fleet lo abre primero.",
+  "conversation_id required": "Se requiere conversation_id",
+  "could not clear your home chat": "No se pudo quitar tu chat de inicio",
+  "could not read your home chat": "No se pudo leer tu chat de inicio",
+  "could not save your home chat": "No se pudo guardar tu chat de inicio"
 }

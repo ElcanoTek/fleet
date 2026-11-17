@@ -331,6 +331,7 @@ too. Below that, conversations are grouped:
 | --- | --- |
 | **Projects** | Workspaces with standing instructions, shared learnings, and their own conversations. A project shared with your team carries a team glyph. See [Memory and projects](#7-memory-and-projects). |
 | **Team chats** | Conversations shared with you or open in **Multiplayer mode** from teammates, with the owner's short name and a **Live** badge when multiplayer is on. |
+| Home row | Your home chat, when you have chosen one, as the first row of the list with a **Home** badge: one of yours, or a teammate's chat you can open. It is not listed again under **Pinned** or **Team chats**. See [Your home chat](#your-home-chat). |
 | **Pinned** | Conversations you have chosen to keep. Pinned conversations never expire. With two or more, **Reorder** in the heading lets you put them in your own order (see [Ordering your chats](#ordering-your-chats)). |
 | **Labels** | Your labels, each a filter. Click one to show only conversations carrying it; click several to narrow further. |
 | **Temporary** | Everything else, most recently active first; the menu beside the heading can sort it by **Newest first** or **Title A–Z** instead. Chats here are deleted after a period of inactivity (14 days on a default deployment); the ⓘ beside the heading says so. Pin a chat or move it into a project to keep it. **Delete temporary chats**, in red at the bottom of the sidebar, deletes them all at once after you confirm. |
@@ -1241,6 +1242,7 @@ you hover over it. Here is everything in it.
 | Item | What it does |
 | --- | --- |
 | **Pin** | Keep it indefinitely and show it under **Pinned**. Pin anything you would mind losing. |
+| **Set as home** | Make it your home chat, the one Fleet opens first (see [Your home chat](#your-home-chat)). On your home chat it reads **Remove as home**. |
 | **Rename** | Conversations take a title from their first exchange. Rename the ones you keep so the rail reads as a list of work, not a list of first sentences. |
 | **Move to project** | File it under a project. The conversation picks up that project's context from its next turn. |
 | **Labels** | Add or remove labels. Labels double as filters in the rail. |
@@ -1286,6 +1288,33 @@ orders theirs.
 started) or **Title A–Z**. The choice is remembered on this device. Temporary
 chats expire when left alone, so they are sorted rather than hand-placed; to
 give one a place of its own, pin it or move it into a project.
+
+### Your home chat
+
+Choose one chat as your home and Fleet opens it first, so a team that starts
+the day from a morning patrol lands straight on it. Open the chat's `⋮` menu in
+the rail and choose **Set as home**. Any chat you can open can be your home:
+one of yours, a **Multiplayer** chat you take part in, or a chat a teammate
+shared with your team (each **Team chats** row has a `⋮` with **Set as home**).
+You have one home at a time; choosing another replaces it.
+
+- **Where it shows.** Your home chat is the first row of your chat list,
+  above **Pinned**, with a **Home** badge.
+- **When Fleet opens it.** The first time you open Fleet in a browser tab, it
+  lands on your home chat instead of your most recent one, and again after you
+  sign out and back in. A link to a particular chat still opens that chat.
+  Reloading the tab does not land on Home again: it opens your most recent
+  chat, as before.
+- **Your own chat is pinned with it**, so it never expires, even if it is in a
+  project that it later leaves. Unpinning or archiving it also removes it as
+  your home.
+- **A teammate's chat** opens the way it always does: a **Multiplayer** chat as
+  a normal chat, a chat shared with your team read-only. If its owner stops
+  sharing it, it drops out of your list, and it comes back if they share it
+  again.
+
+To stop using a home, choose **Remove as home** from its `⋮` menu; the chat
+itself is not changed. A read-only (viewer) account cannot choose a home chat.
 
 ### On the transcript
 

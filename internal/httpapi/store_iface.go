@@ -418,6 +418,10 @@ type chatStore interface {
 	ListChatSchedules(ctx context.Context, userEmail, convID string, includeTerminal bool) ([]store.ChatSchedule, error)
 	ListUserPatrols(ctx context.Context, userEmail string, limit, offset int) ([]store.UserPatrol, error)
 	ChatOrders(ctx context.Context, userEmail string) (map[string][]string, error)
+	// Each person's Home chat (docs/HOME-CHAT.md).
+	HomeConversation(ctx context.Context, userEmail string) (*store.HomeConversation, error)
+	SetHomeConversation(ctx context.Context, userEmail, convID string) (*store.HomeConversation, error)
+	ClearHomeConversation(ctx context.Context, userEmail string) error
 	SetChatOrder(ctx context.Context, userEmail, scope string, ids []string) ([]string, error)
 	UpdateChatSchedule(ctx context.Context, userEmail, convID, scheduleID string, patch store.ChatSchedulePatch) (*store.ChatSchedule, error)
 	CancelChatSchedule(ctx context.Context, userEmail, convID, scheduleID string) (*store.ChatSchedule, error)

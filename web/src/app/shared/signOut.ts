@@ -1,5 +1,6 @@
 import { dropPushSubscription } from "./pushSubscription";
 import { getLanguage } from "@/app/lib/i18n";
+import { forgetHomeLanding } from "@/app/chat/ui/homeChat";
 
 // signOut is the one way every Fleet surface signs a user out: a top-level
 // form POST to /api/auth/logout. A navigation (not a fetch) is what lets the
@@ -15,6 +16,8 @@ export function signOut(): Promise<void> {
 }
 
 function submitLogoutForm(): void {
+  // The next sign-in in this tab lands on its Home chat (docs/HOME-CHAT.md).
+  forgetHomeLanding();
   const form = document.createElement("form");
   form.method = "post";
   form.action = `/api/auth/logout?lang=${getLanguage()}`;

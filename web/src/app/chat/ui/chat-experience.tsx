@@ -166,6 +166,14 @@ import {
   type TurnStreamDeps,
 } from "./useTurnStream";
 import { readChatSession, writeChatSession } from "./chatSessionStore";
+import {
+  bootTarget,
+  claimHomeLanding,
+  parseHome,
+  removeHome,
+  saveHome,
+  type HomeConversation,
+} from "./homeChat";
 import { boardManifest } from "./dashboard/board";
 import { DashboardTranscriptContext } from "./dashboard/context";
 import { DashboardBoard, DashboardHud } from "./dashboard/DashboardView";
@@ -1409,7 +1417,18 @@ export function ChatExperience({
   // A teammate's team-shared chat, open in the read-only viewer (ADR-0057).
   // The conversation id alone: the viewer is always opened FROM a project
   // home, which stays set underneath, so Back is just "close me".
-  const [teamChatView, setTeamChatView] = useState<string | null>(null);
+  // Restored on a warm return like the active conversation, so coming back
+  // from Settings to a chat that was open read-only (a Home shared with the
+  // team, say) does not drop the person onto an empty chat.
+  const [teamChatView, setTeamChatView] = useState<string | null>(
+    () => restoredSession?.teamChatView ?? null,
+  );
+  // The person's Home chat (docs/HOME-CHAT.md): the rail's Home item opens it
+  // and a tab's first visit lands on it. Every active-list refresh reports it,
+  // so an unpin, archive or lost share elsewhere is picked up on the next one.
+  const [home, setHome] = useState<HomeConversation | null>(
+    () => restoredSession?.home ?? null,
+  );
   // A team link (`/chat?team=<id>`) that did not open: B22 (signed in, not
   // on the chat's team) or B23 (not shared anymore). A full-page dead end
   // like the viewer; opening any conversation dismisses it.
@@ -1554,6 +1573,8 @@ export function ChatExperience({
       skills,
       serverConfig,
       userEmail,
+      teamChatView,
+      home,
     });
   }, [
     bootstrapped,
@@ -1568,6 +1589,8 @@ export function ChatExperience({
     skills,
     serverConfig,
     userEmail,
+    teamChatView,
+    home,
   ]);
 
   // Keyboard shortcuts are registered declaratively through the shared
@@ -2074,8 +2097,10 @@ export function ChatExperience({
           projects.length > 0 ? new Set(projects.map((p) => p.id)) : undefined,
         pinOrder: chatOrders[PINNED_ORDER_SCOPE],
         recentSort,
+        homeId: home?.access === "owner" ? home.conversation_id : null,
       }),
     [
+      home,
       conversations,
       filteredConversations,
       filterLabels,
@@ -2607,7 +2632,9 @@ export function ChatExperience({
       if (activeRes.ok) {
         const data = (await activeRes.json()) as {
           conversations: ConversationSummary[] | null;
+          home?: unknown;
         };
+        setHome(parseHome(data.home));
         const reconciledActive = reconcileAutoApprove(data.conversations ?? []);
         const activeIds = new Set(reconciledActive.map((c) => c.id));
         const archivedIds = new Set((nextArchived ?? []).map((c) => c.id));
@@ -3280,6 +3307,7 @@ export function ChatExperience({
     for (const id of ids) {
       deletedConvIdsRef.current.add(id);
     }
+    setHome((h) => (h && removed.has(h.conversation_id) ? null : h));
     const remaining = conversations.filter((c) => !removed.has(c.id));
     setConversations(remaining);
     setArchivedConversations((current) =>
@@ -3381,6 +3409,9 @@ export function ChatExperience({
       return false;
     }
     deletedConvIdsRef.current.add(conversationId);
+    // The server drops (or hides) a deleted Home; drop it here too rather
+    // than leave the Home item pointing at a chat that is gone.
+    setHome((h) => (h?.conversation_id === conversationId ? null : h));
     const remaining = conversations.filter((c) => c.id !== conversationId);
     setConversations(remaining);
     // Also drop it from the archived list (#282): delete is reachable from the
@@ -3603,6 +3634,17 @@ export function ChatExperience({
         await refreshConversations();
         return false;
       }
+      // Unpinning the person's own Home clears it as Home server-side (an
+      // unpinned chat is not safe from retention); say so rather than let the
+      // Home item quietly go empty.
+      if (
+        !nextPinned &&
+        home?.access === "owner" &&
+        home.conversation_id === conversation.id
+      ) {
+        setHome(null);
+        notify({ message: tr("Unpinned. It is no longer your home chat.") });
+      }
       return true;
     } catch {
       // A thrown fetch is the same outcome as a rejected one: the optimistic
@@ -3742,6 +3784,7 @@ export function ChatExperience({
   // a viewer: undefined until /api/me answers, and an unreadable role stays
   // unknown (no mode) rather than defaulting to writable.
   const [accountRole, setAccountRole] = useState<string | undefined>(undefined);
+  const canChooseHome = accountRole !== undefined && accountRole !== "viewer";
   useEffect(() => {
     let cancelled = false;
     queueMicrotask(() => {
@@ -4082,6 +4125,84 @@ export function ChatExperience({
     setRailError(message);
     if (railErrorTimer.current) window.clearTimeout(railErrorTimer.current);
     railErrorTimer.current = window.setTimeout(() => setRailError(null), 5000);
+  };
+
+  // Opens the person's Home the way they can reach it (docs/HOME-CHAT.md).
+  // Their own chat and a Multiplayer chat load as a normal chat; when the
+  // room has been closed to them but the team share has not, the load falls
+  // back to the read-only viewer instead of failing. A team share opens in the
+  // viewer directly, over whatever chat is underneath.
+  //
+  // A boot restore (options.restore) is the landing, not a click: like any
+  // restore it must not undo a project or chat the person opened while the
+  // first requests were in flight, so it leaves the overlays alone and opens
+  // a team share only when nothing else has claimed the view.
+  //
+  // Only a Multiplayer Home opened from the rail falls back to the viewer.
+  // The person's own chat has no read-only view, and a boot restore does not
+  // fall back either (a late fallback would cover a project the person opened
+  // meanwhile): a failed load throws, and the boot opens another chat.
+  const openHome = async (
+    target: HomeConversation,
+    options: { restore?: boolean } = {},
+  ) => {
+    if (!options.restore) {
+      setProjectHome(null);
+      setTeamLinkNotice(null);
+    }
+    if (target.access === "team_view") {
+      if (options.restore && (projectHome !== null || teamChatView !== null)) return;
+      setTeamChatView(target.conversation_id);
+      if (!options.restore) setSidebarOpen(false);
+      return;
+    }
+    if (!options.restore) setTeamChatView(null);
+    await loadConversation(target.conversation_id, {
+      ...options,
+      fallbackToTeamChatView: target.access === "multiplayer" && !options.restore,
+    });
+  };
+
+  // The Home row in the rail, for a Home the person does not own (an owned
+  // Home is an ordinary row and opens like one).
+  const openHomeFromRail = () => {
+    if (!home) return;
+    void openHome(home).catch(() => {
+      showRailError(tr("Couldn’t open your home chat."));
+    });
+  };
+
+  // "Set as home" from a chat's menu: replaces any earlier Home. The server
+  // pins the person's own chat with it, so the list is re-read to show that.
+  const setHomeChat = async (conversation: { id: string; title: string }) => {
+    const previous = home;
+    let next: HomeConversation | null;
+    try {
+      next = await saveHome(conversation.id);
+    } catch {
+      showRailError(tr("Couldn’t set your home chat."));
+      return;
+    }
+    setHome(next);
+    if (next?.access === "owner") void refreshConversations();
+    const title = next?.title || conversation.title || tr("Untitled");
+    notify({
+      message:
+        previous && previous.conversation_id !== conversation.id
+          ? tr("{0} is your home chat now, instead of {1}.", [title, previous.title || tr("Untitled")])
+          : tr("{0} is your home chat now. Fleet opens it first.", [title]),
+    });
+  };
+
+  const clearHomeChat = async () => {
+    try {
+      await removeHome();
+    } catch {
+      showRailError(tr("Couldn’t remove your home chat."));
+      return;
+    }
+    setHome(null);
+    notify({ message: tr("Removed your home chat. The chat itself is unchanged.") });
   };
   // The auto-dismiss timer outlives an unmount otherwise (a failed rail
   // action just before navigating away fires setState on a gone component).
@@ -5106,6 +5227,12 @@ export function ChatExperience({
         showRailError(tr(archived ? "Couldn't archive the chat (HTTP {0})." : "Couldn't unarchive the chat (HTTP {0}).", [response.status]));
         setConversations(prev);
         setArchivedConversations(prevArchived);
+      } else if (archived) {
+        // Archiving unpins, and with it clears the chat as the owner's Home
+        // server-side (store.SetArchived).
+        setHome((h) =>
+          h?.access === "owner" && h.conversation_id === conversation.id ? null : h,
+        );
       }
     } catch (err) {
       console.error(`${verb} error:`, err);
@@ -6231,7 +6358,9 @@ export function ChatExperience({
   const loadMcpServerCatalogPreviewRef = useRef(loadMcpServerCatalogPreview);
   const clearConversationRef = useRef(clearConversation);
   const setPromptForKeyRef = useRef(setPromptForKey);
+  const openHomeRef = useRef(openHome);
   useEffect(() => {
+    openHomeRef.current = openHome;
     clearConversationRef.current = clearConversation;
     setPromptForKeyRef.current = setPromptForKey;
     reattachToConvRef.current = reattachToConv;
@@ -6678,10 +6807,13 @@ export function ChatExperience({
         }
         const conversationsData = (await conversationsResponse.json()) as {
           conversations: ConversationSummary[] | null;
+          home?: unknown;
         };
         if (cancelled) return;
         const convs = conversationsData.conversations ?? [];
+        const homeChat = parseHome(conversationsData.home);
         setConversations(convs);
+        setHome(homeChat);
 
         // A deep-linked conversation outranks "most recent" — that's the
         // conversation the user was just sent to open.
@@ -6689,8 +6821,35 @@ export function ChatExperience({
         const ownerLink =
           teamLink && (await teamLink)?.status === "owner" ? teamLinkId : null;
         if (cancelled) return;
+        // Home (docs/HOME-CHAT.md) comes after every link and before "most
+        // recent", on the tab's first visit.
+        const boot = bootTarget({
+          deepLinkConvId,
+          teamLink: teamLink ? { ownerConvId: ownerLink } : null,
+          newChatLink: newChatLink !== null,
+          home: homeChat,
+          landOnHome: claimHomeLanding,
+          mostRecentConvId: convs[0]?.id ?? null,
+        });
+        if (boot.kind === "home") {
+          willLoadConversation = boot.home.access !== "team_view";
+          try {
+            await openHomeRef.current(boot.home, { restore: true });
+            if (boot.home.access !== "team_view") return;
+          } catch {
+            // Home could not be opened (deleted or unshared since the list
+            // was read): fall through to the most recent chat, as before.
+          }
+          if (cancelled) return;
+        }
+        // After a Home that failed to open, the most recent chat that is not
+        // that Home (an owned Home is pinned, so it is often first).
         const target =
-          deepLinkConvId ?? ownerLink ?? (newChatLink ? null : (convs[0]?.id ?? null));
+          boot.kind === "conversation"
+            ? boot.id
+            : boot.kind === "home"
+              ? (convs.find((c) => c.id !== boot.home.conversation_id)?.id ?? null)
+              : null;
         if (!target) {
           setActiveConversationId(null);
           openNewChatLink();
@@ -7034,6 +7193,17 @@ export function ChatExperience({
           onMoveToProject={(conversationId, projectID) =>
             void moveConversationToProject(conversationId, projectID)
           }
+          home={home}
+          homeOpen={
+            home !== null &&
+            projectHome === null &&
+            (teamChatView ?? activeConversationId) === home.conversation_id
+          }
+          onOpenHome={openHomeFromRail}
+          // Choosing a Home is a write, refused for a read-only viewer: like
+          // Reorder, it is offered only once the role is known not to be one.
+          onSetHome={canChooseHome ? (c) => void setHomeChat(c) : undefined}
+          onClearHome={canChooseHome ? () => void clearHomeChat() : undefined}
         />
         </div>
 

@@ -139,6 +139,9 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("/me", auth(member(http.HandlerFunc(s.handleMe))))
 	mux.Handle("/me/team", auth(member(mutate(http.HandlerFunc(s.handleMyTeam)))))
 	mux.Handle("/chat/autonomous-accept", auth(member(mutate(http.HandlerFunc(s.handleAutonomousAccept)))))
+	// The caller's Home chat (docs/HOME-CHAT.md): mutate, like the other
+	// per-person settings, so a read-only viewer reads but cannot choose one.
+	mux.Handle("/me/home", auth(member(mutate(http.HandlerFunc(s.handleMyHome)))))
 	mux.Handle("/auth/verify", s.gatewayUserMiddleware(http.HandlerFunc(s.handleAuthVerify)))
 	// /auth/session-epoch is off member for the same reason as /auth/verify:
 	// the web tier's mint paths call it before a session exists, and it must answer

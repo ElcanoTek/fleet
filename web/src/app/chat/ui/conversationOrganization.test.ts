@@ -154,6 +154,22 @@ describe("visibleConversationOrder", () => {
     ).toEqual(["Project chat"]);
   });
 
+  it("walks the person's own Home first, where the sidebar renders it, and once", () => {
+    const withIds = [
+      conv({ id: "p", title: "Pinned loose", pinned: true }),
+      conv({ id: "h", title: "Home chat", pinned: true }),
+      conv({ id: "r", title: "Recent loose" }),
+      conv({ id: "f", title: "Filed home", project_id: "p1" }),
+    ];
+    const titles = (homeId: string | null) =>
+      visibleConversationOrder({ all: withIds, filtered: withIds, filtering: false, homeId }).map((c) => c.title);
+    expect(titles("h")).toEqual(["Home chat", "Pinned loose", "Recent loose"]);
+    // A Home filed in a project also has the Home row, so the walk reaches it.
+    expect(titles("f")).toEqual(["Filed home", "Pinned loose", "Home chat", "Recent loose"]);
+    // Not one of the person's chats (a teammate's): nothing to add.
+    expect(titles("elsewhere")).toEqual(["Pinned loose", "Home chat", "Recent loose"]);
+  });
+
   it("does not mutate its inputs", () => {
     const order = visibleConversationOrder({ all, filtered: all, filtering: false });
     order.push(conv({ title: "extra" }));

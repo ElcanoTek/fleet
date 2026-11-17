@@ -137,6 +137,12 @@ func (s *Server) handleListConversations(w http.ResponseWriter, r *http.Request,
 			list[i].AutoApprove = true
 		}
 	}
+	// The active list also says where the person's Home is (docs/HOME-CHAT.md),
+	// so a cold boot can land on it without another round trip.
+	if q.Get("archived") != "true" {
+		writeJSON(w, r, map[string]any{"conversations": list, "home": s.homeForList(r.Context(), user)})
+		return
+	}
 	writeJSON(w, r, map[string]any{"conversations": list})
 }
 

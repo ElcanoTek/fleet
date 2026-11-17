@@ -75,6 +75,12 @@ theirs from the first byte, filed into the same project, private until they
 share it, and unaffected if the original is later unshared or deleted. The
 owner's chat is never modified: conversations keep exactly one owner.
 
+**A teammate can make a shared chat their Home** (the chat Fleet opens first;
+[HOME-CHAT.md](HOME-CHAT.md), ADR-0113) from the `⋮` on its **Team chats**
+row. Home opens it in this same read-only view. Nothing about the share
+changes: Home re-checks the team-read gate on every read, so an unshare (by
+any of the paths below) hides it, and a re-share brings it back.
+
 **What team sharing exposes is the transcript and the chat's outputs.** Tool
 calls, tool results and reasoning are filtered out server-side (the same filter
 the public snapshot applies). Files go with the share since ADR-0079 — but only

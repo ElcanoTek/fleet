@@ -25,6 +25,7 @@
 import type { Message } from "./history";
 import type { SkillInfo } from "./skillSlash";
 import type { ConversationSummary, ServerConfig } from "./chat-experience";
+import type { HomeConversation } from "./homeChat";
 
 export type ChatSessionSnapshot = {
   // Per-conversation message cache (keyed by conversation id / PENDING
@@ -55,6 +56,10 @@ export type ChatSessionSnapshot = {
   skills: SkillInfo[];
   serverConfig: ServerConfig;
   userEmail: string;
+  // A teammate's chat open in the read-only viewer, and the person's Home
+  // chat (docs/HOME-CHAT.md). Optional so an older snapshot shape still reads.
+  teamChatView?: string | null;
+  home?: HomeConversation | null;
 };
 
 // Lives for the life of the page/tab. A hard reload starts it null again.

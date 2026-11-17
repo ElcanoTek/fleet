@@ -264,6 +264,7 @@ above fails otherwise.
 - [`BUNDLE-STAGING.md`](BUNDLE-STAGING.md) — Staging the default bundle for a bare install on an SELinux host (#1655)
 - [`CHAT-EXPORT.md`](CHAT-EXPORT.md) — Downloading a chat
 - [`CHAT-PATROLS.md`](CHAT-PATROLS.md) — In-Chat Patrols & Timers (`chat_patrol`)
+- [`HOME-CHAT.md`](HOME-CHAT.md) — your Home chat: the badged first row of the chat list and the chat a fresh visit lands on (`GET`/`PUT`/`DELETE /api/me/home`; ADR-0113)
 - [`CHAT-ORDER.md`](CHAT-ORDER.md) — your own order for pinned chats and for each project's chats, and the Temporary sort (Reorder mode; `GET`/`PUT /api/conversations/order`)
 - [`PATROL-LAUNCHPAD.md`](PATROL-LAUNCHPAD.md) — Patrols in the rail and the Patrol Launchpad wizard (Chat · Patrols · Background tasks; `GET /api/patrols`, `POST /api/patrol-draft`)
 - [`CHAT-STREAM-RECOVERY.md`](CHAT-STREAM-RECOVERY.md) — Chat stream recovery — losing the socket is not losing the turn

@@ -52,6 +52,7 @@ import type { Project } from "./ProjectsModal";
 import { previewNodes, type SearchResult } from "./SearchBar";
 import { ShareGlyph, TeamGlyph } from "./ShareGlyphs";
 import { ChatReorderList } from "./ChatReorderList";
+import type { HomeConversation } from "./homeChat";
 
 // ── Sealed-chat button + explainer tooltip ───────────────────────────────────
 // The icon-only "new sealed chat" lock lives in the Temporary section's
@@ -528,6 +529,8 @@ function ConversationKebab({
   onSelect,
   onArchive,
   onDelete,
+  isHome = false,
+  onToggleHome,
 }: {
   conversation: ConversationSummary;
   allLabelNames: string[];
@@ -546,6 +549,10 @@ function ConversationKebab({
   onSelect: () => void;
   onArchive: () => void;
   onDelete: () => void;
+  // Home (docs/HOME-CHAT.md): "Set as home" / "Remove as home". Absent, the
+  // item is not offered.
+  isHome?: boolean;
+  onToggleHome?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [flyout, setFlyout] = useState<null | "labels" | "project">(null);
@@ -659,6 +666,17 @@ function ConversationKebab({
             {conversation.pinned ? tr("Unpin") : tr("Pin")}
           </MenuItem>
         )}
+        {onToggleHome ? (
+          <MenuItem
+            icon={<Icon name="map-pin" className="size-4" />}
+            onClick={() => {
+              onToggleHome();
+              close();
+            }}
+          >
+            {isHome ? tr("Remove as home") : tr("Set as home")}
+          </MenuItem>
+        ) : null}
         <MenuItem
           icon={<Icon name="edit" className="size-4" />}
           onClick={() => {
@@ -793,6 +811,21 @@ function ConversationKebab({
 }
 
 // ── Conversation row ─────────────────────────────────────────────────────────
+// The mark on the person's Home row (docs/HOME-CHAT.md). Flag's sprite has no
+// house glyph, so the word carries it and map-pin is decoration.
+function HomeBadge() {
+  return (
+    <span
+      data-testid="home-badge"
+      title={tr("Your home chat. Fleet opens it first.")}
+      className="ml-auto inline-flex shrink-0 items-center gap-0.5 rounded-full bg-[color-mix(in_srgb,var(--color-accent)_14%,transparent)] px-1.5 py-px text-[0.66rem] font-semibold text-[var(--color-accent)]"
+    >
+      <Icon name="map-pin" className="size-2.5 shrink-0" />
+      {tr("Home")}
+    </span>
+  );
+}
+
 function ConvRow({
   conversation,
   active,
@@ -807,6 +840,7 @@ function ConvRow({
   onCancelRename,
   kebab,
   onDragStart,
+  isHome = false,
 }: {
   conversation: ConversationSummary;
   active: boolean;
@@ -826,6 +860,7 @@ function ConvRow({
   // a-project affordance. Mouse only by nature; the kebab's "Move to project"
   // is the touch/keyboard path to the same action.
   onDragStart?: (e: React.DragEvent<HTMLDivElement>) => void;
+  isHome?: boolean;
 }) {
   const labels = conversation.labels ?? [];
   const shown = labels.slice(0, 2);
@@ -948,6 +983,7 @@ function ConvRow({
               </span>
             ) : null}
             <span className="block truncate">{conversation.title}</span>
+            {isHome ? <HomeBadge /> : null}
             {conversation.lockdown ? (
               <span
                 aria-label={tr("Sealed chat")}
@@ -984,6 +1020,75 @@ function ConvRow({
         </div>
       ) : null}
     </div>
+  );
+}
+
+// ── Home-only kebab for a chat the person does not own ───────────────────────
+// A teammate's chat (Team chats, or a Home reached through a share) has none
+// of the owner's actions, so its menu holds the one thing a reader can choose:
+// whether it is their Home (docs/HOME-CHAT.md).
+function HomeOnlyKebab({
+  title,
+  isHome,
+  onToggleHome,
+}: {
+  title: string;
+  isHome: boolean;
+  onToggleHome: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const anchorRef = useRef<HTMLButtonElement | null>(null);
+  const tip = usePortalTip(tr("Options"));
+  return (
+    <>
+      <button
+        ref={anchorRef}
+        type="button"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={tr("Conversation options for {0}", [title])}
+        onMouseEnter={(e) => {
+          if (!open) tip.show(e);
+        }}
+        onMouseLeave={tip.hide}
+        onFocus={(e) => {
+          if (!open) tip.show(e);
+        }}
+        onBlur={tip.hide}
+        className={[
+          "hit-area pointer-events-auto inline-flex size-[1.8rem] items-center justify-center rounded-[var(--radius-md)] text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:opacity-100 focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none",
+          open
+            ? "opacity-100"
+            : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100",
+        ].join(" ")}
+        onClick={(e) => {
+          e.stopPropagation();
+          tip.hide();
+          setOpen((o) => !o);
+        }}
+      >
+        <Icon name="dots" className="size-[1.1rem]" />
+        {tip.tipNode}
+      </button>
+      <Menu
+        open={open}
+        onClose={() => setOpen(false)}
+        anchorRef={anchorRef}
+        placement="bottom-end"
+        label={tr("Options for {0}", [title])}
+        className="min-w-[12rem]"
+      >
+        <MenuItem
+          icon={<Icon name="map-pin" className="size-4" />}
+          onClick={() => {
+            onToggleHome();
+            setOpen(false);
+          }}
+        >
+          {isHome ? tr("Remove as home") : tr("Set as home")}
+        </MenuItem>
+      </Menu>
+    </>
   );
 }
 
@@ -1083,6 +1188,11 @@ export function ConversationSidebar({
   teamSharedConversations = [],
   onSelectTeamSharedConversation,
   onMoveToProject,
+  home = null,
+  homeOpen = false,
+  onOpenHome,
+  onSetHome,
+  onClearHome,
 }: {
   sidebarOpen: boolean;
   setSidebarOpen: Dispatch<SetStateAction<boolean>>;
@@ -1207,6 +1317,15 @@ export function ConversationSidebar({
   // the kebab's "Move to project" both land here; the parent owns the
   // optimistic state + POST.
   onMoveToProject: (conversationId: string, projectID: string) => void;
+  // The person's Home chat (docs/HOME-CHAT.md): the first row of the chat
+  // list, marked Home. homeOpen is whether it is the chat on screen;
+  // onOpenHome opens a Home the person does not own (an owned one is an
+  // ordinary row). Without onSetHome/onClearHome no menu offers the Home items.
+  home?: HomeConversation | null;
+  homeOpen?: boolean;
+  onOpenHome?: () => void;
+  onSetHome?: (conversation: { id: string; title: string }) => void;
+  onClearHome?: () => void;
 }) {
   const [editingId, setEditingId] = useState<string | null>(null);
   // Projects section (#509 follow-up): the section itself starts open (its
@@ -1310,7 +1429,18 @@ export function ConversationSidebar({
   // Temporary for a frame, so the set is withheld until there is one.
   const knownProjectIds =
     projects.length > 0 ? new Set(projects.map((p) => p.id)) : undefined;
-  const pinned = pinnedUnfiled(conversations, knownProjectIds, chatOrders?.[PINNED_ORDER_SCOPE]);
+  const homeId = home?.conversation_id ?? null;
+  // The Home chat renders once, as the first row of the list, rather than
+  // again in Pinned or Team chats.
+  const pinned = pinnedUnfiled(conversations, knownProjectIds, chatOrders?.[PINNED_ORDER_SCOPE]).filter(
+    (c) => c.id !== homeId,
+  );
+  const railTeamChats = teamSharedConversations.filter((c) => c.id !== homeId);
+  const toggleHome = (conversation: { id: string; title: string }) => {
+    if (conversation.id === homeId) onClearHome?.();
+    else onSetHome?.(conversation);
+  };
+  const homeActions = Boolean(onSetHome && onClearHome);
   // Reorder mode: the scope being ordered ("pinned" or "project:<id>"), whose
   // rows become a drag-and-arrow list until Done (or Escape). One at a time.
   const [reorderScope, setReorderScope] = useState<string | null>(null);
@@ -1415,6 +1545,8 @@ export function ConversationSidebar({
       isShared={Boolean(conversation.share_token)}
       onShare={() => openShareDialog(conversation)}
       onSelect={() => onEnterSelectMode(conversation.id)}
+      isHome={conversation.id === homeId}
+      onToggleHome={homeActions ? () => toggleHome(conversation) : undefined}
       onArchive={() => void toggleArchive(conversation, true)}
       onDelete={() =>
         setPendingDeleteConversation({
@@ -1440,6 +1572,7 @@ export function ConversationSidebar({
       onCommitRename={(title) => commitRename(conversation.id, title)}
       onCancelRename={() => setEditingId(null)}
       kebab={rowKebab(conversation)}
+      isHome={conversation.id === homeId}
       onDragStart={
         selecting
           ? undefined
@@ -2050,6 +2183,69 @@ export function ConversationSidebar({
             </>
           ) : (
             <>
+              {home ? (
+                <div className="relative mb-1 rounded-md" data-testid="home-section">
+                  {/* The Home row's gradient ring: the action gradient masked
+                      to a 1px border, so the rail's own background (the page
+                      gradient behind a transparent rail) shows through the
+                      row as it does on every other row. */}
+                  <span
+                    aria-hidden="true"
+                    data-testid="home-ring"
+                    className="pointer-events-none absolute inset-0 z-[1] rounded-md p-px [background:var(--gradient-action-primary)] [mask:linear-gradient(#000_0_0)_content-box_exclude,linear-gradient(#000_0_0)]"
+                  />
+                  {(() => {
+                    const owned =
+                      home.access === "owner"
+                        ? conversations.find((c) => c.id === home.conversation_id)
+                        : undefined;
+                    if (owned) return renderRow(owned);
+                    const title = home.title || tr("Untitled");
+                    const ownerShort =
+                      home.access === "owner" ? "" : home.owner_email.split("@")[0];
+                    return (
+                      <div
+                        className={[
+                          "group relative rounded-md transition",
+                          homeOpen ? "bg-[var(--rail-active)]" : "hover:bg-[var(--rail-hover)]",
+                        ].join(" ")}
+                      >
+                        <button
+                          type="button"
+                          data-testid="home-conv-row"
+                          className={[
+                            "flex w-full min-w-0 items-center gap-1.5 rounded-md py-2 pl-[0.55rem] pr-9 text-left text-[0.875rem] transition",
+                            homeOpen
+                              ? "text-[var(--color-text-primary)]"
+                              : "text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]",
+                          ].join(" ")}
+                          onClick={() => {
+                            setSidebarOpen(false);
+                            onOpenHome?.();
+                          }}
+                          title={home.owner_email && ownerShort ? `${title} (${home.owner_email})` : title}
+                        >
+                          {home.access !== "owner" ? (
+                            <TeamGlyph className="size-3 shrink-0 text-[var(--color-accent)]" />
+                          ) : null}
+                          <span className="min-w-0 flex-1 truncate">{title}</span>
+                          {ownerShort ? (
+                            <span className="max-w-[45%] min-w-0 shrink truncate font-[family-name:var(--font-code)] text-[0.66rem] text-[var(--color-text-muted)]">
+                              {ownerShort}
+                            </span>
+                          ) : null}
+                          <HomeBadge />
+                        </button>
+                        {homeActions ? (
+                          <div className="absolute inset-y-0 right-1 flex items-center">
+                            <HomeOnlyKebab title={title} isHome onToggleHome={() => onClearHome?.()} />
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })()}
+                </div>
+              ) : null}
               {pinned.length > 0 ? (
                 <div className="mb-1" data-testid="pinned-section">
                   <div className="flex items-center gap-1.5 px-2 pb-1 pt-2 text-[0.68rem] font-semibold uppercase tracking-[0.08em] text-[var(--color-text-muted)]">
@@ -2133,27 +2329,28 @@ export function ConversationSidebar({
                   recent.map(renderRow)
                 )}
               </div>
-              {teamSharedConversations.length > 0 ? (
+              {railTeamChats.length > 0 ? (
                 <div className="mb-1 mt-2 border-t border-[var(--color-border)] pt-2">
                   <SectionToggle
                     icon="message"
-                    label={tr("Team chats ({0})", [teamSharedConversations.length])}
+                    label={tr("Team chats ({0})", [railTeamChats.length])}
                     open={teamChatsOpen}
                     onToggle={() => setTeamChatsOpen((o) => !o)}
                   />
                   {teamChatsOpen
-                    ? teamSharedConversations.map((c) => {
+                    ? railTeamChats.map((c) => {
                         const active = activeConversationId === c.id;
                         const ownerShort = c.user_email
                           ? c.user_email.split("@")[0]
                           : "";
                         return (
+                          <div key={c.id} className="group relative">
                           <button
-                            key={c.id}
                             type="button"
                             data-testid="team-shared-conv-row"
                             className={[
                               "flex w-full min-w-0 items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-[0.84rem] transition",
+                              homeActions ? "pr-9" : "",
                               active
                                 ? "bg-[var(--rail-active)] text-[var(--color-text-primary)]"
                                 : "text-[var(--color-text-secondary)] hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)]",
@@ -2189,6 +2386,16 @@ export function ConversationSidebar({
                               </span>
                             ) : null}
                           </button>
+                          {homeActions ? (
+                            <div className="absolute inset-y-0 right-1 flex items-center">
+                              <HomeOnlyKebab
+                                title={c.title}
+                                isHome={false}
+                                onToggleHome={() => toggleHome(c)}
+                              />
+                            </div>
+                          ) : null}
+                          </div>
                         );
                       })
                     : null}

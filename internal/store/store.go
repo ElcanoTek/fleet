@@ -1234,9 +1234,35 @@ func (s *Store) RenameTitle(ctx context.Context, userEmail, convID, title string
 }
 
 // SetPinned toggles the pin state for a conversation. A soft-deleted
-// conversation is not mutable (deleted_at IS NULL, #596).
+// conversation is not mutable (deleted_at IS NULL, #596). Unpinning the
+// owner's Home chat also clears it as their Home (see SetHomeConversation),
+// in the same transaction.
 func (s *Store) SetPinned(ctx context.Context, userEmail, convID string, pinned bool) error {
-	return s.updateOwnedConversation(ctx, userEmail, convID, "pinned = $1", pinned)
+	if pinned {
+		return s.updateOwnedConversation(ctx, userEmail, convID, "pinned = $1", pinned)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	// The Home row before the chat: the order SetHomeConversation takes them
+	// in, so the two never wait on each other. A missing chat rolls it back.
+	if err := clearOwnHomeTx(ctx, tx, userEmail, []string{convID}); err != nil {
+		return err
+	}
+	res, err := tx.ExecContext(ctx,
+		`UPDATE conversations SET pinned = FALSE, updated_at = $1
+		 WHERE id = $2 AND user_email = $3 AND deleted_at IS NULL`,
+		time.Now().Unix(), convID, userEmail,
+	)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrConversationNotFound
+	}
+	return tx.Commit()
 }
 
 // SetArchived archives or unarchives a conversation (#282). archived=true sets
@@ -1256,6 +1282,11 @@ func (s *Store) SetPinned(ctx context.Context, userEmail, convID string, pinned 
 // archived refusal), unarchive never reopens team access. The owner's
 // per-file exclusions are untouched, so sharing again restores their earlier
 // file choices.
+//
+// Since archiving unpins, it also clears the chat as the owner's Home (see
+// SetHomeConversation). Teammates who chose it as their Home keep the row;
+// every read gate refuses an archived chat, so their Home is hidden until it
+// is unarchived and shared again.
 func (s *Store) SetArchived(ctx context.Context, userEmail, convID string, archived bool) error {
 	now := time.Now().Unix()
 	var archivedAt any // NULL when unarchiving
@@ -1263,7 +1294,16 @@ func (s *Store) SetArchived(ctx context.Context, userEmail, convID string, archi
 	if archived {
 		archivedAt = now
 	}
-	res, err := s.db.ExecContext(ctx,
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	// The Home row before the chat, as in SetPinned.
+	if err := clearOwnHomeTx(ctx, tx, userEmail, []string{convID}); err != nil {
+		return err
+	}
+	res, err := tx.ExecContext(ctx,
 		`UPDATE conversations SET archived_at = $1, pinned = $2, updated_at = $3,
 			`+unshareConversationSet+`
 		 WHERE id = $4 AND user_email = $5 AND deleted_at IS NULL`,
@@ -1276,7 +1316,7 @@ func (s *Store) SetArchived(ctx context.Context, userEmail, convID string, archi
 	if n == 0 {
 		return ErrConversationNotFound
 	}
-	return nil
+	return tx.Commit()
 }
 
 // nullableSeconds converts a scanned nullable INTEGER column into the *int the
@@ -1691,7 +1731,8 @@ func (s *Store) DeleteAllMatching(ctx context.Context, userEmail, label string) 
 // field untouched"; a non-nil pointer — including an empty labels slice —
 // overwrites the stored value. Returns ErrForeignConversation (mapped to 403) if
 // any supplied ID is foreign or unknown; the transaction rolls back so nothing
-// is mutated. The caller caps len(ids) (HTTP layer enforces 100).
+// is mutated. The caller caps len(ids) (HTTP layer enforces 100). Unpinning
+// clears any of them that is the caller's Home, as SetPinned does.
 func (s *Store) BulkPatch(ctx context.Context, userEmail string, ids []string, pinned *bool, labels []string) (int, error) {
 	if len(ids) == 0 {
 		return 0, nil
@@ -1712,6 +1753,13 @@ func (s *Store) BulkPatch(ctx context.Context, userEmail string, ids []string, p
 	}
 	if owned != len(ids) {
 		return 0, ErrForeignConversation
+	}
+	// Unpinning the owner's Home clears it, as SetPinned does, and the Home
+	// row is taken before the chats for the same reason.
+	if pinned != nil && !*pinned {
+		if err := clearOwnHomeTx(ctx, tx, userEmail, ids); err != nil {
+			return 0, err
+		}
 	}
 
 	res, err := tx.ExecContext(ctx,

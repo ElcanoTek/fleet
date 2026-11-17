@@ -299,14 +299,19 @@ export function visibleConversationOrder<T extends OrganizableConversation>(args
   // same reason.
   pinOrder?: readonly string[];
   recentSort?: RecentSort;
+  // The person's own Home chat (docs/HOME-CHAT.md), which the sidebar renders
+  // in its own row above Pinned instead of in place. Must match the sidebar's.
+  homeId?: string | null;
 }): T[] {
   if (args.filtering) {
     return [...args.filtered];
   }
-  return [
+  const rows = [
     ...pinnedUnfiled(args.all, args.knownProjectIds, args.pinOrder),
     ...sortRecent(recentUnfiled(args.all, args.knownProjectIds), args.recentSort),
   ];
+  const home = args.homeId ? args.all.find((c) => c.id === args.homeId) : undefined;
+  return home ? [home, ...rows.filter((c) => c.id !== home.id)] : rows;
 }
 
 // railProjectEmptyState picks which empty-state copy a project group in the

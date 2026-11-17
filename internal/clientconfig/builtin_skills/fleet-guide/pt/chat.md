@@ -85,6 +85,7 @@ No topo da barra estão as três formas de trabalhar, cada uma com um subtítulo
 | --- | --- |
 | **Projetos** | Espaços de trabalho com instruções permanentes, aprendizagens partilhadas e as suas próprias conversas. Um projeto partilhado com a sua equipa tem um ícone de equipa. Consulte [Memórias e projetos](#7-memory-and-projects). |
 | **Chats de equipa** | Conversas que os colegas partilham consigo ou abrem em **Modo colaborativo**, com o nome curto do proprietário e uma etiqueta **Em direto** quando o chat colaborativo está ativo. |
+| Linha inicial | O seu chat inicial, se tiver escolhido um, como primeira linha da lista com o distintivo **Início**: um seu ou um chat de um colega que pode abrir. Não é listado novamente em **Fixados** nem em **Chats de equipa**. Consulte [O seu chat inicial](#your-home-chat). |
 | **Fixados** | Conversas que escolheu manter. As conversas fixadas nunca expiram. Se houver duas ou mais, **Reordenar** no cabeçalho permite ordená-las como quiser (consulte [Ordenar os seus chats](#ordering-your-chats)). |
 | **Etiquetas** | As suas etiquetas, cada uma como filtro. Clique numa para mostrar apenas as conversas que a têm; clique em várias para restringir mais. |
 | **Temporários** | Tudo o resto, com a atividade mais recente primeiro; o menu junto ao cabeçalho permite ordenar por **Mais recentes primeiro** ou **Título A–Z**. Estes chats são eliminados após um período de inatividade (14 dias numa instalação predefinida); o ícone ⓘ junto ao cabeçalho indica-o. Fixe um chat ou mova-o para um projeto para o manter. **Eliminar chats temporários**, a vermelho no fim da barra lateral, elimina-os todos de uma vez após confirmar. |
@@ -357,6 +358,7 @@ Cada conversa da barra tem um menu no botão `⋮` que aparece ao passar o curso
 | Opção | O que faz |
 | --- | --- |
 | **Fixar** | Mantê-la indefinidamente e apresentá-la em **Fixados**. Fixe qualquer conversa que não queira perder. |
+| **Definir como inicial** | Torná-la o seu chat inicial, o que o Fleet abre primeiro (consulte [O seu chat inicial](#your-home-chat)). No seu chat inicial aparece **Remover como inicial**. |
 | **Mudar nome** | As conversas recebem um título a partir da primeira troca de mensagens. Mude o nome das que mantiver para que a barra seja uma lista de trabalhos, não de primeiras frases. |
 | **Mover para um projeto** | Guardá-la num projeto. A conversa recebe o contexto desse projeto a partir do turno seguinte. |
 | **Etiquetas** | Adicionar ou remover etiquetas. As etiquetas também servem de filtros na barra. |
@@ -382,6 +384,17 @@ Cada chat mostra então um par de setas. Arraste um chat para onde quiser ou pri
 Um chat que fixa ou adiciona ao projeto pela primeira vez aparece no topo, acima dos ordenados, até o mover; se o desafixar ou retirar e depois o devolver, recupera o lugar anterior. **Reordenar** está disponível para um máximo de 500 chats de cada vez e não para contas só de leitura, que não podem guardar uma ordem. Num projeto, ordena os seus próprios chats; cada colega ordena os seus.
 
 Os chats **Temporários** usam uma ordenação automática no menu do cabeçalho: **Atividade recente** (predefinição), **Mais recentes primeiro** (por data de início) ou **Título A–Z**. A escolha é guardada neste dispositivo. Os chats temporários expiram se não forem usados, pelo que são ordenados automaticamente; para dar a um deles um lugar próprio, fixe-o ou mova-o para um projeto.
+
+### O seu chat inicial
+
+Escolha um chat como inicial e o Fleet abre-o primeiro; assim, uma equipa que começa o dia com uma patrulha matinal chega diretamente a ela. Abra o menu `⋮` do chat na barra e escolha **Definir como inicial**. Qualquer chat que possa abrir pode ser o seu inicial: um seu, um chat em **Modo colaborativo** em que participa ou um chat que um colega partilhou com a sua equipa (cada linha de **Chats de equipa** tem um `⋮` com **Definir como inicial**). Tem um chat inicial de cada vez; escolher outro substitui-o.
+
+- **Onde aparece.** O seu chat inicial é a primeira linha da sua lista de chats, acima de **Fixados**, com o distintivo **Início**.
+- **Quando o Fleet o abre.** Da primeira vez que abre o Fleet num separador do navegador, chega ao seu chat inicial em vez do mais recente, e também depois de terminar sessão e voltar a iniciá-la. Uma ligação para um chat específico continua a abrir esse chat. Recarregar o separador não volta ao Início: abre o seu chat mais recente, como antes.
+- **Um chat seu é fixado com ele**, por isso nunca expira, mesmo que esteja num projeto e depois saia dele. Desafixá-lo ou arquivá-lo também o remove como inicial.
+- **O chat de um colega** abre-se como sempre: um chat em **Modo colaborativo**, como um chat normal; um partilhado com a sua equipa, só de leitura. Se o proprietário deixar de o partilhar, desaparece da sua lista, e volta se o partilhar de novo.
+
+Para deixar de usar um chat inicial, escolha **Remover como inicial** no menu `⋮`; o chat em si não é alterado. Uma conta só de leitura não pode escolher um chat inicial.
 
 ### Na transcrição
 

@@ -261,6 +261,9 @@ func chatRoutes() []chatRoute {
 		{"GET /api/me/team", fixed("/me/team"), noBody, textJSON},
 		{"PUT /api/me/team", fixed("/me/team"), jsonBodyIfAny, textJSON},
 		{"POST /api/chat/autonomous-accept", fixed("/chat/autonomous-accept"), jsonBodyIfAny, textJSON},
+		{"GET /api/me/home", fixed("/me/home"), noBody, textJSON},
+		{"PUT /api/me/home", fixed("/me/home"), jsonBodyAlways, textJSON},
+		{"DELETE /api/me/home", fixed("/me/home"), noBody, textJSON},
 
 		// ── conversations ──
 		{"GET /api/conversations", func(r *http.Request) string {

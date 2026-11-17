@@ -524,10 +524,27 @@ func (s *Store) setConversationProject(ctx context.Context, userEmail, convID, p
 			return err
 		}
 	}
+	// Lock the chat in a statement of its own before the UPDATE. Under READ
+	// COMMITTED the UPDATE's subqueries read the snapshot its statement
+	// started with, so a Home set while it waited on the row would be missed
+	// and its pin cleared (docs/HOME-CHAT.md). Taking the lock first means the
+	// UPDATE starts after any such writer has committed. It is the same row,
+	// in the same order, the UPDATE would lock anyway.
+	if _, err := tx.ExecContext(ctx,
+		`SELECT 1 FROM conversations WHERE id = $1 AND user_email = $2 FOR UPDATE`,
+		convID, userEmail,
+	); err != nil {
+		return err
+	}
 	res, err := tx.ExecContext(ctx,
 		`UPDATE conversations SET
 			project_id = $1,
-			pinned = (CASE WHEN $1::text IS NULL THEN pinned ELSE FALSE END),
+			-- Filing clears a pin (the project keeps the chat), except on the
+			-- owner's Home, which must still be pinned if it is unfiled later
+			-- (docs/HOME-CHAT.md).
+			pinned = (CASE WHEN $1::text IS NULL THEN pinned ELSE EXISTS (
+				SELECT 1 FROM user_home_conversation h
+				 WHERE h.user_email = conversations.user_email AND h.conversation_id = conversations.id) END),
 			team_visible = (CASE
 				WHEN $1::text IS NOT NULL
 				 AND EXISTS (SELECT 1 FROM projects p
