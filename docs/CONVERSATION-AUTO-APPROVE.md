@@ -68,11 +68,13 @@ high-consequence gates.
      rendering a muted receipt card (`tool.action_recorded`), and attaching the
      tool's structured `result_card` once execution finishes.
    - **Always excluded even in `Autonomous` mode** (still stage an explicit card):
-     - Bundle-blocked suffixes in `agent_policy.critical_tool_autonomous_blocked`.
-     - External outbound messages: non-self `send_email` / `send_template_email`,
-       M365 mail/chat/channel/calendar/sharing/rules/batch tools, and vendor
-       outbound report/message tools (`tl_async_email_advertiser_report`,
-       `mgpub_send_deal_request_message`).
+     - Bundle-blocked suffixes configured in `agent_policy.critical_tool_autonomous_blocked`
+       (for example, destructive resource-deletion or external vendor-messaging
+       tools declared by a deployment bundle).
+     - External outbound messages and shared email templates: non-self
+       `send_email` / `send_template_email`, `save_email_template` /
+       `delete_email_template`, and Microsoft 365
+       mail/chat/channel/calendar/sharing/rules/batch tools.
      - Privilege-persistence & untrusted-server floor: `schedule_task`,
        `manage_tasks`, `chat_patrol` `create`/`update`, `connector_studio`
        mutating/probe actions, and user-connected dynamic remote MCP tools

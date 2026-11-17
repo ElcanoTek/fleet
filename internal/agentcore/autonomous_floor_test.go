@@ -11,18 +11,18 @@ func TestAutonomousBlockedAndProblems(t *testing.T) {
 	badPolicy := AgentPolicy{
 		CriticalToolSuffixes: []string{
 			"delete_email_template",
-			"email_advertiser_report",
-			"set_deal_rev_share",
-			"set_deal_share_code",
-			"set_finance_term",
-			"revert_finance_term_change",
+			"send_external_notice",
+			"set_contract_rate",
+			"set_share_code",
+			"set_billing_term",
+			"revert_billing_term_change",
 			"delete_template",
 			"set_password",
-			"delete_page",
+			"delete_resource",
 			"share",
 		},
 		CriticalToolAutonomousBlocked: []string{
-			" delete_page ",
+			" delete_resource ",
 			"share",
 			"send_email",
 			"typo_missing_tool",
@@ -36,14 +36,14 @@ func TestAutonomousBlockedAndProblems(t *testing.T) {
 	goodPolicy := badPolicy
 	goodPolicy.CriticalToolAutonomousBlocked = []string{
 		"delete_email_template",
-		"email_advertiser_report",
-		"set_deal_rev_share",
-		"set_deal_share_code",
-		"set_finance_term",
-		"revert_finance_term_change",
+		"send_external_notice",
+		"set_contract_rate",
+		"set_share_code",
+		"set_billing_term",
+		"revert_billing_term_change",
 		"delete_template",
 		"set_password",
-		"delete_page",
+		"delete_resource",
 		"share",
 	}
 	if got := AutonomousBlockedProblems(goodPolicy); len(got) != 0 {
@@ -52,20 +52,20 @@ func TestAutonomousBlockedAndProblems(t *testing.T) {
 
 	ConfigureAgentPolicy(goodPolicy)
 	for _, blocked := range []string{
-		"mcp_pages_delete_page",
-		"mcp_pages_acct_set_password",
-		"mcp_deals_set_deal_rev_share",
+		"mcp_alpha_delete_resource",
+		"mcp_alpha_acct_set_password",
+		"mcp_beta_set_contract_rate",
 		"mcp_fast_io_share",
-		"delete_page",
+		"delete_resource",
 	} {
 		if !AutonomousBlocked(blocked) {
 			t.Errorf("AutonomousBlocked(%q) = false, want true", blocked)
 		}
 	}
 	for _, allowed := range []string{
-		"mcp_openx_ox_execute_plan",
-		"mcp_pages_deploy_page",
-		"mcp_magnite_mgpub_clone_deal",
+		"mcp_alpha_execute_plan",
+		"mcp_alpha_deploy_resource",
+		"mcp_beta_clone_record",
 	} {
 		if AutonomousBlocked(allowed) {
 			t.Errorf("AutonomousBlocked(%q) = true, want false", allowed)
@@ -153,11 +153,11 @@ func testAutonomousFloorM365AndOutbound(t *testing.T) {
 		t.Error("preview_email must not be hard-blocked on the floor")
 	}
 	for _, bundleManaged := range []string{
-		"mcp_openx_ox_execute_plan",
-		"mcp_magnite_mgpub_clone_deal",
-		"mcp_pages_deploy_page",
-		"mcp_pages_delete_page",
-		"mcp_triplelift_tl_async_email_advertiser_report",
+		"mcp_alpha_execute_plan",
+		"mcp_beta_clone_record",
+		"mcp_gamma_deploy_resource",
+		"mcp_gamma_delete_resource",
+		"mcp_delta_send_external_notice",
 	} {
 		if IsAutonomousHardBlocked(bundleManaged, `{}`) {
 			t.Errorf("expected bundle-managed MCP tool %q NOT to be hardcoded on engine floor", bundleManaged)
@@ -240,31 +240,52 @@ func testAutonomousFloorPrivilegeAndStorage(t *testing.T) {
 }
 
 func testAutonomousFloorBashGitPush(t *testing.T) {
-	// 5. Bash git push floor (including -C, -c, wrappers, subshells, bash -c).
+	// 5. Bash git push floor (including -C, -c, wrappers, command/param substitutions, pipes, heredocs).
 	for _, cmd := range []string{
 		`{"command":"git push"}`,
 		`{"command":"git push origin HEAD"}`,
 		`{"command":"git -C /workspace/repo push origin main"}`,
 		`{"command":"git -c http.extraheader=foo push"}`,
 		`{"command":"/usr/bin/git --git-dir=/tmp/r/.git push"}`,
+		`{"command":"/usr/lib/git-core/git-push origin main"}`,
 		`{"command":"GIT_SSH_COMMAND=ssh env -u HOME git -C repo push"}`,
+		`{"command":"env -S 'git push origin main'"}`,
 		`{"command":"git status && git -C sub push --force"}`,
 		`{"command":"bash -lc 'git -C repo push origin feat'"}`,
 		`{"command":"git -c alias.p=push p origin main"}`,
 		`{"command":"git -calias.p='push --force' p origin main"}`,
 		`{"command":"git -c alias.ship='!git push origin HEAD' ship"}`,
 		`{"command":"git --config-env=alias.p=MY_PUSH_ALIAS p origin main"}`,
+		`{"command":"git config alias.p push && git p origin main"}`,
 		`{"command":"if git push origin main; then :; fi"}`,
 		`{"command":"while ! git push origin main; do break; done"}`,
 		`{"command":"{ git push origin HEAD; }"}`,
 		`{"command":"for b in main; do git push origin \"$b\"; done"}`,
 		`{"command":"eval 'git push origin main'"}`,
+		`{"command":"a=git; b=push; eval \"$a $b\""}`,
 		`{"command":"echo main | xargs -n 1 git push origin"}`,
+		`{"command":"echo push | xargs git"}`,
 		`{"command":"g=git; $g push origin main"}`,
+		`{"command":"a=git; b=push; $a $b origin main"}`,
 		`{"command":"op=push; git $op origin main"}`,
+		`{"command":"git $(printf push) origin main"}`,
+		`{"command":"git \"p$(printf u)sh\" origin main"}`,
+		"{\"command\":\"git `printf push` origin main\"}",
+		`{"command":"$(printf git) push origin main"}`,
+		`{"command":"$(printf 'git push') origin main"}`,
+		`{"command":"$'\\x67\\x69\\x74' $'\\x70\\x75\\x73\\x68' origin main"}`,
+		`{"command":"git $'push' origin main"}`,
+		`{"command":"git {push,status} origin main"}`,
+		`{"command":"git pus? origin main"}`,
+		`{"command":"git pu\\\nsh origin main"}`,
+		`{"command":"git 2>/dev/null push origin main"}`,
+		`{"command":"echo 'git push origin main' | sh"}`,
+		`{"command":"bash <<< 'git push origin main'"}`,
+		"{\"command\":\"sh <<'EOF'\\ngit push origin main\\nEOF\"}",
 		`{"command":"find . -maxdepth 1 -exec git push origin main \\;"}`,
 		`{"command":"flock /tmp/repo.lock git -C /workspace/repo push origin main"}`,
 		`{"command":"python3 -c 'import subprocess; subprocess.run([\"git\", \"push\"])'"}`,
+		"{\"command\":\"python3 - <<'EOF'\\nimport subprocess\\nsubprocess.run(['git', 'push'])\\nEOF\"}",
 		`{"command":"git submodule foreach 'git push origin HEAD'"}`,
 	} {
 		if !IsAutonomousHardBlocked("bash", cmd) {
@@ -277,11 +298,22 @@ func testAutonomousFloorBashGitPush(t *testing.T) {
 	for _, safeCmd := range []string{
 		`{"command":"git status"}`,
 		`{"command":"git -C /workspace/repo log -n 5"}`,
-		`{"command":"git commit -m 'push updates locally'"}`,
+		`{"command":"git -C \"$REPO_DIR\" status"}`,
+		`{"command":"git -C $(pwd) diff HEAD~1"}`,
+		`{"command":"git commit -m \"fix $(date): push updates locally\""}`,
+		`{"command":"git log -- *.go"}`,
+		`{"command":"\"$VIRTUAL_ENV/bin/pytest\" -q"}`,
+		"{\"command\":\"sh <<'EOF'\\necho hello\\ngit status\\nEOF\"}",
+		`{"command":"echo file.go | xargs git add"}`,
+		`{"command":"echo $(date)"}`,
+		`{"command":"grep 'foo$' README.md"}`,
 		`{"command":"ls -la"}`,
 	} {
 		if IsAutonomousHardBlocked("bash", safeCmd) {
 			t.Errorf("bash %s must NOT be hard-blocked", safeCmd)
+		}
+		if risky, reason := classifyRiskyBash(safeCmd); risky {
+			t.Errorf("classifyRiskyBash(%s) = (true, %q), want false", safeCmd, reason)
 		}
 	}
 }

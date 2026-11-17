@@ -33,26 +33,26 @@ func TestAutonomousStage_FloorBlockedSessionDenyAndDynamicRemote(t *testing.T) {
 	agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{
 		CriticalToolSuffixes: []string{
 			"execute_plan",
-			"create_deal",
-			"delete_page",
+			"create_record",
+			"delete_resource",
 			"remote_mutate",
 			"remote_nosa",
 		},
 		CriticalToolNoSessionApproval: []string{
 			"execute_plan",
-			"create_deal",
-			"delete_page",
+			"create_record",
+			"delete_resource",
 			"remote_nosa",
 		},
 		CriticalToolAutonomousBlocked: []string{
-			"delete_page",
+			"delete_resource",
 		},
 	})
 
 	st := &patrolRecordStageStore{}
 	sink := &eventSink{}
 	reg := NewSessionApprovalRegistry()
-	reg.RegisterForUser("c1", "alice@example.com", "mcp_magnite_create_deal", SessionApprovalPolicy{
+	reg.RegisterForUser("c1", "alice@example.com", "mcp_beta_create_record", SessionApprovalPolicy{
 		Pattern: "",
 		Mode:    "deny",
 	})
@@ -79,21 +79,21 @@ func TestAutonomousStage_FloorBlockedSessionDenyAndDynamicRemote(t *testing.T) {
 	}
 
 	// 1. Default-allow critical_tool_no_session_approval tool -> RecordedSentinel.
-	got, err := a.Stage("mcp_openx_ox_execute_plan", "call_1", `{"plan_id":"p1"}`)
+	got, err := a.Stage("mcp_alpha_execute_plan", "call_1", `{"plan_id":"p1"}`)
 	if err != nil || got != agentcore.RecordedSentinel {
 		t.Fatalf("execute_plan = (%q, %v), want RecordedSentinel", got, err)
 	}
 
 	// 2. Explicit session deny overrides Autonomous mode -> PreDeniedSentinel.
-	got, err = a.Stage("mcp_magnite_create_deal", "call_deny", `{"name":"x"}`)
+	got, err = a.Stage("mcp_beta_create_record", "call_deny", `{"name":"x"}`)
 	if err != nil || got != agentcore.PreDeniedSentinel {
 		t.Fatalf("session-denied tool = (%q, %v), want PreDeniedSentinel", got, err)
 	}
 
 	// 3. Bundle critical_tool_autonomous_blocked stages a pending card.
-	got, err = a.Stage("mcp_pages_delete_page", "call_blk", `{"slug":"home"}`)
+	got, err = a.Stage("mcp_gamma_delete_resource", "call_blk", `{"slug":"home"}`)
 	if err != nil || got == agentcore.RecordedSentinel || got == agentcore.PreApprovedSentinel {
-		t.Fatalf("blocked delete_page = (%q, %v), want pending card ID", got, err)
+		t.Fatalf("blocked delete_resource = (%q, %v), want pending card ID", got, err)
 	}
 
 	// 4. Engine Hard-Block Floor tools stage a pending card even in Autonomous mode.
@@ -244,10 +244,10 @@ func TestEnableMCPConnectors_AutonomousInlineAndSessionDeny(t *testing.T) {
 		fakeEngine: &fakeEngine{},
 		catalog: []agent.OptionalServerInfo{
 			{
-				Name:        "openx_mcp",
-				DisplayName: "OpenX",
+				Name:        "alpha_mcp",
+				DisplayName: "Alpha",
 				ToolCount:   4,
-				Tools:       []string{"ox_list_deals"},
+				Tools:       []string{"alpha_list_records"},
 			},
 		},
 	}
@@ -268,13 +268,13 @@ func TestEnableMCPConnectors_AutonomousInlineAndSessionDeny(t *testing.T) {
 
 	handler := srv.newEnableMCPConnectorsHandler(conv, "alice@example.com", buf, stager)
 	res, err := handler(context.Background(), "call_conn_1", tools.EnableMCPConnectorsParams{
-		Connectors: []string{"openx_mcp"},
-		Reason:     "Need OpenX reporting",
+		Connectors: []string{"alpha_mcp"},
+		Reason:     "Need Alpha reporting",
 	})
 	if err != nil {
 		t.Fatalf("Autonomous enable_mcp_connectors error: %v", err)
 	}
-	if res.Status != "enabled" || !res.AutoApproved || len(res.Connectors) != 1 || res.Connectors[0] != "openx_mcp" {
+	if res.Status != "enabled" || !res.AutoApproved || len(res.Connectors) != 1 || res.Connectors[0] != "alpha_mcp" {
 		t.Fatalf("unexpected enable_mcp_connectors result: %+v", res)
 	}
 
@@ -284,13 +284,13 @@ func TestEnableMCPConnectors_AutonomousInlineAndSessionDeny(t *testing.T) {
 		Mode:    "deny",
 	})
 	engine.catalog = append(engine.catalog, agent.OptionalServerInfo{
-		Name:        "magnite_mcp",
-		DisplayName: "Magnite",
+		Name:        "beta_mcp",
+		DisplayName: "Beta",
 		ToolCount:   2,
-		Tools:       []string{"mg_list"},
+		Tools:       []string{"beta_list"},
 	})
 	_, err = handler(context.Background(), "call_conn_2", tools.EnableMCPConnectorsParams{
-		Connectors: []string{"magnite_mcp"},
+		Connectors: []string{"beta_mcp"},
 		Reason:     "Blocked by session policy",
 	})
 	if err == nil || !strings.Contains(err.Error(), "APPROVAL_DENIED") {

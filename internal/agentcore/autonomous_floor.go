@@ -112,7 +112,7 @@ func IsAutonomousHardBlocked(toolName, rawInput string) bool {
 		return IsGitPushBash(rawInput)
 	}
 
-	// 3. M365 outbound/sharing/rules/batch tools and external SSP messaging tools.
+	// 3. M365 outbound/sharing/rules/batch tools and team-wide email template tools.
 	for suffix := range autonomousHardBlockedSuffixSet {
 		if lower == suffix || strings.HasSuffix(lower, "_"+suffix) {
 			return true
@@ -256,8 +256,9 @@ func extractTopLevelStringFieldSpellings(rawInput, wantKey string) (values []str
 
 // IsGitPushBash reports whether a bash tool JSON payload invokes `git push`
 // (including `git -C <dir> push`, `git -c <k=v> push`, `--git-dir=...`, path
-// prefixes like `/usr/bin/git`, wrappers like `env`/`sudo`, or chained shell
-// commands).
+// prefixes like `/usr/bin/git` or `/usr/lib/git-core/git-push`, wrappers like
+// `env`/`sudo`/`xargs`, command/parameter substitutions, or shell pipelines and
+// heredocs).
 func IsGitPushBash(rawInput string) bool {
 	cmds, dupOrBad := extractTopLevelStringFieldSpellings(rawInput, "command")
 	if dupOrBad {
@@ -279,145 +280,677 @@ func bashCommandRunsGitPushDepth(cmd string, depth int) bool {
 	if depth > 4 {
 		return true
 	}
-	segments := splitShellCommandSegments(cmd)
+	segments, subcmds := parseShellScript(cmd)
+	for _, sub := range subcmds {
+		if bashCommandRunsGitPushDepth(sub, depth+1) {
+			return true
+		}
+	}
+	writesPushText := anySegmentWritesPushText(segments)
 	for _, seg := range segments {
-		if segmentIsGitPush(seg, depth) {
+		if segmentIsGitPush(seg, writesPushText, depth) {
 			return true
 		}
 	}
 	return false
 }
 
-func splitShellCommandSegments(cmd string) [][]string {
-	var (
-		segments [][]string
-		cur      []string
-		tok      strings.Builder
-		hasTok   bool
-		inSingle bool
-		inDouble bool
-		escaped  bool
-	)
-	flushTok := func() {
-		if hasTok {
-			cur = append(cur, tok.String())
-			tok.Reset()
-			hasTok = false
-		}
-	}
-	flushSeg := func() {
-		flushTok()
-		if len(cur) > 0 {
-			segments = append(segments, cur)
-			cur = nil
-		}
-	}
-	for i := 0; i < len(cmd); i++ {
-		ch := cmd[i]
-		if escaped {
-			tok.WriteByte(ch)
-			hasTok = true
-			escaped = false
+func anySegmentWritesPushText(segments []shellSegment) bool {
+	for _, seg := range segments {
+		if !seg.hasOutRedir && !segmentUsesTee(seg.tokens) {
 			continue
 		}
+		for _, tok := range seg.tokens {
+			if tok.dynamic || containsASCIIWordFold(tok.val, "git") || containsASCIIWordFold(tok.val, "push") {
+				return true
+			}
+		}
+		for _, body := range seg.stdinBodies {
+			if containsASCIIWordFold(body, "git") && containsASCIIWordFold(body, "push") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func segmentUsesTee(tokens []shellToken) bool {
+	for _, tok := range tokens {
+		if executableBaseName(tok.val) == "tee" {
+			return true
+		}
+	}
+	return false
+}
+
+type shellToken struct {
+	val               string
+	dynamic           bool
+	dynamicAfterSlash bool
+}
+
+type shellSegment struct {
+	tokens      []shellToken
+	pipedStdin  bool
+	hasOutRedir bool
+	stdinBodies []string
+	stdinDyn    bool
+}
+
+type pendingHeredoc struct {
+	segIdx int
+	delim  string
+	strip  bool
+}
+
+type shellLexer struct {
+	src         string
+	pos         int
+	segments    []shellSegment
+	curSeg      shellSegment
+	tok         strings.Builder
+	hasTok      bool
+	tokDyn      bool
+	tokDynSlash bool
+	subcmds     []string
+	heredocs    []pendingHeredoc
+}
+
+func parseShellScript(cmd string) ([]shellSegment, []string) {
+	l := &shellLexer{src: cmd}
+	for l.pos < len(l.src) {
+		l.stepUnquoted()
+	}
+	l.flushSeg(false)
+	return l.segments, l.subcmds
+}
+
+func (l *shellLexer) writeLiteralByte(ch byte) {
+	l.tok.WriteByte(ch)
+	l.hasTok = true
+	if ch == '/' {
+		l.tokDynSlash = false
+	}
+}
+
+func (l *shellLexer) markDynamic(placeholder string) {
+	if placeholder != "" {
+		l.tok.WriteString(placeholder)
+	}
+	l.hasTok = true
+	l.tokDyn = true
+	l.tokDynSlash = true
+}
+
+func (l *shellLexer) flushTok() {
+	if !l.hasTok {
+		return
+	}
+	l.curSeg.tokens = append(l.curSeg.tokens, shellToken{
+		val:               l.tok.String(),
+		dynamic:           l.tokDyn,
+		dynamicAfterSlash: l.tokDynSlash,
+	})
+	l.tok.Reset()
+	l.hasTok = false
+	l.tokDyn = false
+	l.tokDynSlash = false
+}
+
+func (l *shellLexer) flushSeg(nextPiped bool) {
+	l.flushTok()
+	hasContent := len(l.curSeg.tokens) > 0 || len(l.curSeg.stdinBodies) > 0 || l.curSeg.stdinDyn || l.curSeg.hasOutRedir
+	if hasContent {
+		segIdx := len(l.segments)
+		l.segments = append(l.segments, l.curSeg)
+		for idx := range l.heredocs {
+			if l.heredocs[idx].segIdx < 0 {
+				l.heredocs[idx].segIdx = segIdx
+			}
+		}
+	} else {
+		l.heredocs = nil
+	}
+	l.curSeg = shellSegment{pipedStdin: nextPiped}
+}
+
+func (l *shellLexer) stepUnquoted() {
+	if !l.hasTok && l.startsIONumberRedir() {
+		for l.pos < len(l.src) && l.src[l.pos] >= '0' && l.src[l.pos] <= '9' {
+			l.pos++
+		}
+		l.handleRedir()
+		return
+	}
+	ch := l.src[l.pos]
+	switch ch {
+	case '\\':
+		l.consumeBackslash()
+	case '\'':
+		l.readSingleQuoted()
+	case '"':
+		l.readDoubleQuoted()
+	case '$':
+		l.readDollarInWord(false)
+	case '`':
+		l.subcmds = append(l.subcmds, l.readBacktickSubst())
+		l.markDynamic("$()")
+	case ' ', '\t', '\r':
+		l.flushTok()
+		l.pos++
+	case '#':
+		l.stepHash()
+	case '\n':
+		l.flushSeg(false)
+		l.pos++
+		l.consumePendingHeredocs()
+	case ';', '(', ')':
+		l.flushSeg(false)
+		l.pos++
+	case '&':
+		l.stepAmpersand()
+	case '|':
+		l.stepPipe()
+	case '<', '>':
+		l.handleRedir()
+	case '*', '?', '[':
+		l.markDynamic(string(ch))
+		l.pos++
+	case '{', '}':
+		l.stepBrace(ch)
+	default:
+		l.writeLiteralByte(ch)
+		l.pos++
+	}
+}
+
+func (l *shellLexer) startsIONumberRedir() bool {
+	j := l.pos
+	for j < len(l.src) && l.src[j] >= '0' && l.src[j] <= '9' {
+		j++
+	}
+	if j == l.pos || j >= len(l.src) {
+		return false
+	}
+	if l.src[j] != '<' && l.src[j] != '>' {
+		return false
+	}
+	return j+1 >= len(l.src) || l.src[j+1] != '('
+}
+
+func (l *shellLexer) consumeBackslash() {
+	if l.pos+1 >= len(l.src) {
+		l.pos++
+		return
+	}
+	if l.src[l.pos+1] == '\n' {
+		l.pos += 2
+		return
+	}
+	l.writeLiteralByte(l.src[l.pos+1])
+	l.pos += 2
+}
+
+func (l *shellLexer) readSingleQuoted() {
+	l.pos++
+	l.hasTok = true
+	for l.pos < len(l.src) && l.src[l.pos] != '\'' {
+		l.writeLiteralByte(l.src[l.pos])
+		l.pos++
+	}
+	if l.pos < len(l.src) {
+		l.pos++
+	}
+}
+
+func (l *shellLexer) readDoubleQuoted() {
+	l.pos++
+	l.hasTok = true
+	for l.pos < len(l.src) {
+		ch := l.src[l.pos]
+		switch ch {
+		case '"':
+			l.pos++
+			return
+		case '\\':
+			l.consumeDoubleQuoteBackslash()
+		case '`':
+			l.subcmds = append(l.subcmds, l.readBacktickSubst())
+			l.markDynamic("$()")
+		case '$':
+			l.readDollarInWord(true)
+		default:
+			l.writeLiteralByte(ch)
+			l.pos++
+		}
+	}
+}
+
+func (l *shellLexer) consumeDoubleQuoteBackslash() {
+	if l.pos+1 >= len(l.src) {
+		l.pos++
+		return
+	}
+	next := l.src[l.pos+1]
+	if next == '\n' {
+		l.pos += 2
+		return
+	}
+	if next == '$' || next == '`' || next == '"' || next == '\\' {
+		l.writeLiteralByte(next)
+		l.pos += 2
+		return
+	}
+	l.writeLiteralByte('\\')
+	l.writeLiteralByte(next)
+	l.pos += 2
+}
+
+func (l *shellLexer) readDollarInWord(inDouble bool) {
+	if l.pos+1 >= len(l.src) {
+		l.writeLiteralByte('$')
+		l.pos++
+		return
+	}
+	next := l.src[l.pos+1]
+	switch {
+	case next == '(':
+		l.pos += 2
+		l.subcmds = append(l.subcmds, l.readParenBody())
+		l.markDynamic("$()")
+	case next == '{':
+		l.pos += 2
+		l.readBraceBody()
+		l.markDynamic("${}")
+	case !inDouble && next == '\'':
+		l.pos += 2
+		l.skipANSICBody()
+		l.markDynamic("$''")
+	case !inDouble && next == '"':
+		l.pos++
+		l.markDynamic("")
+		l.readDoubleQuoted()
+	case isShellParamStart(next):
+		l.pos += 2
+		if isASCIILetterOrUnderscore(next) {
+			for l.pos < len(l.src) && isASCIIAlnumOrUnderscore(l.src[l.pos]) {
+				l.pos++
+			}
+		}
+		l.markDynamic("$v")
+	default:
+		l.writeLiteralByte('$')
+		l.pos++
+	}
+}
+
+func isShellParamStart(b byte) bool {
+	if isASCIIAlnumOrUnderscore(b) {
+		return true
+	}
+	switch b {
+	case '@', '*', '#', '?', '$', '!', '-':
+		return true
+	}
+	return false
+}
+
+func isASCIILetterOrUnderscore(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || b == '_'
+}
+
+func isASCIIAlnumOrUnderscore(b byte) bool {
+	return isASCIILetterOrUnderscore(b) || (b >= '0' && b <= '9')
+}
+
+func (l *shellLexer) skipANSICBody() {
+	for l.pos < len(l.src) {
+		ch := l.src[l.pos]
+		if ch == '\'' {
+			l.pos++
+			return
+		}
+		if ch == '\\' && l.pos+1 < len(l.src) {
+			l.pos += 2
+			continue
+		}
+		l.pos++
+	}
+}
+
+func (l *shellLexer) readBacktickSubst() string {
+	l.pos++
+	var inner strings.Builder
+	for l.pos < len(l.src) {
+		ch := l.src[l.pos]
+		if ch == '`' {
+			l.pos++
+			break
+		}
+		if ch == '\\' && l.pos+1 < len(l.src) {
+			next := l.src[l.pos+1]
+			if next == '\n' {
+				l.pos += 2
+				continue
+			}
+			if next == '`' || next == '\\' || next == '$' {
+				inner.WriteByte(next)
+				l.pos += 2
+				continue
+			}
+		}
+		inner.WriteByte(ch)
+		l.pos++
+	}
+	return inner.String()
+}
+
+func (l *shellLexer) readParenBody() string {
+	start := l.pos
+	depth := 1
+	inSingle := false
+	inDouble := false
+	for l.pos < len(l.src) && depth > 0 {
+		ch := l.src[l.pos]
 		if inSingle {
 			if ch == '\'' {
 				inSingle = false
-			} else {
-				tok.WriteByte(ch)
 			}
-			hasTok = true
+			l.pos++
+			continue
+		}
+		if ch == '\\' && l.pos+1 < len(l.src) {
+			l.pos += 2
 			continue
 		}
 		if inDouble {
-			switch ch {
-			case '\\':
-				escaped = true
-			case '"':
+			if ch == '"' {
 				inDouble = false
-			case '`':
-				flushSeg()
-			case '$':
-				if i+1 < len(cmd) && cmd[i+1] == '(' {
-					flushSeg()
-					i++
-					continue
-				}
-				tok.WriteByte(ch)
-			default:
-				tok.WriteByte(ch)
 			}
-			hasTok = true
+			l.pos++
 			continue
 		}
 		switch ch {
-		case '\\':
-			escaped = true
 		case '\'':
 			inSingle = true
-			hasTok = true
 		case '"':
 			inDouble = true
-			hasTok = true
-		case ' ', '\t', '\r':
-			flushTok()
-		case ';', '\n', '&', '|', '(', ')', '`':
-			flushSeg()
-		case '$':
-			if i+1 < len(cmd) && cmd[i+1] == '(' {
-				flushSeg()
-				i++
-				continue
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				body := l.src[start:l.pos]
+				l.pos++
+				return body
 			}
-			tok.WriteByte(ch)
-			hasTok = true
-		default:
-			tok.WriteByte(ch)
-			hasTok = true
+		}
+		l.pos++
+	}
+	return l.src[start:l.pos]
+}
+
+func (l *shellLexer) readBraceBody() {
+	depth := 1
+	inSingle := false
+	inDouble := false
+	for l.pos < len(l.src) && depth > 0 {
+		ch := l.src[l.pos]
+		if inSingle {
+			if ch == '\'' {
+				inSingle = false
+			}
+			l.pos++
+			continue
+		}
+		if ch == '\\' && l.pos+1 < len(l.src) {
+			l.pos += 2
+			continue
+		}
+		if ch == '`' {
+			l.subcmds = append(l.subcmds, l.readBacktickSubst())
+			continue
+		}
+		if ch == '$' && l.pos+1 < len(l.src) && l.src[l.pos+1] == '(' {
+			l.pos += 2
+			l.subcmds = append(l.subcmds, l.readParenBody())
+			continue
+		}
+		if inDouble {
+			if ch == '"' {
+				inDouble = false
+			}
+			l.pos++
+			continue
+		}
+		switch ch {
+		case '\'':
+			inSingle = true
+		case '"':
+			inDouble = true
+		case '{':
+			depth++
+		case '}':
+			depth--
+		}
+		l.pos++
+	}
+}
+
+func (l *shellLexer) stepHash() {
+	if l.hasTok {
+		l.writeLiteralByte('#')
+		l.pos++
+		return
+	}
+	for l.pos < len(l.src) && l.src[l.pos] != '\n' {
+		l.pos++
+	}
+}
+
+func (l *shellLexer) stepAmpersand() {
+	if l.pos+1 < len(l.src) && l.src[l.pos+1] == '>' {
+		l.flushTok()
+		l.curSeg.hasOutRedir = true
+		l.pos += 2
+		if l.pos < len(l.src) && l.src[l.pos] == '>' {
+			l.pos++
+		}
+		_ = l.readRedirectTarget()
+		return
+	}
+	l.flushSeg(false)
+	if l.pos+1 < len(l.src) && l.src[l.pos+1] == '&' {
+		l.pos += 2
+		return
+	}
+	l.pos++
+}
+
+func (l *shellLexer) stepPipe() {
+	if l.pos+1 < len(l.src) && l.src[l.pos+1] == '|' {
+		l.flushSeg(false)
+		l.pos += 2
+		return
+	}
+	if l.pos+1 < len(l.src) && l.src[l.pos+1] == '&' {
+		l.flushSeg(true)
+		l.pos += 2
+		return
+	}
+	l.flushSeg(true)
+	l.pos++
+}
+
+func (l *shellLexer) stepBrace(ch byte) {
+	if !l.hasTok && (l.pos+1 >= len(l.src) || isShellWordDelimiter(l.src[l.pos+1])) {
+		l.writeLiteralByte(ch)
+		l.pos++
+		return
+	}
+	l.markDynamic(string(ch))
+	l.pos++
+}
+
+func isShellWordDelimiter(b byte) bool {
+	switch b {
+	case ' ', '\t', '\r', '\n', ';', '&', '|', '(', ')', '<', '>':
+		return true
+	}
+	return false
+}
+
+func (l *shellLexer) handleRedir() {
+	ch := l.src[l.pos]
+	if l.pos+1 < len(l.src) && l.src[l.pos+1] == '(' {
+		l.pos += 2
+		l.subcmds = append(l.subcmds, l.readParenBody())
+		l.markDynamic(string(ch) + "()")
+		return
+	}
+	l.flushTok()
+	if strings.HasPrefix(l.src[l.pos:], "<<<") {
+		l.pos += 3
+		w := l.readRedirectTarget()
+		l.curSeg.stdinBodies = append(l.curSeg.stdinBodies, w.val)
+		if w.dynamic {
+			l.curSeg.stdinDyn = true
+		}
+		return
+	}
+	if strings.HasPrefix(l.src[l.pos:], "<<") {
+		strip := strings.HasPrefix(l.src[l.pos:], "<<-")
+		if strip {
+			l.pos += 3
+		} else {
+			l.pos += 2
+		}
+		delim := l.readRedirectTarget()
+		if delim.val != "" {
+			l.heredocs = append(l.heredocs, pendingHeredoc{segIdx: -1, delim: delim.val, strip: strip})
+		}
+		return
+	}
+	if ch == '>' {
+		l.curSeg.hasOutRedir = true
+	}
+	l.pos++
+	if l.pos < len(l.src) && (l.src[l.pos] == '>' || l.src[l.pos] == '&' || l.src[l.pos] == '|') {
+		l.pos++
+	}
+	_ = l.readRedirectTarget()
+}
+
+func (l *shellLexer) readRedirectTarget() shellToken {
+	for l.pos < len(l.src) && (l.src[l.pos] == ' ' || l.src[l.pos] == '\t') {
+		l.pos++
+	}
+	savedSeg := l.curSeg
+	l.curSeg = shellSegment{}
+	for l.pos < len(l.src) && !isShellWordDelimiter(l.src[l.pos]) {
+		l.stepUnquoted()
+	}
+	l.flushTok()
+	var out shellToken
+	if len(l.curSeg.tokens) > 0 {
+		out = l.curSeg.tokens[0]
+	}
+	l.curSeg = savedSeg
+	return out
+}
+
+func (l *shellLexer) consumePendingHeredocs() {
+	if len(l.heredocs) == 0 {
+		return
+	}
+	pending := l.heredocs
+	l.heredocs = nil
+	for _, hd := range pending {
+		body := l.readHeredocBody(hd.delim, hd.strip)
+		if hd.segIdx >= 0 && hd.segIdx < len(l.segments) {
+			l.segments[hd.segIdx].stdinBodies = append(l.segments[hd.segIdx].stdinBodies, body)
 		}
 	}
-	flushSeg()
-	return segments
+}
+
+func (l *shellLexer) readHeredocBody(delim string, stripTabs bool) string {
+	var body strings.Builder
+	for l.pos < len(l.src) {
+		lineStart := l.pos
+		nl := strings.IndexByte(l.src[lineStart:], '\n')
+		var line string
+		if nl < 0 {
+			line = l.src[lineStart:]
+			l.pos = len(l.src)
+		} else {
+			line = l.src[lineStart : lineStart+nl]
+			l.pos = lineStart + nl + 1
+		}
+		cmp := strings.TrimSuffix(line, "\r")
+		if stripTabs {
+			cmp = strings.TrimLeft(cmp, "\t")
+		}
+		if cmp == delim {
+			break
+		}
+		body.WriteString(line)
+		body.WriteByte('\n')
+	}
+	return body.String()
 }
 
 var gitFlagsTakingArg = map[string]bool{
-	"-C":             true,
-	"-c":             true,
-	"--git-dir":      true,
-	"--work-tree":    true,
-	"--namespace":    true,
-	"--super-prefix": true,
-	"--exec-path":    true,
-	"--config-env":   true,
+	"-C":           true,
+	"-c":           true,
+	"--git-dir":    true,
+	"--work-tree":  true,
+	"--namespace":  true,
+	"--config-env": true,
 }
 
-func segmentIsGitPush(tokens []string, depth int) bool {
-	i, nestedPush, terminated := skipShellWrappers(tokens, depth)
-	if nestedPush {
+func segmentIsGitPush(seg shellSegment, writesPushText bool, depth int) bool {
+	res := skipShellWrappers(seg, writesPushText, depth)
+	if res.nestedPush {
 		return true
 	}
-	if terminated || i >= len(tokens) {
+	if res.terminated || res.next >= len(seg.tokens) {
 		return false
 	}
-	if strings.Contains(tokens[i], "$") && tokensContainWordFold(tokens[i+1:], "push") {
+	tok := seg.tokens[res.next]
+	if tok.dynamicAfterSlash {
 		return true
 	}
-	cmdBase := executableBaseName(tokens[i])
+	cmdBase := executableBaseName(tok.val)
+	if cmdBase == "git-push" {
+		return true
+	}
 	if cmdBase == "git" {
-		return gitTokensHavePushSubcommandDepth(tokens[i+1:], depth)
+		return gitTokensHavePushSubcommandDepth(seg.tokens[res.next+1:], res.viaXargs, depth)
 	}
-	if cmdBase == "echo" || cmdBase == "printf" {
+	if (cmdBase == "echo" || cmdBase == "printf") && !seg.hasOutRedir && !seg.pipedStdin {
 		return false
 	}
-	return nonGitCommandEmbedsGitPush(tokens[i+1:], depth)
-}
-
-func nonGitCommandEmbedsGitPush(args []string, depth int) bool {
-	for j, tok := range args {
-		if executableBaseName(tok) == "git" && gitTokensHavePushSubcommandDepth(args[j+1:], depth+1) {
+	if nonGitCommandEmbedsGitPush(seg.tokens[res.next+1:], depth) {
+		return true
+	}
+	for _, body := range seg.stdinBodies {
+		if tokenContainsEmbeddedGitAndPush(body) {
 			return true
 		}
-		if tokenContainsEmbeddedGitAndPush(tok) {
+	}
+	return false
+}
+
+func nonGitCommandEmbedsGitPush(args []shellToken, depth int) bool {
+	for j, tok := range args {
+		base := executableBaseName(tok.val)
+		if base == "git-push" {
+			return true
+		}
+		if base == "git" && gitTokensHavePushSubcommandDepth(args[j+1:], false, depth+1) {
+			return true
+		}
+		if tokenContainsEmbeddedGitAndPush(tok.val) {
 			return true
 		}
 	}
@@ -452,15 +985,6 @@ func isASCIIIdentChar(b byte) bool {
 	return (b >= 'a' && b <= 'z') || (b >= '0' && b <= '9') || b == '_' || b == '-'
 }
 
-func tokensContainWordFold(tokens []string, want string) bool {
-	for _, tok := range tokens {
-		if strings.EqualFold(strings.TrimSpace(tok), want) {
-			return true
-		}
-	}
-	return false
-}
-
 var shellControlKeywords = map[string]bool{
 	"!":       true,
 	"{":       true,
@@ -481,71 +1005,208 @@ var shellControlKeywords = map[string]bool{
 	"builtin": true,
 }
 
-func skipShellWrappers(tokens []string, depth int) (next int, nestedPush bool, terminated bool) {
+var shellInterpreterNames = map[string]bool{
+	"sh":   true,
+	"bash": true,
+	"dash": true,
+	"zsh":  true,
+	"ksh":  true,
+	"mksh": true,
+	"ash":  true,
+	"csh":  true,
+	"tcsh": true,
+	"fish": true,
+}
+
+type wrapperSkipResult struct {
+	next       int
+	nestedPush bool
+	terminated bool
+	viaXargs   bool
+}
+
+func skipShellWrappers(seg shellSegment, writesPushText bool, depth int) wrapperSkipResult {
+	tokens := seg.tokens
 	i := 0
+	viaXargs := false
+	sawNonXargsWrapper := false
 	for i < len(tokens) {
 		t := tokens[i]
-		if isEnvAssignmentToken(t) || shellControlKeywords[t] {
+		if t.dynamicAfterSlash {
+			return wrapperSkipResult{next: i, viaXargs: viaXargs}
+		}
+		if isEnvAssignmentToken(t.val) || shellControlKeywords[t.val] {
 			i++
 			continue
 		}
-		base := executableBaseName(t)
+		base := executableBaseName(t.val)
+		if shellInterpreterNames[base] {
+			return wrapperSkipResult{next: i, nestedPush: shellInvocationRunsGitPush(seg, tokens[i+1:], writesPushText, viaXargs, depth), terminated: true}
+		}
 		switch base {
-		case "sh", "bash", "dash", "zsh":
-			return i, shellDashCRunsGitPush(tokens[i+1:], depth), true
 		case "eval":
-			return i, bashCommandRunsGitPushDepth(strings.Join(tokens[i+1:], " "), depth+1), true
-		case "env", "command", "nohup", "time", "xargs":
-			i = skipFlagRun(tokens, i+1, envArgFlags(base))
+			return wrapperSkipResult{next: i, nestedPush: evalTokensRunGitPush(tokens[i+1:], viaXargs, depth), terminated: true}
+		case ".", "source":
+			return wrapperSkipResult{next: i, nestedPush: sourceRunsGitPush(tokens[i+1:], writesPushText, viaXargs), terminated: true}
+		case "env":
+			var envPush bool
+			i, envPush = skipEnvWrapper(tokens, i+1, depth)
+			if envPush {
+				return wrapperSkipResult{next: i, nestedPush: true, terminated: true}
+			}
+			sawNonXargsWrapper = true
+			continue
+		case "xargs":
+			viaXargs = true
+			i = skipFlagRun(tokens, i+1, xargsFlagsWithArg)
+			continue
+		case "command", "nohup", "time":
+			sawNonXargsWrapper = true
+			i = skipFlagRun(tokens, i+1, nil)
 			continue
 		case "sudo":
+			sawNonXargsWrapper = true
 			i = skipFlagRun(tokens, i+1, sudoArgFlags)
 			continue
 		case "nice":
+			sawNonXargsWrapper = true
 			i = skipNiceFlags(tokens, i+1)
 			continue
 		case "timeout":
+			sawNonXargsWrapper = true
 			i = skipTimeoutWrapper(tokens, i+1)
 			continue
 		}
 		break
 	}
-	return i, false, false
+	if i >= len(tokens) && viaXargs && sawNonXargsWrapper {
+		return wrapperSkipResult{next: i, nestedPush: true, terminated: true}
+	}
+	return wrapperSkipResult{next: i, viaXargs: viaXargs}
 }
 
-func shellDashCRunsGitPush(args []string, depth int) bool {
+func shellInvocationRunsGitPush(seg shellSegment, args []shellToken, writesPushText, viaXargs bool, depth int) bool {
+	if viaXargs {
+		return true
+	}
 	i := 0
-	for i < len(args) && strings.HasPrefix(args[i], "-") {
-		flag := args[i]
+	for i < len(args) && strings.HasPrefix(args[i].val, "-") {
+		flagTok := args[i]
+		if flagTok.dynamic {
+			return true
+		}
 		i++
+		flag := flagTok.val
 		if flag == "-c" || (len(flag) > 2 && flag[0] == '-' && flag[1] != '-' && strings.HasSuffix(flag, "c")) {
-			return i < len(args) && bashCommandRunsGitPushDepth(args[i], depth+1)
+			if i >= len(args) {
+				return false
+			}
+			if args[i].dynamic {
+				return true
+			}
+			return bashCommandRunsGitPushDepth(args[i].val, depth+1)
+		}
+	}
+	if seg.pipedStdin || seg.stdinDyn {
+		return true
+	}
+	for _, body := range seg.stdinBodies {
+		if bashCommandRunsGitPushDepth(body, depth+1) {
+			return true
+		}
+	}
+	for _, arg := range args[i:] {
+		if arg.dynamic || writesPushText {
+			return true
 		}
 	}
 	return false
 }
 
+func evalTokensRunGitPush(args []shellToken, viaXargs bool, depth int) bool {
+	if viaXargs {
+		return true
+	}
+	parts := make([]string, 0, len(args))
+	for _, a := range args {
+		if a.dynamic {
+			return true
+		}
+		parts = append(parts, a.val)
+	}
+	return bashCommandRunsGitPushDepth(strings.Join(parts, " "), depth+1)
+}
+
+func sourceRunsGitPush(args []shellToken, writesPushText, viaXargs bool) bool {
+	if viaXargs || writesPushText {
+		return true
+	}
+	for _, a := range args {
+		if a.dynamic {
+			return true
+		}
+	}
+	return false
+}
+
+func skipEnvWrapper(tokens []shellToken, i, depth int) (int, bool) {
+	for i < len(tokens) {
+		tok := tokens[i]
+		if isEnvAssignmentToken(tok.val) {
+			i++
+			continue
+		}
+		if !strings.HasPrefix(tok.val, "-") {
+			break
+		}
+		if tok.dynamic {
+			return i, true
+		}
+		if tok.val == "-S" || strings.HasPrefix(tok.val, "-S") || strings.HasPrefix(tok.val, "--split-string=") {
+			spec, nextIdx, dyn := extractEnvSplitString(tokens, i)
+			if dyn || bashCommandRunsGitPushDepth(spec, depth+1) {
+				return nextIdx, true
+			}
+			i = nextIdx
+			continue
+		}
+		if envFlagsWithArg[tok.val] && i+1 < len(tokens) {
+			i += 2
+			continue
+		}
+		i++
+	}
+	return i, false
+}
+
+func extractEnvSplitString(tokens []shellToken, i int) (string, int, bool) {
+	arg := tokens[i].val
+	switch {
+	case arg == "-S":
+		if i+1 >= len(tokens) {
+			return "", i + 1, false
+		}
+		return tokens[i+1].val, i + 2, tokens[i+1].dynamic
+	case strings.HasPrefix(arg, "--split-string="):
+		return strings.TrimPrefix(arg, "--split-string="), i + 1, tokens[i].dynamic
+	default:
+		return arg[2:], i + 1, tokens[i].dynamic
+	}
+}
+
 var (
-	envFlagsWithArg   = map[string]bool{"-u": true, "-C": true, "-S": true}
+	envFlagsWithArg   = map[string]bool{"-u": true, "-C": true}
 	xargsFlagsWithArg = map[string]bool{"-I": true, "-i": true, "-L": true, "-l": true, "-n": true, "-P": true, "-s": true, "-d": true, "-a": true, "-E": true, "-e": true}
 	sudoArgFlags      = map[string]bool{"-u": true, "-g": true, "-C": true, "-D": true}
 	timeoutArgFlags   = map[string]bool{"-k": true, "-s": true}
 )
 
-func envArgFlags(base string) map[string]bool {
-	switch base {
-	case "env":
-		return envFlagsWithArg
-	case "xargs":
-		return xargsFlagsWithArg
-	default:
-		return nil
-	}
-}
-
-func skipFlagRun(tokens []string, i int, flagsTakingArg map[string]bool) int {
-	for i < len(tokens) && strings.HasPrefix(tokens[i], "-") {
-		if flagsTakingArg[tokens[i]] && i+1 < len(tokens) {
+func skipFlagRun(tokens []shellToken, i int, flagsTakingArg map[string]bool) int {
+	for i < len(tokens) && strings.HasPrefix(tokens[i].val, "-") {
+		if tokens[i].dynamic {
+			return i
+		}
+		if flagsTakingArg[tokens[i].val] && i+1 < len(tokens) {
 			i += 2
 			continue
 		}
@@ -554,25 +1215,25 @@ func skipFlagRun(tokens []string, i int, flagsTakingArg map[string]bool) int {
 	return i
 }
 
-func skipNiceFlags(tokens []string, i int) int {
-	if i < len(tokens) && tokens[i] == "-n" && i+1 < len(tokens) {
+func skipNiceFlags(tokens []shellToken, i int) int {
+	if i < len(tokens) && tokens[i].val == "-n" && i+1 < len(tokens) {
 		return i + 2
 	}
-	if i < len(tokens) && strings.HasPrefix(tokens[i], "-") {
+	if i < len(tokens) && strings.HasPrefix(tokens[i].val, "-") && !tokens[i].dynamic {
 		return i + 1
 	}
 	return i
 }
 
-func skipTimeoutWrapper(tokens []string, i int) int {
+func skipTimeoutWrapper(tokens []shellToken, i int) int {
 	i = skipFlagRun(tokens, i, timeoutArgFlags)
-	if i < len(tokens) {
+	if i < len(tokens) && !tokens[i].dynamic {
 		i++ // duration arg
 	}
 	return i
 }
 
-func gitTokensHavePushSubcommandDepth(args []string, depth int) bool {
+func gitTokensHavePushSubcommandDepth(args []shellToken, viaXargs bool, depth int) bool {
 	if depth > 4 {
 		return true
 	}
@@ -581,64 +1242,89 @@ func gitTokensHavePushSubcommandDepth(args []string, depth int) bool {
 	i := 0
 	for i < len(args) {
 		arg := args[i]
-		if arg == "--" {
+		if arg.val == "--" {
 			i++
 			break
 		}
-		if !strings.HasPrefix(arg, "-") || arg == "-" {
-			return gitSubcommandIsPush(arg, args[i+1:], aliases, hasConfigEnvAlias, depth)
+		if !strings.HasPrefix(arg.val, "-") || arg.val == "-" {
+			if arg.dynamic {
+				return true
+			}
+			return gitSubcommandIsPush(arg.val, args[i+1:], aliases, hasConfigEnvAlias, viaXargs, depth)
 		}
-		if arg == "-h" || arg == "--help" || arg == "-v" || arg == "--version" {
+		if arg.dynamic {
+			return true
+		}
+		if arg.val == "-h" || arg.val == "--help" || arg.val == "-v" || arg.val == "--version" {
 			return false
 		}
-		if name, val, ok := parseGitInlineAliasFlag(args, i); ok {
+		name, val, dynSpec, isAlias := parseGitInlineAliasFlag(args, i)
+		if dynSpec {
+			return true
+		}
+		if isAlias {
 			if aliases == nil {
 				aliases = make(map[string]string)
 			}
 			aliases[name] = val
-		} else if gitConfigEnvDefinesAlias(args, i) {
+		} else if gitConfigEnvDefinesOrDynAlias(args, i) {
 			hasConfigEnvAlias = true
 		}
-		if gitFlagsTakingArg[arg] {
+		if gitFlagsTakingArg[arg.val] {
 			i += 2
 			continue
 		}
 		i++
 	}
 	if i >= len(args) {
-		return false
+		return viaXargs
 	}
-	return gitSubcommandIsPush(args[i], args[i+1:], aliases, hasConfigEnvAlias, depth)
+	if args[i].dynamic {
+		return true
+	}
+	return gitSubcommandIsPush(args[i].val, args[i+1:], aliases, hasConfigEnvAlias, viaXargs, depth)
 }
 
-func parseGitInlineAliasFlag(args []string, i int) (string, string, bool) {
-	arg := args[i]
+func parseGitInlineAliasFlag(args []shellToken, i int) (name, val string, dynSpec, ok bool) {
+	arg := args[i].val
 	var spec string
 	switch {
-	case arg == "-c" && i+1 < len(args):
-		spec = args[i+1]
+	case arg == "-c":
+		if i+1 >= len(args) {
+			return "", "", false, false
+		}
+		if args[i+1].dynamic {
+			return "", "", true, false
+		}
+		spec = args[i+1].val
 	case strings.HasPrefix(arg, "-c") && len(arg) > 2:
 		spec = arg[2:]
 	default:
-		return "", "", false
+		return "", "", false, false
 	}
-	key, val, hasEq := strings.Cut(strings.TrimSpace(spec), "=")
+	key, v, hasEq := strings.Cut(strings.TrimSpace(spec), "=")
 	if !hasEq {
-		return "", "", false
+		return "", "", false, false
 	}
 	keyLower := strings.ToLower(strings.TrimSpace(key))
 	if !strings.HasPrefix(keyLower, "alias.") || len(keyLower) <= len("alias.") {
-		return "", "", false
+		return "", "", false, false
 	}
-	return keyLower[len("alias."):], strings.TrimSpace(val), true
+	return keyLower[len("alias."):], strings.TrimSpace(v), false, true
 }
 
-func gitConfigEnvDefinesAlias(args []string, i int) bool {
-	arg := args[i]
+func gitConfigEnvDefinesOrDynAlias(args []shellToken, i int) bool {
+	arg := args[i].val
 	var spec string
 	switch {
-	case arg == "--config-env" && i+1 < len(args):
-		spec = args[i+1]
+	case arg == "--config-env":
+		if i+1 >= len(args) {
+			return false
+		}
+		if args[i+1].dynamic {
+			return true
+		}
+		spec = args[i+1].val
 	case strings.HasPrefix(arg, "--config-env="):
 		spec = strings.TrimPrefix(arg, "--config-env=")
 	default:
@@ -648,11 +1334,17 @@ func gitConfigEnvDefinesAlias(args []string, i int) bool {
 	return strings.HasPrefix(key, "alias.")
 }
 
-func gitSubcommandIsPush(sub string, rest []string, aliases map[string]string, hasConfigEnvAlias bool, depth int) bool {
-	if strings.EqualFold(sub, "push") || strings.Contains(sub, "$") {
+func gitSubcommandIsPush(sub string, rest []shellToken, aliases map[string]string, hasConfigEnvAlias, viaXargs bool, depth int) bool {
+	if strings.EqualFold(sub, "push") {
 		return true
 	}
-	if strings.EqualFold(sub, "submodule") && nonGitCommandEmbedsGitPush(rest, depth) {
+	if strings.EqualFold(sub, "submodule") {
+		if viaXargs && len(rest) == 1 && strings.EqualFold(rest[0].val, "foreach") {
+			return true
+		}
+		return nonGitCommandEmbedsGitPush(rest, depth)
+	}
+	if strings.EqualFold(sub, "config") && gitConfigSetsPushAlias(rest, depth) {
 		return true
 	}
 	if hasConfigEnvAlias {
@@ -662,10 +1354,40 @@ func gitSubcommandIsPush(sub string, rest []string, aliases map[string]string, h
 	if !ok {
 		return false
 	}
+	return gitAliasTargetRunsPush(target, depth)
+}
+
+func gitConfigSetsPushAlias(rest []shellToken, depth int) bool {
+	for idx, tok := range rest {
+		lower := strings.ToLower(strings.TrimSpace(tok.val))
+		if !strings.HasPrefix(lower, "alias.") {
+			continue
+		}
+		if idx+1 >= len(rest) {
+			return false
+		}
+		valTok := rest[idx+1]
+		if valTok.dynamic || gitAliasTargetRunsPush(valTok.val, depth) {
+			return true
+		}
+	}
+	return false
+}
+
+func gitAliasTargetRunsPush(target string, depth int) bool {
 	if strings.HasPrefix(target, "!") {
 		return bashCommandRunsGitPushDepth(strings.TrimPrefix(target, "!"), depth+1)
 	}
-	return gitTokensHavePushSubcommandDepth(strings.Fields(target), depth+1)
+	subSegs, subCmds := parseShellScript(target)
+	for _, sc := range subCmds {
+		if bashCommandRunsGitPushDepth(sc, depth+1) {
+			return true
+		}
+	}
+	if len(subSegs) == 0 {
+		return false
+	}
+	return gitTokensHavePushSubcommandDepth(subSegs[0].tokens, false, depth+1)
 }
 
 func isEnvAssignmentToken(tok string) bool {
@@ -676,10 +1398,10 @@ func isEnvAssignmentToken(tok string) bool {
 	for i := 0; i < eq; i++ {
 		c := tok[i]
 		if i == 0 {
-			if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && c != '_' {
+			if !isASCIILetterOrUnderscore(c) {
 				return false
 			}
-		} else if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (c < '0' || c > '9') && c != '_' {
+		} else if !isASCIIAlnumOrUnderscore(c) {
 			return false
 		}
 	}
