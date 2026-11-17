@@ -159,6 +159,8 @@ var connectorStudioActions = map[string]string{
 	"connect_mcp": ConnectorStudioActionConnectMCP, "add_mcp": ConnectorStudioActionConnectMCP, "register_mcp": ConnectorStudioActionConnectMCP,
 	"create_custom_connector": ConnectorStudioActionCreateCustom, "create_connector": ConnectorStudioActionCreateCustom,
 	"save_connector": ConnectorStudioActionCreateCustom, "create_custom": ConnectorStudioActionCreateCustom,
+	"update_custom_connector": ConnectorStudioActionCreateCustom, "update_connector": ConnectorStudioActionCreateCustom,
+	"edit_connector":   ConnectorStudioActionCreateCustom,
 	"test_custom_tool": ConnectorStudioActionTestCustomTool, "test_tool": ConnectorStudioActionTestCustomTool, "verify_tool": ConnectorStudioActionTestCustomTool,
 }
 

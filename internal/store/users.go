@@ -1051,6 +1051,12 @@ func (s *Store) DeleteUser(ctx context.Context, email string) error {
 		`DELETE FROM conversation_order WHERE lower(user_email) = lower($1)`, email); err != nil {
 		return fmt.Errorf("delete chat orders: %w", err)
 	}
+	// The saved rail layout (migration 0202) names the account's chats,
+	// projects and tasks; it goes with them.
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM chat.sidebar_layouts WHERE user_email = $1`, email); err != nil {
+		return fmt.Errorf("delete sidebar layout: %w", err)
+	}
 	// Per-project UI state (migration 070) goes with the users row below via
 	// its ON DELETE CASCADE — in other people's projects too.
 	//

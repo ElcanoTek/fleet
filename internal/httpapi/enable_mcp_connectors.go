@@ -518,7 +518,18 @@ func (s *Server) newEnableMCPConnectorsHandler(
 		})
 		rawInput := string(rawBytes)
 
-		autoApprove := turnStager != nil && (turnStager.isAutoApprove() || turnStager.autoApproveInTest)
+		if turnStager != nil && turnStager.sessionRegistry != nil {
+			if p, ok := turnStager.sessionRegistry.MatchForUser(conv.ID, user, tools.EnableMCPConnectorsToolName, rawInput); ok && p.Mode == "deny" {
+				turnStager.emitUserScoped("tool.auto_resolved", map[string]any{
+					"tool":    tools.EnableMCPConnectorsToolName,
+					"mode":    "deny",
+					"pattern": p.Pattern,
+				})
+				return nil, fmt.Errorf("APPROVAL_DENIED: the user pre-denied %s for this conversation (session policy). Do NOT retry", tools.EnableMCPConnectorsToolName)
+			}
+		}
+
+		autoApprove := turnStager != nil && (turnStager.isAutonomous() || turnStager.isAutoApprove() || turnStager.autoApproveInTest)
 		if autoApprove {
 			return s.autoApproveEnableMCPConnectors(ctx, conv, user, toolCallID, rawInput, newlyAdded, merged, buf, turnStager)
 		}
@@ -547,6 +558,10 @@ func (s *Server) autoApproveEnableMCPConnectors(
 	safeAdded := promptSafeSlice(newlyAdded)
 	recordText := fmt.Sprintf("%s: auto-approved enabling optional MCP connector(s) %s for this conversation.",
 		notifyRecordResultPrefix, strings.Join(safeAdded, ", "))
+	if turnStager != nil && turnStager.isAutonomous() {
+		recordText = fmt.Sprintf("%s: this chat is in Autonomous mode. Enabled optional MCP connector(s) %s.",
+			notifyRecordResultPrefix, strings.Join(safeAdded, ", "))
+	}
 	expiry := int64(0)
 	if turnStager != nil {
 		expiry = turnStager.expiryUnixFor(tools.EnableMCPConnectorsToolName)
@@ -638,24 +653,29 @@ func (s *Server) autoApproveEnableMCPConnectors(
 	}
 	conv.OptionalMCPServersEnabled = callerMerged
 
+	serversUpdatedPayload := map[string]any{
+		"enabled_optional":             callerMerged,
+		"added":                        newlyAdded,
+		"owner_enabled_optional":       ownerMerged,
+		"participant_enabled_optional": participantMerged,
+		"viewer_enabled_optional":      viewerEnabled,
+		"user_email":                   user,
+	}
+	actionRecordedPayload := map[string]any{
+		"approval_id":      approval.ID,
+		"tool":             tools.EnableMCPConnectorsToolName,
+		"summary":          summarizeEnableMCPConnectorsInput(tools.EnableMCPConnectorsToolName, rawInput),
+		"undo_hint":        "You can toggle connectors off anytime in the Tools picker.",
+		"result_text":      recordText,
+		"enabled_optional": callerMerged,
+		"user_email":       user,
+	}
 	if buf != nil {
-		buf.Emit("mcp.servers_updated", map[string]any{
-			"enabled_optional":             callerMerged,
-			"added":                        newlyAdded,
-			"owner_enabled_optional":       ownerMerged,
-			"participant_enabled_optional": participantMerged,
-			"viewer_enabled_optional":      viewerEnabled,
-			"user_email":                   user,
-		})
-		buf.Emit("tool.action_recorded", map[string]any{
-			"approval_id":      approval.ID,
-			"tool":             tools.EnableMCPConnectorsToolName,
-			"summary":          summarizeEnableMCPConnectorsInput(tools.EnableMCPConnectorsToolName, rawInput),
-			"undo_hint":        "You can toggle connectors off anytime in the Tools picker.",
-			"result_text":      recordText,
-			"enabled_optional": callerMerged,
-			"user_email":       user,
-		})
+		buf.Emit("mcp.servers_updated", serversUpdatedPayload)
+		buf.Emit("tool.action_recorded", actionRecordedPayload)
+	} else if turnStager != nil && turnStager.sink != nil {
+		turnStager.emitUserScoped("mcp.servers_updated", serversUpdatedPayload)
+		turnStager.emitUserScoped("tool.action_recorded", actionRecordedPayload)
 	}
 
 	resumed := autoRes.ResumeInput != nil

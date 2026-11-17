@@ -361,6 +361,18 @@ type notifyRecordedCall struct {
 	tool, rawInput, toolCallID string
 }
 
+// ActionResultRecorder is an optional ApprovalStager extension that attaches a
+// structured outcome card (result_card) to an already-recorded notify or
+// Autonomous approval row once the tool call completes.
+//
+// LiveApprovalModeNotifier is an optional ApprovalStager extension that returns
+// a concise request-local notice when a conversation's live approval posture is
+// downgraded mid-turn (for example from autonomous to auto or manual), or ""
+// when unchanged.
+type LiveApprovalModeNotifier interface {
+	LiveApprovalModeNotice(ctx context.Context) string
+}
+
 // Session pre-approval sentinels (#300): instead of a real approval ID, Stage
 // may return one of these to signal a session-scoped pre-decision the user made
 // earlier ("approve/deny all <tool> in this conversation"). They ride the normal
@@ -897,9 +909,23 @@ func (o *orchestrationState) checkEmailSafety(toolName, toolCallID, rawInput str
 		}
 		switch id {
 		case PreApprovedSentinel:
-			// Session pre-approval (#300): run the send without a card, but the
-			// per-turn limit + dedup checks above still applied.
+			// Session pre-approval (#300): run the send without a card, while keeping
+			// the per-turn limit and dedup checks above active.
+			if o.sentEmailFingerprints == nil {
+				o.sentEmailFingerprints = make(map[string]struct{})
+			}
 			o.sentEmailFingerprints[fp] = struct{}{}
+			return false, ""
+		case RecordedSentinel:
+			// Self-addressed owner email in Autonomous mode: durable receipt was
+			// persisted in chat.approvals; let the send proceed.
+			if o.sentEmailFingerprints == nil {
+				o.sentEmailFingerprints = make(map[string]struct{})
+			}
+			o.sentEmailFingerprints[fp] = struct{}{}
+			if _, ok := o.approvalSink.(ActionResultRecorder); ok && ApprovalResultCard(toolName) {
+				o.notifyRecordedCalls = append(o.notifyRecordedCalls, notifyRecordedCall{tool: toolName, rawInput: rawInput, toolCallID: toolCallID})
+			}
 			return false, ""
 		case PreDeniedSentinel:
 			return true, fmt.Sprintf("APPROVAL_DENIED: the user pre-denied %s for this conversation (session policy). Do NOT retry; tell the user it was blocked by their own pre-approval setting.", toolName)

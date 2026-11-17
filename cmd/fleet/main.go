@@ -91,6 +91,9 @@ import (
 // approval card's expectation that a stale request closes within a minute.
 const approvalExpirySweepInterval = 30 * time.Second
 
+// uiAutoSubmitSweepInterval is the server-owned show_ui 10s countdown firing cadence.
+const uiAutoSubmitSweepInterval = 1 * time.Second
+
 // maintenanceInterval is how often the background maintenance loop runs the
 // box's reclamation pass — the chat plane's database retention sweeps plus the
 // attachment, temp-upload, workspace and git-worktree reclaimers. Hourly is
@@ -1110,11 +1113,28 @@ func run() error {
 	}()
 	serveInBackground("orchestrator", orchServer, errCh)
 	serveInBackground("web", webServer, errCh) // nil (skipped) when FLEET_WEB_ADDR=off
-	// Approval expiry sweep (#225): enforces the default-DENY-on-timeout contract
-	// for the web approval path. The per-turn SweepExpired only fires when a turn
-	// runs, so an idle conversation with a staged card would never auto-deny — this
-	// ticker closes that gap. Bound to ctx so it stops on shutdown; a panic is
-	// contained so the sweep can't crash the process.
+	startApprovalSweepers(ctx, chatSrv)
+	// One maintenance loop drives every periodic reclaimer on the box (chat
+	// retention sweeps, attachment + temp-upload files, orphan workspaces,
+	// stale git worktrees). See startMaintenanceLoop.
+	startMaintenanceLoop(ctx, cfg, h, chatSrv, chatStore)
+
+	// Listeners are bound; tell a systemd-aware supervisor we are ready (no-op
+	// when NOTIFY_SOCKET is unset, i.e. non-systemd / dev / tests).
+	grace := shutdownGrace(cfg)
+	logging.From(ctx).Info("fleet: shutdown grace configured (FLEET_SHUTDOWN_GRACE_SECONDS)", "grace", grace)
+	sdNotify("READY=1")
+
+	// Block until a terminal signal / listener error decides graceful vs immediate,
+	// then drain. Extracted so run() stays within the cyclomatic budget.
+	graceful := awaitShutdown(sigCh, errCh, chatSrv, pool, agentLimiter)
+	performShutdown(graceful, grace, cancel, chatSrv, pool, poolDone, chatServer, orchServer, webServer)
+	return nil
+}
+
+// startApprovalSweepers launches the background tickers for pending approval
+// expiry (#225) and Autonomous 10-second show_ui countdown auto-submission.
+func startApprovalSweepers(ctx context.Context, chatSrv *httpapi.Server) {
 	go func() {
 		defer safe.RecoverContext(ctx, "cmd.approval-expiry-sweep", nil)
 		ticker := time.NewTicker(approvalExpirySweepInterval)
@@ -1134,22 +1154,23 @@ func run() error {
 			}
 		}
 	}()
-	// One maintenance loop drives every periodic reclaimer on the box (chat
-	// retention sweeps, attachment + temp-upload files, orphan workspaces,
-	// stale git worktrees). See startMaintenanceLoop.
-	startMaintenanceLoop(ctx, cfg, h, chatSrv, chatStore)
-
-	// Listeners are bound; tell a systemd-aware supervisor we are ready (no-op
-	// when NOTIFY_SOCKET is unset, i.e. non-systemd / dev / tests).
-	grace := shutdownGrace(cfg)
-	logging.From(ctx).Info("fleet: shutdown grace configured (FLEET_SHUTDOWN_GRACE_SECONDS)", "grace", grace)
-	sdNotify("READY=1")
-
-	// Block until a terminal signal / listener error decides graceful vs immediate,
-	// then drain. Extracted so run() stays within the cyclomatic budget.
-	graceful := awaitShutdown(sigCh, errCh, chatSrv, pool, agentLimiter)
-	performShutdown(graceful, grace, cancel, chatSrv, pool, poolDone, chatServer, orchServer, webServer)
-	return nil
+	go func() {
+		defer safe.RecoverContext(ctx, "cmd.ui-autosubmit-sweep", nil)
+		ticker := time.NewTicker(uiAutoSubmitSweepInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				sweepCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+				if _, err := chatSrv.SweepDueUIAutoSubmits(sweepCtx); err != nil {
+					logging.From(ctx).Error("ui autosubmit sweep: failed", "err", err)
+				}
+				cancel()
+			}
+		}
+	}()
 }
 
 // keepChatScheduleCascade runs db.KeepChatScheduleCascade (5s doubling to a
@@ -2178,6 +2199,7 @@ func (p scheduledSkillProposer) Propose(name, description, body, _ string) (stri
 // but does not abort boot: the DB may be degraded, and the affected turns stay
 // 'running' for the next boot to retry. See docs/TURN-JOURNAL.md + ADR-0039.
 func recoverStrandedTurns(chatStore *store.Store, inputQueueRetentionDays int) {
+	chatStore.RequireBootAutoSubmitRecovery(time.Now().UnixMilli())
 	recCtx, recCancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer recCancel()
 	recovered, err := chatStore.RecoverStrandedTurns(recCtx)
@@ -2226,6 +2248,7 @@ func recoverStrandedTurns(chatStore *store.Store, inputQueueRetentionDays int) {
 	} else if noted > 0 {
 		logging.From(recCtx).Info("approval-resume recovery: dropped pending automatic resumes, with a note in each conversation", "conversations", noted)
 	}
+	recoverUIAutoSubmitsAtBoot(recCtx, chatStore)
 	// Reclaim terminal idempotency rows at boot as well as after turns. Recovery
 	// runs first so a stranded non-terminal row is resolved before retention is
 	// considered; non-terminal rows are never eligible for deletion.
@@ -2251,6 +2274,25 @@ func dropApprovalResumesAtBoot(chatStore *store.Store) (int, error) {
 		}
 	}
 	return 0, err
+}
+
+// recoverUIAutoSubmitsAtBoot pauses any pre-restart pending show_ui countdowns
+// and cancels stale autosubmit:* queue rows before startApprovalSweepers starts.
+func recoverUIAutoSubmitsAtBoot(logCtx context.Context, chatStore *store.Store) {
+	var err error
+	for attempt := 0; attempt < 2; attempt++ {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(logCtx), 30*time.Second)
+		var recovered int
+		recovered, err = chatStore.RecoverUIAutoSubmits(ctx)
+		cancel()
+		if err == nil {
+			if recovered > 0 {
+				logging.From(logCtx).Info("ui-autosubmit recovery: paused pre-restart countdowns", "recovered", recovered)
+			}
+			return
+		}
+	}
+	logging.From(logCtx).Error("ui-autosubmit recovery: failed at boot (sweeper remains gated until recovery succeeds)", "err", err)
 }
 
 // warnUncategorizedConnectors logs the bundle connectors with no Tools-picker

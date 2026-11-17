@@ -33,6 +33,7 @@ func (b *Bundle) AgentcorePolicy() agentcore.AgentPolicy {
 		ApprovedCallTimeoutSeconds:    p.ApprovedCallTimeoutSeconds,
 		CriticalToolNoSessionApproval: p.CriticalToolNoSessionApproval,
 		CriticalToolAutonomous:        p.CriticalToolAutonomous,
+		CriticalToolAutonomousBlocked: p.CriticalToolAutonomousBlocked,
 		CriticalToolCardDescribers:    p.CriticalToolCardDescribers,
 		CriticalToolResume:            p.CriticalToolResume,
 		CriticalToolResumeMaxPerHour:  p.CriticalToolResumeMaxPerHour,

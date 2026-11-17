@@ -28,8 +28,8 @@ import { t as tr } from "@/app/lib/i18n";
 // state without a second source of truth.
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { LaunchpadButton } from "@/app/launchpad/LaunchpadButton";
-import { NavToChat, NavToOrchestrator } from "./CrossViewNav";
+import { CustomizeRailButton, RailNav } from "@/app/shared/sidebar/RailNav";
+import { SidebarCustomizer } from "@/app/shared/sidebar/SidebarCustomizer";
 import { CloseButton } from "./CloseButton";
 import { Icon } from "./Icon";
 import { AccountMenu } from "./AccountMenu";
@@ -96,45 +96,6 @@ export function useRailCollapse(): RailCollapse {
   }, []);
 
   return { collapsed, isNarrow, railReady, setCollapsed };
-}
-
-function navItemClass(active: boolean, collapsed: boolean): string {
-  return [
-    "group/nav relative flex items-center gap-2.5 rounded-[var(--radius-md)] px-2.5 py-2 text-[0.875rem] no-underline transition",
-    active
-      ? "bg-[color-mix(in_srgb,var(--color-primary)_18%,transparent)] font-semibold text-[var(--color-text-primary)] before:absolute before:left-0 before:top-1/2 before:h-[0.95rem] before:w-0.5 before:-translate-y-1/2 before:rounded-full before:bg-[var(--color-primary)]"
-      : "text-[var(--color-text-secondary)] hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)]",
-    // Collapsed strip (≥sm): 2.5rem squares with the hue tile centered.
-    collapsed ? "sm:size-10 sm:justify-center sm:gap-0 sm:p-0" : "",
-  ].join(" ");
-}
-
-// navTileClass — the icon sits in a small accent-tinted tile with a
-// motion-safe hover lift; active saturates the tint with a soft glow. One
-// brand hue for every surface (per-surface colors read as noise here — the
-// status palette stays reserved for actual task states).
-function navTileClass(active: boolean): string {
-  const tint = active
-    ? "bg-[color-mix(in_srgb,var(--color-accent)_24%,transparent)] text-[var(--color-accent)] shadow-[0_0_10px_color-mix(in_srgb,var(--color-accent)_24%,transparent)]"
-    : "bg-[color-mix(in_srgb,var(--color-accent)_10%,transparent)] text-[color-mix(in_srgb,var(--color-accent)_75%,var(--color-text-secondary))]";
-  return [
-    "flex size-7 shrink-0 items-center justify-center rounded-[0.55rem] transition",
-    "motion-safe:group-hover/nav:scale-110 group-hover/nav:text-[var(--color-text-primary)]",
-    tint,
-  ].join(" ");
-}
-
-// RailLabel — a rail item's name with its one-line subtitle. In the collapsed
-// strip it is hidden from sight only (sm:sr-only): the hover data-tip is drawn
-// by the stylesheet, which a screen reader does not announce, so with the
-// label removed outright the icon was an unnamed link.
-function RailLabel({ title, subtitle, collapsed }: { title: string; subtitle: string; collapsed: boolean }) {
-  return (
-    <span className={["flex min-w-0 flex-1 flex-col leading-tight", collapsed ? "sm:sr-only" : ""].join(" ")}>
-      <span className="truncate">{title}</span>
-      <span className="truncate text-[0.7rem] font-normal text-[var(--color-text-muted)]">{subtitle}</span>
-    </span>
-  );
 }
 
 // Focusable elements inside the overlay drawer, for the Tab trap. Mirrors the
@@ -389,7 +350,7 @@ export function NavRail({
           // background-image (the un-hinted arbitrary-value form emits
           // background-color, which drops gradient values); --color-bg
           // underneath keeps the drawer opaque over scrolled content.
-          "fixed inset-y-0 left-0 z-30 flex h-[100dvh] w-[min(19rem,85vw)] flex-col gap-2 border-r border-[var(--color-border)] bg-[var(--color-bg)] bg-[image:var(--sidebar-surface)] py-[0.85rem] shadow-[var(--shadow-lg)] backdrop-blur-xl transition-[translate,visibility] duration-base max-sm:overflow-hidden",
+          "group/rail fixed inset-y-0 left-0 z-30 flex h-[100dvh] w-[min(19rem,85vw)] flex-col gap-2 border-r border-[var(--color-border)] bg-[var(--color-bg)] bg-[image:var(--sidebar-surface)] py-[0.85rem] shadow-[var(--shadow-lg)] backdrop-blur-xl transition-[translate,visibility] duration-base max-sm:overflow-hidden",
           // Closed on a phone it is also invisible, not only slid off-screen:
           // an off-screen drawer still took keyboard focus (the first Tab
           // stops on every page were its hidden items) and was still read
@@ -467,72 +428,24 @@ export function NavRail({
           />
         </div>
 
-        {/* Primary navigation */}
-        <nav
-          aria-label={tr("Switch surface")}
-          className={["grid grid-cols-[minmax(0,1fr)] gap-0.5", collapsed ? "sm:justify-items-center" : ""].join(" ")}
-        >
-          {/* The three ways of working, each with a subtitle that says what
-              makes it different — patrols and background tasks both run on a
-              schedule, so the names alone would blur: a patrol is a chat you
-              can talk to; a background task runs headless, with no chat (and
-              emails its result only when it has recipients). (The user guides live in the account menu.) */}
-          <NavToChat
-            className={navItemClass(activeView === "chat", collapsed)}
-            ariaCurrent={activeView === "chat" ? "page" : undefined}
-            dataTip={collapsed ? tr("Chat — talk it through") : undefined}
-          >
-            <span className={navTileClass(activeView === "chat")} aria-hidden="true">
-              <Icon name="message" className="size-[1rem]" />
-            </span>
-            <RailLabel title={tr("Chat")} subtitle={tr("Talk it through")} collapsed={collapsed} />
-          </NavToChat>
-          {/* Patrols (docs/PATROL-LAUNCHPAD.md): patrols live in Chat; this item
-              is their index (a menu of your patrol chats) and, with none yet,
-              the Patrol Launchpad wizard that sets one up. */}
-          <LaunchpadButton
-            className={`${navItemClass(false, collapsed)} w-full cursor-pointer text-left`}
-            tileClassName={navTileClass(false)}
-            label={<RailLabel title={tr("Patrols")} subtitle={tr("Chats that check in on a schedule")} collapsed={collapsed} />}
-            dataTip={collapsed ? tr("Patrols — chats that check in on a schedule") : undefined}
-            collapsed={collapsed}
-            onOpen={() => setSidebarOpen(false)}
-          />
-          <NavToOrchestrator
-            className={navItemClass(activeView === "orchestrator", collapsed)}
-            ariaCurrent={activeView === "orchestrator" ? "page" : undefined}
-            dataTip={
-              collapsed
-                ? typeof opsCount === "number" && opsCount > 0
-                  ? tr("Background tasks · {0} running", [opsCount])
-                  : tr("Background tasks · Runs without a chat")
-                : undefined
-            }
-          >
-            <span className={navTileClass(activeView === "orchestrator")} aria-hidden="true">
-              <Icon name="grid" className="size-[1rem]" />
-            </span>
-            <RailLabel title={tr("Background tasks")} subtitle={tr("Runs without a chat")} collapsed={collapsed} />
-            {typeof opsCount === "number" && opsCount > 0 ? (
-              <span
-                className={[
-                  "font-[family-name:var(--font-code)] text-[0.7rem] text-[var(--color-text-muted)]",
-                  collapsed ? "sm:hidden" : "",
-                ].join(" ")}
-              >
-                {opsCount}
-              </span>
-            ) : null}
-          </NavToOrchestrator>
-        </nav>
+        {/* Primary navigation: the person's destinations and pinned
+            shortcuts, in their own order (sidebar/RailNav.tsx). */}
+        <RailNav
+          activeView={activeView}
+          collapsed={collapsed}
+          opsCount={opsCount}
+          onNavigate={() => setSidebarOpen(false)}
+        />
 
-        <div className="my-1 h-px shrink-0 bg-[var(--color-border)]" />
+        <CustomizeRailButton collapsed={collapsed} />
 
         {/* Surface-specific middle content (chat: conversation org; ops: New task). */}
         <div className="flex min-h-0 flex-1 flex-col">{children}</div>
 
         {/* Surface-specific footer items (e.g. update banner, delete-all-unpinned). */}
         {footer}
+
+        <SidebarCustomizer />
 
         <AccountMenu
           email={account.email}

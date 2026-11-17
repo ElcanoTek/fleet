@@ -127,9 +127,14 @@ func (s *Server) handleListConversations(w http.ResponseWriter, r *http.Request,
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	autonomousAccepted := s.hasAcceptedAutonomous(r.Context(), user)
 	for i := range list {
 		if len(list[i].OptionalMCPServersEnabled) > 0 {
 			list[i].OptionalMCPServersEnabled = s.effectiveOptionalMCPServersForCaller(r.Context(), user, &list[i])
+		}
+		if !autonomousAccepted && list[i].EffectiveApprovalMode() == store.ConversationApprovalAutonomous {
+			list[i].ApprovalMode = store.ConversationApprovalAuto
+			list[i].AutoApprove = true
 		}
 	}
 	writeJSON(w, r, map[string]any{"conversations": list})
@@ -291,6 +296,16 @@ func (s *Server) createConversation(w http.ResponseWriter, r *http.Request, user
 	if len(req.MCPAccounts) > 0 {
 		if _, err := s.cleanMCPAccounts(r.Context(), user, req.MCPAccounts); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+	if req.ApprovalMode != nil {
+		parsedMode, ok := store.ParseConversationApprovalMode(*req.ApprovalMode)
+		if !ok {
+			http.Error(w, "invalid approval_mode: must be manual, auto, or autonomous", http.StatusBadRequest)
+			return
+		}
+		if parsedMode == store.ConversationApprovalAutonomous && !s.requireAutonomousAcceptance(w, r, user) {
 			return
 		}
 	}
@@ -498,6 +513,16 @@ func (s *Server) conversationByID(w http.ResponseWriter, r *http.Request) {
 	// the agent during run_python actually render in the chat UI.
 	if sub == "workspace" && r.Method == http.MethodGet {
 		s.handleWorkspaceFile(w, r, id, subArg)
+		return
+	}
+
+	if sub == "autosubmit" && subArg == "pause" {
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", "POST")
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		withOwnedOrMultiplayerConversation("conversation not found", (*Server).handleConversationAutoSubmitPause)(s, w, r, user, id)
 		return
 	}
 

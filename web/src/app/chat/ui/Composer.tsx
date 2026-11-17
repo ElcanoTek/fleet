@@ -183,6 +183,8 @@ export type ComposerProps = {
   toggleAutoApprove?: () => void;
   approvalMode?: ConversationApprovalMode;
   onChangeApprovalMode?: (mode: ConversationApprovalMode) => void;
+  autonomousAccepted?: boolean;
+  onRequireAutonomousAccept?: (onAccepted: () => void) => void;
   isConversationOwner?: boolean;
 
   // Turn / upload gating
@@ -289,6 +291,7 @@ export type ComposerProps = {
   activeConversationIdRef: RefObject<string | null>;
   abortControllersRef: RefObject<Map<string, AbortController>>;
   isPendingKey: (key: string | null) => boolean;
+  onStopPressed?: (convKey: string) => void;
 
   // In-chat recurring patrols & one-shot timers
   onStartPatrol?: (input: CreatePatrolInput) => boolean | void | Promise<boolean | void>;
@@ -323,6 +326,8 @@ export function Composer({
   toggleAutoApprove,
   approvalMode,
   onChangeApprovalMode,
+  autonomousAccepted,
+  onRequireAutonomousAccept,
   isConversationOwner = true,
   isStreaming,
   isUploadingAttachments,
@@ -377,6 +382,7 @@ export function Composer({
   activeConversationIdRef,
   abortControllersRef,
   isPendingKey,
+  onStopPressed,
   onStartPatrol,
   activePatrolCount = 0,
   onOpenShare,
@@ -1817,7 +1823,7 @@ export function Composer({
                                   {
                                     id: "autonomous" as const,
                                     label: tr("Autonomous"),
-                                    aria: tr("Autonomous mode: also run checked plans without asking"),
+                                    aria: tr("Autonomous mode: run live platform actions without asking"),
                                   },
                                 ]
                               ).map((opt) => {
@@ -1836,7 +1842,15 @@ export function Composer({
                                     aria-checked={selected}
                                     aria-label={opt.aria}
                                     data-testid={`composer-approval-mode-${opt.id}`}
-                                    onClick={() => onChangeApprovalMode(opt.id)}
+                                    onClick={() => {
+                                      if (
+                                        opt.id === "autonomous" &&
+                                        autonomousAccepted === false
+                                      ) {
+                                        setMoreMenuOpen(false);
+                                      }
+                                      onChangeApprovalMode(opt.id);
+                                    }}
                                     className={`rounded-[var(--radius-sm)] border px-2 py-1 text-center text-[0.7rem] font-semibold transition ${
                                       selected
                                         ? activeTone
@@ -1850,7 +1864,7 @@ export function Composer({
                             </div>
                             <p className="mt-1 px-1 text-[0.68rem] leading-snug text-[var(--color-text-muted)]">
                               {effectiveApprovalMode === "autonomous"
-                                ? tr("Runs routine tools and checked plans with a receipt card; external emails still ask.")
+                                ? tr("Runs live platform actions and prefilled forms (10s countdown) with receipt cards; external messages, schedules, destructive changes, and git push still ask.")
                                 : effectiveApprovalMode === "auto"
                                   ? tr("Skips cards for routine workspace actions; external plans and emails still ask.")
                                   : tr("Asks for confirmation before every critical action.")}
@@ -2229,6 +2243,8 @@ export function Composer({
                       {patrolPopoverOpen && !shareBusy ? (
                         <PatrolPopover
                           initialPrompt={prompt}
+                          autonomousAccepted={autonomousAccepted}
+                          onRequireAutonomousAccept={onRequireAutonomousAccept}
                           onStartPatrol={async (input) => {
                             const ok = await onStartPatrol(input);
                             if (ok !== false && prompt.trim() && input.prompt === prompt.trim()) {
@@ -2348,7 +2364,10 @@ export function Composer({
                   const convKey =
                     activeConversationIdRef.current ?? PENDING_CONV_KEY;
                   abortControllersRef.current.get(convKey)?.abort();
-                  if (isPendingKey(convKey)) return;
+                  if (isPendingKey(convKey)) {
+                    onStopPressed?.(convKey);
+                    return;
+                  }
                   const cancelUrl = conversationApiUrl(convKey, "/cancel");
                   if (!cancelUrl) return;
                   void (async () => {
@@ -2359,7 +2378,10 @@ export function Composer({
                     } catch {
                       cancelled = false;
                     }
-                    if (cancelled) cancelRecovery(convKey);
+                    if (cancelled) {
+                      onStopPressed?.(convKey);
+                      cancelRecovery(convKey);
+                    }
                   })();
                 }}
               >

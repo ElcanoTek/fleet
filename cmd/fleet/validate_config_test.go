@@ -1801,6 +1801,40 @@ agent_policy:
 	}
 }
 
+func TestCheckAgentPolicy_AutonomousBlocked(t *testing.T) {
+	t.Parallel()
+
+	load := func(body string) *clientconfig.Bundle {
+		t.Helper()
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		b, err := clientconfig.Load(dir)
+		if err != nil {
+			t.Fatalf("load: %v", err)
+		}
+		return b
+	}
+	bad := load(`
+agent_policy:
+  critical_tools: [delete_page, share]
+  critical_tool_autonomous_blocked: [delet_page]
+`)
+	if res := checkAgentPolicy(bad, nil); res.Status != statusFail || !strings.Contains(res.Detail, `"delet_page"`) {
+		t.Fatalf("a typo'd critical_tool_autonomous_blocked member must fail agent_policy, got %q: %s", res.Status, res.Detail)
+	}
+	good := load(`
+agent_policy:
+  critical_tools: [delete_page, share]
+  critical_tool_autonomous: [delete_page]
+  critical_tool_autonomous_blocked: [delete_page, share, send_email]
+`)
+	if res := checkAgentPolicy(good, nil); res.Status == statusFail {
+		t.Fatalf("valid critical_tool_autonomous_blocked members (and legacy critical_tool_autonomous) must pass: %s", res.Detail)
+	}
+}
+
 // validate-config holds critical_tool_resume to its rules: a member that
 // stages no card (not critical, or notify mode) or an out-of-range hourly cap
 // fails the agent_policy check, read from the manifest itself; a well-formed

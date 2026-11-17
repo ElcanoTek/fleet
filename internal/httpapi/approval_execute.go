@@ -139,6 +139,9 @@ func (s *Server) runStagedTool(ctx context.Context, approval *store.Approval) (t
 	if approval.ToolName == tools.ConnectorStudioToolName {
 		return s.runStagedConnectorStudio(ctx, approval)
 	}
+	if approval.ToolName == tools.ChatPatrolToolName {
+		return s.runStagedChatPatrol(ctx, approval)
+	}
 	// preview_email is preview-only by design: there is no send path.
 	// When the user clicks Dismiss, we just mark it resolved with a
 	// canned acknowledgment so the history reflects "user saw it".
@@ -531,6 +534,34 @@ func (s *Server) runStagedConnectorStudio(ctx context.Context, approval *store.A
 	out, err := json.MarshalIndent(res, "", "  ")
 	if err != nil {
 		return "", fmt.Errorf("encode connector_studio result: %w", err)
+	}
+	return string(out), nil
+}
+
+func (s *Server) runStagedChatPatrol(ctx context.Context, approval *store.Approval) (string, error) {
+	var params tools.ChatPatrolParams
+	if err := json.Unmarshal([]byte(approval.ArgsJSON), &params); err != nil {
+		return "", fmt.Errorf("parse chat_patrol args: %w", err)
+	}
+	params.Action = tools.NormalizeChatPatrolAction(params.Action)
+	if params.Action == "" {
+		return "", errors.New("invalid chat_patrol action")
+	}
+	if s.store == nil || strings.TrimSpace(approval.ConversationID) == "" {
+		return "", errors.New("chat schedule store is not configured")
+	}
+	conv, err := s.getOwnedOrMultiplayerConversation(ctx, approval.UserEmail, approval.ConversationID)
+	if err != nil || conv == nil {
+		return "", errors.New("conversation not found")
+	}
+	handler := s.newChatPatrolHandler(conv, approval.UserEmail, nil)
+	res, err := handler(ctx, params)
+	if err != nil {
+		return "", err
+	}
+	out, err := json.MarshalIndent(res, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("encode chat_patrol result: %w", err)
 	}
 	return string(out), nil
 }

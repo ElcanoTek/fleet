@@ -208,11 +208,14 @@ active**, **Timer armed**, or **Paused**), cadence, run count, and countdown to
 the next run, along with **Run now**, **Pause / Resume**, and **Stop** buttons.
 Choosing **⚡ Auto-approve** (in the Patrol popover, Patrol bar, or **Approval
 mode** under **More options** in the composer) lets session-approvable tool
-calls run hands-free while you are away, while **Autonomous** also runs
-deployment-allowlisted checked plans (`agent_policy.critical_tool_autonomous`)
-without pausing and leaves durable receipt cards in the transcript (outbound
-email, scheduled-task cards, and non-allowlisted per-call actions still ask, and
-only turns triggered by the conversation owner use Auto-approve or Autonomous).
+calls run hands-free while you are away, while **Autonomous** (after you accept
+the one-time risk notice) runs bundle-configured live platform actions, optional
+connector activations, and self-addressed owner emails without pausing and
+leaves durable receipt cards in the transcript (external emails/chats/invites,
+scheduled-task and patrol schedule changes, bundle-blocked destructive actions
+in `agent_policy.critical_tool_autonomous_blocked`, and `git push` still ask,
+and only turns triggered by the conversation owner use Auto-approve or
+Autonomous).
 If a patrol turn does stage an approval card, the card stays open for 24 hours
 and automatically resumes the patrol turn as soon as you approve it.
 Conversations with an active or paused patrol are exempt from retention sweeps
@@ -402,6 +405,59 @@ Otherwise, renaming a team here keeps everything shared with it shared with
 the renamed team; a new team that later takes the old name starts with
 nothing shared.
 
+### Customizing your sidebar
+
+The rail is yours to arrange. Open **Customize sidebar** from your account
+menu (or hover the line under Chat, Patrols and Background tasks and press
+**Customize**). A panel slides in from the right and leaves the rail in view,
+so every change shows in it as you make it. Changes are saved to your account
+a moment later, so your sidebar is the same in every browser you sign in to.
+A read-only **Viewer** account can open the panel but not change anything.
+
+- **Start from** offers five arrangements for the ways people use fleet:
+  **Classic** (the rail as it comes), **Just chat**, **Dashboards first**,
+  **Automation** (Background tasks and Patrols on top, opening on Background
+  tasks) and **Team room** (team chats first). Each card draws your own rail
+  in miniature, and choosing one keeps every shortcut you have pinned.
+- **In the sidebar** lists Chat, Patrols, Background tasks and your
+  shortcuts. **Add** pins a chat, a patrol, a teammate's shared or multiplayer
+  chat, a project, a recent background task, or a page (Guides, Settings, and
+  Analytics for administrators). Drag a row, or use its arrows, to move it;
+  type over its name to rename it; press its icon to pick another icon or any
+  emoji; switch it off to hide it; press **×** to unpin it. A chat can open
+  as a **Chat** or as a **Dashboard**, straight into
+  [Dashboard view](#dashboard-view).
+- **Home** (the map pin on a row) is where fleet opens. When you open fleet
+  without a link to something else, it takes you to your Home instead of your
+  most recent chat: a dashboard, a patrol, a project, Background tasks or a
+  page. Moving around inside fleet never sends you back there, and a link to
+  a chat still opens that chat. With no Home set, fleet opens your most
+  recent chat, as before.
+- **On the Chat page** orders, renames, hides or folds the **Projects**,
+  **Chats** and **Team chats** lists. A hidden Chats list still leaves the
+  **+** for a new chat.
+- **Compact** shows one line per item, without the descriptions.
+
+**Add to sidebar** in a chat's menu, or in a project's menu, pins it without
+opening the panel (a chat you last read as a dashboard is added as a
+dashboard); the same item reads **Remove from sidebar** once it is there.
+**Reset to default** in the panel returns you to your workspace's sidebar.
+A pinned chat you can no longer open is shown faded, so you can unpin it.
+
+Administrators set the sidebar everyone starts with under **Settings → Admin
+→ Sidebar**: the same editor, saved with **Save for everyone**. Its **Add**
+list offers only chats and projects shared with your team (your own sidebar
+can pin private ones too), and a pin that is not shared is marked **Not
+shared with the team**. People who
+have not customized their own sidebar get it the next time they load a page,
+and **Reset to default** brings anyone back to it. A chat pinned there shows
+only to people who can open it, which makes a shared or multiplayer chat (a
+team-wide patrol, say) a good Home for everyone; a Home someone cannot open is
+skipped for them. Background tasks cannot be pinned there, because only their
+owner and administrators can open one. **Start from my sidebar**
+copies your own arrangement as a starting point, and **Reset to fleet's
+default** removes the workspace sidebar.
+
 ### The header
 
 Above the transcript sit two quick desktop controls on the right: **Dashboard**
@@ -469,7 +525,11 @@ beside them. Use it for anything you want to keep an eye on while you keep
 talking: a pipeline, a campaign, a launch checklist, a comparison you are
 refining. Turn it on with **Dashboard** at the top of the chat (on desktop screens), **Dashboard
 view** in **More options**, or `D`; leave with **Exit**, or `Esc` when you are
-not typing in the message box.
+not typing in the message box. The sidebar button at the left of the board's
+header slides the sidebar in over the board, so you can move to another
+dashboard or chat without leaving the view. A chat
+[pinned to your sidebar](#customizing-your-sidebar) as a dashboard opens
+straight into this view.
 
 - **Ask for what you want to watch.** "Turn this into a dashboard", "add a
   panel for open deals", "refresh the revenue panel". The assistant builds
@@ -1026,12 +1086,15 @@ can also set the conversation's **Approval mode** under **More options** (`•�
 in the composer toolbar (even while a reply is streaming): **Manual** asks on
 every critical tool, **Auto-approve** shows a lightning-bolt badge on the
 toolbar and runs session-approvable connector actions and shell commands without
-stopping on a card, and **Autonomous** shows an amber **Autonomous** badge and
-also runs deployment-allowlisted checked plans
-(`agent_policy.critical_tool_autonomous`) without pausing while recording
-durable receipt and result cards in the chat (outbound email, scheduled-task
-cards, and non-allowlisted per-call actions still ask, and only turns sent by
-the conversation owner use Auto-approve or Autonomous). Cards are not for exploring what an action would change; ask the assistant to
+stopping on a card, and **Autonomous** (after accepting the one-time risk
+notice) shows an amber **Autonomous** badge and runs live platform actions,
+optional connector activations, self-addressed owner emails, and eligible
+prefilled forms (after a 10-second countdown you can pause) without pausing
+while recording durable receipt and result cards in the chat (external
+messages/invites, scheduled-task and patrol schedule changes, bundle-blocked
+destructive actions in `agent_policy.critical_tool_autonomous_blocked`, and
+`git push` still ask, and only turns sent by the conversation owner use
+Auto-approve or Autonomous). Cards are not for exploring what an action would change; ask the assistant to
 describe the change first, then approve the card once you agree with it.
 
 Which tools are gated and which merely report is set per deployment, not by the

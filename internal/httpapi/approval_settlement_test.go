@@ -139,6 +139,12 @@ func (s *settlementStore) GetBranchOrigin(context.Context, string, string) (*sto
 func (s *settlementStore) ListChatSchedules(context.Context, string, string, bool) ([]store.ChatSchedule, error) {
 	return nil, nil
 }
+func (s *settlementStore) ListActiveUIAutoSubmits(context.Context, string) ([]store.UIAutoSubmit, error) {
+	return nil, nil
+}
+func (s *settlementStore) GetAutonomousAcceptance(context.Context, string) (int, bool, error) {
+	return 0, false, nil
+}
 
 func TestTerminalSettlementExcludesLargeResolvedCards(t *testing.T) {
 	t.Parallel()

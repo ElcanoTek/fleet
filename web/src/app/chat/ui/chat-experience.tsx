@@ -1,4 +1,8 @@
 import { localizeConnector } from "@/app/lib/i18n/bundle";
+import { entryHomeEligible, markEntryHomeUsed, resolveEntryHome } from "@/app/shared/sidebar/home";
+import { prepareShortcut, shortcutHref } from "@/app/shared/sidebar/RailNav";
+import { writeDashboardView } from "./dashboard/prefs";
+import type { SidebarItem } from "@/app/shared/sidebar/layout";
 import { rich } from "@/app/lib/i18n/rich";
 import { t as tr } from "@/app/lib/i18n";
 // NOTE (lint hygiene): this large component used to disable three React
@@ -13,6 +17,7 @@ import { t as tr } from "@/app/lib/i18n";
 // derive-in-render, handler-side resets, or a deferred microtask). Keep this
 // component clean — prefer those patterns over re-adding a rule disable.
 import { signOut } from "@/app/shared/signOut";
+import { getBootstrap } from "@/app/lib/bootstrap";
 import type { Dispatch, SetStateAction } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { deriveConversationTitle } from "@/app/lib/title";
@@ -86,6 +91,8 @@ import {
 import { isToggleable, type PickerCategory } from "./toolsPicker";
 import { useIsAdmin } from "@/app/settings/useIsAdmin";
 import { bootstrapFailureDestination } from "./bootstrapFailure";
+import { AutonomousRiskModal } from "./AutonomousRiskModal";
+import type { AutoSubmitPauseResult, UIAutoSubmitState } from "./genui/model";
 import { isPendingKey, PENDING_CONV_KEY, realConvId } from "./workspaceHref";
 import { DialogShell } from "@/app/shared/ui/DialogShell";
 import { StatusChip } from "@/app/shared/ui/StatusChip";
@@ -263,6 +270,8 @@ export type ServerConfig = {
   // instead of failing after a full upload round-trip.
   uploadMaxBytes: number;
   teamChatsSharedByDefault?: boolean;
+  autonomousAccepted?: boolean;
+  autonomousPolicyVersion?: number;
 };
 
 // parseServerConfigPayload maps GET /api/server-config onto ServerConfig.
@@ -274,6 +283,8 @@ export function parseServerConfigPayload(cfg: {
   lockdown_allowed_models?: string[] | null;
   upload_max_bytes?: number;
   team_chats_shared_by_default?: boolean;
+  autonomous_accepted?: boolean;
+  autonomous_policy_version?: number;
 }): ServerConfig {
   return {
     lockdownAvailable: cfg.lockdown_available === true,
@@ -286,6 +297,11 @@ export function parseServerConfigPayload(cfg: {
         ? cfg.upload_max_bytes
         : DEFAULT_UPLOAD_MAX_BYTES,
     teamChatsSharedByDefault: cfg.team_chats_shared_by_default === true,
+    autonomousAccepted: cfg.autonomous_accepted === true,
+    autonomousPolicyVersion:
+      typeof cfg.autonomous_policy_version === "number"
+        ? cfg.autonomous_policy_version
+        : undefined,
   };
 }
 
@@ -875,6 +891,109 @@ export function ChatExperience({
         uploadMaxBytes: DEFAULT_UPLOAD_MAX_BYTES,
       },
   );
+  const [autonomousAccepted, setAutonomousAccepted] = useState<boolean>(
+    () =>
+      getBootstrap().session?.autonomous_accepted === true ||
+      restoredSession?.serverConfig?.autonomousAccepted === true,
+  );
+  const [autonomousRiskOpen, setAutonomousRiskOpen] = useState(false);
+  const pendingAutonomousConfirmRef = useRef<(() => void) | null>(null);
+  const requireAutonomousAccept = useCallback((onAccepted: () => void) => {
+    pendingAutonomousConfirmRef.current = onAccepted;
+    setAutonomousRiskOpen(true);
+  }, []);
+  const [uiAutoSubmitsByConv, setUiAutoSubmitsByConv] = useState<
+    Map<string, Map<string, UIAutoSubmitState>>
+  >(() => new Map());
+  const autoSubmitBroadcastRef = useRef<BroadcastChannel | null>(null);
+  const broadcastAutoSubmitSync = useCallback(
+    (
+      msg:
+        | { type: "item"; convId: string; item: UIAutoSubmitState }
+        | { type: "cancel_all"; convId: string },
+    ) => {
+      try {
+        autoSubmitBroadcastRef.current?.postMessage(msg);
+      } catch {
+        // Ignore cross-tab channel errors in restricted environments.
+      }
+    },
+    [],
+  );
+  useEffect(() => {
+    if (typeof BroadcastChannel === "undefined") return;
+    let bc: BroadcastChannel | null = null;
+    try {
+      bc = new BroadcastChannel("fleet.autosubmit");
+      autoSubmitBroadcastRef.current = bc;
+      bc.onmessage = (ev: MessageEvent) => {
+        const data = ev.data as
+          | { type: "item"; convId: string; item: UIAutoSubmitState }
+          | { type: "cancel_all"; convId: string }
+          | null;
+        if (!data || typeof data.convId !== "string") return;
+        if (data.type === "cancel_all") {
+          setUiAutoSubmitsByConv((prev) => {
+            const cur = prev.get(data.convId);
+            if (!cur || cur.size === 0) return prev;
+            let changed = false;
+            const nextByCall = new Map(cur);
+            for (const [callId, row] of nextByCall) {
+              if (row.status === "pending" || row.status === "paused") {
+                nextByCall.set(callId, { ...row, status: "cancelled" });
+                changed = true;
+              }
+            }
+            if (!changed) return prev;
+            const next = new Map(prev);
+            next.set(data.convId, nextByCall);
+            return next;
+          });
+        } else if (data.type === "item" && data.item?.call_id) {
+          setUiAutoSubmitsByConv((prev) => {
+            const next = new Map(prev);
+            const byCall = new Map(next.get(data.convId) ?? []);
+            byCall.set(data.item.call_id, data.item);
+            next.set(data.convId, byCall);
+            return next;
+          });
+        }
+      };
+    } catch {
+      autoSubmitBroadcastRef.current = null;
+    }
+    return () => {
+      autoSubmitBroadcastRef.current = null;
+      try {
+        bc?.close();
+      } catch {
+        // Ignore close errors.
+      }
+    };
+  }, []);
+  const cancelLocalPendingAutoSubmits = useCallback(
+    (convKey: string) => {
+      if (!convKey) return;
+      setUiAutoSubmitsByConv((prev) => {
+        const cur = prev.get(convKey);
+        if (!cur || cur.size === 0) return prev;
+        let changed = false;
+        const nextByCall = new Map(cur);
+        for (const [callId, row] of nextByCall) {
+          if (row.status === "pending" || row.status === "paused") {
+            nextByCall.set(callId, { ...row, status: "cancelled" });
+            changed = true;
+          }
+        }
+        if (!changed) return prev;
+        const next = new Map(prev);
+        next.set(convKey, nextByCall);
+        return next;
+      });
+      broadcastAutoSubmitSync({ type: "cancel_all", convId: convKey });
+    },
+    [broadcastAutoSubmitSync],
+  );
   // refreshServerConfig re-reads the capability payload. Besides mount it runs
   // on tab/network return and whenever the workspace model tiers change: with
   // FLEET_LOCKDOWN_ALLOWED_MODELS unset the lockdown allow-list IS the live
@@ -898,6 +1017,9 @@ export function ChatExperience({
       if (seq <= serverConfigAppliedSeqRef.current) return;
       serverConfigAppliedSeqRef.current = seq;
       setServerConfig(parseServerConfigPayload(cfg));
+      if (typeof cfg.autonomous_accepted === "boolean") {
+        setAutonomousAccepted(cfg.autonomous_accepted);
+      }
     } catch {
       // Optional capability — leave the snapshot as it is.
     }
@@ -1175,6 +1297,11 @@ export function ChatExperience({
               auto_approve: next !== "manual",
             }),
           });
+          if (res.status === 409) {
+            setAutonomousAccepted(false);
+            requireAutonomousAccept(() => changeApprovalMode("autonomous"));
+            throw new Error(tr("HTTP {0}", [res.status]));
+          }
           if (!res.ok) throw new Error(tr("HTTP {0}", [res.status]));
           let committed: ConversationApprovalMode = next;
           try {
@@ -1192,6 +1319,9 @@ export function ChatExperience({
             // ignore empty/non-JSON body (204 No Content)
           }
           autoApproveCommittedRef.current.set(convId, committed);
+          if (committed !== "autonomous") {
+            cancelLocalPendingAutoSubmits(convId);
+          }
           if (autoApproveSeqRef.current.get(convId) === seq) {
             autoApproveDisplayedRef.current.set(convId, committed);
             autoApproveValueRef.current.set(convId, committed);
@@ -1213,7 +1343,23 @@ export function ChatExperience({
       });
       autoApproveChainRef.current.set(convId, run);
     },
-    [approvalMode, activeConversationId, setPendingApprovalModeForKey],
+    [
+      approvalMode,
+      activeConversationId,
+      cancelLocalPendingAutoSubmits,
+      requireAutonomousAccept,
+      setPendingApprovalModeForKey,
+    ],
+  );
+  const requestApprovalModeChange = useCallback(
+    (next: ConversationApprovalMode) => {
+      if (next === "autonomous" && !autonomousAccepted) {
+        requireAutonomousAccept(() => changeApprovalMode("autonomous"));
+        return;
+      }
+      changeApprovalMode(next);
+    },
+    [autonomousAccepted, changeApprovalMode, requireAutonomousAccept],
   );
   const toggleAutoApprove = useCallback(() => {
     changeApprovalMode(approvalMode !== "manual" ? "manual" : "auto");
@@ -1235,6 +1381,9 @@ export function ChatExperience({
   // chats, sources, instructions, per-project settings. null = normal chat
   // view. settings=true opens straight into the settings dialog (the rail
   // kebab's "Project settings…").
+  // A Home (docs/SIDEBAR.md) the boot could not open in its own place,
+  // opened once the boot settles.
+  const pendingHomeRef = useRef<SidebarItem | null>(null);
   const [projectHome, setProjectHome] = useState<null | {
     id: string;
     settings?: boolean;
@@ -1519,6 +1668,14 @@ export function ChatExperience({
       messagesByConvRef.current = next;
       return next;
     });
+    setUiAutoSubmitsByConv((prev) => {
+      const slot = prev.get(oldKey);
+      if (oldKey === newKey || slot === undefined) return prev;
+      const next = new Map(prev);
+      next.set(newKey, slot);
+      next.delete(oldKey);
+      return next;
+    });
   };
 
   // clearConvSlot drops a single conversation's messages from memory.
@@ -1530,6 +1687,12 @@ export function ChatExperience({
       const next = new Map(prev);
       next.delete(convId);
       messagesByConvRef.current = next;
+      return next;
+    });
+    setUiAutoSubmitsByConv((prev) => {
+      if (!prev.has(convId)) return prev;
+      const next = new Map(prev);
+      next.delete(convId);
       return next;
     });
   };
@@ -1888,6 +2051,15 @@ export function ChatExperience({
   // visibleOrder, because that memo needs the set of projects the viewer can
   // see to decide which chats are "unfiled".
   const [projects, setProjects] = useState<Project[]>([]);
+  // Whether the projects list has loaded once: an empty list then means "no
+  // projects", not "not read yet" (the sidebar's project shortcuts use it).
+  const [projectsLoaded, setProjectsLoaded] = useState(false);
+  // Whether the shared/multiplayer conversation list has loaded once (the
+  // sidebar tells "not available" from "not read yet" by it).
+  const [teamSharedLoaded, setTeamSharedLoaded] = useState(false);
+  // Whether the archived conversation list has loaded once (it is read after
+  // the boot, not with it).
+  const [archivedLoaded, setArchivedLoaded] = useState(false);
   // The person's own chat orders by scope — "pinned", and "project:<id>" for
   // their chats in a project (docs/CHAT-ORDER.md) — set in the rail's
   // reorder mode and saved per user on the server. Empty until read (or for a
@@ -2447,6 +2619,7 @@ export function ChatExperience({
         };
         nextArchived = reconcileAutoApprove(data.conversations ?? []);
         setArchivedConversations(nextArchived);
+        setArchivedLoaded(true);
       }
       if (activeRes.ok) {
         const data = (await activeRes.json()) as {
@@ -2680,6 +2853,8 @@ export function ChatExperience({
           supersedes_content?: string;
         }>;
         schedules?: ChatSchedule[] | null;
+        ui_autosubmits?: UIAutoSubmitState[] | null;
+        autonomous_accepted?: boolean;
       };
       // The attach check at the top ran BEFORE the fetch. A reload that took
       // long enough for recovery to give up waiting on it — and for a queued
@@ -2815,10 +2990,39 @@ export function ChatExperience({
           return nextOrigins;
         });
       }
+      if (typeof data.autonomous_accepted === "boolean") {
+        setAutonomousAccepted(data.autonomous_accepted);
+      }
       setSchedulesByConv((prev) => {
         const nextSchedules = new Map(prev);
         nextSchedules.set(data.conversation.id, data.schedules ?? []);
         return nextSchedules;
+      });
+      const receivedAtMs = Date.now();
+      setUiAutoSubmitsByConv((prev) => {
+        const nextAuto = new Map(prev);
+        const prevByCall = prev.get(data.conversation.id);
+        const byCall = new Map<string, UIAutoSubmitState>();
+        for (const item of data.ui_autosubmits ?? []) {
+          if (item && typeof item.call_id === "string") {
+            const existing = prevByCall?.get(item.call_id);
+            const keepClientDeadline =
+              existing &&
+              typeof existing.client_deadline_ms === "number" &&
+              existing.id === item.id &&
+              existing.deadline_ms === item.deadline_ms
+                ? existing.client_deadline_ms
+                : typeof item.remaining_ms === "number"
+                  ? receivedAtMs + Math.max(0, item.remaining_ms)
+                  : item.deadline_ms;
+            byCall.set(item.call_id, {
+              ...item,
+              client_deadline_ms: keepClientDeadline,
+            });
+          }
+        }
+        nextAuto.set(data.conversation.id, byCall);
+        return nextAuto;
       });
       const next = historyToMessages(data.history ?? []);
 
@@ -3513,6 +3717,7 @@ export function ChatExperience({
       if (!res.ok) return;
       const data = (await res.json()) as { projects?: Project[] };
       setProjects(data.projects ?? []);
+      setProjectsLoaded(true);
     } catch {
       // Rail projects are best-effort — a failed load keeps the previous list.
     }
@@ -3672,8 +3877,13 @@ export function ChatExperience({
   }, [teamSharedConversations, userEmail]);
   const loadTeamSharedChatCounts = useCallback(async () => {
     try {
+      // Each read settles on its own: a failed team-count read must not
+      // throw away the shared list that did arrive (the sidebar's shortcuts
+      // depend on it).
       const [teamRes, sharedRes] = await Promise.all([
-        fetch("/api/conversations?scope=team", { cache: "no-store" }),
+        fetch("/api/conversations?scope=team", { cache: "no-store" }).catch(
+          () => null,
+        ),
         fetch("/api/conversations?scope=shared", { cache: "no-store" }).catch(
           () => null,
         ),
@@ -3690,10 +3900,11 @@ export function ChatExperience({
             (c) => !mine || (c.user_email ?? "").trim().toLowerCase() !== mine,
           ),
         );
+        setTeamSharedLoaded(true);
       }
-      if (!teamRes.ok) {
+      if (!teamRes || !teamRes.ok) {
         // 400 is "you have no team": a KNOWN empty, not an unknown.
-        if (teamRes.status === 400) setTeamSharedChatCounts({});
+        if (teamRes?.status === 400) setTeamSharedChatCounts({});
         return;
       }
       const data = (await teamRes.json()) as {
@@ -3762,6 +3973,70 @@ export function ChatExperience({
     isStreaming,
     setSidebarOpen,
   });
+
+  // The sidebar slid in over a dashboard (docs/SIDEBAR.md) is a modal
+  // drawer: focus moves into it, Tab stays inside it, Escape closes it (and
+  // only it — captured before dashboard view's own Escape, which would leave
+  // the view), and closing hands focus back to what opened it.
+  const dashboardRailRef = useRef<HTMLDivElement | null>(null);
+  const dashboardRailOpen = dashboardActive && sidebarOpen;
+  useEffect(() => {
+    if (!dashboardRailOpen) return;
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const railEl = dashboardRailRef.current;
+    const focusables = () =>
+      Array.from(
+        dashboardRailRef.current?.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), input:not([disabled]), select:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])',
+        ) ?? [],
+      ).filter((el) => el.offsetParent !== null);
+    const frame = requestAnimationFrame(() => focusables()[0]?.focus());
+    const onKey = (e: KeyboardEvent) => {
+      const rail = dashboardRailRef.current;
+      if (!rail) return;
+      // A menu or dialog opened from the rail is portaled out of it and owns
+      // its own keys.
+      const active = document.activeElement;
+      if (
+        active instanceof Element &&
+        !rail.contains(active) &&
+        active.closest('[role="menu"], [role="dialog"], [role="alertdialog"], [role="listbox"]')
+      )
+        return;
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        setSidebarOpen(false);
+        return;
+      }
+      if (e.key !== "Tab") return;
+      const items = focusables();
+      if (items.length === 0) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (!(active instanceof Element) || !rail.contains(active)) {
+        e.preventDefault();
+        (e.shiftKey ? last : first).focus();
+      } else if (e.shiftKey && active === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && active === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", onKey, true);
+    return () => {
+      cancelAnimationFrame(frame);
+      document.removeEventListener("keydown", onKey, true);
+      // Hand focus back when it was in the drawer (or fell to <body> as the
+      // drawer hid); a choice that left the view took it somewhere else.
+      const now = document.activeElement;
+      if (opener?.isConnected && (now === document.body || (railEl?.contains(now) ?? false))) {
+        opener.focus();
+      }
+    };
+  }, [dashboardRailOpen, setSidebarOpen]);
 
   // A teammate's branch (B20): the banner, and the outputs its transcript
   // names that were NOT shared at branch time — those render as locked names,
@@ -4486,6 +4761,16 @@ export function ChatExperience({
       if (!response.ok) {
         if (!mountedRef.current) return;
         const errText = (await response.text().catch(() => "")).trim();
+        if (
+          response.status === 409 &&
+          errText.includes("autonomous_acceptance_required")
+        ) {
+          setAutonomousAccepted(false);
+          requireAutonomousAccept(() => {
+            void openShareFromComposer();
+          });
+          return;
+        }
         showRailError(
           errText ||
             tr("Couldn't open sharing for this chat (HTTP {0}).", [response.status]),
@@ -5595,6 +5880,37 @@ export function ChatExperience({
         );
       }
     },
+    onUIAutoSubmitUpdated: (convId, item) => {
+      const receivedAtMs = Date.now();
+      setUiAutoSubmitsByConv((prev) => {
+        const next = new Map(prev);
+        const byCall = new Map(next.get(convId) ?? []);
+        const existing = byCall.get(item.call_id);
+        const clientDeadline =
+          existing &&
+          typeof existing.client_deadline_ms === "number" &&
+          existing.id === item.id &&
+          existing.deadline_ms === item.deadline_ms
+            ? existing.client_deadline_ms
+            : typeof item.remaining_ms === "number"
+              ? receivedAtMs + Math.max(0, item.remaining_ms)
+              : item.deadline_ms;
+        byCall.set(item.call_id, {
+          ...item,
+          client_deadline_ms: clientDeadline,
+        });
+        next.set(convId, byCall);
+        return next;
+      });
+    },
+    onAutonomousAcceptanceRequired: (convKey) => {
+      setAutonomousAccepted(false);
+      requireAutonomousAccept(() => {
+        if (!isPendingKey(convKey)) {
+          changeApprovalMode("autonomous");
+        }
+      });
+    },
   } satisfies TurnStreamDeps;
   const {
     reattachToConv,
@@ -5624,6 +5940,188 @@ export function ChatExperience({
     () => activeSchedules.filter((s) => s.status === "active").length,
     [activeSchedules],
   );
+  const activeUIAutoSubmits = useMemo(
+    () => uiAutoSubmitsByConv.get(currentConvKey),
+    [currentConvKey, uiAutoSubmitsByConv],
+  );
+  const refreshUIAutoSubmits = useCallback(async (convId: string) => {
+    const url = conversationApiUrl(convId, "?omit_history=1&approval_index=1");
+    if (!url) return;
+    try {
+      const res = await fetch(url, { cache: "no-store" });
+      if (!res.ok) return;
+      const data = (await res.json().catch(() => null)) as {
+        ui_autosubmits?: UIAutoSubmitState[] | null;
+      } | null;
+      if (!data || !Array.isArray(data.ui_autosubmits)) return;
+      const rows = data.ui_autosubmits;
+      const receivedAtMs = Date.now();
+      setUiAutoSubmitsByConv((prev) => {
+        const nextAuto = new Map(prev);
+        const prevByCall = prev.get(convId);
+        const byCall = new Map<string, UIAutoSubmitState>();
+        for (const item of rows) {
+          if (item && typeof item.call_id === "string") {
+            const existing = prevByCall?.get(item.call_id);
+            const keepClientDeadline =
+              existing &&
+              typeof existing.client_deadline_ms === "number" &&
+              existing.id === item.id &&
+              existing.deadline_ms === item.deadline_ms
+                ? existing.client_deadline_ms
+                : typeof item.remaining_ms === "number"
+                  ? receivedAtMs + Math.max(0, item.remaining_ms)
+                  : item.deadline_ms;
+            byCall.set(item.call_id, {
+              ...item,
+              client_deadline_ms: keepClientDeadline,
+            });
+          }
+        }
+        nextAuto.set(convId, byCall);
+        return nextAuto;
+      });
+    } catch {
+      // Ignore transient network errors; followApprovalResume retries reconciliation.
+    }
+  }, []);
+  const handleAutoSubmitDue = useCallback(
+    (_cardId: string) => {
+      const convId = realConvId(currentConvKey);
+      if (!convId) return;
+      void refreshUIAutoSubmits(convId);
+      void refreshQueue(convId);
+      void followApprovalResume(convId, approvalResumeFollowSettledMs);
+    },
+    [currentConvKey, followApprovalResume, refreshQueue, refreshUIAutoSubmits],
+  );
+  // Ensure virtualized off-screen cards still follow the server-enqueued turn
+  // when their 10-second server countdown expires.
+  useEffect(() => {
+    const convId = realConvId(currentConvKey);
+    if (!convId || !activeUIAutoSubmits || activeUIAutoSubmits.size === 0) return;
+    const timers: number[] = [];
+    const now = Date.now();
+    for (const item of activeUIAutoSubmits.values()) {
+      if (item.status !== "pending") continue;
+      const targetMs =
+        typeof item.client_deadline_ms === "number"
+          ? item.client_deadline_ms
+          : item.deadline_ms;
+      const waitMs = Math.max(0, targetMs - now);
+      timers.push(
+        window.setTimeout(() => {
+          void refreshUIAutoSubmits(convId);
+          void refreshQueue(convId);
+          void followApprovalResume(convId, approvalResumeFollowSettledMs);
+        }, waitMs + 250),
+      );
+      timers.push(
+        window.setTimeout(() => {
+          void refreshUIAutoSubmits(convId);
+          void refreshQueue(convId);
+          void followApprovalResume(convId, approvalResumeFollowSettledMs);
+        }, waitMs + 1250),
+      );
+    }
+    return () => {
+      for (const tid of timers) window.clearTimeout(tid);
+    };
+  }, [
+    activeUIAutoSubmits,
+    currentConvKey,
+    followApprovalResume,
+    refreshQueue,
+    refreshUIAutoSubmits,
+  ]);
+  const handlePauseAutoSubmit = useCallback(
+    async (cardId: string): Promise<AutoSubmitPauseResult> => {
+      const convId = realConvId(currentConvKey);
+      const targetKey = convId ?? currentConvKey;
+      let previousRow: UIAutoSubmitState | undefined;
+      setUiAutoSubmitsByConv((prev) => {
+        const cur = prev.get(targetKey);
+        const existing = cur?.get(cardId);
+        previousRow = existing;
+        if (!cur || !existing || existing.status !== "pending") return prev;
+        const pausedItem: UIAutoSubmitState = { ...existing, status: "paused" };
+        const nextByCall = new Map(cur);
+        nextByCall.set(cardId, pausedItem);
+        const next = new Map(prev);
+        next.set(targetKey, nextByCall);
+        return next;
+      });
+      if (!convId) return "paused";
+      try {
+        const res = await fetch(
+          `/api/chat/conversations/${encodeURIComponent(convId)}/autosubmit/pause`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ call_id: cardId }),
+          },
+        );
+        if (!res.ok) {
+          if (previousRow) {
+            const restore = previousRow;
+            setUiAutoSubmitsByConv((prev) => {
+              const next = new Map(prev);
+              const byCall = new Map(next.get(targetKey) ?? []);
+              byCall.set(cardId, restore);
+              next.set(targetKey, byCall);
+              return next;
+            });
+          }
+          return "error";
+        }
+        const body = (await res.json().catch(() => null)) as {
+          ui_autosubmits?: UIAutoSubmitState[];
+        } | null;
+        const rows = Array.isArray(body?.ui_autosubmits) ? body.ui_autosubmits : [];
+        const matched = rows.find((r) => r?.call_id === cardId) ?? rows[0];
+        if (!matched) {
+          return "cancelled";
+        }
+        const updatedItem: UIAutoSubmitState = {
+          ...matched,
+          client_deadline_ms:
+            typeof matched.remaining_ms === "number"
+              ? Date.now() + Math.max(0, matched.remaining_ms)
+              : matched.deadline_ms,
+        };
+        setUiAutoSubmitsByConv((prev) => {
+          const next = new Map(prev);
+          const byCall = new Map(next.get(targetKey) ?? []);
+          byCall.set(cardId, updatedItem);
+          next.set(targetKey, byCall);
+          return next;
+        });
+        broadcastAutoSubmitSync({ type: "item", convId: targetKey, item: updatedItem });
+        if (matched.status === "fired") {
+          void refreshQueue(convId);
+          void followApprovalResume(convId, approvalResumeFollowSettledMs);
+          return "fired";
+        }
+        if (matched.status === "paused") {
+          return "paused";
+        }
+        return "cancelled";
+      } catch {
+        if (previousRow) {
+          const restore = previousRow;
+          setUiAutoSubmitsByConv((prev) => {
+            const next = new Map(prev);
+            const byCall = new Map(next.get(targetKey) ?? []);
+            byCall.set(cardId, restore);
+            next.set(targetKey, byCall);
+            return next;
+          });
+        }
+        return "error";
+      }
+    },
+    [broadcastAutoSubmitSync, currentConvKey, followApprovalResume, refreshQueue],
+  );
 
   const applyScheduleResponse = (
     convId: string,
@@ -5645,6 +6143,9 @@ export function ChatExperience({
         data.approval_mode,
         data.auto_approve,
       );
+      if (resolved !== "autonomous") {
+        cancelLocalPendingAutoSubmits(convId);
+      }
       const aa = resolved !== "manual";
       setConversations((curr) =>
         curr.map((c) =>
@@ -5668,6 +6169,12 @@ export function ChatExperience({
       input.approvalMode,
       input.autoApprove,
     );
+    if (requestedMode === "autonomous" && !autonomousAccepted) {
+      requireAutonomousAccept(() => {
+        void handleStartPatrol(input);
+      });
+      return false;
+    }
     const convId = activeConversationId;
     if (!convId || isPendingKey(convId)) {
       const key = convId ?? draftKeyRef.current;
@@ -5699,6 +6206,13 @@ export function ChatExperience({
       });
       return true;
     } catch (e) {
+      if (e instanceof PatrolApiError && e.status === 409) {
+        setAutonomousAccepted(false);
+        requireAutonomousAccept(() => {
+          void handleStartPatrol(input);
+        });
+        return false;
+      }
       showRailError(
         e instanceof PatrolApiError ? e.message : tr("Couldn't reach the server to schedule the patrol."),
       );
@@ -6038,6 +6552,13 @@ export function ChatExperience({
     {
       const params = new URLSearchParams(window.location.search);
       const c = params.get("c");
+      // ?view=dashboard|chat (a sidebar shortcut's link): open the chat in
+      // that view. Consumed and stripped with ?c=.
+      const view = params.get("view");
+      params.delete("view");
+      if (isRealConvId(c) && (view === "dashboard" || view === "chat")) {
+        writeDashboardView(c, view === "dashboard");
+      }
       if (isRealConvId(c)) {
         deepLinkConvId = c;
         params.delete("c");
@@ -6126,6 +6647,46 @@ export function ChatExperience({
         });
       }
     }
+
+    // Project link (?project=<id>): a sidebar project shortcut followed from
+    // another page (docs/SIDEBAR.md). Consumed and stripped like ?c=; the
+    // project's home opens once the boot has settled.
+    let projectLinkId: string | null = null;
+    {
+      const params = new URLSearchParams(window.location.search);
+      const proj = params.get("project");
+      if (proj !== null) {
+        params.delete("project");
+        const qs = params.toString();
+        window.history.replaceState(
+          null,
+          "",
+          window.location.pathname + (qs ? `?${qs}` : ""),
+        );
+        if (proj.trim()) projectLinkId = proj.trim();
+      }
+    }
+
+    // Home (docs/SIDEBAR.md): when this page load opened fleet itself (no
+    // link asked for anything), the sidebar's Home item — a chat, a
+    // dashboard, a project, a page — opens instead of the most recent chat.
+    // The layout read started when the rail mounted; this waits for it only
+    // briefly.
+    const entryHome: Promise<SidebarItem | null> = entryHomeEligible()
+      ? resolveEntryHome(900)
+      : Promise.resolve(null);
+    const openHomeElsewhere = (home: SidebarItem) => {
+      if (home.kind === "chat" && home.ref) {
+        prepareShortcut(home);
+        void loadConversationRef.current(home.ref, { fallbackToTeamChatView: true });
+      } else if (home.kind === "project" && home.ref) {
+        setProjectHome({ id: home.ref });
+      } else if (home.kind === "task" || home.kind === "page" || home.id === "tasks") {
+        // Replace, not push: Back must not return to the bare /chat that
+        // would send the person to Home again.
+        window.location.replace(home.kind === "builtin" ? "/orchestrator" : shortcutHref(home));
+      }
+    };
 
     // Personas — nice-to-have; the server falls back to default. Sets the
     // roster always, and reconciles any draft or empty-chat pending persona
@@ -6221,9 +6782,13 @@ export function ChatExperience({
           }
           const sessionData = (await sessionResponse.json()) as {
             email: string;
+            autonomous_accepted?: boolean;
           };
           if (cancelled) return;
           setUserEmail(sessionData.email);
+          if (typeof sessionData.autonomous_accepted === "boolean") {
+            setAutonomousAccepted(sessionData.autonomous_accepted);
+          }
         }
 
         let conversationsResponse: Response;
@@ -6259,8 +6824,21 @@ export function ChatExperience({
         const ownerLink =
           teamLink && (await teamLink)?.status === "owner" ? teamLinkId : null;
         if (cancelled) return;
+        const home = await entryHome;
+        if (cancelled) return;
+        // A Home chat of the person's own opens in the boot's place; any other
+        // Home (a teammate's chat, a project, a page) opens once it settles.
+        const homeChat =
+          home && home.kind === "chat" && convs.some((c) => c.id === home.ref)
+            ? (home.ref ?? null)
+            : null;
+        if (home && homeChat) prepareShortcut(home);
+        else if (home) pendingHomeRef.current = home;
         const target =
-          deepLinkConvId ?? ownerLink ?? (newChatLink ? null : (convs[0]?.id ?? null));
+          deepLinkConvId ??
+          ownerLink ??
+          homeChat ??
+          (newChatLink ? null : (convs[0]?.id ?? null));
         if (!target) {
           setActiveConversationId(null);
           openNewChatLink();
@@ -6285,6 +6863,14 @@ export function ChatExperience({
           // Bootstrap done — start mirroring state into the module store so a
           // later navigation to /settings leaves a warm snapshot to return to.
           setBootstrapped(true);
+          markEntryHomeUsed();
+          const pendingHome = pendingHomeRef.current;
+          pendingHomeRef.current = null;
+          if (projectLinkId) {
+            setProjectHome({ id: projectLinkId });
+          } else if (pendingHome) {
+            openHomeElsewhere(pendingHome);
+          }
         }
       }
     };
@@ -6514,7 +7100,28 @@ export function ChatExperience({
       >
         {/* Dashboard view takes the whole screen: the rail stays mounted
             (its search, scroll and drafts survive) but is not drawn. */}
-        <div data-dashboard-rail-wrapper="" className={dashboardActive ? "hidden" : "contents"}>
+        {/* …except when the dashboard header's sidebar button slides it in
+            over the board (docs/SIDEBAR.md), with a scrim to dismiss it. */}
+        {dashboardActive && sidebarOpen ? (
+          <button
+            type="button"
+            aria-label={tr("Close navigation")}
+            data-testid="dashboard-rail-scrim"
+            className="fixed inset-0 z-[440] hidden bg-[var(--color-overlay-strong)] sm:block"
+            onClick={() => setSidebarOpen(false)}
+          />
+        ) : null}
+        <div
+          ref={dashboardRailRef}
+          data-dashboard-rail-wrapper=""
+          className={
+            dashboardActive
+              ? sidebarOpen
+                ? "fixed inset-y-0 left-0 z-[450] flex"
+                : "hidden"
+              : "contents"
+          }
+        >
         <ConversationSidebar
           collapse={railCollapse}
           sidebarOpen={sidebarOpen}
@@ -6604,6 +7211,14 @@ export function ChatExperience({
           onMoveToProject={(conversationId, projectID) =>
             void moveConversationToProject(conversationId, projectID)
           }
+          activeProjectId={projectHome?.id ?? null}
+          projectsLoaded={projectsLoaded}
+          teamSharedLoaded={teamSharedLoaded}
+          archivedLoaded={archivedLoaded}
+          onSetDashboardView={(dashboard) => {
+            if (dashboard !== dashboardActive) toggleDashboardView();
+            setSidebarOpen(false);
+          }}
         />
         </div>
 
@@ -7068,6 +7683,7 @@ export function ChatExperience({
               setMobilePane={setDashboardPane}
               onExit={toggleDashboardView}
               onApprovals={showDashboardApprovals}
+              onSidebar={() => setSidebarOpen(true)}
             />
           ) : (
           <PageTopBar
@@ -7390,9 +8006,14 @@ export function ChatExperience({
                 if (creatingShareForCurrentView) return;
                 setActivePillId(id);
               }}
-              submitPrompt={(text, opts) => {
-                if (creatingShareForCurrentView) return Promise.resolve(false);
-                return submitPrompt(text, opts);
+              submitPrompt={async (text, opts) => {
+                if (creatingShareForCurrentView) return false;
+                const targetConv = realConvId(currentConvKey) ?? currentConvKey;
+                const ok = await submitPrompt(text, opts);
+                if (ok) {
+                  cancelLocalPendingAutoSubmits(targetConv);
+                }
+                return ok;
               }}
               resumeHeldCardSend={resumeHeldCardSend}
               setPrompt={(next) => {
@@ -7446,6 +8067,9 @@ export function ChatExperience({
                   ),
                 );
               }}
+              uiAutoSubmits={activeUIAutoSubmits}
+              onPauseAutoSubmit={handlePauseAutoSubmit}
+              onAutoSubmitDue={handleAutoSubmitDue}
             />
             </ConnectorNamesContext.Provider>
             </WithheldFilesContext.Provider>
@@ -7526,7 +8150,7 @@ export function ChatExperience({
                   approvalMode={approvalMode}
                   isStreaming={isStreaming}
                   onToggleAutoApprove={isActiveConversationOwner ? toggleAutoApprove : undefined}
-                  onChangeApprovalMode={isActiveConversationOwner ? changeApprovalMode : undefined}
+                  onChangeApprovalMode={isActiveConversationOwner ? requestApprovalModeChange : undefined}
                   onRunNow={(id) => void handleRunPatrolNow(id)}
                   onTogglePause={(id, status) =>
                     void handleTogglePausePatrol(id, status)
@@ -7558,15 +8182,22 @@ export function ChatExperience({
                 }}
                 promptPlaceholder={promptPlaceholder}
                 promptRef={promptRef}
-                submitPrompt={(text) => {
-                  if (creatingShareForCurrentView) return Promise.resolve(false);
-                  return submitPrompt(text);
+                submitPrompt={async (text) => {
+                  if (creatingShareForCurrentView) return false;
+                  const targetConv = realConvId(currentConvKey) ?? currentConvKey;
+                  const ok = await submitPrompt(text);
+                  if (ok) {
+                    cancelLocalPendingAutoSubmits(targetConv);
+                  }
+                  return ok;
                 }}
                 sealed={isLockdown}
                 isAutoApprove={isAutoApprove}
                 toggleAutoApprove={isActiveConversationOwner ? toggleAutoApprove : undefined}
                 approvalMode={approvalMode}
-                onChangeApprovalMode={isActiveConversationOwner ? changeApprovalMode : undefined}
+                onChangeApprovalMode={isActiveConversationOwner ? requestApprovalModeChange : undefined}
+                autonomousAccepted={autonomousAccepted}
+                onRequireAutonomousAccept={requireAutonomousAccept}
                 isConversationOwner={isActiveConversationOwner}
                 isStreaming={isStreaming}
                 isUploadingAttachments={isUploadingAttachments}
@@ -7620,6 +8251,9 @@ export function ChatExperience({
                 activeConversationIdRef={activeConversationIdRef}
                 abortControllersRef={abortControllersRef}
                 isPendingKey={isPendingKey}
+                onStopPressed={(convKey) =>
+                  cancelLocalPendingAutoSubmits(realConvId(convKey) ?? convKey)
+                }
                 onOpenShare={() => void openShareFromComposer()}
                 shareConversation={
                   activeConversation ??
@@ -7642,6 +8276,21 @@ export function ChatExperience({
           </div>
         </main>
       </div>
+      <AutonomousRiskModal
+        open={autonomousRiskOpen}
+        onClose={() => {
+          pendingAutonomousConfirmRef.current = null;
+          setAutonomousRiskOpen(false);
+        }}
+        onAccepted={() => {
+          setAutonomousAccepted(true);
+          setServerConfig((prev) => ({ ...prev, autonomousAccepted: true }));
+          setAutonomousRiskOpen(false);
+          const fn = pendingAutonomousConfirmRef.current;
+          pendingAutonomousConfirmRef.current = null;
+          fn?.();
+        }}
+      />
     </div>
   );
 }

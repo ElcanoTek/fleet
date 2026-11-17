@@ -52,6 +52,7 @@ import {
   RESEND_EVENT,
   retryHoldPending,
   type ResendDetail,
+  type UIAutoSubmitState,
 } from "./genui/model";
 import { enabledOptionalMcpServerNames } from "./mcpSelection";
 import {
@@ -611,6 +612,8 @@ export interface TurnStreamDeps {
     approvalMode?: ConversationApprovalMode,
   ) => void;
   onMcpServersUpdated?: (convId: string, enabledOptional: string[]) => void;
+  onUIAutoSubmitUpdated?: (convId: string, item: UIAutoSubmitState) => void;
+  onAutonomousAcceptanceRequired?: (convKey: string) => void;
   // Cross-tab election for the recovery chain's beat (#1595). Omitted, the
   // hook builds its own from the platform — `navigator.locks` plus a
   // BroadcastChannel where both exist, and today's independent per-tab chain
@@ -2909,6 +2912,23 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       return;
     }
 
+    if (event.event === "ui.autosubmit") {
+      const p = payload as Partial<UIAutoSubmitState>;
+      if (typeof p.call_id === "string" && typeof p.status === "string") {
+        deps.onUIAutoSubmitUpdated?.(ctx.target, {
+          id: typeof p.id === "string" ? p.id : undefined,
+          conversation_id:
+            typeof p.conversation_id === "string" ? p.conversation_id : ctx.target,
+          call_id: p.call_id,
+          action_id: typeof p.action_id === "string" ? p.action_id : "",
+          deadline_ms: typeof p.deadline_ms === "number" ? p.deadline_ms : 0,
+          ...(typeof p.remaining_ms === "number" ? { remaining_ms: p.remaining_ms } : {}),
+          status: p.status as UIAutoSubmitState["status"],
+        });
+      }
+      return;
+    }
+
     if (event.event === "history.persisted") {
       // Post-persist id notification (server.go:runTurnAsync): the turn's
       // history rows now exist in Postgres, and this carries their {id, role}
@@ -3889,6 +3909,25 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         throw new Error(
           tr("Rate limit reached. Try again in {0}s.", [retry.replace(/\D/g, "")]),
         );
+      }
+      if (response.status === 409) {
+        try {
+          const parsed = JSON.parse(errorText) as { error?: unknown };
+          if (parsed?.error === "autonomous_acceptance_required") {
+            deps.onAutonomousAcceptanceRequired?.(target);
+            throw new Error(
+              tr("Accept the Autonomous mode risk notice to continue."),
+            );
+          }
+        } catch (innerErr) {
+          if (
+            innerErr instanceof Error &&
+            innerErr.message ===
+              tr("Accept the Autonomous mode risk notice to continue.")
+          ) {
+            throw innerErr;
+          }
+        }
       }
       const refusal = parseLockdownModelRefusal(response.status, errorText);
       if (refusal) {

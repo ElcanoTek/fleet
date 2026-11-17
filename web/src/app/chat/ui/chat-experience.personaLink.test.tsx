@@ -81,6 +81,12 @@ describe("persona new-chat link", () => {
     let createdPayload: Record<string, unknown> | null = null;
     fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
+      if (url === "/api/chat/autonomous-accept" && init?.method === "POST") {
+        return new Response(
+          JSON.stringify({ autonomous_accepted: true, autonomous_policy_version: 1 }),
+          { status: 200 },
+        );
+      }
       if (url === "/api/conversations" && init?.method === "POST") {
         createdPayload = JSON.parse(String(init.body ?? "{}")) as Record<string, unknown>;
         return new Response(
@@ -103,14 +109,20 @@ describe("persona new-chat link", () => {
     const composer = await screen.findByDisplayValue("Draft before sharing");
     expect(composer.tagName).toBe("TEXTAREA");
 
-    // Enable Autonomous mode before clicking Share to verify pre-chat approval_mode + auto_approve are seeded.
+    // Enable Autonomous mode before clicking Share to verify risk acceptance + pre-chat approval_mode + auto_approve are seeded.
     fireEvent.click(screen.getByTestId("composer-more-button"));
     fireEvent.click(
       screen.getByRole("menuitemradio", {
-        name: /Autonomous mode: also run checked plans without asking/,
+        name: /Autonomous mode: run live platform actions without asking/,
       }),
     );
+    const riskModal = await screen.findByTestId("autonomous-risk-modal");
+    fireEvent.click(within(riskModal).getByTestId("autonomous-risk-accept"));
+    await waitFor(() =>
+      expect(screen.queryByTestId("autonomous-risk-modal")).not.toBeInTheDocument(),
+    );
 
+    fireEvent.click(screen.getByTestId("composer-more-button"));
     const shareBtn = screen.getByTestId("composer-share-button");
     fireEvent.click(shareBtn);
 

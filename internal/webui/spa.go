@@ -183,7 +183,7 @@ var helpGuides = map[string]string{"chat": "Chat", "operations-center": "Backgro
 var pagePaths = map[string]bool{
 	"/chat": true, "/orchestrator": true, "/analytics": true, "/login": true, "/no-access": true,
 	"/settings": true, "/settings/admin": true, "/settings/admin/doctor": true,
-	"/settings/admin/features":  true,
+	"/settings/admin/features": true, "/settings/admin/sidebar": true,
 	"/settings/admin/providers": true, "/settings/admin/server": true,
 	"/settings/admin/users": true, "/settings/connections": true,
 	"/settings/shared-files": true, "/settings/skills": true, "/settings/team": true,
@@ -232,7 +232,9 @@ type bootCentralAuth struct {
 }
 
 type bootSession struct {
-	Email string `json:"email"`
+	Email                   string `json:"email"`
+	AutonomousAccepted      bool   `json:"autonomous_accepted"`
+	AutonomousPolicyVersion int    `json:"autonomous_policy_version"`
 }
 
 type bootLogin struct {
@@ -323,7 +325,12 @@ func (g *Gateway) servePage(w http.ResponseWriter, r *http.Request, sess *webses
 
 	boot.Branding = g.branding.get()
 	if sess != nil {
-		boot.Session = &bootSession{Email: sess.Email}
+		accepted, policyVer := g.memberAutonomousAcceptance(sess)
+		boot.Session = &bootSession{
+			Email:                   sess.Email,
+			AutonomousAccepted:      accepted,
+			AutonomousPolicyVersion: policyVer,
+		}
 		// Resolve private bundle copy through the same member gate as the SPA.
 		// It is request-local, never placed in the shared branding cache.
 		if boot.Branding.HasLocalizations {
@@ -342,6 +349,29 @@ func (g *Gateway) servePage(w http.ResponseWriter, r *http.Request, sess *webses
 		boot.Login.OIDCLabel = "Sign in with SSO"
 	}
 	g.renderIndex(w, r, status, title, boot)
+}
+
+func (g *Gateway) memberAutonomousAcceptance(sess *websession.Session) (bool, int) {
+	if g.chat == nil || sess == nil {
+		return false, 1
+	}
+	status, _, body, ok := g.callCapture(g.chat, call{
+		method: http.MethodGet, target: "/server-config", header: http.Header{}, who: sessionPrincipal(sess),
+	})
+	if !ok || status != http.StatusOK {
+		return false, 1
+	}
+	var cfg struct {
+		AutonomousAccepted      bool `json:"autonomous_accepted"`
+		AutonomousPolicyVersion int  `json:"autonomous_policy_version"`
+	}
+	if json.Unmarshal(body, &cfg) != nil {
+		return false, 1
+	}
+	if cfg.AutonomousPolicyVersion <= 0 {
+		cfg.AutonomousPolicyVersion = 1
+	}
+	return cfg.AutonomousAccepted, cfg.AutonomousPolicyVersion
 }
 
 func (g *Gateway) memberLocalizations(sess *websession.Session) map[string]map[string]string {

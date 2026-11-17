@@ -20,6 +20,7 @@ import (
 
 const (
 	toolNameBash                 = "bash"
+	toolNameRunPython            = "run_python"
 	toolNamePlaywrightBrowser    = "playwright_browser"
 	toolNameConnectorStudio      = "connector_studio"
 	toolNamePreviewEmail         = "preview_email"
@@ -58,13 +59,27 @@ func (o *orchestrationState) checkBashSafety(toolName, toolCallID, rawInput stri
 		return true, fmt.Sprintf("APPROVAL_REQUIRED: %s. Could not stage for user approval (%v).", reason, err)
 	}
 	switch id {
-	case PreApprovedSentinel:
-		// Session pre-approval (#300): run the command without a card.
+	case PreApprovedSentinel, RecordedSentinel:
+		// Session pre-approval or recorded autonomous action: run without a blocking card.
 		return false, ""
 	case PreDeniedSentinel:
-		return true, fmt.Sprintf("APPROVAL_DENIED: %s — the user pre-denied bash for this conversation (session policy). Do NOT retry.", reason)
+		return true, fmt.Sprintf("APPROVAL_DENIED: %s - the user pre-denied bash for this conversation (session policy). Do NOT retry.", reason)
 	}
-	return true, fmt.Sprintf("APPROVAL_REQUIRED: %s — staged for user approval (approval_id=%s). Do NOT retry. Summarize intent and wait for the user to click Approve.", reason, id)
+	return true, fmt.Sprintf("APPROVAL_REQUIRED: %s - staged for user approval (approval_id=%s). Do NOT retry. Summarize intent and wait for the user to click Approve.", reason, id)
+}
+
+// checkPythonSafety refuses git push attempts routed through run_python so the
+// agent runs git push via bash (which stages a real user approval card). The
+// kernel bootstrap in python_bridge.py enforces the same boundary at runtime
+// for dynamically constructed subprocess/shell calls.
+func (o *orchestrationState) checkPythonSafety(toolName, rawInput string) (bool, string) {
+	if toolName != toolNameRunPython {
+		return false, ""
+	}
+	if !IsGitPushPython(rawInput) {
+		return false, ""
+	}
+	return true, "REFUSED: git push is disabled inside run_python; run git push via the bash tool so Fleet can stage an approval card."
 }
 
 // BrowserCallKind says what a playwright_browser or connector_studio browser
@@ -157,12 +172,83 @@ func (o *orchestrationState) checkBrowserSafety(toolName, toolCallID, rawInput s
 		return true, fmt.Sprintf("APPROVAL_REQUIRED: %s. Could not stage for user approval (%v).", reason, err)
 	}
 	switch id {
-	case PreApprovedSentinel:
+	case PreApprovedSentinel, RecordedSentinel:
 		return false, ""
 	case PreDeniedSentinel:
-		return true, fmt.Sprintf("APPROVAL_DENIED: %s — the user pre-denied %s for this conversation (session policy). Do NOT retry.", reason, toolName)
+		return true, fmt.Sprintf("APPROVAL_DENIED: %s - the user pre-denied %s for this conversation (session policy). Do NOT retry.", reason, toolName)
 	}
-	return true, fmt.Sprintf("APPROVAL_REQUIRED: %s — staged for user approval (approval_id=%s). Do NOT retry. Summarize intent and wait for the user to click Approve.", reason, id)
+	return true, fmt.Sprintf("APPROVAL_REQUIRED: %s - staged for user approval (approval_id=%s). Do NOT retry. Summarize intent and wait for the user to click Approve.", reason, id)
+}
+
+// checkConnectorStudioSafety stages non-search connector_studio actions
+// (connect_mcp, create_custom_connector, update_custom_connector, probe_http,
+// test_custom_tool, and browser/copilot session actions not already handled by
+// checkBrowserSafety) for explicit user approval even in Autonomous mode.
+func (o *orchestrationState) checkConnectorStudioSafety(toolName, toolCallID, rawInput string) (bool, string) {
+	if toolName != toolNameConnectorStudio {
+		return false, ""
+	}
+	if risky, _ := classifyRiskyBrowser(toolName, rawInput); risky {
+		// Already evaluated by checkBrowserSafety immediately prior in BeforeToolCall.
+		return false, ""
+	}
+	if !IsGatedConnectorStudioCall(rawInput) {
+		return false, ""
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.approvalSink == nil {
+		return false, ""
+	}
+	id, err := o.approvalSink.Stage(toolName, toolCallID, rawInput)
+	if err != nil {
+		o.log().Error("approval stage failed (connector_studio)", "err", err)
+		return true, fmt.Sprintf("APPROVAL_REQUIRED: connector_studio requires user approval. Could not stage (%v).", err)
+	}
+	switch id {
+	case PreApprovedSentinel, RecordedSentinel:
+		return false, ""
+	case PreDeniedSentinel:
+		return true, "APPROVAL_DENIED: the user pre-denied connector_studio for this conversation (session policy). Do NOT retry."
+	}
+	return true, fmt.Sprintf("APPROVAL_REQUIRED: connector_studio action has been staged for explicit user approval (approval_id=%s). Do NOT retry. Summarize the connector action and wait for the user to click Approve.", id)
+}
+
+// checkChatPatrolSafety stages chat_patrol 'create' and 'update' calls for
+// explicit user approval so recurring patrol schedules and prompts cannot be
+// installed or rewritten without human confirmation, even in Autonomous mode.
+// Read and lifecycle actions ('list', 'pause', 'resume', 'cancel') pass through.
+func (o *orchestrationState) checkChatPatrolSafety(toolName, toolCallID, rawInput string) (bool, string) {
+	if toolName != tools.ChatPatrolToolName {
+		return false, ""
+	}
+	if !IsGatedChatPatrolCall(rawInput) {
+		return false, ""
+	}
+	if hasUnresolvedToolPlaceholder(rawInput) {
+		return true, "chat_patrol argument contains an unresolved ${tool:...} placeholder. The agent runtime does NOT substitute that syntax; paste the actual value into the tool arguments instead."
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.approvalSink == nil {
+		return false, ""
+	}
+	id, err := o.approvalSink.Stage(toolName, toolCallID, rawInput)
+	var refused *StageRefusedError
+	if errors.As(err, &refused) {
+		return true, "CHAT_PATROL_REFUSED: " + refused.Reason
+	}
+	if err != nil {
+		o.log().Error("approval stage failed (chat_patrol)", "err", err)
+		return true, fmt.Sprintf("APPROVAL_REQUIRED: could not stage chat_patrol for user approval (%v). Ask the user what to do.", err)
+	}
+	switch id {
+	case PreApprovedSentinel, RecordedSentinel:
+		return false, ""
+	case PreDeniedSentinel:
+		return true, "APPROVAL_DENIED: the user pre-denied chat_patrol for this conversation (session policy). Do NOT retry."
+	}
+	return true, fmt.Sprintf("APPROVAL_REQUIRED: the patrol schedule change has been staged for explicit user approval (approval_id=%s). Do NOT retry. Summarize the patrol schedule and prompt you proposed and wait for the user to click Approve.", id)
 }
 
 // checkCriticalToolApproval stages bundle-declared critical tools (the
@@ -184,14 +270,15 @@ func (o *orchestrationState) checkBrowserSafety(toolName, toolCallID, rawInput s
 // checkBashSafety: a transport with no approval UI cannot stage a card, and
 // hard-blocking would brick those tools without offering a decision path).
 func (o *orchestrationState) checkCriticalToolApproval(toolName, toolCallID, rawInput string) (bool, string) {
-	if !o.isRunCriticalTool(toolName) {
+	hardBlocked := IsAutonomousHardBlocked(toolName, rawInput)
+	if !o.isRunCriticalTool(toolName) && !AutonomousBlocked(toolName) && !hardBlocked {
 		return false, ""
 	}
 	if isEmailSendTool(toolName) {
 		return false, "" // checkEmailSafety owns send_email end-to-end
 	}
 	switch toolName {
-	case toolNameBash, toolNamePlaywrightBrowser, toolNameConnectorStudio, toolNamePreviewEmail, toolNameScheduleTask, toolNameManageTasks, toolNameSuggestAdvancedModel:
+	case toolNameBash, toolNamePlaywrightBrowser, toolNameConnectorStudio, tools.ChatPatrolToolName, toolNamePreviewEmail, toolNameScheduleTask, toolNameManageTasks, toolNameSuggestAdvancedModel:
 		// Dedicated gates own these. manage_tasks: checkManageTasksSafety
 		// stages every write itself, and a read-only show staged here would
 		// reach an executor that (rightly) refuses to approve a show.
@@ -204,16 +291,8 @@ func (o *orchestrationState) checkCriticalToolApproval(toolName, toolCallID, raw
 	}
 	// Per-tool approval mode (#1153). `notify` runs the tool now and posts a
 	// card recording what happened, for operations whose undo is cheap and
-	// complete — a page publish against a store that keeps immutable versions,
-	// not a sent email. The window it replaces is 300 seconds beginning at an
-	// unpredictable moment many minutes into a run the user started and then
-	// reasonably stopped watching, so the thing it most reliably blocked was the
-	// final, wanted action of a long analysis.
-	//
-	// Recording is REQUIRED, not best-effort: a sink that cannot post the card,
-	// or one that fails to, falls back to blocking. The whole case for executing
-	// without asking is that the user still finds out.
-	if approvalPolicy, undoHint := ApprovalModeForTool(toolName); approvalPolicy == ApprovalModeNotify {
+	// complete (never for hard-blocked or autonomous-blocked tools).
+	if approvalPolicy, undoHint := ApprovalModeForTool(toolName); approvalPolicy == ApprovalModeNotify && !hardBlocked && !AutonomousBlocked(toolName) {
 		if recorder, ok := o.approvalSink.(ActionRecorder); ok {
 			if err := recorder.RecordAction(toolName, toolCallID, rawInput, undoHint); err != nil {
 				o.log().Warn("notify-mode record failed — falling back to a blocking approval", "tool", toolName, "err", err)
@@ -416,6 +495,9 @@ func (o *orchestrationState) checkSuggestAdvancedSafety(toolName, rawInput strin
 // shown to the user in the approval card. Ported verbatim from chat's
 // orchestration.go.
 func classifyRiskyBash(rawInput string) (bool, string) {
+	if IsGitPushBash(rawInput) {
+		return true, "git push to a remote"
+	}
 	var args struct {
 		Command string `json:"command"`
 	}
@@ -423,10 +505,6 @@ func classifyRiskyBash(rawInput string) (bool, string) {
 		return false, ""
 	}
 	c := strings.ToLower(args.Command)
-
-	if strings.Contains(c, "git push") {
-		return true, "git push to a remote"
-	}
 
 	pkgOps := []string{
 		"dnf install", "dnf remove", "dnf erase", "dnf update", "dnf upgrade",

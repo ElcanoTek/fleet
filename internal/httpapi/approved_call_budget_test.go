@@ -232,6 +232,10 @@ type claimStore struct {
 	resultErr error
 }
 
+func (c *claimStore) Get(context.Context, string, string) (*store.Conversation, error) {
+	return nil, nil
+}
+
 func (c *claimStore) GetApproval(context.Context, string, string) (*store.Approval, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

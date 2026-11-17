@@ -443,3 +443,47 @@ describe("restored chip collections", () => {
     expect(ie.include.length + ie.exclude.length).toBe(MAX_CHOICE_ITEMS);
   });
 });
+
+describe("Autonomous auto_submit spec field and auto=1 submission marker", () => {
+  it("parses optional auto_submit boolean on CardSpec", () => {
+    const enabled = parseCardSpec(
+      JSON.stringify({
+        title: "Prefilled",
+        auto_submit: true,
+        components: [{ type: "text_input", id: "name", label: "Name", value: "A" }],
+        actions: [{ id: "go", label: "Submit" }],
+      }),
+    );
+    expect(enabled?.auto_submit).toBe(true);
+
+    const disabled = parseCardSpec(
+      JSON.stringify({
+        title: "OptOut",
+        auto_submit: false,
+        components: [{ type: "text_input", id: "name", label: "Name", value: "A" }],
+        actions: [{ id: "go", label: "Submit" }],
+      }),
+    );
+    expect(disabled?.auto_submit).toBe(false);
+  });
+
+  it("parses auto=1 on server auto-submitted messages and leaves manual submissions unmarked", () => {
+    const autoMsg = '[UI submission] card=call_1 action=clone auto=1\n```json\n{"deal":"d1"}\n```';
+    const parsedAuto = parseSubmissionMessage(autoMsg);
+    expect(parsedAuto).toEqual({
+      cardId: "call_1",
+      actionId: "clone",
+      values: { deal: "d1" },
+      autoSubmitted: true,
+    });
+
+    const manualMsg = '[UI submission] card=call_2 action=clone\n```json\n{"deal":"d2"}\n```';
+    const parsedManual = parseSubmissionMessage(manualMsg);
+    expect(parsedManual).toEqual({
+      cardId: "call_2",
+      actionId: "clone",
+      values: { deal: "d2" },
+    });
+    expect(parsedManual?.autoSubmitted).toBeUndefined();
+  });
+});
