@@ -217,6 +217,9 @@ func chatRoutes() []chatRoute {
 			return target
 		}, noBody, passthroughJSON},
 		{"POST /api/admin/models/rollout", fixed("/admin/models/rollout"), jsonBodyAlways, passthroughJSON},
+		{"GET /api/admin/sidebar", fixed("/admin/sidebar"), noBody, passthroughJSON},
+		{"PUT /api/admin/sidebar", fixed("/admin/sidebar"), jsonBodyIfAny, passthroughJSON},
+		{"DELETE /api/admin/sidebar", fixed("/admin/sidebar"), noBody, passthroughJSON},
 		{"GET /api/admin/stats", fixed("/admin/stats"), noBody, textJSON},
 		{"GET /api/admin/storage", fixed("/admin/storage"), noBody, passthroughJSON},
 		{"POST /api/admin/storage/cleanup", fixed("/admin/storage/cleanup"), jsonBodyAlways, passthroughJSON},
@@ -280,6 +283,9 @@ func chatRoutes() []chatRoute {
 		{"PATCH /api/conversations/bulk", fixed("/conversations/bulk"), jsonBodyIfAny, textJSON},
 		{"GET /api/conversations/order", fixed("/conversations/order"), noBody, textJSON},
 		{"PUT /api/conversations/order", fixed("/conversations/order"), jsonBodyIfAny, textJSON},
+		{"GET /api/sidebar", fixed("/sidebar"), noBody, textJSON},
+		{"PUT /api/sidebar", fixed("/sidebar"), jsonBodyIfAny, textJSON},
+		{"DELETE /api/sidebar", fixed("/sidebar"), noBody, textJSON},
 		{"GET /api/conversations/{id}", conv, noBody, textJSON},
 		{"DELETE /api/conversations/{id}", conv, noBody, textOK},
 		{"POST /api/conversations/{id}/approval-groups/{groupId}", func(r *http.Request) string {

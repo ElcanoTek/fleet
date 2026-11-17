@@ -1,4 +1,7 @@
 import { localizeConnector } from "@/app/lib/i18n/bundle";
+import { entryHomeEligible, markEntryHomeUsed, resolveEntryHome } from "@/app/shared/sidebar/home";
+import { prepareShortcut, shortcutHref } from "@/app/shared/sidebar/RailNav";
+import type { SidebarItem } from "@/app/shared/sidebar/layout";
 import { rich } from "@/app/lib/i18n/rich";
 import { t as tr } from "@/app/lib/i18n";
 // NOTE (lint hygiene): this large component used to disable three React
@@ -1377,6 +1380,9 @@ export function ChatExperience({
   // chats, sources, instructions, per-project settings. null = normal chat
   // view. settings=true opens straight into the settings dialog (the rail
   // kebab's "Project settings…").
+  // A Home (docs/SIDEBAR.md) the boot could not open in its own place,
+  // opened once the boot settles.
+  const pendingHomeRef = useRef<SidebarItem | null>(null);
   const [projectHome, setProjectHome] = useState<null | {
     id: string;
     settings?: boolean;
@@ -6553,6 +6559,46 @@ export function ChatExperience({
       }
     }
 
+    // Project link (?project=<id>): a sidebar project shortcut followed from
+    // another page (docs/SIDEBAR.md). Consumed and stripped like ?c=; the
+    // project's home opens once the boot has settled.
+    let projectLinkId: string | null = null;
+    {
+      const params = new URLSearchParams(window.location.search);
+      const proj = params.get("project");
+      if (proj !== null) {
+        params.delete("project");
+        const qs = params.toString();
+        window.history.replaceState(
+          null,
+          "",
+          window.location.pathname + (qs ? `?${qs}` : ""),
+        );
+        if (proj.trim()) projectLinkId = proj.trim();
+      }
+    }
+
+    // Home (docs/SIDEBAR.md): when this page load opened fleet itself (no
+    // link asked for anything), the sidebar's Home item — a chat, a
+    // dashboard, a project, a page — opens instead of the most recent chat.
+    // The layout read started when the rail mounted; this waits for it only
+    // briefly.
+    const entryHome: Promise<SidebarItem | null> = entryHomeEligible()
+      ? resolveEntryHome(900)
+      : Promise.resolve(null);
+    const openHomeElsewhere = (home: SidebarItem) => {
+      if (home.kind === "chat" && home.ref) {
+        prepareShortcut(home);
+        void loadConversationRef.current(home.ref, { fallbackToTeamChatView: true });
+      } else if (home.kind === "project" && home.ref) {
+        setProjectHome({ id: home.ref });
+      } else if (home.kind === "task" || home.kind === "page" || home.id === "tasks") {
+        // Replace, not push: Back must not return to the bare /chat that
+        // would send the person to Home again.
+        window.location.replace(home.kind === "builtin" ? "/orchestrator" : shortcutHref(home));
+      }
+    };
+
     // Personas — nice-to-have; the server falls back to default. Sets the
     // roster always, and reconciles any draft or empty-chat pending persona
     // against the refreshed workspace/user roster so a deleted user persona
@@ -6689,8 +6735,21 @@ export function ChatExperience({
         const ownerLink =
           teamLink && (await teamLink)?.status === "owner" ? teamLinkId : null;
         if (cancelled) return;
+        const home = await entryHome;
+        if (cancelled) return;
+        // A Home chat of the person's own opens in the boot's place; any other
+        // Home (a teammate's chat, a project, a page) opens once it settles.
+        const homeChat =
+          home && home.kind === "chat" && convs.some((c) => c.id === home.ref)
+            ? (home.ref ?? null)
+            : null;
+        if (home && homeChat) prepareShortcut(home);
+        else if (home) pendingHomeRef.current = home;
         const target =
-          deepLinkConvId ?? ownerLink ?? (newChatLink ? null : (convs[0]?.id ?? null));
+          deepLinkConvId ??
+          ownerLink ??
+          homeChat ??
+          (newChatLink ? null : (convs[0]?.id ?? null));
         if (!target) {
           setActiveConversationId(null);
           openNewChatLink();
@@ -6715,6 +6774,14 @@ export function ChatExperience({
           // Bootstrap done — start mirroring state into the module store so a
           // later navigation to /settings leaves a warm snapshot to return to.
           setBootstrapped(true);
+          markEntryHomeUsed();
+          const pendingHome = pendingHomeRef.current;
+          pendingHomeRef.current = null;
+          if (projectLinkId) {
+            setProjectHome({ id: projectLinkId });
+          } else if (pendingHome) {
+            openHomeElsewhere(pendingHome);
+          }
         }
       }
     };
@@ -6944,7 +7011,27 @@ export function ChatExperience({
       >
         {/* Dashboard view takes the whole screen: the rail stays mounted
             (its search, scroll and drafts survive) but is not drawn. */}
-        <div data-dashboard-rail-wrapper="" className={dashboardActive ? "hidden" : "contents"}>
+        {/* …except when the dashboard header's sidebar button slides it in
+            over the board (docs/SIDEBAR.md), with a scrim to dismiss it. */}
+        {dashboardActive && sidebarOpen ? (
+          <button
+            type="button"
+            aria-label={tr("Close navigation")}
+            data-testid="dashboard-rail-scrim"
+            className="fixed inset-0 z-[440] hidden bg-[var(--color-overlay-strong)] sm:block"
+            onClick={() => setSidebarOpen(false)}
+          />
+        ) : null}
+        <div
+          data-dashboard-rail-wrapper=""
+          className={
+            dashboardActive
+              ? sidebarOpen
+                ? "fixed inset-y-0 left-0 z-[450] flex"
+                : "hidden"
+              : "contents"
+          }
+        >
         <ConversationSidebar
           collapse={railCollapse}
           sidebarOpen={sidebarOpen}
@@ -7034,6 +7121,8 @@ export function ChatExperience({
           onMoveToProject={(conversationId, projectID) =>
             void moveConversationToProject(conversationId, projectID)
           }
+          activeProjectId={projectHome?.id ?? null}
+          onShowDashboard={toggleDashboardView}
         />
         </div>
 
@@ -7498,6 +7587,7 @@ export function ChatExperience({
               setMobilePane={setDashboardPane}
               onExit={toggleDashboardView}
               onApprovals={showDashboardApprovals}
+              onSidebar={() => setSidebarOpen(true)}
             />
           ) : (
           <PageTopBar

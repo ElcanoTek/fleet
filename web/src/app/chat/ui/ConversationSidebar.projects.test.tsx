@@ -272,13 +272,13 @@ describe("ConversationSidebar — project rows (decision #23)", () => {
     expect(onOpenProjectHome).toHaveBeenLastCalledWith("p-mine");
   });
 
-  it("gives a member Open and New chat only — settings and sharing are the owner's", () => {
+  it("gives a member Open, New chat and Add to sidebar only — settings and sharing are the owner's", () => {
     renderSidebar();
     fireEvent.click(
       screen.getByRole("button", { name: "Project options for Quant" }),
     );
     expect(
       screen.getAllByRole("menuitem").map((el) => el.textContent?.trim()),
-    ).toEqual(["Open project", "New chat"]);
+    ).toEqual(["Open project", "New chat", "Add to sidebar"]);
   });
 });
