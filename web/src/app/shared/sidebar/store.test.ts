@@ -81,11 +81,11 @@ describe("sidebar store", () => {
 
   it("an edit whose save is still in flight is sent again on pagehide, and its answer is applied", async () => {
     vi.useFakeTimers();
-    let release: (() => void) | null = null;
+    const hang: { release?: () => void } = {};
     const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
       if ((init?.method ?? "GET") === "GET") return Response.json({ layout: null, workspace_default: null, rev: 0 });
       const body = JSON.parse(String(init?.body));
-      if (!init?.keepalive) await new Promise<void>((r) => (release = r)); // the debounced save hangs
+      if (!init?.keepalive) await new Promise<void>((r) => (hang.release = r)); // the debounced save hangs
       return Response.json({ layout: body.layout, rev: body.rev });
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -100,7 +100,7 @@ describe("sidebar store", () => {
     await vi.advanceTimersByTimeAsync(0);
     // Restored from the back/forward cache: the keepalive answer settles the state.
     expect(getSidebarState()).toMatchObject({ saving: false, saveError: false });
-    release?.();
+    hang.release?.();
     await vi.advanceTimersByTimeAsync(0);
     // A confirmed edit is not sent a third time.
     flushSidebarSaveForTests();
