@@ -107,7 +107,8 @@ function SidebarAdmin() {
   };
 
   // A workspace sidebar cannot pin a background task (only its owner and
-  // admins can open one; the server refuses it), so a copy leaves them out.
+  // admins can open one) or the admin-only Analytics page; the server
+  // refuses both, so a copy leaves them out.
   // Only a layout that really loaded is copied: when the admin's own read
   // failed, the store holds the built-in stand-in, and copying that would
   // replace the draft with something the admin never chose.
@@ -119,7 +120,12 @@ function SidebarAdmin() {
       return;
     }
     const mine = cloneLayout(own.layout);
-    setDraft(normalizeLayout({ ...mine, items: mine.items.filter((i) => i.kind !== "task") }));
+    setDraft(
+      normalizeLayout({
+        ...mine,
+        items: mine.items.filter((i) => i.kind !== "task" && !(i.kind === "page" && i.ref === "analytics")),
+      }),
+    );
   };
 
   const loaded = saved !== undefined && !loadFailed;

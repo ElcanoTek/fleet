@@ -1103,6 +1103,7 @@ export function ConversationSidebar({
   onSelectTeamSharedConversation,
   onMoveToProject,
   activeProjectId = null,
+  projectsLoaded = false,
   onSetDashboardView,
 }: {
   sidebarOpen: boolean;
@@ -1231,6 +1232,8 @@ export function ConversationSidebar({
   // The project whose home is open in the main pane, for the sidebar's
   // project shortcuts (docs/SIDEBAR.md).
   activeProjectId?: string | null;
+  // The projects list has loaded once (an empty list is then a real "none").
+  projectsLoaded?: boolean;
   // Puts the open chat in dashboard view (true) or chat view (false): a
   // shortcut clicked while its chat is already open applies the view it
   // names, whichever view the chat is in.
@@ -1858,16 +1861,19 @@ export function ConversationSidebar({
     },
     availability: (item) => {
       if (item.kind === "chat") {
-        if (!listsKnown) return "unknown";
+        // Found in any list already loaded: openable, whatever the others
+        // are still doing (a failed team read must not hide a chat that is
+        // plainly here). "No" only once every list has answered.
         const found =
           conversations.some((c) => c.id === item.ref) ||
           archivedConversations.some((c) => c.id === item.ref) ||
           teamSharedConversations.some((c) => c.id === item.ref);
-        return found ? "yes" : "no";
+        if (found) return "yes";
+        return listsKnown ? "no" : "unknown";
       }
       if (item.kind === "project") {
-        if (projects.length === 0) return "unknown";
-        return projects.some((p) => p.id === item.ref) ? "yes" : "no";
+        if (projects.some((p) => p.id === item.ref)) return "yes";
+        return projectsLoaded ? "no" : "unknown";
       }
       return "unknown";
     },

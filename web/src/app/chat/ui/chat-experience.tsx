@@ -2050,6 +2050,9 @@ export function ChatExperience({
   // visibleOrder, because that memo needs the set of projects the viewer can
   // see to decide which chats are "unfiled".
   const [projects, setProjects] = useState<Project[]>([]);
+  // Whether the projects list has loaded once: an empty list then means "no
+  // projects", not "not read yet" (the sidebar's project shortcuts use it).
+  const [projectsLoaded, setProjectsLoaded] = useState(false);
   // The person's own chat orders by scope — "pinned", and "project:<id>" for
   // their chats in a project (docs/CHAT-ORDER.md) — set in the rail's
   // reorder mode and saved per user on the server. Empty until read (or for a
@@ -3706,6 +3709,7 @@ export function ChatExperience({
       if (!res.ok) return;
       const data = (await res.json()) as { projects?: Project[] };
       setProjects(data.projects ?? []);
+      setProjectsLoaded(true);
     } catch {
       // Rail projects are best-effort — a failed load keeps the previous list.
     }
@@ -7187,6 +7191,7 @@ export function ChatExperience({
             void moveConversationToProject(conversationId, projectID)
           }
           activeProjectId={projectHome?.id ?? null}
+          projectsLoaded={projectsLoaded}
           onSetDashboardView={(dashboard) => {
             if (dashboard !== dashboardActive) toggleDashboardView();
             setSidebarOpen(false);

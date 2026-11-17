@@ -542,3 +542,56 @@ test("Analytics is never pinned for the whole team", async ({ page }) => {
   await expect(page.getByRole("option", { name: /Guides/ })).toBeVisible();
   await expect(page.getByRole("option", { name: /Analytics/ })).toHaveCount(0);
 });
+
+test("a workspace pin to a chat that is plainly here shows even when the team list fails", async ({ page }) => {
+  await setup(page, {
+    workspace: { version: 1, items: [{ id: "s-own", kind: "chat", ref: "c4", label: "Launch email" }], sections: [] },
+  });
+  await page.route("**/api/conversations?*", (r: Route) => {
+    const url = new URL(r.request().url());
+    if (url.searchParams.get("scope") === "team") return r.fulfill({ status: 500, body: "down" });
+    if (url.searchParams.get("archived") === "true") return r.fulfill({ json: { conversations: [] } });
+    return r.fulfill({ json: { conversations: [] } });
+  });
+  await page.goto("/chat");
+  await expect(page.getByTestId("rail-nav").getByText("Launch email")).toBeVisible();
+});
+
+test("a pin to a deleted project reads as not available once projects have loaded", async ({ page }) => {
+  await setup(page, {
+    own: { version: 1, items: [{ id: "s-gone", kind: "project", ref: "p-gone", title: "Old project" }], sections: [] },
+  });
+  await page.route("**/api/projects", (r: Route) => r.fulfill({ json: { projects: [] } }));
+  await page.goto("/chat");
+  await expect(page.getByTestId("rail-shortcut")).toContainText("Not available to you");
+});
+
+test("the workspace editor flags an archived chat pinned there, and never copies Analytics", async ({ page }) => {
+  await setup(page, { admin: true });
+  await page.route("**/api/conversations?*", (r: Route) => {
+    const url = new URL(r.request().url());
+    if (url.searchParams.get("archived") === "true")
+      return r.fulfill({ json: { conversations: [{ id: "c-old", title: "Old board", archived_at: 1 }] } });
+    return r.fulfill({ json: { conversations: [] } });
+  });
+  await page.route("**/api/admin/sidebar", (r: Route) =>
+    r.fulfill({
+      json: {
+        layout: { version: 1, items: [{ id: "s-old", kind: "chat", ref: "c-old", title: "Old board" }], sections: [] },
+        updated_by: "e2e@example.com",
+        updated_at: 1_763_000_000,
+      },
+    }),
+  );
+  await page.route("**/api/sidebar", (r: Route) =>
+    r.fulfill({
+      json: { layout: { version: 1, items: [{ id: "s-a", kind: "page", ref: "analytics" }], sections: [] }, workspace_default: null },
+    }),
+  );
+  await page.goto("/settings/admin/sidebar");
+  const editor = page.getByTestId("admin-sidebar-editor");
+  await expect(editor.getByTestId("sidebar-item-not-shared")).toHaveCount(1);
+  await page.getByTestId("admin-sidebar-copy-mine").click();
+  await expect(editor.getByTestId("sidebar-item-not-shared")).toHaveCount(0);
+  await expect(editor.getByPlaceholder("Analytics")).toHaveCount(0);
+});

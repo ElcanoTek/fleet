@@ -1,5 +1,6 @@
 import { orchestratorApi } from "@/app/shared/lib/orchestratorApi";
 import { taskRunLabel } from "@/app/orchestrator/taskDisplay";
+import { t as tr } from "@/app/lib/i18n";
 import type { ShortcutTarget } from "./layout";
 
 // What the Customize panel's "Add to sidebar" list offers: the person's chats
@@ -40,8 +41,9 @@ async function json<T>(url: string): Promise<T | null> {
 }
 
 export async function loadPickerEntries(): Promise<PickerEntry[]> {
-  const [own, shared, projects, patrols, tasks] = await Promise.all([
+  const [own, archived, shared, projects, patrols, tasks] = await Promise.all([
     json<{ conversations?: ConvRow[] | null }>("/api/conversations"),
+    json<{ conversations?: ConvRow[] | null }>("/api/conversations?archived=true"),
     json<{ conversations?: ConvRow[] | null }>("/api/conversations?scope=shared"),
     json<{ projects?: { id: string; name: string; team_id?: string }[] | null }>("/api/projects"),
     json<{ patrols?: { conversation_id: string; title?: string; conversation_title?: string }[] | null }>("/api/patrols"),
@@ -68,6 +70,13 @@ export async function loadPickerEntries(): Promise<PickerEntry[]> {
   for (const c of own?.conversations ?? []) {
     if (patrolIds.has(c.id)) continue;
     out.push({ group: "chats", kind: "chat", ref: c.id, title: c.title || "", shared: sharedChat(c) });
+  }
+  // Archived chats can still be pinned to your own sidebar, and are listed so
+  // the workspace editor can flag one already pinned there: an archived chat
+  // is never shared with the team.
+  for (const c of archived?.conversations ?? []) {
+    if (patrolIds.has(c.id)) continue;
+    out.push({ group: "chats", kind: "chat", ref: c.id, title: c.title || "", detail: tr("Archived"), shared: false });
   }
   for (const c of shared?.conversations ?? []) {
     if (patrolIds.has(c.id)) continue;
