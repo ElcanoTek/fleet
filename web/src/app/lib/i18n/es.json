@@ -3398,6 +3398,7 @@
   "Sign in": "Iniciar sesión",
   "Sign in again": "Volver a iniciar sesión",
   "Sign in again to keep watching this run.": "Vuelve a iniciar sesión para seguir viendo esta ejecución.",
+  "Your sign-in expired — taking you to sign in. Nothing was lost.": "Tu sesión ha caducado; te llevamos a iniciar sesión. No se ha perdido nada.",
   "Sign in at app.devin.ai and generate a service-user API key under Settings → API Keys, then paste it here. Legacy personal apk_ keys are not accepted.": "Inicia sesión en app.devin.ai y genera una clave de API de usuario de servicio en Settings → API Keys; después pégala aquí. No se aceptan las claves personales antiguas apk_.",
   "Sign in at app.greptile.com, go to Settings → Organization → API Keys, and copy your API key here.": "Inicia sesión en app.greptile.com, ve a Settings → Organization → API Keys y copia aquí tu clave de API.",
   "Sign in at etherscan.io and create a free API key under your account's API Keys page (etherscan.io/myapikey); higher API usage tiers unlock more MCP tools.": "Inicia sesión en etherscan.io y crea una clave de API gratuita en la página API Keys de tu cuenta (etherscan.io/myapikey); los niveles superiores de uso de API desbloquean más herramientas MCP.",
