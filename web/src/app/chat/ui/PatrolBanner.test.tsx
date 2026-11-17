@@ -305,7 +305,19 @@ describe("PatrolsDialog", () => {
       cron: "0 * * * *",
       autoApprove: true,
       approvalMode: "auto",
+      // Adding next to a running patrol must add, never overwrite it.
+      allowMultiple: true,
     });
+  });
+
+  it("keeps the remove confirmation armed when the DELETE fails", async () => {
+    const props = renderDialog({ onRemove: vi.fn().mockResolvedValue(false) });
+    fireEvent.click(cardToggle(0));
+    const remove = screen.getByTestId("patrols-remove");
+    fireEvent.click(remove);
+    fireEvent.click(remove);
+    await waitFor(() => expect(props.onRemove).toHaveBeenCalledTimes(1));
+    expect(screen.getByTestId("patrols-remove")).toHaveTextContent("Confirm remove");
   });
 });
 
@@ -335,6 +347,8 @@ describe("PatrolsDialog with no patrols (first patrol)", () => {
       prompt: "Summarize unread emails.",
       cron: "30 8 * * 1-5",
     });
+    // A chat's first patrol is a plain create.
+    expect(vi.mocked(props.onStart).mock.calls[0][0].allowMultiple).toBeUndefined();
   });
 
   it("sets a one-time timer, clamping a custom duration when the unit changes", async () => {

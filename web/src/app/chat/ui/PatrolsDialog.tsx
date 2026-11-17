@@ -36,6 +36,9 @@ export type CreatePatrolInput = {
   durationSeconds?: number;
   autoApprove: boolean;
   approvalMode?: ConversationApprovalMode;
+  /** Add alongside the chat's existing patrols; without it the server
+   *  updates the latest recurring patrol in place. */
+  allowMultiple?: boolean;
 };
 
 type Outcome = boolean | void | Promise<boolean | void>;
@@ -547,10 +550,10 @@ export function PatrolsDialog({
 
   const attentionId = pendingApprovals > 0 ? attentionScheduleId(schedules) : null;
 
-  const runBusy = async (id: string, fn: () => unknown) => {
+  const runBusy = async (id: string, fn: () => unknown): Promise<unknown> => {
     setBusyId(id);
     try {
-      await fn();
+      return await fn();
     } finally {
       setBusyId(null);
     }
@@ -761,7 +764,10 @@ export function PatrolsDialog({
                                   setConfirmRemoveId(sc.id);
                                   return;
                                 }
-                                await runBusy(sc.id, () => onRemove(sc.id));
+                                // A refused or unreachable DELETE leaves the
+                                // confirm armed so one click retries it.
+                                const ok = await runBusy(sc.id, () => onRemove(sc.id));
+                                if (ok === false) return;
                                 setConfirmRemoveId(null);
                                 setExpandedId(null);
                               }}
@@ -851,6 +857,9 @@ export function PatrolsDialog({
                   durationSeconds: v.durationSeconds,
                   autoApprove: v.approvalMode !== "manual",
                   approvalMode: v.approvalMode,
+                  // "New patrol or timer" next to existing patrols adds one;
+                  // it must never overwrite the patrol already running.
+                  allowMultiple: hasPatrols || undefined,
                 });
                 if (ok !== false) setAdding(false);
                 return ok;

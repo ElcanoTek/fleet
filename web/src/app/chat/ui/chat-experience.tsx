@@ -5928,6 +5928,15 @@ export function ChatExperience({
     if (el) el.scrollIntoView({ block: "center", behavior: prefersReducedMotion() ? "auto" : "smooth" });
     else jumpToLatest();
   };
+  // The clock's label carries a countdown, so it re-reads the time on a
+  // tick while the chat has a patrol (as the bar's countdown does).
+  const [patrolNowSec, setPatrolNowSec] = useState(() => Math.floor(Date.now() / 1000));
+  useEffect(() => {
+    if (livePatrols.length === 0) return;
+    setPatrolNowSec(Math.floor(Date.now() / 1000));
+    const id = window.setInterval(() => setPatrolNowSec(Math.floor(Date.now() / 1000)), 30_000);
+    return () => window.clearInterval(id);
+  }, [livePatrols.length]);
   const patrolChipLabel = useMemo(() => {
     if (livePatrols.length === 0) return undefined;
     if (pendingApprovalCount > 0) {
@@ -5938,11 +5947,11 @@ export function ChatExperience({
       const when =
         sc.status === "paused"
           ? tr("paused")
-          : formatCountdown(sc.next_run_at, Math.floor(Date.now() / 1000));
+          : formatCountdown(sc.next_run_at, patrolNowSec);
       return when ? tr("{0} · {1} · Click to manage", [sc.title, when]) : tr("{0} · Click to manage", [sc.title]);
     }
     return tr("Patrols and timers: {0} in this chat", [livePatrols.length]);
-  }, [livePatrols, pendingApprovalCount]);
+  }, [livePatrols, pendingApprovalCount, patrolNowSec]);
   const activeUIAutoSubmits = useMemo(
     () => uiAutoSubmitsByConv.get(currentConvKey),
     [currentConvKey, uiAutoSubmitsByConv],
@@ -6200,6 +6209,7 @@ export function ChatExperience({
         duration_seconds: input.durationSeconds,
         auto_approve: requestedMode !== "manual",
         approval_mode: requestedMode,
+        allow_multiple: input.allowMultiple,
       });
       applyScheduleResponse(convId, data);
       notify({

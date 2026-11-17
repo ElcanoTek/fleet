@@ -37,6 +37,9 @@ export type CreateScheduleBody = {
   duration_seconds?: number;
   auto_approve?: boolean;
   approval_mode?: ConversationApprovalMode;
+  /** Add another recurring patrol instead of updating the chat's latest one
+   *  in place (the server's default for a create). */
+  allow_multiple?: boolean;
 };
 
 export type ScheduleAction = "pause" | "resume" | "cancel";
