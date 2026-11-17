@@ -221,7 +221,11 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, u
 		sanitized.OptionalMCPServersEnabled = s.effectiveOptionalMCPServersForCaller(r.Context(), user, conv)
 		conv = &sanitized
 	}
-	uiAutoSubmits, _ := s.store.ListActiveUIAutoSubmits(r.Context(), id)
+	uiAutoSubmits, err := s.store.ListActiveUIAutoSubmits(r.Context(), id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	if uiAutoSubmits == nil {
 		uiAutoSubmits = []store.UIAutoSubmit{}
 	}

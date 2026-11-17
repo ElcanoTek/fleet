@@ -105,8 +105,8 @@ func TestAutonomousStage_FloorBlockedSessionDenyAndDynamicRemote(t *testing.T) {
 		{"m365 send-mail", "mcp_ms365_send-mail", `{"to":"ext@example.com"}`},
 		{"m365 graph-batch", "mcp_ms365_graph-batch", `{"requests":[]}`},
 		{"m365 execute-tool", "mcp_ms365_execute-tool", `{"tool":"send-mail"}`},
-		{"vendor email report", "mcp_triplelift_tl_async_email_advertiser_report", `{}`},
-		{"vendor deal message", "mcp_magnite_mgpub_send_deal_request_message", `{}`},
+		{"email template save", "mcp_email_save_email_template", `{}`},
+		{"email template delete", "mcp_email_delete_email_template", `{}`},
 		{"schedule_task", "schedule_task", `{"name":"job"}`},
 		{"manage_tasks pause", "manage_tasks", `{"action":"pause","task_id":"t1"}`},
 		{"chat_patrol create", "chat_patrol", `{"action":"create","prompt":"hi","cron":"0 * * * *"}`},
@@ -115,6 +115,7 @@ func TestAutonomousStage_FloorBlockedSessionDenyAndDynamicRemote(t *testing.T) {
 		{"fast_io share", "mcp_fast_io_share", `{"action":"create"}`},
 		{"fast_io storage delete", "mcp_fast_io_storage", `{"action":"delete","path":"/x"}`},
 		{"bash git -C push", "bash", `{"command":"git -C /workspace/repo push origin main"}`},
+		{"bash if git push", "bash", `{"command":"if git push origin main; then :; fi"}`},
 	} {
 		id, err := a.Stage(tc.tool, "call_"+tc.name, tc.args)
 		if err != nil {

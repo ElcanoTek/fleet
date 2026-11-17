@@ -136,45 +136,31 @@ func testAutonomousFloorM365AndOutbound(t *testing.T) {
 		}
 	}
 
-	// 2. External SSP/vendor outbound tools vs normal SSP plan/deal tools.
-	for _, blockedVendor := range []string{
-		"mcp_triplelift_tl_async_email_advertiser_report",
-		"mcp_magnite_mgpub_send_deal_request_message",
+	// 2. Generic outbound email & template tools vs bundle-configured MCP tools.
+	for _, blockedEmail := range []string{
 		"mcp_ses_outbound_send_email",
 		"mcp_ses_outbound_send_template_email",
 		"send_email",
 		"send_template_email",
+		"mcp_email_delete_email_template",
+		"mcp_email_save_email_template",
 	} {
-		if !IsAutonomousHardBlocked(blockedVendor, `{}`) {
-			t.Errorf("expected outbound tool %q to be hard-blocked", blockedVendor)
+		if !IsAutonomousHardBlocked(blockedEmail, `{}`) {
+			t.Errorf("expected outbound/template email tool %q to be hard-blocked", blockedEmail)
 		}
 	}
 	if IsAutonomousHardBlocked("preview_email", `{"to":["a@b.com"]}`) {
 		t.Error("preview_email must not be hard-blocked on the floor")
 	}
-	for _, allowedSSP := range []string{
+	for _, bundleManaged := range []string{
 		"mcp_openx_ox_execute_plan",
 		"mcp_magnite_mgpub_clone_deal",
 		"mcp_pages_deploy_page",
-	} {
-		if IsAutonomousHardBlocked(allowedSSP, `{}`) {
-			t.Errorf("expected SSP/Pages tool %q NOT to be hard-blocked", allowedSSP)
-		}
-	}
-	for _, universalBlocked := range []string{
 		"mcp_pages_delete_page",
-		"mcp_fast_io_delete_workspace",
-		"mcp_pages_delete_template",
-		"mcp_pages_set_password",
-		"mcp_email_delete_email_template",
-		"mcp_email_save_email_template",
-		"mcp_deals_set_deal_rev_share",
-		"mcp_deals_set_deal_share_code",
-		"mcp_finance_set_finance_term",
-		"mcp_finance_revert_finance_term_change",
+		"mcp_triplelift_tl_async_email_advertiser_report",
 	} {
-		if !IsAutonomousHardBlocked(universalBlocked, `{}`) {
-			t.Errorf("expected universal destructive/access/finance tool %q to be hard-blocked on floor", universalBlocked)
+		if IsAutonomousHardBlocked(bundleManaged, `{}`) {
+			t.Errorf("expected bundle-managed MCP tool %q NOT to be hardcoded on engine floor", bundleManaged)
 		}
 	}
 }
@@ -268,6 +254,14 @@ func testAutonomousFloorBashGitPush(t *testing.T) {
 		`{"command":"git -calias.p='push --force' p origin main"}`,
 		`{"command":"git -c alias.ship='!git push origin HEAD' ship"}`,
 		`{"command":"git --config-env=alias.p=MY_PUSH_ALIAS p origin main"}`,
+		`{"command":"if git push origin main; then :; fi"}`,
+		`{"command":"while ! git push origin main; do break; done"}`,
+		`{"command":"{ git push origin HEAD; }"}`,
+		`{"command":"for b in main; do git push origin \"$b\"; done"}`,
+		`{"command":"eval 'git push origin main'"}`,
+		`{"command":"echo main | xargs -n 1 git push origin"}`,
+		`{"command":"g=git; $g push origin main"}`,
+		`{"command":"op=push; git $op origin main"}`,
 	} {
 		if !IsAutonomousHardBlocked("bash", cmd) {
 			t.Errorf("bash %s must be hard-blocked as git push", cmd)

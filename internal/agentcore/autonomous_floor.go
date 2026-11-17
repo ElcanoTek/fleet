@@ -52,38 +52,22 @@ var m365SharedMailboxBlockedPrefixes = []string{
 	"delete_shared_mailbox_",
 }
 
-// vendorOutboundHardBlockedSuffixes enumerates external SSP/vendor outbound
-// messaging tools that send emails or messages to external advertisers/buyers
-// and must never run without an explicit approval card in Autonomous mode.
-var vendorOutboundHardBlockedSuffixes = []string{
-	"tl_async_email_advertiser_report",
-	"mgpub_send_deal_request_message",
-}
-
-// universalDestructiveAndAccessFloorSuffixes enumerates destructive deletion,
-// access-control, email-template mutation, and finance/rev-share tools across
-// all client bundles so every deployment is protected on the engine floor even
-// before individual bundle manifests add critical_tool_autonomous_blocked.
-var universalDestructiveAndAccessFloorSuffixes = []string{
-	"delete_page",
-	"delete_workspace",
-	"delete_template",
-	"set_password",
+// emailTemplateHardBlockedSuffixes covers team-wide email template mutations
+// alongside the base nonReversibleSuffixes (send_email, send_template_email).
+// Per AGENTS.md ("Bundles are data, fleet is engine"), customer- or
+// bundle-specific MCP suffixes belong in manifest.yaml
+// agent_policy.critical_tool_autonomous_blocked, never hardcoded here.
+var emailTemplateHardBlockedSuffixes = []string{
 	"delete_email_template",
 	"save_email_template",
-	"set_deal_rev_share",
-	"set_deal_share_code",
-	"set_finance_term",
-	"revert_finance_term_change",
 }
 
 var autonomousHardBlockedSuffixSet = func() map[string]bool {
-	total := len(m365HardBlockedToolSuffixes) + len(vendorOutboundHardBlockedSuffixes) + len(universalDestructiveAndAccessFloorSuffixes)
+	total := len(m365HardBlockedToolSuffixes) + len(emailTemplateHardBlockedSuffixes)
 	m := make(map[string]bool, total*2)
 	for _, list := range [][]string{
 		m365HardBlockedToolSuffixes,
-		vendorOutboundHardBlockedSuffixes,
-		universalDestructiveAndAccessFloorSuffixes,
+		emailTemplateHardBlockedSuffixes,
 	} {
 		for _, s := range list {
 			m[s] = true
@@ -412,17 +396,52 @@ func segmentIsGitPush(tokens []string, depth int) bool {
 	if nestedPush {
 		return true
 	}
-	if terminated || i >= len(tokens) || executableBaseName(tokens[i]) != "git" {
+	if terminated || i >= len(tokens) {
+		return false
+	}
+	if strings.Contains(tokens[i], "$") && tokensContainWordFold(tokens[i+1:], "push") {
+		return true
+	}
+	if executableBaseName(tokens[i]) != "git" {
 		return false
 	}
 	return gitTokensHavePushSubcommand(tokens[i+1:])
+}
+
+func tokensContainWordFold(tokens []string, want string) bool {
+	for _, tok := range tokens {
+		if strings.EqualFold(strings.TrimSpace(tok), want) {
+			return true
+		}
+	}
+	return false
+}
+
+var shellControlKeywords = map[string]bool{
+	"!":       true,
+	"{":       true,
+	"}":       true,
+	"if":      true,
+	"then":    true,
+	"elif":    true,
+	"else":    true,
+	"fi":      true,
+	"while":   true,
+	"until":   true,
+	"do":      true,
+	"done":    true,
+	"case":    true,
+	"esac":    true,
+	"coproc":  true,
+	"exec":    true,
+	"builtin": true,
 }
 
 func skipShellWrappers(tokens []string, depth int) (next int, nestedPush bool, terminated bool) {
 	i := 0
 	for i < len(tokens) {
 		t := tokens[i]
-		if isEnvAssignmentToken(t) {
+		if isEnvAssignmentToken(t) || shellControlKeywords[t] {
 			i++
 			continue
 		}
@@ -430,7 +449,9 @@ func skipShellWrappers(tokens []string, depth int) (next int, nestedPush bool, t
 		switch base {
 		case "sh", "bash", "dash", "zsh":
 			return i, shellDashCRunsGitPush(tokens[i+1:], depth), true
-		case "env", "command", "nohup", "time":
+		case "eval":
+			return i, bashCommandRunsGitPushDepth(strings.Join(tokens[i+1:], " "), depth+1), true
+		case "env", "command", "nohup", "time", "xargs":
 			i = skipFlagRun(tokens, i+1, envArgFlags(base))
 			continue
 		case "sudo":
@@ -461,16 +482,21 @@ func shellDashCRunsGitPush(args []string, depth int) bool {
 }
 
 var (
-	envFlagsWithArg = map[string]bool{"-u": true, "-C": true, "-S": true}
-	sudoArgFlags    = map[string]bool{"-u": true, "-g": true, "-C": true, "-D": true}
-	timeoutArgFlags = map[string]bool{"-k": true, "-s": true}
+	envFlagsWithArg   = map[string]bool{"-u": true, "-C": true, "-S": true}
+	xargsFlagsWithArg = map[string]bool{"-I": true, "-i": true, "-L": true, "-l": true, "-n": true, "-P": true, "-s": true, "-d": true, "-a": true, "-E": true, "-e": true}
+	sudoArgFlags      = map[string]bool{"-u": true, "-g": true, "-C": true, "-D": true}
+	timeoutArgFlags   = map[string]bool{"-k": true, "-s": true}
 )
 
 func envArgFlags(base string) map[string]bool {
-	if base == "env" {
+	switch base {
+	case "env":
 		return envFlagsWithArg
+	case "xargs":
+		return xargsFlagsWithArg
+	default:
+		return nil
 	}
-	return nil
 }
 
 func skipFlagRun(tokens []string, i int, flagsTakingArg map[string]bool) int {
@@ -583,7 +609,7 @@ func gitConfigEnvDefinesAlias(args []string, i int) bool {
 }
 
 func gitSubcommandIsPush(sub string, aliases map[string]string, hasConfigEnvAlias bool, depth int) bool {
-	if strings.EqualFold(sub, "push") {
+	if strings.EqualFold(sub, "push") || strings.Contains(sub, "$") {
 		return true
 	}
 	if hasConfigEnvAlias {
