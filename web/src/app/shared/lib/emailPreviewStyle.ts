@@ -22,7 +22,15 @@ const HEX = /#[0-9A-Fa-f]{6}\b/g;
 const HEX_ONLY = /^#[0-9A-Fa-f]{6}$/;
 
 /** {preview color: new color} for the form's current palette value; empty
- *  when the template has no palette field or the table does not cover it. */
+ *  when the template has no palette field or the table does not cover it.
+ *
+ *  Before the form is open (`values` null) the look is the one the form
+ *  will preselect (the field's default, or its first option), so the example
+ *  starts as the email a person gets by changing nothing. A
+ *  bundle whose default theme is a brand renders its examples in a plain
+ *  palette and lists the brand as the default option. Custom colors go on
+ *  top of that default look, which is what the renderer does: custom colors
+ *  are passed without a theme, and the bundle's default theme still applies. */
 export function previewRecolorTable(
   styles: PreviewStyles | null | undefined,
   fields: PillField[] | undefined,
@@ -30,13 +38,17 @@ export function previewRecolorTable(
 ): Record<string, string> {
   const table: Record<string, string> = {};
   const field = fields?.find((f) => f.type === "palette");
-  const value = field && values ? values[field.key] : undefined;
+  // What the form preselects (formInitialValues): the default, else the first option.
+  const fallback = typeof field?.default === "string" ? field.default : field?.options?.[0];
+  const picked = field && values ? values[field.key] : undefined;
+  const value = values ? picked : fallback;
   if (!styles || !field || typeof value !== "string") return table;
   const put = (from: string, to: string) => {
     if (HEX_ONLY.test(from) && HEX_ONLY.test(to)) table[from.toUpperCase()] = to.toUpperCase();
   };
   const custom = parseCustomPalette(value, field.custom);
   if (custom) {
+    for (const [from, to] of Object.entries((fallback && styles.options?.[fallback]) || {})) put(from, to);
     for (const [name, color] of Object.entries(custom)) {
       for (const from of styles.custom?.[name] ?? []) put(from, color);
     }
