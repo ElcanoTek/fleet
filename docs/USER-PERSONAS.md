@@ -145,7 +145,9 @@ keyboard. Actions:
   opens. Only a relative link to a Fleet page is kept — never a scheme, host,
   `//`, backslash or an encoded form of one, never `/api/…` or `/login` — and
   at most 2 048 characters as sent (a draft of several hundred characters
-  fits); a longer link signs in to the start page as before. The draft text
+  fits); a longer link signs in to the start page as before, except a team
+  link, whose own cookie (`fleet_team_link`) still opens the chat without the
+  rest of the link. The draft text
   is never logged and never reaches the identity provider or central Auth.
   The link is kept in the browser that opened it: an Elcano email sign-in
   link opened in another browser signs in there to the start page.

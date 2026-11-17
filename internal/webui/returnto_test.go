@@ -296,11 +296,22 @@ func TestNewerLinkSupersedesParkedTeamLink(t *testing.T) {
 	landing := withTeam(signedIn(t, req("GET", "/", "")))
 	landAndFollow(t, e, landing, manifestLink, manifestLink)
 	if c := setCookies(e.do(withTeam(withParked(signedIn(t, req("GET", "/", "")), manifestLink)))); !teamCleared.MatchString(c) {
-		t.Fatalf("redeem left the team link parked: %q", c)
+		t.Errorf("redeem left the team link parked: %q", c)
 	}
 	res = e.do(signedIn(t, req("GET", manifestLink, "")))
 	if res.StatusCode != http.StatusOK || res.Header.Get("Location") != "" {
 		t.Fatalf("%d %q", res.StatusCode, res.Header.Get("Location"))
+	}
+	// /login with a session follows its return_to, or the parked link, and
+	// drops the team link the same way.
+	for _, r := range []*http.Request{
+		signedIn(t, req("GET", "/login?"+returnToParam+"="+url.QueryEscape(manifestLink), "")),
+		withParked(signedIn(t, req("GET", "/login", "")), manifestLink),
+	} {
+		res = e.do(withTeam(r))
+		if res.Header.Get("Location") != testOrigin+manifestLink || !teamCleared.MatchString(setCookies(res)) {
+			t.Errorf("%s: %q %q", r.URL, res.Header.Get("Location"), setCookies(res))
+		}
 	}
 	// An unusable parked link is not redeemed, so the team link still is.
 	res = e.do(withTeam(withCookie(signedIn(t, req("GET", "/", "")), returnToCookie, "garbage!")))
@@ -449,6 +460,23 @@ func TestDeepLinkOverLongNotParked(t *testing.T) {
 	}
 	if _, ok := parkedValue(t, res); ok {
 		t.Fatalf("parked an over-long link: %q", setCookies(res))
+	}
+}
+
+// An over-long team link keeps what it always had: its own cookie opens the
+// team chat after sign-in, without the rest of the link (the guide says so).
+func TestOverLongTeamLinkFallsBackToTheTeamCookie(t *testing.T) {
+	e := newTestEnv(t, withOrigin(testOrigin))
+	res := e.do(req("GET", "/chat?team="+testTeamLinkID+"&draft="+strings.Repeat("x", maxReturnToLen), ""))
+	if res.Header.Get("Location") != testOrigin+"/login?team_link=1" || !strings.Contains(setCookies(res), "fleet_team_link="+testTeamLinkID) {
+		t.Fatalf("%q %q", res.Header.Get("Location"), setCookies(res))
+	}
+	if _, ok := parkedValue(t, res); ok {
+		t.Fatalf("parked an over-long link: %q", setCookies(res))
+	}
+	res = e.do(withCookie(signedIn(t, req("GET", "/", "")), teamLinkCookie, testTeamLinkID))
+	if res.Header.Get("Location") != testOrigin+"/chat?team="+testTeamLinkID {
+		t.Fatalf("%q", res.Header.Get("Location"))
 	}
 }
 

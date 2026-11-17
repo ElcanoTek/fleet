@@ -191,11 +191,9 @@ func (g *Gateway) signedInLoginTarget(w http.ResponseWriter, r *http.Request) st
 // (startPageLanding) is sent on to the parked link. It reports whether it
 // answered the request.
 //
-// Redeeming also drops a parked team link. The return cookie is never older
-// than the team cookie (every page visit the gate bounces re-parks or drops
-// both), and a team link's own ?team= rides in the parked query; left in
-// place, the team cookie would redirect the visitor's next /chat away from
-// the link just redeemed.
+// Redeeming also drops a parked team link (redirectToReturnPath): the return
+// cookie is never older than the team cookie, since every page visit the gate
+// bounces re-parks or drops both.
 func (g *Gateway) redeemReturnPath(w http.ResponseWriter, r *http.Request) bool {
 	if r.Method != http.MethodGet {
 		return false
@@ -208,16 +206,19 @@ func (g *Gateway) redeemReturnPath(w http.ResponseWriter, r *http.Request) bool 
 	if target == "" || !startPageLanding(r) {
 		return false
 	}
-	if _, err := r.Cookie(teamLinkCookie); err == nil {
-		clearTeamLink(w, g.secureRequest(r))
-	}
 	g.redirectToReturnPath(w, r, target)
 	return true
 }
 
 // redirectToReturnPath sends a signed-in visitor on to a checked link, with
-// the landing's language hint.
+// the landing's language hint. It drops a parked team link on the way: the
+// link being followed is the newer one (a team link's own ?team= rides in its
+// query), and a team cookie left in place would redirect the visitor's next
+// /chat away from it.
 func (g *Gateway) redirectToReturnPath(w http.ResponseWriter, r *http.Request, target string) {
+	if _, err := r.Cookie(teamLinkCookie); err == nil {
+		clearTeamLink(w, g.secureRequest(r))
+	}
 	temporaryRedirect(w, g.redirectURL(r, withReturnLanguage(target, requestLanguage(r))))
 }
 
