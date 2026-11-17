@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 import type { Route } from "@playwright/test";
-import { mintSessionToken, loginViaElcanoCookie } from "./_session";
+import { mintElcanoToken, mintSessionToken, loginViaElcanoCookie } from "./_session";
 import { mockChatBoot } from "./_mocks";
 
 // Mocked e2e for the two login paths the unified middleware accepts, plus the
@@ -127,6 +127,59 @@ test("password login: a verified credential lands on /chat", async ({ page }) =>
   await expect(page.getByRole("heading", { name: /what can i help with/i })).toBeVisible({
     timeout: 15_000,
   });
+});
+
+// A deep link survives sign-in (internal/webui/returnto.go): the REAL gate
+// parks the signed-out link in its fleet_return_to cookie on the way to
+// /login, and the landing on / after sign-in sends the browser on to it, so
+// the draft reaches the composer. Only the sign-in leg's own backend hop is
+// faked; every redirect and cookie between is the browser's and the gate's.
+const MANIFEST_DRAFT = "Book Manifest intake ELC07431 (intake 42)";
+
+test("a deep link survives password sign-in: the draft lands in the composer", async ({ page }) => {
+  await page.route("**/api/auth/login", (r: Route) =>
+    r.fulfill({
+      status: 303,
+      headers: {
+        location: "/",
+        "set-cookie": `elcano_session=${mintSessionToken("e2e@example.com")}; Path=/; HttpOnly; SameSite=Lax`,
+      },
+    }),
+  );
+  await mockChatBoot(page);
+
+  await page.goto(`/chat?draft=${encodeURIComponent(MANIFEST_DRAFT)}`);
+  await expect(page).toHaveURL(/\/login$/);
+  await page.getByLabel(/email/i).fill("e2e@example.com");
+  await page.getByLabel(/password/i).fill("e2e-test-password");
+  await page.getByRole("button", { name: /sign in/i }).click();
+
+  // The chat consumes and strips ?draft= as it boots (the sign-in's language
+  // hint stays, as it does on any landing).
+  await page.waitForURL(/\/chat(\?lang=en)?$/, { timeout: 15_000 });
+  await expect(page.getByRole("textbox").first()).toHaveValue(MANIFEST_DRAFT, { timeout: 15_000 });
+});
+
+test("a deep link survives the Elcano email sign-in", async ({ page }) => {
+  // Central Auth's round trip is faked as its outcome: the elcano_auth cookie
+  // and a redirect to the return_to Fleet gave it, which is the start page.
+  await page.route("**/api/auth/elcano-login?lang=en", (r: Route) =>
+    r.fulfill({
+      status: 303,
+      headers: {
+        location: "/",
+        "set-cookie": `elcano_auth=${mintElcanoToken("e2e@example.com")}; Path=/; HttpOnly; SameSite=Lax`,
+      },
+    }),
+  );
+  await mockChatBoot(page);
+
+  await page.goto(`/chat?draft=${encodeURIComponent(MANIFEST_DRAFT)}`);
+  await expect(page).toHaveURL(/\/login$/);
+  await page.getByRole("link", { name: /use elcano email/i }).click();
+
+  await page.waitForURL(/\/chat(\?lang=en)?$/, { timeout: 15_000 });
+  await expect(page.getByRole("textbox").first()).toHaveValue(MANIFEST_DRAFT, { timeout: 15_000 });
 });
 
 test("password login: an invalid credential stays on /login with an error", async ({ page }) => {
