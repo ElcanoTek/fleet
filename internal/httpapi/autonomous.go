@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -318,7 +319,9 @@ func (s *Server) newShowUIDisplayedHandler(
 			UpdatedAtMs:    nowMs,
 		})
 		if err != nil {
-			logging.From(ctx).Warn("autosubmit arm failed", "conv_id", safe.LogSafe(conv.ID), "call_id", safe.LogSafe(callID), "err", err)
+			if !errors.Is(err, store.ErrUIAutoSubmitSuperseded) {
+				logging.From(ctx).Warn("autosubmit arm failed", "conv_id", safe.LogSafe(conv.ID), "call_id", safe.LogSafe(callID), "err", err)
+			}
 			return
 		}
 		s.emitUIAutoSubmit(buf, conv.ID, stored)

@@ -304,6 +304,7 @@ func (s *Server) handleBusySubmit(w http.ResponseWriter, r *http.Request, user s
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return false
 	}
+	s.cancelConversationAutoSubmits(r.Context(), conv.ID)
 	// A Stop naming this key may have landed before the row existed (it
 	// found nothing to withdraw and left only the in-memory mark). A queued
 	// row can wait longer than the mark lives, so it is withdrawn here, at
@@ -616,6 +617,9 @@ func (s *Server) launchQueuedTurn(convID string, row *store.InputQueueRow) bool 
 		// The turn fleet starts when an in-chat patrol or timer schedule fires
 		// (chat_schedules.go): its input is a patrol header, not a user bubble.
 		req.inputKind = agent.InputKindChatPatrol
+	}
+	if !strings.HasPrefix(row.ClientInputID, store.UIAutoSubmitClientInputPrefix) && row.Mode != store.InputModeResume {
+		s.cancelConversationAutoSubmits(lctx, convID)
 	}
 	if !s.startTurn(nil, nil, user, conv, req, &queuedLaunch{rowID: row.ID, claimTurnID: row.TurnID, sweepGen: sweepGen, inputKey: row.ClientInputID}, releaseSlot, nil) {
 		releaseSlot()

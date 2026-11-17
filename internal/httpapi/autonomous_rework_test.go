@@ -645,6 +645,22 @@ func verifyUIAutoSubmitChainCap(
 	if activeReset, _ := st.ListActiveUIAutoSubmits(ctx, convID); len(activeReset) != 1 || activeReset[0].CallID != "call_chain_reset" {
 		t.Fatalf("expected human message to reset chain cap, got %v", activeReset)
 	}
+	srv.cancelConversationAutoSubmits(ctx, convID)
+
+	// Refuses to arm behind an already-queued human follow-up input!
+	_, _, _ = st.EnqueueInput(ctx, store.InputQueueRow{
+		ID:             "q-user-followup",
+		ConversationID: convID,
+		UserEmail:      "alice@example.com",
+		ClientInputID:  "cli-user-followup-1",
+		Message:        "Wait, change budget to 50k first",
+		Attachments:    "[]",
+		Mode:           store.InputModeQueued,
+	})
+	hookAfterHuman(ctx, "call_blocked_behind_queued_input", eligibleSpec)
+	if activeBehindQueue, _ := st.ListActiveUIAutoSubmits(ctx, convID); len(activeBehindQueue) != 0 {
+		t.Fatalf("expected autosubmit NOT to arm behind queued human follow-up, got %v", activeBehindQueue)
+	}
 }
 
 func TestNewTurnStager_ClampsAutonomousWithoutPolicyAcceptance(t *testing.T) {

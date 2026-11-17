@@ -823,6 +823,14 @@ func (s *fakeChatStore) AcceptAutonomousPolicy(_ context.Context, userEmail stri
 func (s *fakeChatStore) CreateUIAutoSubmit(_ context.Context, row store.UIAutoSubmit) (store.UIAutoSubmit, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	for _, q := range s.queue {
+		if q.ConversationID != row.ConversationID || strings.HasPrefix(q.ClientInputID, store.UIAutoSubmitClientInputPrefix) || q.Mode == store.InputModeResume {
+			continue
+		}
+		if q.State == store.InputStateQueued || (q.State == store.InputStateRunning && strings.HasPrefix(q.TurnID, store.ClaimTurnPrefix)) {
+			return store.UIAutoSubmit{}, store.ErrUIAutoSubmitSuperseded
+		}
+	}
 	nowMs := time.Now().UnixMilli()
 	if row.ID == "" {
 		row.ID = fmt.Sprintf("autosub-%d", len(s.uiAutoSubmits)+1)

@@ -7775,10 +7775,14 @@ export function ChatExperience({
                 if (creatingShareForCurrentView) return;
                 setActivePillId(id);
               }}
-              submitPrompt={(text, opts) => {
-                if (creatingShareForCurrentView) return Promise.resolve(false);
-                cancelLocalPendingAutoSubmits(realConvId(currentConvKey) ?? currentConvKey);
-                return submitPrompt(text, opts);
+              submitPrompt={async (text, opts) => {
+                if (creatingShareForCurrentView) return false;
+                const targetConv = realConvId(currentConvKey) ?? currentConvKey;
+                const ok = await submitPrompt(text, opts);
+                if (ok) {
+                  cancelLocalPendingAutoSubmits(targetConv);
+                }
+                return ok;
               }}
               resumeHeldCardSend={resumeHeldCardSend}
               setPrompt={(next) => {
@@ -7947,10 +7951,14 @@ export function ChatExperience({
                 }}
                 promptPlaceholder={promptPlaceholder}
                 promptRef={promptRef}
-                submitPrompt={(text) => {
-                  if (creatingShareForCurrentView) return Promise.resolve(false);
-                  cancelLocalPendingAutoSubmits(realConvId(currentConvKey) ?? currentConvKey);
-                  return submitPrompt(text);
+                submitPrompt={async (text) => {
+                  if (creatingShareForCurrentView) return false;
+                  const targetConv = realConvId(currentConvKey) ?? currentConvKey;
+                  const ok = await submitPrompt(text);
+                  if (ok) {
+                    cancelLocalPendingAutoSubmits(targetConv);
+                  }
+                  return ok;
                 }}
                 sealed={isLockdown}
                 isAutoApprove={isAutoApprove}
