@@ -383,4 +383,15 @@
     <path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"></path>
     <path d="M10 12h4"></path>
   </symbol>
+  <symbol id="play" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round">
+    <path d="M7.5 5 19 12 7.5 19z"></path>
+  </symbol>
+  <symbol id="pause" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+    <rect x="6.5" y="5" width="3.75" height="14" rx="1.25"></rect>
+    <rect x="13.75" y="5" width="3.75" height="14" rx="1.25"></rect>
+  </symbol>
+  <symbol id="collapse-down" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+    <path d="m6 8 6 6 6-6"></path>
+    <path d="M6 19h12"></path>
+  </symbol>
 </svg>

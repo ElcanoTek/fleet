@@ -682,18 +682,20 @@ export function PatrolsDialog({
                           type="button"
                           disabled={busy || isPaused}
                           onClick={() => void runBusy(sc.id, () => onRunNow(sc.id))}
-                          className="pill-btn h-9 shrink-0 font-medium disabled:opacity-40"
+                          className="pill-btn inline-flex h-9 shrink-0 items-center gap-1.5 font-medium disabled:opacity-40"
                         >
+                          <Icon name="play" className="size-3" />
                           {tr("Run now")}
                         </button>
                         <button
                           type="button"
                           disabled={busy}
                           aria-label={isPaused ? tr("Resume {0}", [sc.title]) : tr("Pause {0}", [sc.title])}
+                          title={isPaused ? tr("Resume {0}", [sc.title]) : tr("Pause {0}", [sc.title])}
                           onClick={() => void runBusy(sc.id, () => onTogglePause(sc.id, sc.status))}
-                          className="pill-btn h-9 shrink-0 disabled:opacity-40"
+                          className="hit-area inline-flex size-9 shrink-0 items-center justify-center rounded-[var(--radius-md)] border border-[var(--color-border-strong)] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] disabled:opacity-40"
                         >
-                          {isPaused ? tr("Resume") : tr("Pause")}
+                          <Icon name={isPaused ? "play" : "pause"} className="size-3.5" />
                         </button>
                         </div>
                       </div>

@@ -391,8 +391,9 @@ export function PatrolBanner({
                       setBusyId(null);
                     }
                   }}
-                  className="pill-btn h-8 font-medium disabled:opacity-40"
+                  className="pill-btn inline-flex h-8 items-center gap-1.5 font-medium disabled:opacity-40"
                 >
+                  <Icon name="play" className="size-3" />
                   {tr("Run now")}
                 </button>
                 <button
@@ -406,8 +407,9 @@ export function PatrolBanner({
                       setBusyId(null);
                     }
                   }}
-                  className="pill-btn h-8 disabled:opacity-40"
+                  className="pill-btn inline-flex h-8 items-center gap-1.5 disabled:opacity-40"
                 >
+                  <Icon name={isPaused ? "play" : "pause"} className="size-3" />
                   {isPaused ? tr("Resume") : tr("Pause")}
                 </button>
                 <span aria-hidden="true" className="mx-0.5 h-5 w-px shrink-0 bg-[var(--color-border-strong)]" />
@@ -420,7 +422,7 @@ export function PatrolBanner({
                   onClick={onHide}
                   className="hit-area inline-flex size-8 shrink-0 items-center justify-center rounded-[var(--radius-md)] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
                 >
-                  <Icon name="chevron-down" className="size-4" />
+                  <Icon name="collapse-down" className="size-4" />
                 </button>
               </div>
             </div>
