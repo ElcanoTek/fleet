@@ -302,13 +302,17 @@ func validIcon(s string) bool {
 
 // CheckWorkspace holds a workspace default to the rules an ordinary layout
 // does not need: it is served to every member, so it may not pin a
-// background task. Task visibility is owner-scoped for everyone but admins,
+// background task, nor the admin-only Analytics page (a dead end, and as Home
+// an "admin access required" screen, for every member). Task visibility is owner-scoped for everyone but admins,
 // so such a pin would be a dead link (and its title another person's
 // metadata) for nearly every member.
 func CheckWorkspace(l Layout) error {
 	for _, it := range l.Items {
 		if it.Kind == KindTask {
 			return invalid("item %q: a workspace sidebar cannot pin a background task; only its owner and admins can open one", it.ID)
+		}
+		if it.Kind == KindPage && it.Ref == "analytics" {
+			return invalid("item %q: a workspace sidebar cannot pin Analytics; it is an admin page", it.ID)
 		}
 	}
 	return nil

@@ -512,3 +512,33 @@ test("your own sidebar can pin a private chat; the workspace sidebar offers only
   await expect(page.getByRole("option", { name: /Vendor comparison/ })).toHaveCount(0);
   await expect(page.getByRole("option", { name: /Draft launch email/ })).toHaveCount(0);
 });
+
+test("the sidebar cannot be changed until the saved one has loaded", async ({ page }) => {
+  const { puts } = await setup(page);
+  let fail = true;
+  await page.route("**/api/sidebar", (r: Route) =>
+    fail ? r.fulfill({ status: 502, body: "down" }) : r.fulfill({ json: { layout: null, workspace_default: null } }),
+  );
+  await page.goto("/chat");
+  await page.getByRole("button", { name: "Options for Vendor comparison" }).click();
+  await expect(page.getByTestId("add-to-sidebar")).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await page.getByTestId("account-menu-button").click();
+  await page.getByTestId("customize-sidebar").click();
+  const panel = page.getByTestId("sidebar-customizer");
+  await expect(panel.getByTestId("sidebar-unavailable")).toBeVisible();
+  await expect(panel.getByTestId("sidebar-preset-chat")).toBeDisabled();
+  expect(puts).toEqual([]);
+  fail = false;
+  await panel.getByRole("button", { name: "Try again" }).click();
+  await expect(panel.getByTestId("sidebar-preset-chat")).toBeEnabled();
+});
+
+test("Analytics is never pinned for the whole team", async ({ page }) => {
+  await setup(page, { admin: true });
+  await page.route("**/api/admin/sidebar", (r: Route) => r.fulfill({ json: { layout: null, updated_by: "", updated_at: 0 } }));
+  await page.goto("/settings/admin/sidebar");
+  await page.getByTestId("admin-sidebar-editor").getByTestId("sidebar-add-shortcut").click();
+  await expect(page.getByRole("option", { name: /Guides/ })).toBeVisible();
+  await expect(page.getByRole("option", { name: /Analytics/ })).toHaveCount(0);
+});

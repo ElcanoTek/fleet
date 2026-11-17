@@ -87,7 +87,8 @@ export async function loadPickerEntries(): Promise<PickerEntry[]> {
     out.push({ group: "tasks", kind: "task", ref: t.id, title: taskRunLabel(t), shared: false });
   }
   for (const ref of ["analytics", "help", "settings"]) {
-    out.push({ group: "pages", kind: "page", ref, shared: true });
+    // Analytics is an admin page: never offered for the whole team.
+    out.push({ group: "pages", kind: "page", ref, shared: ref !== "analytics" });
   }
   return out;
 }

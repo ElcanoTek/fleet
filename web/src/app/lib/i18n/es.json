@@ -5859,7 +5859,6 @@
   "You're using your workspace's default sidebar.": "Usas la barra lateral predeterminada de tu espacio de trabajo.",
   "Your boards up top, opened as live dashboards; chat is one click away.": "Tus paneles arriba, abiertos en vivo; el chat a un clic.",
   "Your shortcuts stay": "Tus accesos directos se mantienen",
-  "Your sidebar can't be saved right now — changes last until you reload.": "Ahora no se puede guardar tu barra lateral: los cambios duran hasta que recargues.",
   "fleet's default": "la predeterminada de fleet",
   "your workspace's default": "la predeterminada de tu espacio de trabajo",
   "{0} · Runs without a chat": "{0} · Se ejecuta sin chat",
@@ -5876,5 +5875,7 @@
   "Couldn't load your sidebar, so nothing was copied. Try again.": "No se pudo cargar tu barra lateral, así que no se copió nada. Inténtalo de nuevo.",
   "Only chats and projects shared with your team are listed. Pin a shared or multiplayer chat to give your whole team one place to meet.": "Solo se muestran los chats y proyectos compartidos con tu equipo. Fija un chat compartido o multijugador para dar a todo tu equipo un lugar donde reunirse.",
   "Not shared with your team: only people who can open it will see this pin. Share it first, or remove it.": "No compartido con tu equipo: solo verá este acceso quien pueda abrirlo. Compártelo primero o quítalo.",
-  "Not shared with the team": "No compartido con el equipo"
+  "Not shared with the team": "No compartido con el equipo",
+  "Loading your sidebar…": "Cargando tu barra lateral…",
+  "Your sidebar couldn't be loaded, so it can't be changed right now.": "No se pudo cargar tu barra lateral, así que ahora no se puede cambiar."
 }

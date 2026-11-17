@@ -7,6 +7,7 @@ import { useCanCustomize } from "./useCanCustomize";
 import { isBuiltinLayout } from "./layout";
 import {
   resetSidebarLayout,
+  loadOwnSidebar,
   retrySidebarSave,
   setSidebarCustomizerOpen,
   setSidebarLayout,
@@ -46,13 +47,24 @@ export function SidebarCustomizer() {
               {tr("Pin what you use, hide what you don't, and make fleet open where you work. Changes show in your sidebar as you make them.")}
             </SheetDescription>
             <p className="mt-1 flex flex-wrap items-center gap-2 text-[0.72rem] text-[var(--color-text-muted)]" data-testid="sidebar-save-state">
-              {!canCustomize ? (
+              {status === "loading" ? (
+                <span>{tr("Loading your sidebar…")}</span>
+              ) : status === "unavailable" ? (
+                <>
+                  <span role="alert" className="text-[var(--color-status-warning-fg)]" data-testid="sidebar-unavailable">
+                    {tr("Your sidebar couldn't be loaded, so it can't be changed right now.")}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => void loadOwnSidebar()}
+                    className="rounded px-1 font-medium text-[var(--color-text-primary)] underline underline-offset-2"
+                  >
+                    {tr("Try again")}
+                  </button>
+                </>
+              ) : !canCustomize ? (
                 <span data-testid="sidebar-read-only">
                   {tr("Your account is read-only, so your sidebar can't be changed.")}
-                </span>
-              ) : status === "unavailable" ? (
-                <span className="text-[var(--color-status-warning-fg)]">
-                  {tr("Your sidebar can't be saved right now — changes last until you reload.")}
                 </span>
               ) : saveError ? (
                 <>

@@ -281,4 +281,18 @@ func TestWorkspaceRulesAndRedaction(t *testing.T) {
 	if err := CheckWorkspace(task); !errors.Is(err, ErrInvalid) {
 		t.Errorf("CheckWorkspace(task) = %v; want ErrInvalid", err)
 	}
+	analytics, err := Normalize(Layout{Version: 1, Items: []Item{{ID: "s-3", Kind: KindPage, Ref: "analytics"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckWorkspace(analytics); !errors.Is(err, ErrInvalid) {
+		t.Errorf("CheckWorkspace(analytics) = %v; want ErrInvalid", err)
+	}
+	help, err := Normalize(Layout{Version: 1, Items: []Item{{ID: "s-4", Kind: KindPage, Ref: "help"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckWorkspace(help); err != nil {
+		t.Errorf("CheckWorkspace(help) = %v", err)
+	}
 }

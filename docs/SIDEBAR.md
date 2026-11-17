@@ -118,6 +118,9 @@ sidebar"), which `/help` renders.
   project shared with a team, and pages — and flags a pin already in the
   default that is not shared ("Not shared with the team"), since it shows
   only to the people who can open it.
+- **No Analytics in the workspace default.** It is an admin page:
+  `CheckWorkspace` refuses it, the workspace picker does not offer it, it is
+  never a workspace Home, and the rail shows an Analytics pin only to admins.
 - **No background tasks in the workspace default.** Task visibility is
   owner-scoped for everyone but admins, so `PUT /api/admin/sidebar` refuses a
   `task` item (`sidebar.CheckWorkspace`), the workspace editor's picker does
@@ -141,8 +144,13 @@ sidebar"), which `/help` renders.
   server cannot be reached (or predates this feature), the rail renders the
   built-in layout, not the cached one, and the panel says changes cannot be
   saved.
+- Nothing can be edited until the person's saved layout has loaded: until
+  then the rail shows a cached or built-in stand-in, and an edit on it would
+  be saved over the real one. If the read fails, the panel says so and offers
+  **Try again**; the quick pins stay hidden meanwhile.
 - Edits apply at once and are saved 450 ms after the last one (one PUT per
-  burst). An edit still waiting when the page is hidden for good (a reload, a
+  burst). Saves run one at a time, in order, each sending the layout as it is
+  when its turn comes, so an older save can never land after a newer one. An edit still waiting when the page is hidden for good (a reload, a
   closed tab, a shortcut that loads another page) is sent on `pagehide` with
   `keepalive`. A read that started before an edit never overwrites it. A failed
   save keeps the edit on screen and offers **Try again**.

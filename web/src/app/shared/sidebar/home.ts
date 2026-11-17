@@ -51,8 +51,9 @@ export async function resolveEntryHome(timeoutMs: number): Promise<SidebarItem |
   const item = state.layout.items.find((i) => i.id === home);
   if (!item || item.hidden || item.id === "chat" || item.id === "patrols") return null;
   const fromWorkspace = state.source !== "user";
-  // Only its owner and admins can open a task: never a workspace Home.
-  if (item.kind === "task" && fromWorkspace) return null;
+  // Only its owner and admins can open a task, and only admins Analytics:
+  // never a workspace Home.
+  if (fromWorkspace && (item.kind === "task" || (item.kind === "page" && item.ref === "analytics"))) return null;
   if (item.kind === "chat" || item.kind === "project") {
     // Home goes only where this account can go. A workspace Home that is not
     // confirmed openable (in time) is skipped, so nobody lands on an error

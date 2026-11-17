@@ -17,6 +17,7 @@ import { HomeIcon, ItemIcon } from "./glyphs";
 import { Icon } from "@/app/shared/ui/Icon";
 import { openSidebarCustomizer, useSidebar } from "./store";
 import { useFallbackTargets, usePatrolIds, useSidebarTargets } from "./targets";
+import { useIsAdmin } from "@/app/settings/useIsAdmin";
 import type { RailView } from "@/app/shared/ui/NavRail";
 
 // RailNav — the rail's destinations, in the person's own order
@@ -68,6 +69,7 @@ export function RailNav({
   const pageTargets = useSidebarTargets();
   const needsLists = !pageTargets && layout.items.some((i) => !i.hidden && (i.kind === "chat" || i.kind === "project"));
   const fallbackTargets = useFallbackTargets(needsLists);
+  const isAdmin = useIsAdmin() === "admin";
   const targets = pageTargets ?? fallbackTargets;
   const hasChatShortcuts = layout.items.some((i) => i.kind === "chat" && !i.hidden && !i.icon);
   const patrolIds = usePatrolIds(hasChatShortcuts);
@@ -91,6 +93,8 @@ export function RailNav({
     // The server refuses a task pin in a workspace default (only its owner
     // and admins can open a task); one arriving anyway is never shown.
     if (item.kind === "task") return source === "user";
+    // Analytics is an admin page: a pin to it shows only to admins.
+    if (item.kind === "page" && item.ref === "analytics") return isAdmin;
     if (item.kind !== "chat" && item.kind !== "project") return true;
     // A shortcut to something this account cannot open: the person's own is
     // kept (dimmed, so they can see and remove it); one that came from the

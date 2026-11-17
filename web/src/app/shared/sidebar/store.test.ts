@@ -109,6 +109,36 @@ describe("sidebar store", () => {
     expect(calls.some((c) => c.method === "DELETE")).toBe(true);
   });
 
+  it("saves run one at a time, so an older one can never land after a newer one", async () => {
+    vi.useFakeTimers();
+    const sent: string[] = [];
+    let releaseFirst: () => void = () => {};
+    let puts = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        if ((init?.method ?? "GET") === "GET") return Response.json({ layout: null, workspace_default: null });
+        const body = String(init?.body ?? "");
+        puts++;
+        if (puts === 1) await new Promise<void>((r) => (releaseFirst = r));
+        sent.push(body);
+        return Response.json({ layout: JSON.parse(body) });
+      }),
+    );
+    await loadSidebar();
+    setSidebarLayout(OWN);
+    await vi.advanceTimersByTimeAsync(600); // first PUT starts and hangs
+    const newer = addShortcut(OWN, { kind: "project", ref: "p9", title: "Newer" });
+    setSidebarLayout(newer);
+    await vi.advanceTimersByTimeAsync(600); // second save is due, but waits its turn
+    expect(puts).toBe(1);
+    releaseFirst();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(sent).toHaveLength(2);
+    expect(JSON.parse(sent[1]).items).toHaveLength(5); // the newer layout committed last
+    expect(getSidebarState()).toMatchObject({ saving: false, saveError: false });
+  });
+
   it("an edit made while the first read is in flight is not overwritten by it", async () => {
     let release: (v: Response) => void = () => {};
     vi.stubGlobal(

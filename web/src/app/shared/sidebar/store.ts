@@ -162,7 +162,20 @@ function sendSave(keepalive: boolean): Promise<Response> {
     : fetch("/api/sidebar", { method: "DELETE", keepalive });
 }
 
-async function flushSave(gen: number) {
+// Saves run one at a time, in order: each waits for the one before it to
+// finish, and sends the layout as it is when its turn comes. So an older
+// request can never reach the server after a newer one and overwrite it, and
+// a save whose edit has already been superseded is skipped (the newer one
+// carries it).
+let saveChain: Promise<void> = Promise.resolve();
+
+function flushSave(gen: number): Promise<void> {
+  saveChain = saveChain.then(() => sendInTurn(gen));
+  return saveChain;
+}
+
+async function sendInTurn(gen: number) {
+  if (gen !== editGen) return;
   const own = state.own;
   try {
     const res = await sendSave(false);
@@ -256,6 +269,7 @@ export function getSidebarState(): SidebarState {
 export function resetSidebarStoreForTests() {
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = null;
+  saveChain = Promise.resolve();
   loadPromise = null;
   editGen = 0;
   listeners.clear();
