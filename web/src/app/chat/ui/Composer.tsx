@@ -58,6 +58,7 @@ import { EmailTemplateLibrary, useHasEmailTemplates } from "@/app/shared/ui/Emai
 import { ToolsLibrary } from "./ToolsLibrary";
 import { ToolsPopover } from "./ToolsPopover";
 import { PatrolPopover, type CreatePatrolInput } from "./PatrolBanner";
+import { ApprovalModesInfoModal } from "./ApprovalModesInfoModal";
 import { countOn, orderedCategories, type PickerCategory } from "./toolsPicker";
 import { StatusChip } from "@/app/shared/ui/StatusChip";
 import { readSendOnEnter, writeSendOnEnter } from "@/app/shared/lib/storage";
@@ -456,6 +457,7 @@ export function Composer({
   const moreMenuRef = useRef<HTMLDivElement | null>(null);
   const moreButtonRef = useRef<HTMLButtonElement | null>(null);
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
+  const [approvalInfoOpen, setApprovalInfoOpen] = useState(false);
   const hasEmailTemplates = useHasEmailTemplates(moreMenuOpen);
   const openPromptLibraryRef = useRef<(() => void) | null>(null);
   const openEmailTemplatesRef = useRef<(() => void) | null>(null);
@@ -1790,7 +1792,12 @@ export function Composer({
                           <div
                             role="group"
                             aria-label={tr("Approval mode")}
-                            className="my-0.5 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-1)] p-1.5"
+                            data-testid="composer-approval-mode-group"
+                            className={`my-0.5 rounded-[var(--radius-md)] p-1.5 transition ${
+                              effectiveApprovalMode === "autonomous"
+                                ? "border-[1.5px] border-transparent shadow-[0_0_16px_-5px_rgba(245,158,11,0.5)] [background:linear-gradient(var(--color-surface-1),var(--color-surface-1))_padding-box,linear-gradient(135deg,#f59e0b,#ec4899,#8b5cf6)_border-box]"
+                                : "border border-[var(--color-border)] bg-[var(--color-surface-1)]"
+                            }`}
                           >
                             <div className="mb-1 flex items-center justify-between px-1">
                               <span className="flex items-center gap-1.5 text-[0.72rem] font-semibold text-[var(--color-text-secondary)]">
@@ -1806,8 +1813,22 @@ export function Composer({
                                 />
                                 {tr("Approval mode")}
                               </span>
+                              <button
+                                type="button"
+                                title={tr("More info")}
+                                aria-label={tr("More info")}
+                                data-testid="composer-approval-mode-info"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setMoreMenuOpen(false);
+                                  setApprovalInfoOpen(true);
+                                }}
+                                className="inline-flex size-5 shrink-0 items-center justify-center rounded-full text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+                              >
+                                <Icon name="alert-circle" className="size-3.5" />
+                              </button>
                             </div>
-                            <div className="grid grid-cols-3 gap-1">
+                            <div className="grid grid-cols-3 gap-1 rounded-[calc(var(--radius-md)-2px)] bg-[var(--color-surface-2)] p-0.5">
                               {(
                                 [
                                   {
@@ -1830,10 +1851,10 @@ export function Composer({
                                 const selected = effectiveApprovalMode === opt.id;
                                 const activeTone =
                                   opt.id === "autonomous"
-                                    ? "border-[var(--color-warning-border)] bg-[var(--color-warning-tint)] text-[var(--color-warning-text)]"
+                                    ? "border-transparent text-[var(--color-warning-text)] shadow-xs [background:linear-gradient(var(--color-warning-tint),var(--color-warning-tint))_padding-box,linear-gradient(135deg,#f59e0b,#ec4899,#8b5cf6)_border-box]"
                                     : opt.id === "auto"
-                                      ? "border-[color-mix(in_srgb,var(--color-accent)_45%,var(--color-border-strong))] bg-[color-mix(in_srgb,var(--color-accent)_16%,transparent)] text-[var(--color-accent)]"
-                                      : "border-[var(--color-border-strong)] bg-[var(--color-surface-2)] text-[var(--color-text-primary)]";
+                                      ? "border-[color-mix(in_srgb,var(--color-accent)_45%,var(--color-border-strong))] bg-[color-mix(in_srgb,var(--color-accent)_16%,var(--color-surface-1))] text-[var(--color-accent)] shadow-xs"
+                                      : "border-[var(--color-border-strong)] bg-[var(--color-surface-1)] text-[var(--color-text-primary)] shadow-xs";
                                 return (
                                   <button
                                     key={opt.id}
@@ -1845,7 +1866,7 @@ export function Composer({
                                     onClick={() => {
                                       if (
                                         opt.id === "autonomous" &&
-                                        autonomousAccepted === false
+                                        effectiveApprovalMode !== "autonomous"
                                       ) {
                                         setMoreMenuOpen(false);
                                       }
@@ -1862,13 +1883,6 @@ export function Composer({
                                 );
                               })}
                             </div>
-                            <p className="mt-1 px-1 text-[0.68rem] leading-snug text-[var(--color-text-muted)]">
-                              {effectiveApprovalMode === "autonomous"
-                                ? tr("Runs live platform actions and prefilled forms (10s countdown) with receipt cards; external messages, schedules, destructive changes, and git push still ask.")
-                                : effectiveApprovalMode === "auto"
-                                  ? tr("Skips cards for routine workspace actions; external plans and emails still ask.")
-                                  : tr("Asks for confirmation before every critical action.")}
-                            </p>
                           </div>
                         ) : toggleAutoApprove ? (
                           <button
@@ -2463,6 +2477,13 @@ export function Composer({
           </>
         )}
       </p>
+      <ApprovalModesInfoModal
+        open={approvalInfoOpen}
+        onClose={() => {
+          setApprovalInfoOpen(false);
+          moreButtonRef.current?.focus();
+        }}
+      />
     </>
   );
 }

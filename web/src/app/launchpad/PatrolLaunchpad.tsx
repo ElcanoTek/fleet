@@ -54,7 +54,10 @@ import { fetchMe, invalidateMe } from "@/app/shared/lib/account";
 import { conversationApiUrl } from "@/app/lib/conversationApiUrl";
 import { createSchedule, PatrolApiError, runScheduleNow, setScheduleAction } from "@/app/shared/lib/patrolApi";
 import { plural } from "@/app/shared/lib/format";
-import { AutonomousRiskModal } from "@/app/chat/ui/AutonomousRiskModal";
+import {
+  AUTONOMOUS_ACCEPTED_EVENT,
+  AutonomousRiskModal,
+} from "@/app/chat/ui/AutonomousRiskModal";
 
 export const LAUNCHPAD_PROGRESS_ITEM = "fleet.launchpad.v1";
 
@@ -237,6 +240,7 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
   const [autonomousAccepted, setAutonomousAccepted] = useState(
     () => getBootstrap().session?.autonomous_accepted === true,
   );
+  const acceptedLocallyRef = useRef(false);
   const [pendingRiskAction, setPendingRiskAction] = useState<(() => void) | null>(null);
 
   // Each read takes a generation; only the latest one's answer lands, so a
@@ -294,7 +298,7 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
     // Unknown role (an unreadable record): the server still refuses what a
     // viewer cannot do.
     void fetchMe().then((me) => {
-      if (typeof me?.autonomous_accepted === "boolean") {
+      if (!acceptedLocallyRef.current && typeof me?.autonomous_accepted === "boolean") {
         setAutonomousAccepted(me.autonomous_accepted);
       }
       if (me?.role === "viewer") {
@@ -341,8 +345,16 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
   // Connecting a tool happens in a new tab; coming back refreshes the list.
   useEffect(() => {
     const onFocus = () => void loadConnectors();
+    const onAccepted = () => {
+      acceptedLocallyRef.current = true;
+      setAutonomousAccepted(true);
+    };
     window.addEventListener("focus", onFocus);
-    return () => window.removeEventListener("focus", onFocus);
+    window.addEventListener(AUTONOMOUS_ACCEPTED_EVENT, onAccepted);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      window.removeEventListener(AUTONOMOUS_ACCEPTED_EVENT, onAccepted);
+    };
   }, [loadConnectors]);
 
   // Persist progress (not while launching or after launch: those clear it).
@@ -759,7 +771,7 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
                 onGoals={(goals) => patch({ goals })}
                 onNotes={(notes) => patch({ notes })}
                 onMode={(mode) => {
-                  if (mode === "autonomous" && !autonomousAccepted) {
+                  if (mode === "autonomous" && state.mode !== "autonomous") {
                     setPendingRiskAction(() => () => patch({ mode: "autonomous" }));
                     return;
                   }
@@ -891,6 +903,7 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
         onAccepted={() => {
           const nextAction = pendingRiskAction;
           setPendingRiskAction(null);
+          acceptedLocallyRef.current = true;
           setAutonomousAccepted(true);
           invalidateMe();
           nextAction?.();

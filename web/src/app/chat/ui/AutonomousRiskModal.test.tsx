@@ -23,7 +23,9 @@ describe("AutonomousRiskModal", () => {
 
     const modal = screen.getByTestId("autonomous-risk-modal");
     expect(modal).toHaveAttribute("role", "dialog");
+    expect(modal.getAttribute("aria-describedby")).toBeTruthy();
     expect(modal).toHaveTextContent("Enable Autonomous mode");
+    expect(modal).toHaveTextContent("Are you sure you want to use Autonomous mode?");
     expect(modal).toHaveTextContent("Bundle-configured connector actions");
     expect(modal).toHaveTextContent("10s countdown");
     expect(modal).toHaveTextContent("marks as blocked");

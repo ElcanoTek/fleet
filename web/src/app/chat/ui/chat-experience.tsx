@@ -87,7 +87,10 @@ import {
 import { isToggleable, type PickerCategory } from "./toolsPicker";
 import { useIsAdmin } from "@/app/settings/useIsAdmin";
 import { bootstrapFailureDestination } from "./bootstrapFailure";
-import { AutonomousRiskModal } from "./AutonomousRiskModal";
+import {
+  AUTONOMOUS_ACCEPTED_EVENT,
+  AutonomousRiskModal,
+} from "./AutonomousRiskModal";
 import type { AutoSubmitPauseResult, UIAutoSubmitState } from "./genui/model";
 import { isPendingKey, PENDING_CONV_KEY, realConvId } from "./workspaceHref";
 import { DialogShell } from "@/app/shared/ui/DialogShell";
@@ -898,6 +901,11 @@ export function ChatExperience({
     pendingAutonomousConfirmRef.current = onAccepted;
     setAutonomousRiskOpen(true);
   }, []);
+  useEffect(() => {
+    const onAccepted = () => setAutonomousAccepted(true);
+    window.addEventListener(AUTONOMOUS_ACCEPTED_EVENT, onAccepted);
+    return () => window.removeEventListener(AUTONOMOUS_ACCEPTED_EVENT, onAccepted);
+  }, []);
   const [uiAutoSubmitsByConv, setUiAutoSubmitsByConv] = useState<
     Map<string, Map<string, UIAutoSubmitState>>
   >(() => new Map());
@@ -1349,13 +1357,13 @@ export function ChatExperience({
   );
   const requestApprovalModeChange = useCallback(
     (next: ConversationApprovalMode) => {
-      if (next === "autonomous" && !autonomousAccepted) {
+      if (next === "autonomous" && approvalMode !== "autonomous") {
         requireAutonomousAccept(() => changeApprovalMode("autonomous"));
         return;
       }
       changeApprovalMode(next);
     },
-    [autonomousAccepted, changeApprovalMode, requireAutonomousAccept],
+    [approvalMode, changeApprovalMode, requireAutonomousAccept],
   );
   const toggleAutoApprove = useCallback(() => {
     changeApprovalMode(approvalMode !== "manual" ? "manual" : "auto");

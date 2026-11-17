@@ -6,6 +6,7 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
+import { isTopDialogLayer, pushDialogLayer } from "./dialogStack";
 import { useDialogDismiss } from "./useDialogDismiss";
 
 // DialogShell — the one modal-dialog base for the chat and settings surfaces.
@@ -50,14 +51,13 @@ import { useDialogDismiss } from "./useDialogDismiss";
 // z-index alone, so document order would answer the wrong dialog. Mount order
 // rather than z-index: two dialogs on the same layer stack by which opened
 // last, which is what the reader means by "the one on top".
-const openShells: unknown[] = [];
-
 export type DialogShellProps = {
   // Accessible name. Pass `label` for a titled dialog, or `labelledBy` when
   // the dialog's own copy is the name (the confirm shape whose body IS the
   // question).
   label?: string;
   labelledBy?: string;
+  describedBy?: string;
   // Accessible name for the scrim's dismiss affordance, e.g. "Close projects".
   scrimLabel: string;
   onDismiss: () => void;
@@ -87,6 +87,7 @@ export type DialogShellProps = {
 export function DialogShell({
   label,
   labelledBy,
+  describedBy,
   scrimLabel,
   onDismiss,
   layer = "modal",
@@ -99,14 +100,8 @@ export function DialogShell({
 }: DialogShellProps) {
   const panelRef = useRef<HTMLDivElement | null>(null);
 
-  // Register/unregister in the open-shell stack for the Escape ordering above.
-  useEffect(() => {
-    openShells.push(panelRef);
-    return () => {
-      const at = openShells.indexOf(panelRef);
-      if (at !== -1) openShells.splice(at, 1);
-    };
-  }, []);
+  // Register/unregister in the shared dialog stack for Escape and Tab ordering.
+  useEffect(() => pushDialogLayer(panelRef), []);
 
   // onDismiss through a ref so `dismiss` stays stable: useDialogDismiss
   // re-arms its listener whenever its callback changes, and a parent
@@ -119,7 +114,7 @@ export function DialogShell({
     onDismissRef.current = onDismiss;
   });
   const dismiss = useCallback(() => {
-    if (openShells[openShells.length - 1] !== panelRef) return;
+    if (!isTopDialogLayer(panelRef)) return;
     onDismissRef.current();
   }, []);
   useDialogDismiss(true, dismiss);
@@ -127,7 +122,7 @@ export function DialogShell({
   useEffect(() => {
     const onTab = (event: KeyboardEvent) => {
       if (event.key !== "Tab" || event.defaultPrevented) return;
-      if (openShells[openShells.length - 1] !== panelRef) return;
+      if (!isTopDialogLayer(panelRef)) return;
       const panel = panelRef.current;
       if (!panel) return;
       const controls = Array.from(panel.querySelectorAll<HTMLElement>(
@@ -199,6 +194,7 @@ export function DialogShell({
         aria-modal="true"
         aria-label={label}
         aria-labelledby={labelledBy}
+        aria-describedby={describedBy}
         data-testid={testId}
         className={[
           // The opaque surface is the point of this component. --color-surface-1

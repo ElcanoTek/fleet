@@ -7,6 +7,8 @@ import { Icon } from "@/app/shared/ui/Icon";
 import { errorMessage } from "@/app/shared/lib/errorMessage";
 import { Button } from "@/components/ui/button";
 
+export const AUTONOMOUS_ACCEPTED_EVENT = "fleet:autonomous-accepted";
+
 export type AutonomousRiskModalProps = {
   open: boolean;
   onAccepted: () => void;
@@ -42,6 +44,9 @@ export function AutonomousRiskModal({
       if (!res.ok) {
         throw new Error(tr("HTTP {0}", [res.status]));
       }
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent(AUTONOMOUS_ACCEPTED_EVENT));
+      }
       onAccepted();
     } catch (err) {
       setError(
@@ -58,6 +63,7 @@ export function AutonomousRiskModal({
   const modal = (
     <DialogShell
       labelledBy={titleId}
+      describedBy={descId}
       scrimLabel={tr("Close Autonomous mode confirmation")}
       onDismiss={dismiss}
       layer="topmost"
@@ -65,7 +71,7 @@ export function AutonomousRiskModal({
       testId="autonomous-risk-modal"
       className="flex max-w-[32rem] flex-col overflow-hidden"
     >
-      <div aria-describedby={descId}>
+      <div>
         <header className="flex items-start gap-3 border-b border-[var(--color-border)] bg-[var(--gradient-surface-panel)] px-5 py-4">
           <span
             aria-hidden="true"
@@ -120,9 +126,9 @@ export function AutonomousRiskModal({
             </p>
           </div>
 
-          <p className="m-0 text-xs text-[var(--color-text-muted)]">
+          <p className="m-0 text-xs font-medium text-[var(--color-text-primary)]">
             {tr(
-              "You can return to Manual in one click at any time using the amber Autonomous pill in the composer.",
+              "Are you sure you want to use Autonomous mode? You can return to Manual in one click at any time using the amber Autonomous pill in the composer.",
             )}
           </p>
 

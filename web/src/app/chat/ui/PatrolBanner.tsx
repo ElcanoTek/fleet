@@ -350,7 +350,7 @@ export type CreatePatrolInput = {
 
 export function PatrolPopover({
   initialPrompt,
-  autonomousAccepted,
+  autonomousAccepted: _autonomousAccepted,
   onRequireAutonomousAccept,
   onStartPatrol,
   onClose,
@@ -653,7 +653,7 @@ export function PatrolPopover({
                     onClick={() => {
                       if (
                         opt.id === "autonomous" &&
-                        autonomousAccepted === false &&
+                        patrolApprovalMode !== "autonomous" &&
                         onRequireAutonomousAccept
                       ) {
                         onRequireAutonomousAccept(() =>
