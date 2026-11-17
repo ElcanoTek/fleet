@@ -320,10 +320,14 @@ func (s *fakeChatStore) Get(_ context.Context, userEmail, convID string) (*store
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	c := s.convs[convID]
-	if c != nil && c.UserEmail != "" && userEmail != "" && !strings.EqualFold(c.UserEmail, userEmail) {
+	if c == nil {
 		return nil, nil
 	}
-	return c, nil
+	if c.UserEmail != "" && userEmail != "" && !strings.EqualFold(c.UserEmail, userEmail) {
+		return nil, nil
+	}
+	cp := *c
+	return &cp, nil
 }
 
 func (s *fakeChatStore) LoadHistory(_ context.Context, convID string) ([]agent.HistoryEntry, error) {

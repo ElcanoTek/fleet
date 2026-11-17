@@ -980,6 +980,7 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	// deferred-only release would deterministically starve the queue at cap.
 	var releasedOnce sync.Once
 	releaseOnce := func() { releasedOnce.Do(releaseSlot) }
+	convSnapshot := cloneConversationSnapshot(conv)
 	// Deliberate: the turn must outlive the HTTP request (see the detachment
 	// comment above); Stop routes through /cancel.
 	go func() {
@@ -993,7 +994,7 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 		// and sent this turn, so their identity reaches the turn's MCP scope
 		// for ${FLEET_USER_EMAIL} (ADR-0087). Conversations have exactly one
 		// owner and store.Get is owner-scoped, so this is also the owner.
-		s.runTurnAsync(turnCtx, turnCancel, buf, turnToken, conv, user, req.Message, injected, req.inputKind, history, append(memoryContents(memories), projectMemoryBullets...), projectInstructions, toAgentImageAttachments(imageAttachments), steer, agentcore.NewMCPUserIdentity(user))
+		s.runTurnAsync(turnCtx, turnCancel, buf, turnToken, convSnapshot, user, req.Message, injected, req.inputKind, history, append(memoryContents(memories), projectMemoryBullets...), projectInstructions, toAgentImageAttachments(imageAttachments), steer, agentcore.NewMCPUserIdentity(user))
 		// The turn (and its deferred finishTurn) is done: settle this turn's
 		// queue rows against the durable #798 record — the drained row
 		// completes only if its user entry committed (a pre-commit failure
@@ -1551,13 +1552,16 @@ func (s *Server) prepareTurnExecutionContext(
 	if conv.Multiplayer || (conv.UserEmail != "" && !strings.EqualFold(conv.UserEmail, user)) {
 		senderEmail = user
 	}
+	promptConv := conv
 	if s.store != nil && conv != nil && conv.ID != "" {
 		if latest, lerr := s.store.Get(turnCtx, convOwnerEmail(conv, user), conv.ID); lerr == nil && latest != nil {
-			conv.AutoApprove = latest.AutoApprove
-			conv.ApprovalMode = latest.ApprovalMode
+			cp := *conv
+			cp.AutoApprove = latest.AutoApprove
+			cp.ApprovalMode = latest.ApprovalMode
+			promptConv = &cp
 		}
 	}
-	injectedContext = s.appendTurnApprovalModeContext(turnCtx, injectedContext, conv, user, inputKind)
+	injectedContext = s.appendTurnApprovalModeContext(turnCtx, injectedContext, promptConv, user, inputKind)
 	return turnCtx, turnPersona, personaLayer, turnStager, availableOptional, senderEmail, injectedContext
 }
 

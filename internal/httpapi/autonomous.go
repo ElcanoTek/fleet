@@ -143,6 +143,14 @@ func (s *Server) cancelConversationAutoSubmits(ctx context.Context, convID strin
 	}
 }
 
+func cloneConversationSnapshot(conv *store.Conversation) *store.Conversation {
+	if conv == nil {
+		return nil
+	}
+	cp := *conv
+	return &cp
+}
+
 func isAutoSubmitUserMessage(text string) bool {
 	trimmed := strings.TrimSpace(text)
 	if !strings.HasPrefix(trimmed, "[UI submission] ") {

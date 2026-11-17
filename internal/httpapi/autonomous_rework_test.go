@@ -600,7 +600,9 @@ func verifyUIAutoSubmitChainCap(
 		}
 	}
 	st.mu.Unlock()
-	srv.SweepDueUIAutoSubmits(ctx)
+	if swept, serr := st.SweepAndEnqueueDueUIAutoSubmits(ctx, time.Now().UnixMilli(), 10, 20); serr != nil || len(swept) != 1 || !swept[0].Enqueued {
+		t.Fatalf("SweepAndEnqueueDueUIAutoSubmits(call_chain_2) = (%+v, %v), want 1 enqueued", swept, serr)
+	}
 	hasQueuedChain2 := func() bool {
 		qItems, _ := st.ListQueuedInputs(ctx, "alice@example.com", convID)
 		for _, qi := range qItems {
