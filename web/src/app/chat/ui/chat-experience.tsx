@@ -1266,9 +1266,6 @@ export function ChatExperience({
       }
       const currentDesired = autoApproveValueRef.current.get(convId) ?? approvalMode;
       if (currentDesired === next) return;
-      if (next !== "autonomous") {
-        cancelLocalPendingAutoSubmits(convId);
-      }
       const seq = (autoApproveSeqRef.current.get(convId) ?? 0) + 1;
       autoApproveSeqRef.current.set(convId, seq);
       autoApproveValueRef.current.set(convId, next);
@@ -1341,6 +1338,9 @@ export function ChatExperience({
             // ignore empty/non-JSON body (204 No Content)
           }
           autoApproveCommittedRef.current.set(convId, committed);
+          if (committed !== "autonomous") {
+            cancelLocalPendingAutoSubmits(convId);
+          }
           if (autoApproveSeqRef.current.get(convId) === seq) {
             autoApproveDisplayedRef.current.set(convId, committed);
             autoApproveValueRef.current.set(convId, committed);
@@ -6077,6 +6077,9 @@ export function ChatExperience({
         data.approval_mode,
         data.auto_approve,
       );
+      if (resolved !== "autonomous") {
+        cancelLocalPendingAutoSubmits(convId);
+      }
       const aa = resolved !== "manual";
       setConversations((curr) =>
         curr.map((c) =>

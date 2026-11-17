@@ -625,8 +625,8 @@ func (s *Server) handleAutoApproveSet(w http.ResponseWriter, r *http.Request, us
 			writeConversationMutationError(w, err)
 			return
 		}
-		if mode != store.ConversationApprovalAutonomous {
-			s.cancelConversationAutoSubmits(r.Context(), id)
+		if mode != store.ConversationApprovalAutonomous && !s.cancelAutoSubmitsOrFail(r.Context(), w, id) {
+			return
 		}
 		w.WriteHeader(http.StatusNoContent)
 		return
@@ -639,8 +639,8 @@ func (s *Server) handleAutoApproveSet(w http.ResponseWriter, r *http.Request, us
 		writeConversationMutationError(w, err)
 		return
 	}
-	if !enabled {
-		s.cancelConversationAutoSubmits(r.Context(), id)
+	if !enabled && !s.cancelAutoSubmitsOrFail(r.Context(), w, id) {
+		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

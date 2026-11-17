@@ -2276,9 +2276,11 @@ export function Composer({
                 onClick={() => {
                   const convKey =
                     activeConversationIdRef.current ?? PENDING_CONV_KEY;
-                  onStopPressed?.(convKey);
                   abortControllersRef.current.get(convKey)?.abort();
-                  if (isPendingKey(convKey)) return;
+                  if (isPendingKey(convKey)) {
+                    onStopPressed?.(convKey);
+                    return;
+                  }
                   const cancelUrl = conversationApiUrl(convKey, "/cancel");
                   if (!cancelUrl) return;
                   void (async () => {
@@ -2289,7 +2291,10 @@ export function Composer({
                     } catch {
                       cancelled = false;
                     }
-                    if (cancelled) cancelRecovery(convKey);
+                    if (cancelled) {
+                      onStopPressed?.(convKey);
+                      cancelRecovery(convKey);
+                    }
                   })();
                 }}
               >
