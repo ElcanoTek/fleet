@@ -208,8 +208,9 @@ cd web && npx playwright test --project=mocked     # mocked e2e (builds the bund
 ```
 
 `web/` is the only npm tree (the second one, `scripts/rampart-service/`, was
-removed in ADR-0063), and CI audits it (`npm audit --audit-level=low`,
-lockfile-only) before the install. `make ci-web` runs every step; the
+removed in ADR-0063), and CI audits it (`web/tools/npm-audit-gate.cjs`:
+`npm audit`, lockfile-only, any severity, minus the reviewed register
+`web/npm-audit-accepted.json` — ADR-0113) before the install. `make ci-web` runs every step; the
 hand-rolled line above skips the audit, which is how a clean local run turns
 into a red PR.
 
@@ -252,6 +253,9 @@ severity) and ruff (`check` **and** `format --check`) gate the same way.
 Their thresholds differ, and the difference is load-bearing:
 
 - **Semgrep, ruff and `npm audit`: zero findings, gating on any finding.**
+  `npm audit`'s one exception is the register in ADR-0113: a named advisory
+  on a dev-only package with no patched release, with a written reason and
+  an expiry, every condition checked by the gate.
 - **CodeQL: zero *blocking* findings.** It gates on the **High band**
   (`security-severity >= 7.0`, or level `error`/`warning` for a rule publishing
   no security-severity), minus a reviewed register of accepted `(rule, file)`

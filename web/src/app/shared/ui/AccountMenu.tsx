@@ -34,6 +34,7 @@ import { useTheme } from "@/app/shared/hooks/useTheme";
 import { Avatar as FlagAvatar, AvatarFallback } from "@/components/ui/avatar";
 import { cn } from "@/lib/utils";
 import { Icon } from "./Icon";
+import { openSidebarCustomizer } from "@/app/shared/sidebar/store";
 import { Menu, MenuItem, MenuSeparator } from "./Menu";
 import { Segmented } from "./Segmented";
 
@@ -195,6 +196,17 @@ export function AccountMenu({
           }}
         >
           {tr("Guides")}</MenuItem>
+        <MenuItem
+          icon={<Icon name="panel-left" className="size-4" />}
+          description={tr("Pin, hide, rename and reorder what's here")}
+          testId="customize-sidebar"
+          onClick={() => {
+            close();
+            openSidebarCustomizer();
+          }}
+        >
+          {tr("Customize sidebar")}
+        </MenuItem>
         <div className={MENU_GROUP_HEADING}>{tr("Model Context & Tools")}</div>
         <MenuItem
           icon={<Icon name="plug" className="size-4" />}

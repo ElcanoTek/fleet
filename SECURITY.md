@@ -168,7 +168,8 @@ compromised or fresh-and-unvetted release from reaching `main`:
 - **Dependency-CVE scanning.** CI runs `govulncheck` against the Go module on
   every PR (the `govulncheck` job in `.github/workflows/ci.yml`), failing the
   build on a known-vulnerable dependency that fleet actually calls into.
-- **npm dependency-CVE scanning.** `npm audit --audit-level=low` runs in the
+- **npm dependency-CVE scanning.** `npm audit` (via `web/tools/npm-audit-gate.cjs`,
+  [ADR-0113](docs/adr/0113-npm-audit-accepted-advisories.md)) runs in the
   `web` CI job, lockfile-only (before the install, so a vulnerable lockfile
   fails fast) against the `web/` tree — the only npm tree since the
   `scripts/rampart-service` reference service was removed
