@@ -285,4 +285,32 @@ func TestRecoverUIAutoSubmitsAndAtomicInputCancel(t *testing.T) {
 	if err != nil || len(activeAfterInput) != 0 {
 		t.Fatalf("expected EnqueueInput to atomically cancel paused autosubmit, got (%+v, %v)", activeAfterInput, err)
 	}
+
+	// Downgrading via SetApprovalMode atomically cancels active ui_autosubmits in the same tx.
+	conv2, err := s.CreateConversation(ctx, "alice@example.com", "Atomic Downgrade", "default", "m", false)
+	if err != nil {
+		t.Fatalf("CreateConversation(conv2): %v", err)
+	}
+	if err := s.SetApprovalMode(ctx, "alice@example.com", conv2.ID, ConversationApprovalAutonomous); err != nil {
+		t.Fatalf("SetApprovalMode(autonomous): %v", err)
+	}
+	if _, err := s.CreateUIAutoSubmit(ctx, UIAutoSubmit{
+		ConversationID: conv2.ID,
+		UserEmail:      "alice@example.com",
+		CallID:         "call_downgrade_atomic",
+		ActionID:       "submit",
+		ValuesJSON:     `{"deal":"d"}`,
+		DeadlineMs:     nowMs + 10_000,
+		Status:         UIAutoSubmitStatusPending,
+		CreatedAtMs:    nowMs,
+		UpdatedAtMs:    nowMs,
+	}); err != nil {
+		t.Fatalf("CreateUIAutoSubmit(conv2): %v", err)
+	}
+	if err := s.SetApprovalMode(ctx, "alice@example.com", conv2.ID, ConversationApprovalAuto); err != nil {
+		t.Fatalf("SetApprovalMode(auto): %v", err)
+	}
+	if activeAfterDown, err := s.ListActiveUIAutoSubmits(ctx, conv2.ID); err != nil || len(activeAfterDown) != 0 {
+		t.Fatalf("expected SetApprovalMode(auto) to atomically cancel active autosubmit, got (%+v, %v)", activeAfterDown, err)
+	}
 }

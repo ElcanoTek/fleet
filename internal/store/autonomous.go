@@ -441,7 +441,6 @@ func (s *Store) CancelActiveUIAutoSubmits(ctx context.Context, convID, callID st
 		return nil, 0, nil
 	}
 	nowMs := time.Now().UnixMilli()
-	nowSec := nowMs / 1000
 	callID = strings.TrimSpace(callID)
 
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -457,7 +456,25 @@ func (s *Store) CancelActiveUIAutoSubmits(ctx context.Context, convID, callID st
 		return nil, 0, err
 	}
 
-	var qRows *sql.Rows
+	cancelledRows, qCount, err := cancelActiveUIAutoSubmitsTx(ctx, tx, convID, callID, nowMs)
+	if err != nil {
+		return nil, 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, 0, err
+	}
+	for i := range cancelledRows {
+		cancelledRows[i] = cancelledRows[i].WithRemainingMs(nowMs)
+	}
+	return cancelledRows, qCount, nil
+}
+
+func cancelActiveUIAutoSubmitsTx(ctx context.Context, tx *sql.Tx, convID, callID string, nowMs int64) ([]UIAutoSubmit, int, error) {
+	nowSec := nowMs / 1000
+	var (
+		qRows *sql.Rows
+		err   error
+	)
 	if callID != "" {
 		msgPrefix := "[UI submission] card=" + escapeLikeLiteral(callID) + " %"
 		qRows, err = tx.QueryContext(ctx,
@@ -531,14 +548,33 @@ func (s *Store) CancelActiveUIAutoSubmits(ctx context.Context, convID, callID st
 	if err != nil {
 		return nil, 0, err
 	}
-
-	if err := tx.Commit(); err != nil {
-		return nil, 0, err
-	}
-	for i := range cancelledRows {
-		cancelledRows[i] = cancelledRows[i].WithRemainingMs(nowMs)
-	}
 	return cancelledRows, qCount, nil
+}
+
+func (s *Store) setOwnedApprovalModeAndCancelAutoSubmits(ctx context.Context, userEmail, convID, mode string, autoApprove bool) error {
+	nowMs := time.Now().UnixMilli()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	res, err := tx.ExecContext(ctx,
+		`UPDATE conversations
+		    SET approval_mode = $1, auto_approve = $2, updated_at = $3
+		  WHERE id = $4 AND user_email = $5 AND deleted_at IS NULL`,
+		mode, autoApprove, nowMs/1000, convID, userEmail,
+	)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrConversationNotFound
+	}
+	if _, _, err := cancelActiveUIAutoSubmitsTx(ctx, tx, convID, "", nowMs); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // RecoverUIAutoSubmits pauses any pending show_ui countdowns and cancels any

@@ -1355,7 +1355,7 @@ func (s *Store) SetAutoApprove(ctx context.Context, userEmail, convID string, en
 			"auto_approve = TRUE, approval_mode = CASE WHEN approval_mode = 'autonomous' THEN 'autonomous' ELSE 'auto' END",
 		)
 	}
-	return s.updateOwnedConversation(ctx, userEmail, convID, "auto_approve = FALSE, approval_mode = 'manual'")
+	return s.setOwnedApprovalModeAndCancelAutoSubmits(ctx, userEmail, convID, ConversationApprovalManual, false)
 }
 
 // SetApprovalMode sets the per-conversation approval mode ("manual", "auto",
@@ -1366,6 +1366,9 @@ func (s *Store) SetApprovalMode(ctx context.Context, userEmail, convID, mode str
 		return fmt.Errorf("invalid approval_mode %q: must be manual, auto, or autonomous", mode)
 	}
 	autoApprove := normalized != ConversationApprovalManual
+	if normalized != ConversationApprovalAutonomous {
+		return s.setOwnedApprovalModeAndCancelAutoSubmits(ctx, userEmail, convID, normalized, autoApprove)
+	}
 	return s.updateOwnedConversation(ctx, userEmail, convID, "approval_mode = $1, auto_approve = $2", normalized, autoApprove)
 }
 

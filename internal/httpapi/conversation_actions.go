@@ -625,8 +625,13 @@ func (s *Server) handleAutoApproveSet(w http.ResponseWriter, r *http.Request, us
 			writeConversationMutationError(w, err)
 			return
 		}
-		if mode != store.ConversationApprovalAutonomous && !s.cancelAutoSubmitsOrFail(r.Context(), w, id) {
-			return
+		if mode != store.ConversationApprovalAutonomous {
+			// SetApprovalMode already cancelled active ui_autosubmits and queued
+			// autosubmit:* rows atomically inside its database transaction; notify
+			// live SSE/queue listeners best-effort without turning a committed
+			// mode update into a false 500.
+			s.cancelConversationAutoSubmits(r.Context(), id)
+			s.emitQueueUpdate(r.Context(), user, id)
 		}
 		w.WriteHeader(http.StatusNoContent)
 		return
@@ -639,8 +644,9 @@ func (s *Server) handleAutoApproveSet(w http.ResponseWriter, r *http.Request, us
 		writeConversationMutationError(w, err)
 		return
 	}
-	if !enabled && !s.cancelAutoSubmitsOrFail(r.Context(), w, id) {
-		return
+	if !enabled {
+		s.cancelConversationAutoSubmits(r.Context(), id)
+		s.emitQueueUpdate(r.Context(), user, id)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
