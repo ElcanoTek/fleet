@@ -97,6 +97,15 @@ through Caddy afterwards); `sudo fleet update --adopt-units` does the same.
 
 ## Not yet implemented (honest scope)
 
+- **Removals before GA have not bumped the major.** The table above is the
+  contract from GA on. Before it, two removals of unused features took
+  endpoints and response fields off `/v1` without a `/v2`:
+  [ADR-0111](adr/0111-remove-memory-knowledge-graph.md) (memory graph, task
+  feedback, datasets, notes, evals, `ask`/`notify`) and
+  [ADR-0112](adr/0112-remove-sub-agents.md) (`GET /logs/{task_id}/subagents/{child_session_id}`,
+  the task `allow_delegation` field). A client that called one of those gets
+  a 404 or no longer sees the field while `api_version` still reads `1`;
+  `docs/openapi.yaml` is the record of what `/v1` serves today.
 - **A `Sunset` date** on the legacy bare paths: the issue's plan is `Sunset:
   <GA + 6 months>` and an eventual `410 Gone`. There is no GA date yet, so the
   legacy paths carry `Deprecation`/`Link` (the migration signal) but no `Sunset`

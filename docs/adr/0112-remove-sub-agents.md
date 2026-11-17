@@ -59,6 +59,13 @@ place another change had to keep "and a sub-agent inherits it" true.
 
 ## Consequences
 
+- **The `/v1` contract shrinks without a major bump.** docs/api-versioning.md
+  classifies removing an endpoint or a response field as breaking. The
+  transcript endpoint and the task `allow_delegation` field leave `/v1`
+  anyway, as ADR-0111's endpoints did: the API has no GA date, the feature had
+  no users, and a `/v2` or a permanent shim for an endpoint nobody calls would
+  keep exactly the code this ADR removes. The exception is recorded in
+  docs/api-versioning.md ("Not yet implemented").
 - The model is never offered `spawn_subagent`, and no system prompt mentions
   delegation. Work that used to fan out runs in the one loop; a task that
   genuinely needs separate runs uses `create_task` or A2A (ADR-0056), both of
