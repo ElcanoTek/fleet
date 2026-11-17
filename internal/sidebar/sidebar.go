@@ -182,7 +182,7 @@ func Normalize(l Layout) (Layout, error) {
 
 	if l.Home != "" {
 		for _, it := range out.Items {
-			if it.ID == l.Home && !it.Hidden && !(it.Kind == KindBuiltin && it.ID == "patrols") {
+			if it.ID == l.Home && !it.Hidden && (it.Kind != KindBuiltin || it.ID != "patrols") {
 				out.Home = it.ID
 				break
 			}

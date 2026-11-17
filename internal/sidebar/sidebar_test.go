@@ -153,17 +153,21 @@ func TestValidIcon(t *testing.T) {
 		"rocket":             false,
 		"Bar-Chart":          false,
 		"a🚀":                 false,
-		"🚀 ":                 false,
-		" ":                  false, // no-break space
-		"‮":                  false, // bidi override
+		"\u00a0":             false, // no-break space
+		"\u202e":             false, // bidi override
 		"\u0085":             false, // C1 control
-		"🚀​":                 false, // zero-width space
+		"🚀\u200b":            false, // zero-width space
 		string([]byte{0xff}): false,
 		"<script>":           false,
 	} {
 		if got := validIcon(icon); got != ok {
 			t.Errorf("validIcon(%q) = %v, want %v", icon, got, ok)
 		}
+	}
+	// A trailing space is not part of an emoji (kept out of the table above,
+	// where a key with whitespace reads as a typo).
+	if validIcon("🚀" + " ") {
+		t.Error("validIcon accepted an emoji with a trailing space")
 	}
 }
 
