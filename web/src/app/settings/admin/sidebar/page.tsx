@@ -21,7 +21,7 @@ import {
   sameLayout,
   type SidebarLayout,
 } from "@/app/shared/sidebar/layout";
-import { getSidebarState, loadSidebar } from "@/app/shared/sidebar/store";
+import { loadOwnSidebar } from "@/app/shared/sidebar/store";
 import { responseErrorText } from "@/app/lib/responseError";
 import { getGatedJson } from "@/app/settings/lib/getGated";
 import { formatDate } from "@/app/shared/lib/format";
@@ -108,9 +108,17 @@ function SidebarAdmin() {
 
   // A workspace sidebar cannot pin a background task (only its owner and
   // admins can open one; the server refuses it), so a copy leaves them out.
+  // Only a layout that really loaded is copied: when the admin's own read
+  // failed, the store holds the built-in stand-in, and copying that would
+  // replace the draft with something the admin never chose.
   const copyMine = async () => {
-    await loadSidebar();
-    const mine = cloneLayout(getSidebarState().layout);
+    setError(null);
+    const own = await loadOwnSidebar();
+    if (own.status !== "ready") {
+      setError(tr("Couldn't load your sidebar, so nothing was copied. Try again."));
+      return;
+    }
+    const mine = cloneLayout(own.layout);
     setDraft(normalizeLayout({ ...mine, items: mine.items.filter((i) => i.kind !== "task") }));
   };
 

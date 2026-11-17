@@ -131,6 +131,17 @@ export function loadSidebar(): Promise<void> {
   return loadPromise;
 }
 
+/**
+ * loadOwnSidebar reads the layouts again when the last read failed (the
+ * once-per-page read is otherwise shared) and resolves to the state, whose
+ * `status` says whether the person's own layout is really known.
+ */
+export async function loadOwnSidebar(): Promise<SidebarState> {
+  if (state.status === "unavailable") loadPromise = null;
+  await loadSidebar();
+  return state;
+}
+
 /** sidebarSettled resolves once the read has landed, or after `timeoutMs`. */
 export function sidebarSettled(timeoutMs: number): Promise<SidebarState> {
   return Promise.race([

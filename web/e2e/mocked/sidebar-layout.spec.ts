@@ -445,3 +445,38 @@ test("the admin page never saves over a workspace sidebar it could not load", as
   await page.getByTestId("sidebar-preset-team").click();
   await expect(page.getByTestId("admin-sidebar-save")).toBeEnabled();
 });
+
+test("Start from my sidebar never copies a sidebar that failed to load", async ({ page }) => {
+  await setup(page, { admin: true });
+  let ownFails = true;
+  await page.route("**/api/sidebar", (r: Route) =>
+    ownFails
+      ? r.fulfill({ status: 502, body: "down" })
+      : r.fulfill({
+          json: {
+            layout: { version: 1, items: [{ id: "tasks", kind: "builtin", label: "Ops" }], sections: [] },
+            workspace_default: null,
+          },
+        }),
+  );
+  await page.route("**/api/admin/sidebar", (r: Route) =>
+    r.fulfill({
+      json: {
+        layout: { version: 1, items: [{ id: "chat", kind: "builtin", label: "Team default" }], sections: [] },
+        updated_by: "boss@example.com",
+        updated_at: 1_763_000_000,
+      },
+    }),
+  );
+  await page.goto("/settings/admin/sidebar");
+  const names = page.getByTestId("admin-sidebar-editor").getByTestId("sidebar-item-name");
+  await expect(names.first()).toHaveValue("Team default");
+  await page.getByTestId("admin-sidebar-copy-mine").click();
+  await expect(page.getByText("Couldn't load your sidebar, so nothing was copied. Try again.")).toBeVisible();
+  await expect(names.first()).toHaveValue("Team default");
+  await expect(page.getByTestId("admin-sidebar-save")).toBeDisabled();
+  // Once the read recovers, the copy is retried and lands.
+  ownFails = false;
+  await page.getByTestId("admin-sidebar-copy-mine").click();
+  await expect(names.first()).toHaveValue("Ops");
+});

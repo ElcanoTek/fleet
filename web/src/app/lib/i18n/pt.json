@@ -5873,5 +5873,6 @@
   "Show {0} in the sidebar": "Mostrar {0} na barra lateral",
   "Show {0} on the Chat page": "Mostrar {0} na página de Chat",
   "Hidden — switch on to show": "Oculto: ative para mostrar",
-  "Shown — switch off to hide": "Visível: desative para ocultar"
+  "Shown — switch off to hide": "Visível: desative para ocultar",
+  "Couldn't load your sidebar, so nothing was copied. Try again.": "Não foi possível carregar a sua barra lateral, por isso nada foi copiado. Tente novamente."
 }
