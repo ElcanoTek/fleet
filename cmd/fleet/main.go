@@ -2280,7 +2280,7 @@ func dropApprovalResumesAtBoot(chatStore *store.Store) (int, error) {
 func recoverUIAutoSubmitsAtBoot(logCtx context.Context, chatStore *store.Store) {
 	var err error
 	for attempt := 0; attempt < 2; attempt++ {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(logCtx), 30*time.Second)
 		var recovered int
 		recovered, err = chatStore.RecoverUIAutoSubmits(ctx)
 		cancel()

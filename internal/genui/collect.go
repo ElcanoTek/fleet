@@ -675,6 +675,7 @@ func collectCardSubmission(components []map[string]any, values map[string]any) (
 					}
 					write[id] = items
 					if !off {
+						hasVisibleInputs = true
 						if errMsg := checkCollectedField(c, rawItems); errMsg != "" {
 							errs[prefix+id] = errMsg
 						}

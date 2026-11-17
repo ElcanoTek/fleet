@@ -189,6 +189,7 @@
     "external session lookup failed",
     "external session revocation failed",
     "external sessions unavailable",
+    "failed to cancel pending auto-submit",
     "failed to create prompt",
     "failed to delete prompt",
     "failed to export prompts",

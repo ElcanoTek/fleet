@@ -4582,6 +4582,7 @@
   "fact": "facto",
   "fail @ {0}×": "falhar a {0}×",
   "failed": "falhou",
+  "failed to cancel pending auto-submit": "Não foi possível cancelar o envio automático pendente",
   "failed to create prompt": "Não foi possível criar o prompt",
   "failed to delete prompt": "Não foi possível eliminar o prompt",
   "failed to export prompts": "Não foi possível exportar os prompts",

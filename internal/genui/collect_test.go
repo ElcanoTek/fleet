@@ -290,4 +290,26 @@ func TestCollectInitialSubmit(t *testing.T) {
 			t.Fatalf("EvaluateSafe(1.5e2 - 1) = %v, want 149", got)
 		}
 	})
+
+	t.Run("repeater-only card counts enabled repeater as visible input", func(t *testing.T) {
+		spec := `{
+			"title": "Optional Deals Repeater",
+			"components": [
+				{
+					"type": "repeater",
+					"id": "deals",
+					"label": "Deals",
+					"fields": [
+						{"type": "text_input", "id": "name", "label": "Deal name", "required": true}
+					],
+					"value": []
+				}
+			],
+			"actions": [{"id": "save", "label": "Save"}]
+		}`
+		actID, vals, ok := CollectInitialSubmit([]byte(spec))
+		if !ok || actID != "save" || string(vals) != `{"deals":[]}` {
+			t.Fatalf("expected enabled empty repeater card eligible, got (%q, %s, %v)", actID, string(vals), ok)
+		}
+	})
 }
