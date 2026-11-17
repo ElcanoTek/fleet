@@ -75,6 +75,28 @@ func (s *Store) DeleteSidebarLayout(ctx context.Context, userEmail string, rev i
 	return s.putSidebarLayout(ctx, email, "null", rev)
 }
 
+// SidebarLayoutWithRev reads the user's layout and its revision from the
+// same row in one statement, so the revision always identifies the layout
+// returned with it (a save landing between two reads could otherwise pair an
+// older layout with a newer revision). layout is nil when there is none
+// (never saved, or reset); rev is 0 when there is no row.
+func (s *Store) SidebarLayoutWithRev(ctx context.Context, userEmail string) ([]byte, int64, error) {
+	var raw []byte
+	var rev int64
+	err := s.db.QueryRowContext(ctx,
+		`SELECT CASE WHEN layout = 'null'::jsonb THEN NULL ELSE layout END, rev
+		   FROM chat.sidebar_layouts WHERE user_email = $1`,
+		normalizeEmail(userEmail),
+	).Scan(&raw, &rev)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, 0, nil
+	}
+	if err != nil {
+		return nil, 0, fmt.Errorf("read sidebar layout: %w", err)
+	}
+	return raw, rev, nil
+}
+
 // SidebarLayoutRev returns the revision of the user's stored layout (0 when
 // they have never saved one). The browser numbers its next save after it, so
 // revisions come from one server-held sequence rather than from each

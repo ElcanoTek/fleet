@@ -79,6 +79,34 @@ describe("sidebar store", () => {
     expect(fetchMock.mock.calls.filter((c) => c[1]?.method === "PUT")).toHaveLength(1);
   });
 
+  it("an edit whose save is still in flight is sent again on pagehide, and its answer is applied", async () => {
+    vi.useFakeTimers();
+    let release: (() => void) | null = null;
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      if ((init?.method ?? "GET") === "GET") return Response.json({ layout: null, workspace_default: null, rev: 0 });
+      const body = JSON.parse(String(init?.body));
+      if (!init?.keepalive) await new Promise<void>((r) => (release = r)); // the debounced save hangs
+      return Response.json({ layout: body.layout, rev: body.rev });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    await loadSidebar();
+    setSidebarLayout(OWN);
+    await vi.advanceTimersByTimeAsync(600); // the debounced PUT is now in flight
+    expect(fetchMock.mock.calls.filter((c) => c[1]?.method === "PUT")).toHaveLength(1);
+    flushSidebarSaveForTests(); // the page is hidden before it answers
+    const puts = fetchMock.mock.calls.filter((c) => c[1]?.method === "PUT");
+    expect(puts).toHaveLength(2);
+    expect(puts[1][1]?.keepalive).toBe(true);
+    await vi.advanceTimersByTimeAsync(0);
+    // Restored from the back/forward cache: the keepalive answer settles the state.
+    expect(getSidebarState()).toMatchObject({ saving: false, saveError: false });
+    release?.();
+    await vi.advanceTimersByTimeAsync(0);
+    // A confirmed edit is not sent a third time.
+    flushSidebarSaveForTests();
+    expect(fetchMock.mock.calls.filter((c) => c[1]?.method === "PUT")).toHaveLength(2);
+  });
+
   it("an unreachable server renders the built-in layout and says it cannot save", async () => {
     window.localStorage.setItem("fleet.sidebar.layout.v2", JSON.stringify({ email: "ana@example.com", layout: OWN }));
     resetSidebarStoreForTests();

@@ -195,30 +195,42 @@ function flushSave(gen: number): Promise<void> {
   return saveChain;
 }
 
+// The newest edit the server has confirmed. An edit is "unsaved" until its
+// generation is confirmed here, whether its debounce is still waiting, its
+// request is queued behind a slow one, or the request is in flight; leaving
+// the page sends any unsaved edit with keepalive (flushOnHide).
+let confirmedGen = 0;
+
 async function sendInTurn(gen: number) {
   if (gen !== editGen) return;
-  const own = state.own;
   try {
-    const res = await sendSave(false);
-    if (!res.ok) throw new Error(String(res.status));
-    if (gen !== editGen) return; // a newer edit has its own save queued
-    const data = (await res.json().catch(() => ({}))) as { layout?: unknown; stale?: unknown; rev?: unknown };
-    learnRev(data.rev);
-    const saved = data.layout ? normalizeLayout(data.layout) : null;
-    if (data.stale === true) {
-      // Overtaken by a newer save from another tab or device: show what the
-      // server keeps, which is what every page will load from now on.
-      emit({ own: saved, saving: false, saveError: false, ...effective(saved, state.workspace) });
-      return;
-    }
-    if (own && saved && !sameLayout(saved, own)) {
-      // The server repaired something (a name cut to length, say): show its copy.
-      emit({ own: saved, layout: saved, saving: false, saveError: false });
-    } else {
-      emit({ saving: false, saveError: false });
-    }
+    await handleSaveResponse(await sendSave(false), gen, state.own);
   } catch {
     if (gen === editGen) emit({ saving: false, saveError: true });
+  }
+}
+
+// handleSaveResponse applies a save's answer, from an ordinary save or from
+// the keepalive one sent on pagehide (whose answer arrives if the page was
+// kept in the back-forward cache and restored).
+async function handleSaveResponse(res: Response, gen: number, own: SidebarLayout | null) {
+  if (!res.ok) throw new Error(String(res.status));
+  const data = (await res.json().catch(() => ({}))) as { layout?: unknown; stale?: unknown; rev?: unknown };
+  learnRev(data.rev);
+  if (gen !== editGen) return; // a newer edit has its own save queued
+  confirmedGen = gen;
+  const saved = data.layout ? normalizeLayout(data.layout) : null;
+  if (data.stale === true) {
+    // Overtaken by a newer save from another tab or device: show what the
+    // server keeps, which is what every page will load from now on.
+    emit({ own: saved, saving: false, saveError: false, ...effective(saved, state.workspace) });
+    return;
+  }
+  if (own && saved && !sameLayout(saved, own)) {
+    // The server repaired something (a name cut to length, say): show its copy.
+    emit({ own: saved, layout: saved, saving: false, saveError: false });
+  } else {
+    emit({ saving: false, saveError: false });
   }
 }
 
@@ -261,10 +273,23 @@ export function retrySidebarSave() {
 // a closed tab, a shortcut that loads another page) is sent at once, with
 // keepalive so the browser finishes the request after the page is gone.
 function flushOnHide() {
-  if (!saveTimer) return;
-  clearTimeout(saveTimer);
-  saveTimer = null;
-  void sendSave(true).catch(() => {});
+  if (saveTimer) {
+    clearTimeout(saveTimer);
+    saveTimer = null;
+  }
+  // Nothing unsaved: the newest edit is already confirmed (or there was none).
+  if (editGen === 0 || confirmedGen === editGen) return;
+  // Send the newest edit now, whether it was still waiting, queued behind a
+  // slow save or in flight: revisions make a duplicate harmless (the server
+  // answers the older or equal one as stale). If the page is kept in the
+  // back-forward cache, the answer is handled like any other on return.
+  const gen = editGen;
+  const own = state.own;
+  void sendSave(true)
+    .then((res) => handleSaveResponse(res, gen, own))
+    .catch(() => {
+      if (gen === editGen) emit({ saving: false, saveError: true });
+    });
 }
 if (typeof window !== "undefined") window.addEventListener("pagehide", flushOnHide);
 
@@ -299,6 +324,7 @@ export function resetSidebarStoreForTests() {
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = null;
   saveChain = Promise.resolve();
+  confirmedGen = 0;
   lastRev = 0;
   pendingRev = 0;
   loadPromise = null;

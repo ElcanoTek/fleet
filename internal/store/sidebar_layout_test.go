@@ -211,6 +211,11 @@ func TestSidebarLayout_RevOrdersSaves(t *testing.T) {
 	if got := read(); got != "<none>" {
 		t.Errorf("after reset, layout = %s; want none", got)
 	}
+	// The layout and its revision come from one read: a reset is no layout
+	// with the reset's revision.
+	if raw, rev, err := s.SidebarLayoutWithRev(ctx, me); err != nil || raw != nil || rev != 30 {
+		t.Errorf("SidebarLayoutWithRev after reset = %s, %d, %v; want nil, 30", raw, rev, err)
+	}
 	if apply(older, 25) {
 		t.Error("an older save brought the layout back after a reset")
 	}
@@ -220,6 +225,12 @@ func TestSidebarLayout_RevOrdersSaves(t *testing.T) {
 	// A newer save after the reset applies.
 	if !apply(newer, 40) || !strings.Contains(read(), `"newer"`) {
 		t.Errorf("a save after the reset was not applied: %s", read())
+	}
+	if raw, rev, err := s.SidebarLayoutWithRev(ctx, me); err != nil || !strings.Contains(string(raw), `"newer"`) || rev != 40 {
+		t.Errorf("SidebarLayoutWithRev = %s, %d, %v; want the newer layout at 40", raw, rev, err)
+	}
+	if raw, rev, err := s.SidebarLayoutWithRev(ctx, "nobody@elcanotek.com"); err != nil || raw != nil || rev != 0 {
+		t.Errorf("SidebarLayoutWithRev(no row) = %s, %d, %v", raw, rev, err)
 	}
 	// Unnumbered (rev 0) always applies, as before.
 	if !apply(older, 0) || !strings.Contains(read(), `"older"`) {

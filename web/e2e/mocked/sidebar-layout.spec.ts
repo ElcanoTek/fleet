@@ -411,6 +411,25 @@ test("a read-only Viewer can look at the panel but not change the sidebar", asyn
   expect(puts).toEqual([]);
 });
 
+test("a failed account check is not read-only: opening Customize tries again", async ({ page }) => {
+  await setup(page);
+  let fail = true;
+  await page.route("**/api/me", (r: Route) =>
+    fail ? r.fulfill({ status: 502, body: "down" }) : r.fulfill({ json: { email: "e2e@example.com", role: "member" } }),
+  );
+  await page.goto("/chat");
+  await page.getByTestId("account-menu-button").click();
+  await page.getByTestId("customize-sidebar").click();
+  const panel = page.getByTestId("sidebar-customizer");
+  await expect(panel.getByTestId("sidebar-account-unknown")).toBeVisible();
+  await expect(panel.getByTestId("sidebar-read-only")).toHaveCount(0);
+  await expect(panel.getByTestId("sidebar-add-shortcut")).toBeDisabled();
+  fail = false;
+  await panel.getByRole("button", { name: "Try again" }).click();
+  await expect(panel.getByTestId("sidebar-account-unknown")).toHaveCount(0);
+  await expect(panel.getByTestId("sidebar-add-shortcut")).toBeEnabled();
+});
+
 test("the sidebar over a dashboard is a modal drawer: Escape closes it, not the view", async ({ page }) => {
   await setup(page);
   await page.goto("/chat?c=c2");

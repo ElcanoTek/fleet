@@ -2057,6 +2057,9 @@ export function ChatExperience({
   // Whether the shared/multiplayer conversation list has loaded once (the
   // sidebar tells "not available" from "not read yet" by it).
   const [teamSharedLoaded, setTeamSharedLoaded] = useState(false);
+  // Whether the archived conversation list has loaded once (it is read after
+  // the boot, not with it).
+  const [archivedLoaded, setArchivedLoaded] = useState(false);
   // The person's own chat orders by scope — "pinned", and "project:<id>" for
   // their chats in a project (docs/CHAT-ORDER.md) — set in the rail's
   // reorder mode and saved per user on the server. Empty until read (or for a
@@ -2616,6 +2619,7 @@ export function ChatExperience({
         };
         nextArchived = reconcileAutoApprove(data.conversations ?? []);
         setArchivedConversations(nextArchived);
+        setArchivedLoaded(true);
       }
       if (activeRes.ok) {
         const data = (await activeRes.json()) as {
@@ -3873,8 +3877,13 @@ export function ChatExperience({
   }, [teamSharedConversations, userEmail]);
   const loadTeamSharedChatCounts = useCallback(async () => {
     try {
+      // Each read settles on its own: a failed team-count read must not
+      // throw away the shared list that did arrive (the sidebar's shortcuts
+      // depend on it).
       const [teamRes, sharedRes] = await Promise.all([
-        fetch("/api/conversations?scope=team", { cache: "no-store" }),
+        fetch("/api/conversations?scope=team", { cache: "no-store" }).catch(
+          () => null,
+        ),
         fetch("/api/conversations?scope=shared", { cache: "no-store" }).catch(
           () => null,
         ),
@@ -3893,9 +3902,9 @@ export function ChatExperience({
         );
         setTeamSharedLoaded(true);
       }
-      if (!teamRes.ok) {
+      if (!teamRes || !teamRes.ok) {
         // 400 is "you have no team": a KNOWN empty, not an unknown.
-        if (teamRes.status === 400) setTeamSharedChatCounts({});
+        if (teamRes?.status === 400) setTeamSharedChatCounts({});
         return;
       }
       const data = (await teamRes.json()) as {
@@ -7205,6 +7214,7 @@ export function ChatExperience({
           activeProjectId={projectHome?.id ?? null}
           projectsLoaded={projectsLoaded}
           teamSharedLoaded={teamSharedLoaded}
+          archivedLoaded={archivedLoaded}
           onSetDashboardView={(dashboard) => {
             if (dashboard !== dashboardActive) toggleDashboardView();
             setSidebarOpen(false);

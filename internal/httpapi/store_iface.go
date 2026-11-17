@@ -423,6 +423,7 @@ type chatStore interface {
 	// workspace default. The JSON is validated by internal/sidebar.
 	SidebarLayout(ctx context.Context, userEmail string) ([]byte, error)
 	SidebarLayoutRev(ctx context.Context, userEmail string) (int64, error)
+	SidebarLayoutWithRev(ctx context.Context, userEmail string) ([]byte, int64, error)
 	SetSidebarLayout(ctx context.Context, userEmail string, layout []byte, rev int64) (bool, error)
 	DeleteSidebarLayout(ctx context.Context, userEmail string, rev int64) (bool, error)
 	WorkspaceSidebarLayout(ctx context.Context) (store.WorkspaceSidebarLayout, error)

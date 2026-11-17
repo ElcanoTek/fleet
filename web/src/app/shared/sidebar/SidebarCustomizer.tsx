@@ -3,7 +3,7 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "
 import { useIsAdmin } from "@/app/settings/useIsAdmin";
 import { Button } from "@/components/ui/button";
 import { SidebarEditor } from "./SidebarEditor";
-import { useCanCustomize } from "./useCanCustomize";
+import { useCustomizeAccess } from "./useCanCustomize";
 import { isBuiltinLayout } from "./layout";
 import {
   resetSidebarLayout,
@@ -25,7 +25,7 @@ export function SidebarCustomizer() {
   const open = useSidebarCustomizerOpen();
   const { layout, source, status, saving, saveError, workspace } = useSidebar();
   const isAdmin = useIsAdmin() === "admin";
-  const canCustomize = useCanCustomize();
+  const { canCustomize, account, retry: retryAccount } = useCustomizeAccess();
   const following = source !== "user";
   const resetTarget = workspace ? tr("your workspace's default") : tr("fleet's default");
   const atDefault = following || (workspace ? false : isBuiltinLayout(layout));
@@ -62,7 +62,20 @@ export function SidebarCustomizer() {
                     {tr("Try again")}
                   </button>
                 </>
-              ) : !canCustomize ? (
+              ) : account === "failed" ? (
+                <>
+                  <span role="alert" data-testid="sidebar-account-unknown">
+                    {tr("Couldn't check your account, so your sidebar can't be changed right now.")}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={retryAccount}
+                    className="rounded px-1 font-medium text-[var(--color-text-primary)] underline underline-offset-2"
+                  >
+                    {tr("Try again")}
+                  </button>
+                </>
+              ) : account === "viewer" ? (
                 <span data-testid="sidebar-read-only">
                   {tr("Your account is read-only, so your sidebar can't be changed.")}
                 </span>

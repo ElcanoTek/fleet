@@ -171,19 +171,16 @@ func (s *Server) handleSidebar(w http.ResponseWriter, r *http.Request) {
 // revision, answering 500 itself on a store failure.
 func (s *Server) ownSidebarLayout(w http.ResponseWriter, r *http.Request, user string) (*sidebar.Layout, int64, bool) {
 	ctx := r.Context()
-	var mine *sidebar.Layout
-	raw, err := s.store.SidebarLayout(ctx, user)
-	switch {
-	case err == nil:
-		mine = storedSidebarLayout(ctx, raw, "user")
-	case !errors.Is(err, store.ErrSidebarLayoutNotFound):
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return nil, 0, false
-	}
-	rev, err := s.store.SidebarLayoutRev(ctx, user)
+	// One read for both, so the revision always names the layout it comes
+	// with (store.SidebarLayoutWithRev).
+	raw, rev, err := s.store.SidebarLayoutWithRev(ctx, user)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return nil, 0, false
+	}
+	var mine *sidebar.Layout
+	if raw != nil {
+		mine = storedSidebarLayout(ctx, raw, "user")
 	}
 	return mine, rev, true
 }

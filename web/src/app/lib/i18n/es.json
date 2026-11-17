@@ -5878,6 +5878,7 @@
   "Not shared with the team": "No compartido con el equipo",
   "Loading your sidebar…": "Cargando tu barra lateral…",
   "Your sidebar couldn't be loaded, so it can't be changed right now.": "No se pudo cargar tu barra lateral, así que ahora no se puede cambiar.",
+  "Couldn't check your account, so your sidebar can't be changed right now.": "No se pudo comprobar tu cuenta, así que ahora no se puede cambiar tu barra lateral.",
   "Archived": "Archivado",
   "bad json: body too large or unreadable": "JSON no válido: cuerpo demasiado grande o ilegible",
   "bad json: rev must be a non-negative integer": "JSON no válido: rev debe ser un entero no negativo"
