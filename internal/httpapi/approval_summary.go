@@ -33,9 +33,11 @@ func approvalClientFields(toolName, rawInput, convID string) map[string]any {
 		"pattern_args": handlerApprovalPatternArgs(toolName, rawInput),
 		"frozen_args":  frozen,
 		// True when the bundle lists the tool in
-		// critical_tool_no_session_approval: the card must not offer
-		// "apply my choice to all calls", and the POST refuses that scope.
-		"no_session_approval": !agentcore.SessionApprovalAllowed(toolName),
+		// critical_tool_no_session_approval or the specific call is an
+		// argument-sensitive floor action (e.g. `bash` `git push`): the card
+		// must not offer "apply my choice to all calls", and the POST refuses
+		// that scope.
+		"no_session_approval": !agentcore.SessionApprovalAllowed(toolName) || isArgumentSensitiveFloorCall(toolName, rawInput),
 	}
 	if approvalReportsProgress(toolName) {
 		// critical_tool_progress: once approved and running, the card polls

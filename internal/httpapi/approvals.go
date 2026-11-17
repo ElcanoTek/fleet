@@ -678,6 +678,58 @@ func (a *approvalStager) emitUserScoped(name string, payload map[string]any) {
 	a.sink.Emit(name, payload)
 }
 
+// isArgumentSensitiveFloorCall reports whether a tool call's specific
+// arguments place it on the Hard-Block Floor even though benign invocations of
+// the same tool name are session-approvable (for example, `bash` running
+// `git push` after an earlier `apt-get install` allow-all, mutating
+// `chat_patrol` or `connector_studio`, or non-read-only `mcp_fast_io_storage`).
+func isArgumentSensitiveFloorCall(toolName, rawInput string) bool {
+	switch strings.ToLower(strings.TrimSpace(toolName)) {
+	case "bash", tools.ChatPatrolToolName, tools.ConnectorStudioToolName:
+		return agentcore.IsAutonomousHardBlocked(toolName, rawInput)
+	}
+	norm := strings.ReplaceAll(strings.ToLower(strings.TrimSpace(toolName)), "-", "_")
+	if norm == "mcp_fast_io_storage" || norm == "fast_io_storage" ||
+		(strings.HasPrefix(norm, "mcp_fast_io_") && strings.HasSuffix(norm, "_storage")) {
+		return agentcore.IsAutonomousHardBlocked(toolName, rawInput)
+	}
+	return false
+}
+
+func isAutonomousExcludedCall(toolName, rawInput string) bool {
+	return agentcore.AutonomousBlocked(toolName) || agentcore.IsAutonomousHardBlocked(toolName, rawInput)
+}
+
+func sessionApprovalAllowedForCall(toolName, rawInput string, isAutonomous bool) bool {
+	if !agentcore.SessionApprovalAllowed(toolName) || isArgumentSensitiveFloorCall(toolName, rawInput) {
+		return false
+	}
+	if isAutonomous && isAutonomousExcludedCall(toolName, rawInput) {
+		return false
+	}
+	return true
+}
+
+func (s *Server) validateApprovalRequestScope(ctx context.Context, user, convID string, approval *store.Approval, rawScope string) string {
+	if handlerOnlyApproval(approval.ToolName) && rawScope != "" && rawScope != "once" {
+		return "this tool requires a separate decision for each staged card; use scope once"
+	}
+	scope := strings.TrimSpace(rawScope)
+	if scope == "" || scope == "once" {
+		return ""
+	}
+	isAutoConv := false
+	if s.store != nil && isAutonomousExcludedCall(approval.ToolName, approval.ArgsJSON) {
+		if conv, cerr := s.store.Get(ctx, user, convID); cerr == nil && conv != nil {
+			isAutoConv = conv.EffectiveApprovalMode() == store.ConversationApprovalAutonomous
+		}
+	}
+	if !sessionApprovalAllowedForCall(approval.ToolName, approval.ArgsJSON, isAutoConv) {
+		return "this action needs its own decision for each call, so it cannot be approved or denied for the rest of the chat; use scope once"
+	}
+	return ""
+}
+
 func (a *approvalStager) tryPreResolveBeforeMaterialize(toolName, rawInput string) (string, bool) {
 	// Auto-approve-in-test (#225): a CI/test escape hatch (FLEET_AUTO_APPROVE_IN_TEST,
 	// off by default) for pipelines that have no human present and run against a
@@ -693,6 +745,9 @@ func (a *approvalStager) tryPreResolveBeforeMaterialize(toolName, rawInput strin
 	// Session pre-approval (#300): an explicit session deny policy takes
 	// precedence over conversation-wide auto-approve and autonomous modes, even
 	// on tools whose cards do not normally offer session-wide approval.
+	// Approve policies, however, never bypass argument-sensitive floor actions
+	// (such as `git push` after an earlier `apt-get install` allow-all) or the
+	// Autonomous Hard-Block Floor / bundle `critical_tool_autonomous_blocked`.
 	if a.sessionRegistry != nil && !handlerOnlyApproval(toolName) {
 		if p, ok := a.sessionRegistry.MatchForUser(a.conversationID, a.userEmail, toolName, rawInput); ok {
 			if p.Mode == "deny" {
@@ -703,7 +758,7 @@ func (a *approvalStager) tryPreResolveBeforeMaterialize(toolName, rawInput strin
 				})
 				return agentcore.PreDeniedSentinel, true
 			}
-			if agentcore.SessionApprovalAllowed(toolName) {
+			if sessionApprovalAllowedForCall(toolName, rawInput, a.isAutonomous()) {
 				a.emitUserScoped("tool.auto_resolved", map[string]any{
 					"tool":    toolName,
 					"mode":    p.Mode,
@@ -947,7 +1002,11 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 		})
 	}
 
-	a.emitUserScoped("tool.approval_required", approvalRequiredEvent(approval, rawInput, a.conversationID))
+	reqEv := approvalRequiredEvent(approval, rawInput, a.conversationID)
+	if !sessionApprovalAllowedForCall(toolName, rawInput, a.isAutonomous()) {
+		reqEv["no_session_approval"] = true
+	}
+	a.emitUserScoped("tool.approval_required", reqEv)
 	a.firePushNotification(toolName)
 	return approval.ID, nil
 }
@@ -1651,16 +1710,8 @@ func (s *Server) decideApproval(ctx context.Context, done <-chan struct{}, user,
 		// Idempotent: return the already-resolved state without re-firing.
 		return s.resolvedApprovalDecision(ctx, user, approval.ID)
 	}
-	if handlerOnlyApproval(approval.ToolName) && req.Scope != "" && req.Scope != "once" {
-		return approvalError(http.StatusBadRequest, "this tool requires a separate decision for each staged card; use scope once")
-	}
-	// The bundle can require the same for a critical tool
-	// (agent_policy.critical_tool_no_session_approval). The web hides the
-	// apply-all checkbox for it; this is the server's own refusal, so a
-	// terminal or API client cannot pre-approve the rest of the chat either.
-	// Nothing is claimed: the card stays pending for a per-call decision.
-	if scope := strings.TrimSpace(req.Scope); scope != "" && scope != "once" && !agentcore.SessionApprovalAllowed(approval.ToolName) {
-		return approvalError(http.StatusBadRequest, "this action needs its own decision for each call, so it cannot be approved or denied for the rest of the chat; use scope once")
+	if scopeErr := s.validateApprovalRequestScope(ctx, user, convID, approval, req.Scope); scopeErr != "" {
+		return approvalError(http.StatusBadRequest, scopeErr)
 	}
 	// A narrowed approval (agent_policy.critical_tool_narrowable_args): the
 	// person approved only some of the staged values of the declared list

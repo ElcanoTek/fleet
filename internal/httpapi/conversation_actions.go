@@ -30,9 +30,20 @@ import (
 // memory proposals — everything a reload needs to re-hydrate the transcript.
 // ?omit_history=1 skips LoadHistory so a terminal approval review does not
 // have to download an unbounded transcript before POSTing a decision.
+func isAutonomousConversation(conv *store.Conversation) bool {
+	return conv != nil && conv.EffectiveApprovalMode() == store.ConversationApprovalAutonomous
+}
+
+func applyCallNoSessionFlag(card map[string]any, toolName, rawInput string, isAutonomousConv bool) {
+	if !sessionApprovalAllowedForCall(toolName, rawInput, isAutonomousConv) {
+		card["no_session_approval"] = true
+	}
+}
+
 func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, user, id string, conv *store.Conversation) {
+	isAutonomousConv := isAutonomousConversation(conv)
 	if approvalID := r.URL.Query().Get("approval_id"); approvalID != "" {
-		s.handleConversationApprovalGet(w, r, user, id, approvalID)
+		s.handleConversationApprovalGetWithMode(w, r, user, id, approvalID, isAutonomousConv)
 		return
 	}
 	omitHistory := r.URL.Query().Get("omit_history") == "1"
@@ -59,6 +70,7 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, u
 			continue
 		}
 		card := approvalClientFields(a.ToolName, a.ArgsJSON, id)
+		applyCallNoSessionFlag(card, a.ToolName, a.ArgsJSON, isAutonomousConv)
 		if summary, ok := card["summary"].(map[string]any); ok {
 			card["summary"] = withBrowserSessionSite(summary, a.ToolName, a.ArgsJSON, a.UserEmail)
 		}
@@ -250,6 +262,10 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, u
 // handleConversationApprovalGet bounds one-shot review to the requested card;
 // unrelated pending email bodies must not block a small action's settlement.
 func (s *Server) handleConversationApprovalGet(w http.ResponseWriter, r *http.Request, user, convID, approvalID string) {
+	s.handleConversationApprovalGetWithMode(w, r, user, convID, approvalID, false)
+}
+
+func (s *Server) handleConversationApprovalGetWithMode(w http.ResponseWriter, r *http.Request, user, convID, approvalID string, isAutonomousConv bool) {
 	a, err := s.store.GetApproval(r.Context(), user, approvalID)
 	if err != nil {
 		http.Error(w, "could not load approval", http.StatusInternalServerError)
@@ -262,6 +278,7 @@ func (s *Server) handleConversationApprovalGet(w http.ResponseWriter, r *http.Re
 	pending, resolved := []map[string]any{}, []map[string]any{}
 	if a.Status == "pending" {
 		card := approvalRequiredEvent(a, a.ArgsJSON, convID)
+		applyCallNoSessionFlag(card, a.ToolName, a.ArgsJSON, isAutonomousConv)
 		pending = append(pending, card)
 	} else {
 		card := s.approvalClientState(a)

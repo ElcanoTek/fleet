@@ -147,6 +147,30 @@ func TestAutonomousStage_FloorBlockedSessionDenyAndDynamicRemote(t *testing.T) {
 	if err != nil || got == agentcore.RecordedSentinel || got == agentcore.PreApprovedSentinel {
 		t.Fatalf("dynamic remote destructiveHint tool = (%q, %v), want pending card ID", got, err)
 	}
+
+	// 7. A pre-existing session allow-all (e.g. from an earlier `apt-get install`
+	//    on `bash` or earlier Manual-mode allow-all) must NOT bypass git push,
+	//    argument-sensitive floor actions, or Autonomous floor exclusions, while
+	//    still honoring non-push bash and explicit session deny!
+	reg.RegisterForUser("c1", "alice@example.com", "bash", SessionApprovalPolicy{Mode: "approve"})
+	reg.RegisterForUser("c1", "alice@example.com", "mcp_ms365_send-mail", SessionApprovalPolicy{Mode: "approve"})
+	got, err = a.Stage("bash", "call_apt_session", `{"command":"apt-get install -y curl"}`)
+	if err != nil || got != agentcore.PreApprovedSentinel {
+		t.Fatalf("session-approved non-push bash = (%q, %v), want PreApprovedSentinel", got, err)
+	}
+	got, err = a.Stage("bash", "call_push_after_session_allow", `{"command":"git push origin main"}`)
+	if err != nil || got == agentcore.RecordedSentinel || got == agentcore.PreApprovedSentinel {
+		t.Fatalf("git push bypassed floor via bash session allow-all: got (%q, %v)", got, err)
+	}
+	got, err = a.Stage("mcp_ms365_send-mail", "call_m365_after_session_allow", `{"to":"ext@example.com"}`)
+	if err != nil || got == agentcore.RecordedSentinel || got == agentcore.PreApprovedSentinel {
+		t.Fatalf("m365 send-mail bypassed Autonomous floor via session allow-all: got (%q, %v)", got, err)
+	}
+	reg.RegisterForUser("c1", "alice@example.com", "bash", SessionApprovalPolicy{Mode: "deny", Pattern: "command=git push*"})
+	got, err = a.Stage("bash", "call_push_session_deny", `{"command":"git push origin main"}`)
+	if err != nil || got != agentcore.PreDeniedSentinel {
+		t.Fatalf("explicit session deny on git push = (%q, %v), want PreDeniedSentinel", got, err)
+	}
 }
 
 func TestIsSelfAddressedOwnerEmail_InteractiveAndPatrolWithContentFile(t *testing.T) {
