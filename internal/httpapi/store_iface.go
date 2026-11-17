@@ -419,6 +419,16 @@ type chatStore interface {
 	ListUserPatrols(ctx context.Context, userEmail string, limit, offset int) ([]store.UserPatrol, error)
 	ChatOrders(ctx context.Context, userEmail string) (map[string][]string, error)
 	SetChatOrder(ctx context.Context, userEmail, scope string, ids []string) ([]string, error)
+	// Saved left-rail layouts (migration 0202): the user's own and the
+	// workspace default. The JSON is validated by internal/sidebar.
+	SidebarLayout(ctx context.Context, userEmail string) ([]byte, error)
+	SidebarLayoutRev(ctx context.Context, userEmail string) (int64, error)
+	SidebarLayoutWithRev(ctx context.Context, userEmail string) ([]byte, int64, error)
+	SetSidebarLayout(ctx context.Context, userEmail string, layout []byte, rev int64) (bool, error)
+	DeleteSidebarLayout(ctx context.Context, userEmail string, rev int64) (bool, error)
+	WorkspaceSidebarLayout(ctx context.Context) (store.WorkspaceSidebarLayout, error)
+	SetWorkspaceSidebarLayout(ctx context.Context, layout []byte, updatedBy string) (store.WorkspaceSidebarLayout, error)
+	DeleteWorkspaceSidebarLayout(ctx context.Context) error
 	UpdateChatSchedule(ctx context.Context, userEmail, convID, scheduleID string, patch store.ChatSchedulePatch) (*store.ChatSchedule, error)
 	CancelChatSchedule(ctx context.Context, userEmail, convID, scheduleID string) (*store.ChatSchedule, error)
 	DeliverChatScheduleFire(ctx context.Context, fire models.ChatScheduleFire, maxPending int) (models.ChatScheduleDelivery, error)

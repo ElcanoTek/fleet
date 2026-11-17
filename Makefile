@@ -367,7 +367,7 @@ ci-go: compile
 	$(MAKE) test-race
 	$(MAKE) govulncheck GOVULN_TOOLCHAIN=$(GOVULN_TOOLCHAIN)
 
-# The Web CI job, verbatim: npm audit → npm ci → lint → typecheck → vitest →
+# The Web CI job, verbatim: npm audit (tools/npm-audit-gate.cjs) → npm ci → lint → typecheck → vitest →
 # build → a binary that embeds the build. It once said "verbatim" while running
 # only half of those steps, which is the wrong half of a CI==local promise: the
 # `npm audit` CVE gate and the explicit `npm run typecheck` were missing, so a
@@ -375,7 +375,7 @@ ci-go: compile
 # type-check at all, so the explicit gate is the only one. (web/ is the only npm
 # tree since ADR-0063 removed scripts/rampart-service.)
 ci-web:
-	cd web && npm audit --audit-level=low
+	cd web && node tools/npm-audit-gate.cjs
 	cd web && npm ci && npm run lint && npm run typecheck && npx vitest run && npm run build
 	$(MAKE) check-web-bundle
 

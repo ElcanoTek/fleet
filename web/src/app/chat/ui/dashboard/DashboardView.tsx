@@ -142,6 +142,7 @@ export function DashboardHud({
   setMobilePane,
   onExit,
   onApprovals,
+  onSidebar,
 }: {
   title: string;
   status: BoardStatus;
@@ -150,6 +151,10 @@ export function DashboardHud({
   setMobilePane: (pane: "board" | "chat") => void;
   onExit: () => void;
   onApprovals: () => void;
+  /** Slides the sidebar in over the board (docs/SIDEBAR.md): a person whose
+   *  Home is a dashboard moves between boards without leaving the view. It
+   *  takes the place of the decorative mark. */
+  onSidebar?: () => void;
 }) {
   const clock = useClock();
   const [helpOpen, setHelpOpen] = useState(false);
@@ -178,9 +183,21 @@ export function DashboardHud({
           at 640px (the status is whole in en/es/pt at every width from
           there up; measured, not assumed). */}
       <div className="flex min-w-0 flex-1 items-center gap-3 sm:min-w-[5rem] sm:flex-[0_1000000_auto] md:min-w-[7.5rem]">
-        <span className="dash-hud-mark max-md:hidden" aria-hidden="true">
-          <Icon name="target" className="size-4" />
-        </span>
+        {onSidebar ? (
+          <button
+            type="button"
+            className="dash-icon-btn"
+            aria-label={tr("Show sidebar")}
+            data-testid="dashboard-sidebar-button"
+            onClick={onSidebar}
+          >
+            <Icon name="panel-left" className="size-4" />
+          </button>
+        ) : (
+          <span className="dash-hud-mark max-md:hidden" aria-hidden="true">
+            <Icon name="target" className="size-4" />
+          </span>
+        )}
         <div className="min-w-0">
           <p className="dash-overline">{tr("Dashboard")}</p>
           <h1 className="truncate text-[0.95rem] font-semibold text-[var(--color-text-primary)]" title={title}>{title}</h1>

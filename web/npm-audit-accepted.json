@@ -1,0 +1,25 @@
+{
+  "$note": [
+    "Register of npm advisories accepted by the web tier's CVE gate",
+    "(tools/npm-audit-gate.cjs, ADR-0113, docs/SCANNING.md). Every other advisory,",
+    "of any severity, fails CI.",
+    "",
+    "An entry is honoured only while: it names the GHSA id AND the package; its",
+    "reason says why the code cannot be exploited HERE; it has not expired; every",
+    "copy of the package in package-lock.json is a dev dependency (never shipped);",
+    "and the advisory is still reported. The gate checks each of these.",
+    "",
+    "Use it only for an advisory with NO patched release, on a build-time-only",
+    "package we cannot drop. Upgrading is always preferred. Widening this file is",
+    "a security decision: it belongs in the PR diff, the reviewer checks the",
+    "reason, and the expiry is short so the decision is made again."
+  ],
+  "accepted": [
+    {
+      "advisory": "GHSA-fc5q-39xc-vjpf",
+      "package": "picomatch",
+      "reason": "ReDoS when picomatch compiles an attacker-chosen glob with repeated single-branch extglobs. picomatch is reached only through vite, vitest and tinyglobby/fdir at build and test time, compiling glob patterns written in our own config (vite.config.ts, vitest include/exclude, Vite's internal file scans); no request, user input or network data ever becomes a pattern, and the package is not in the browser bundle or the Go binary (the gate checks it is dev-only). Every vite and vitest release depends on picomatch directly, the frontend standard requires Vite, and upstream has published no fix: 4.0.7, the latest release, is inside the vulnerable range. Remove this entry in the PR that bumps picomatch once a patched release exists.",
+      "expires": "2026-12-31"
+    }
+  ]
+}

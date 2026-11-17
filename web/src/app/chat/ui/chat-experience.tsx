@@ -1,4 +1,8 @@
 import { localizeConnector } from "@/app/lib/i18n/bundle";
+import { entryHomeEligible, markEntryHomeUsed, resolveEntryHome } from "@/app/shared/sidebar/home";
+import { prepareShortcut, shortcutHref } from "@/app/shared/sidebar/RailNav";
+import { writeDashboardView } from "./dashboard/prefs";
+import type { SidebarItem } from "@/app/shared/sidebar/layout";
 import { rich } from "@/app/lib/i18n/rich";
 import { t as tr } from "@/app/lib/i18n";
 // NOTE (lint hygiene): this large component used to disable three React
@@ -1377,6 +1381,9 @@ export function ChatExperience({
   // chats, sources, instructions, per-project settings. null = normal chat
   // view. settings=true opens straight into the settings dialog (the rail
   // kebab's "Project settings…").
+  // A Home (docs/SIDEBAR.md) the boot could not open in its own place,
+  // opened once the boot settles.
+  const pendingHomeRef = useRef<SidebarItem | null>(null);
   const [projectHome, setProjectHome] = useState<null | {
     id: string;
     settings?: boolean;
@@ -2044,6 +2051,15 @@ export function ChatExperience({
   // visibleOrder, because that memo needs the set of projects the viewer can
   // see to decide which chats are "unfiled".
   const [projects, setProjects] = useState<Project[]>([]);
+  // Whether the projects list has loaded once: an empty list then means "no
+  // projects", not "not read yet" (the sidebar's project shortcuts use it).
+  const [projectsLoaded, setProjectsLoaded] = useState(false);
+  // Whether the shared/multiplayer conversation list has loaded once (the
+  // sidebar tells "not available" from "not read yet" by it).
+  const [teamSharedLoaded, setTeamSharedLoaded] = useState(false);
+  // Whether the archived conversation list has loaded once (it is read after
+  // the boot, not with it).
+  const [archivedLoaded, setArchivedLoaded] = useState(false);
   // The person's own chat orders by scope — "pinned", and "project:<id>" for
   // their chats in a project (docs/CHAT-ORDER.md) — set in the rail's
   // reorder mode and saved per user on the server. Empty until read (or for a
@@ -2603,6 +2619,7 @@ export function ChatExperience({
         };
         nextArchived = reconcileAutoApprove(data.conversations ?? []);
         setArchivedConversations(nextArchived);
+        setArchivedLoaded(true);
       }
       if (activeRes.ok) {
         const data = (await activeRes.json()) as {
@@ -3700,6 +3717,7 @@ export function ChatExperience({
       if (!res.ok) return;
       const data = (await res.json()) as { projects?: Project[] };
       setProjects(data.projects ?? []);
+      setProjectsLoaded(true);
     } catch {
       // Rail projects are best-effort — a failed load keeps the previous list.
     }
@@ -3859,8 +3877,13 @@ export function ChatExperience({
   }, [teamSharedConversations, userEmail]);
   const loadTeamSharedChatCounts = useCallback(async () => {
     try {
+      // Each read settles on its own: a failed team-count read must not
+      // throw away the shared list that did arrive (the sidebar's shortcuts
+      // depend on it).
       const [teamRes, sharedRes] = await Promise.all([
-        fetch("/api/conversations?scope=team", { cache: "no-store" }),
+        fetch("/api/conversations?scope=team", { cache: "no-store" }).catch(
+          () => null,
+        ),
         fetch("/api/conversations?scope=shared", { cache: "no-store" }).catch(
           () => null,
         ),
@@ -3877,10 +3900,11 @@ export function ChatExperience({
             (c) => !mine || (c.user_email ?? "").trim().toLowerCase() !== mine,
           ),
         );
+        setTeamSharedLoaded(true);
       }
-      if (!teamRes.ok) {
+      if (!teamRes || !teamRes.ok) {
         // 400 is "you have no team": a KNOWN empty, not an unknown.
-        if (teamRes.status === 400) setTeamSharedChatCounts({});
+        if (teamRes?.status === 400) setTeamSharedChatCounts({});
         return;
       }
       const data = (await teamRes.json()) as {
@@ -3949,6 +3973,70 @@ export function ChatExperience({
     isStreaming,
     setSidebarOpen,
   });
+
+  // The sidebar slid in over a dashboard (docs/SIDEBAR.md) is a modal
+  // drawer: focus moves into it, Tab stays inside it, Escape closes it (and
+  // only it — captured before dashboard view's own Escape, which would leave
+  // the view), and closing hands focus back to what opened it.
+  const dashboardRailRef = useRef<HTMLDivElement | null>(null);
+  const dashboardRailOpen = dashboardActive && sidebarOpen;
+  useEffect(() => {
+    if (!dashboardRailOpen) return;
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const railEl = dashboardRailRef.current;
+    const focusables = () =>
+      Array.from(
+        dashboardRailRef.current?.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), input:not([disabled]), select:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])',
+        ) ?? [],
+      ).filter((el) => el.offsetParent !== null);
+    const frame = requestAnimationFrame(() => focusables()[0]?.focus());
+    const onKey = (e: KeyboardEvent) => {
+      const rail = dashboardRailRef.current;
+      if (!rail) return;
+      // A menu or dialog opened from the rail is portaled out of it and owns
+      // its own keys.
+      const active = document.activeElement;
+      if (
+        active instanceof Element &&
+        !rail.contains(active) &&
+        active.closest('[role="menu"], [role="dialog"], [role="alertdialog"], [role="listbox"]')
+      )
+        return;
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        setSidebarOpen(false);
+        return;
+      }
+      if (e.key !== "Tab") return;
+      const items = focusables();
+      if (items.length === 0) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (!(active instanceof Element) || !rail.contains(active)) {
+        e.preventDefault();
+        (e.shiftKey ? last : first).focus();
+      } else if (e.shiftKey && active === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && active === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", onKey, true);
+    return () => {
+      cancelAnimationFrame(frame);
+      document.removeEventListener("keydown", onKey, true);
+      // Hand focus back when it was in the drawer (or fell to <body> as the
+      // drawer hid); a choice that left the view took it somewhere else.
+      const now = document.activeElement;
+      if (opener?.isConnected && (now === document.body || (railEl?.contains(now) ?? false))) {
+        opener.focus();
+      }
+    };
+  }, [dashboardRailOpen, setSidebarOpen]);
 
   // A teammate's branch (B20): the banner, and the outputs its transcript
   // names that were NOT shared at branch time — those render as locked names,
@@ -6464,6 +6552,13 @@ export function ChatExperience({
     {
       const params = new URLSearchParams(window.location.search);
       const c = params.get("c");
+      // ?view=dashboard|chat (a sidebar shortcut's link): open the chat in
+      // that view. Consumed and stripped with ?c=.
+      const view = params.get("view");
+      params.delete("view");
+      if (isRealConvId(c) && (view === "dashboard" || view === "chat")) {
+        writeDashboardView(c, view === "dashboard");
+      }
       if (isRealConvId(c)) {
         deepLinkConvId = c;
         params.delete("c");
@@ -6552,6 +6647,46 @@ export function ChatExperience({
         });
       }
     }
+
+    // Project link (?project=<id>): a sidebar project shortcut followed from
+    // another page (docs/SIDEBAR.md). Consumed and stripped like ?c=; the
+    // project's home opens once the boot has settled.
+    let projectLinkId: string | null = null;
+    {
+      const params = new URLSearchParams(window.location.search);
+      const proj = params.get("project");
+      if (proj !== null) {
+        params.delete("project");
+        const qs = params.toString();
+        window.history.replaceState(
+          null,
+          "",
+          window.location.pathname + (qs ? `?${qs}` : ""),
+        );
+        if (proj.trim()) projectLinkId = proj.trim();
+      }
+    }
+
+    // Home (docs/SIDEBAR.md): when this page load opened fleet itself (no
+    // link asked for anything), the sidebar's Home item — a chat, a
+    // dashboard, a project, a page — opens instead of the most recent chat.
+    // The layout read started when the rail mounted; this waits for it only
+    // briefly.
+    const entryHome: Promise<SidebarItem | null> = entryHomeEligible()
+      ? resolveEntryHome(900)
+      : Promise.resolve(null);
+    const openHomeElsewhere = (home: SidebarItem) => {
+      if (home.kind === "chat" && home.ref) {
+        prepareShortcut(home);
+        void loadConversationRef.current(home.ref, { fallbackToTeamChatView: true });
+      } else if (home.kind === "project" && home.ref) {
+        setProjectHome({ id: home.ref });
+      } else if (home.kind === "task" || home.kind === "page" || home.id === "tasks") {
+        // Replace, not push: Back must not return to the bare /chat that
+        // would send the person to Home again.
+        window.location.replace(home.kind === "builtin" ? "/orchestrator" : shortcutHref(home));
+      }
+    };
 
     // Personas — nice-to-have; the server falls back to default. Sets the
     // roster always, and reconciles any draft or empty-chat pending persona
@@ -6689,8 +6824,21 @@ export function ChatExperience({
         const ownerLink =
           teamLink && (await teamLink)?.status === "owner" ? teamLinkId : null;
         if (cancelled) return;
+        const home = await entryHome;
+        if (cancelled) return;
+        // A Home chat of the person's own opens in the boot's place; any other
+        // Home (a teammate's chat, a project, a page) opens once it settles.
+        const homeChat =
+          home && home.kind === "chat" && convs.some((c) => c.id === home.ref)
+            ? (home.ref ?? null)
+            : null;
+        if (home && homeChat) prepareShortcut(home);
+        else if (home) pendingHomeRef.current = home;
         const target =
-          deepLinkConvId ?? ownerLink ?? (newChatLink ? null : (convs[0]?.id ?? null));
+          deepLinkConvId ??
+          ownerLink ??
+          homeChat ??
+          (newChatLink ? null : (convs[0]?.id ?? null));
         if (!target) {
           setActiveConversationId(null);
           openNewChatLink();
@@ -6715,6 +6863,14 @@ export function ChatExperience({
           // Bootstrap done — start mirroring state into the module store so a
           // later navigation to /settings leaves a warm snapshot to return to.
           setBootstrapped(true);
+          markEntryHomeUsed();
+          const pendingHome = pendingHomeRef.current;
+          pendingHomeRef.current = null;
+          if (projectLinkId) {
+            setProjectHome({ id: projectLinkId });
+          } else if (pendingHome) {
+            openHomeElsewhere(pendingHome);
+          }
         }
       }
     };
@@ -6944,7 +7100,28 @@ export function ChatExperience({
       >
         {/* Dashboard view takes the whole screen: the rail stays mounted
             (its search, scroll and drafts survive) but is not drawn. */}
-        <div data-dashboard-rail-wrapper="" className={dashboardActive ? "hidden" : "contents"}>
+        {/* …except when the dashboard header's sidebar button slides it in
+            over the board (docs/SIDEBAR.md), with a scrim to dismiss it. */}
+        {dashboardActive && sidebarOpen ? (
+          <button
+            type="button"
+            aria-label={tr("Close navigation")}
+            data-testid="dashboard-rail-scrim"
+            className="fixed inset-0 z-[440] hidden bg-[var(--color-overlay-strong)] sm:block"
+            onClick={() => setSidebarOpen(false)}
+          />
+        ) : null}
+        <div
+          ref={dashboardRailRef}
+          data-dashboard-rail-wrapper=""
+          className={
+            dashboardActive
+              ? sidebarOpen
+                ? "fixed inset-y-0 left-0 z-[450] flex"
+                : "hidden"
+              : "contents"
+          }
+        >
         <ConversationSidebar
           collapse={railCollapse}
           sidebarOpen={sidebarOpen}
@@ -7034,6 +7211,14 @@ export function ChatExperience({
           onMoveToProject={(conversationId, projectID) =>
             void moveConversationToProject(conversationId, projectID)
           }
+          activeProjectId={projectHome?.id ?? null}
+          projectsLoaded={projectsLoaded}
+          teamSharedLoaded={teamSharedLoaded}
+          archivedLoaded={archivedLoaded}
+          onSetDashboardView={(dashboard) => {
+            if (dashboard !== dashboardActive) toggleDashboardView();
+            setSidebarOpen(false);
+          }}
         />
         </div>
 
@@ -7498,6 +7683,7 @@ export function ChatExperience({
               setMobilePane={setDashboardPane}
               onExit={toggleDashboardView}
               onApprovals={showDashboardApprovals}
+              onSidebar={() => setSidebarOpen(true)}
             />
           ) : (
           <PageTopBar

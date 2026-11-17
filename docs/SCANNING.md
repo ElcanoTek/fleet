@@ -299,9 +299,10 @@ Python `#`, TypeScript `//`), including the one waiver that had to become a
 ### npm audit owns dependency CVEs for the npm tree (blocking)
 
 `govulncheck` is Go-only and `grype` scans the sandbox *image*, so the web
-tier's dependency tree had no CVE gate at all. `npm audit --audit-level=low`
-runs in the `web` job of `ci.yml`, lockfile-only (no install needed), before
-the expensive `npm ci`, and fails on **any** severity. Like govulncheck, its
+tier's dependency tree had no CVE gate at all. `npm audit` runs in the `web`
+job of `ci.yml` (through `web/tools/npm-audit-gate.cjs`), lockfile-only (no
+install needed), before the expensive `npm ci`, and fails on **any**
+severity. Like govulncheck, its
 verdict is a function of the clock as well as the commit: a new advisory can
 redden an unchanged tree, and that is the point.
 
@@ -313,10 +314,23 @@ lockfile exposed five high-severity findings (libvips CVEs in `sharp`, a
 crafted-ZIP allocation in `adm-zip`) that had to be force-patched with npm
 `overrides` plus a canary script watching for the day the overrides became
 droppable, and in the end an advisory arrived (adm-zip GHSA-vwc7-r8mq-g2x9)
-with **no patched release at all**, reddening every open PR. The gate has no
-accepted-advisory register — the feature that carried the unfixable dependency
-was removed instead. If a second npm tree ever returns, it comes with a
-lockfile, an audit step and an owner from day one.
+with **no patched release at all**, reddening every open PR. Then the feature
+that carried the unfixable dependency was removed. If a second npm tree ever
+returns, it comes with a lockfile, an audit step and an owner from day one.
+
+**The accepted-advisory register ([ADR-0113](adr/0113-npm-audit-accepted-advisories.md)).**
+The next unfixable advisory (picomatch GHSA-fc5q-39xc-vjpf, 2026-11) sat in a
+dependency that cannot be removed: every Vite and Vitest release depends on
+picomatch, and the frontend standard requires Vite. So the gate gained one
+narrow exception, `web/npm-audit-accepted.json`. An entry is honoured only
+while it names the GHSA id and the package, carries a written reason, has not
+expired, the package is a dev dependency everywhere in the lockfile (it never
+ships), and the advisory is still reported. `web/tools/npm-audit-gate.cjs`
+checks every one of those and prints each accepted advisory in the job log.
+Every other advisory fails exactly as before. Upgrading or replacing the
+dependency is always the first answer; an entry is for a build-time-only
+package with no patched release, and its expiry is short so the decision is
+made again.
 
 ## Findings are readable from the job log, on purpose
 
