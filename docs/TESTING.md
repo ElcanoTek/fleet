@@ -54,7 +54,7 @@ test has to meet to be able to fail are in
 | Grype (image) | `grype-scan` | CVEs in the sandbox container image (fail on a fixable CRITICAL or HIGH **Fedora RPM**) | see below |
 | CodeQL | `codeql` (called workflow) | `security-extended` taint analysis over go / python / javascript-typescript / actions; fails on an unwaived **High-band** finding | not wrapped (see [`CODEQL.md`](CODEQL.md)) |
 | Semgrep | `semgrep` (called workflow) | `p/github-actions` + `p/golang` + `p/javascript` + `p/python`; fails on **any** unsuppressed finding | `semgrep scan --config …` (see [`SCANNING.md`](SCANNING.md)) |
-| npm CVE audit | `web` | `npm audit --audit-level=low`, lockfile-only, over `web/` — fails on any severity | `cd web && npm audit --audit-level=low` |
+| npm CVE audit | `web` | `npm audit`, lockfile-only, over `web/` — fails on any severity except an entry in the reviewed register `web/npm-audit-accepted.json` (ADR-0113) | `cd web && node tools/npm-audit-gate.cjs` |
 | Web lint/test/build | `web` | oxlint + `tsc --noEmit` + vitest + `vite build` + a `fleet` binary that must embed that bundle | `make ci-web` |
 | HTTP contracts | `contracts` | `docs/openapi.yaml` and `web/src/api/generated/` regenerate from the router + route catalog with no diff; no route without a catalog entry or the reverse ([`HTTP-CONTRACTS.md`](HTTP-CONTRACTS.md)) | `make api-contracts && git diff --exit-code` |
 | Playwright (mocked) | `playwright` | Deterministic browser e2e, no backend | `make ci-e2e-mocked` |
@@ -524,7 +524,7 @@ make ci-go
 
 ## Web lint / test / build — CI job `web`
 
-Runs from `web/`. The job is: `npm audit --audit-level=low` → `npm ci` →
+Runs from `web/`. The job is: `node tools/npm-audit-gate.cjs` (npm audit) → `npm ci` →
 `npm run lint` (**oxlint**, not ESLint — see the TypeScript 7 section above,
 which explains why ESLint was replaced) → `npm run typecheck` (`tsc --noEmit`)
 → `npx vitest run` (unit tests) → `npm run build` (`vite build`, into

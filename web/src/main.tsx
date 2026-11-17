@@ -8,7 +8,11 @@ import "./app/globals.css";
 import { App } from "./App";
 import { getLanguage, rememberLanguage } from "./app/lib/i18n";
 import { updateNotificationLanguage } from "./app/lib/i18n/notifications";
+import { captureEntryAddress } from "./app/shared/sidebar/home";
 
+// The address fleet was opened at, for the sidebar's Home (docs/SIDEBAR.md),
+// read before any page strips its link parameters.
+captureEntryAddress();
 document.documentElement.lang = getLanguage();
 rememberLanguage(getLanguage());
 void updateNotificationLanguage();
