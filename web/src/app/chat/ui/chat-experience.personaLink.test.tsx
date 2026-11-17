@@ -136,6 +136,23 @@ describe("persona new-chat link", () => {
     ]);
   });
 
+  it("keeps any link parameter through sign-in, not only the persona link's", async () => {
+    const link = "/chat?project=proj-1&view=dashboard";
+    window.history.replaceState(null, "", link);
+    const fetchMock = mockBackend();
+    const base = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) =>
+      String(input) === "/api/conversations"
+        ? new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401 })
+        : base(input, init),
+    );
+    const destination = vi.mocked(bootstrapFailureDestination);
+    destination.mockClear();
+    render(<ChatExperience initialUserEmail="user@example.com" />);
+
+    await waitFor(() => expect(destination).toHaveBeenCalledWith(401, link));
+  });
+
   it("sends a plain /chat with a revoked session to plain sign-in", async () => {
     window.history.replaceState(null, "", "/chat");
     const fetchMock = mockBackend();

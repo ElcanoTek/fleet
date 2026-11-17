@@ -6551,14 +6551,12 @@ export function ChatExperience({
     // The link this page was opened with, kept before the blocks below
     // consume and strip its parameters: if the boot fetches then find the
     // session gone (revoked after the gateway let the page load), sign-in is
-    // sent on to it, so the link survives (bootstrapFailure.ts). null for a
-    // plain /chat. Read once per mount (bootLinkRef).
+    // sent on to it, so the link survives (bootstrapFailure.ts). The whole
+    // query is kept, not a list of known parameters, so a parameter added
+    // later (?project=, ?view=, …) survives too; null for a plain /chat.
+    // Read once per mount (bootLinkRef).
     bootLinkRef.current ??= {
-      link: ["c", "persona", "draft", "team"].some((k) =>
-        new URLSearchParams(window.location.search).has(k),
-      )
-        ? window.location.pathname + window.location.search
-        : null,
+      link: window.location.search ? window.location.pathname + window.location.search : null,
     };
     const bootLink = bootLinkRef.current.link;
 
