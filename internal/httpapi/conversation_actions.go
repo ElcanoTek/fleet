@@ -30,9 +30,65 @@ import (
 // memory proposals — everything a reload needs to re-hydrate the transcript.
 // ?omit_history=1 skips LoadHistory so a terminal approval review does not
 // have to download an unbounded transcript before POSTing a decision.
+func (s *Server) isAcceptedAutonomousConversation(ctx context.Context, conv *store.Conversation) bool {
+	if conv == nil || conv.EffectiveApprovalMode() != store.ConversationApprovalAutonomous {
+		return false
+	}
+	return s.hasAcceptedAutonomous(ctx, conv.UserEmail)
+}
+
+func (s *Server) sanitizeConversationForViewer(
+	ctx context.Context,
+	user string,
+	isOwner, autonomousAccepted bool,
+	conv *store.Conversation,
+) *store.Conversation {
+	if conv == nil {
+		return nil
+	}
+	if !isOwner {
+		sanitized := *conv
+		sanitized.OptionalMCPServersEnabled = nil
+		sanitized.Labels = nil
+		sanitized.ShareToken = ""
+		sanitized.ParentConversationID = ""
+		sanitized.AutoApprove = false
+		sanitized.ApprovalMode = ""
+		return &sanitized
+	}
+	clampMode := !autonomousAccepted && conv.EffectiveApprovalMode() == store.ConversationApprovalAutonomous
+	if len(conv.OptionalMCPServersEnabled) == 0 && !clampMode {
+		return conv
+	}
+	sanitized := *conv
+	if len(sanitized.OptionalMCPServersEnabled) > 0 {
+		sanitized.OptionalMCPServersEnabled = s.effectiveOptionalMCPServersForCaller(ctx, user, conv)
+	}
+	if clampMode {
+		sanitized.ApprovalMode = store.ConversationApprovalAuto
+		sanitized.AutoApprove = true
+	}
+	return &sanitized
+}
+
+func (s *Server) cancelAutoSubmitsOrFail(ctx context.Context, w http.ResponseWriter, convID string) bool {
+	if err := s.cancelConversationAutoSubmitsErr(ctx, convID); err != nil {
+		http.Error(w, "failed to cancel pending auto-submit", http.StatusInternalServerError)
+		return false
+	}
+	return true
+}
+
+func applyCallNoSessionFlag(card map[string]any, toolName, rawInput string, isAutonomousConv bool) {
+	if !sessionApprovalAllowedForCall(toolName, rawInput, isAutonomousConv) {
+		card["no_session_approval"] = true
+	}
+}
+
 func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, user, id string, conv *store.Conversation) {
+	isAutonomousConv := s.isAcceptedAutonomousConversation(r.Context(), conv)
 	if approvalID := r.URL.Query().Get("approval_id"); approvalID != "" {
-		s.handleConversationApprovalGet(w, r, user, id, approvalID)
+		s.handleConversationApprovalGetWithMode(w, r, user, id, approvalID, isAutonomousConv)
 		return
 	}
 	omitHistory := r.URL.Query().Get("omit_history") == "1"
@@ -59,6 +115,7 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, u
 			continue
 		}
 		card := approvalClientFields(a.ToolName, a.ArgsJSON, id)
+		applyCallNoSessionFlag(card, a.ToolName, a.ArgsJSON, isAutonomousConv)
 		if summary, ok := card["summary"].(map[string]any); ok {
 			card["summary"] = withBrowserSessionSite(summary, a.ToolName, a.ArgsJSON, a.UserEmail)
 		}
@@ -207,19 +264,19 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, u
 		schedules = []store.ChatSchedule{}
 	}
 	historyPayload := historyForParticipant(history, user, conv.UserEmail)
-	if !isOwner {
-		sanitized := *conv
-		sanitized.OptionalMCPServersEnabled = nil
-		sanitized.Labels = nil
-		sanitized.ShareToken = ""
-		sanitized.ParentConversationID = ""
-		sanitized.AutoApprove = false
-		sanitized.ApprovalMode = ""
-		conv = &sanitized
-	} else if len(conv.OptionalMCPServersEnabled) > 0 {
-		sanitized := *conv
-		sanitized.OptionalMCPServersEnabled = s.effectiveOptionalMCPServersForCaller(r.Context(), user, conv)
-		conv = &sanitized
+	autonomousAccepted := s.hasAcceptedAutonomous(r.Context(), user)
+	conv = s.sanitizeConversationForViewer(r.Context(), user, isOwner, autonomousAccepted, conv)
+	var uiAutoSubmits []store.UIAutoSubmit
+	if isAutonomousConv {
+		var err error
+		uiAutoSubmits, err = s.store.ListActiveUIAutoSubmits(r.Context(), id)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+	if uiAutoSubmits == nil {
+		uiAutoSubmits = []store.UIAutoSubmit{}
 	}
 	writeJSON(w, r, map[string]any{
 		"conversation":  conv,
@@ -227,17 +284,24 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, u
 		// historyForParticipant: the owner's own entries carry
 		// `injected_context`; another multiplayer participant's are omitted
 		// so their attachment paths are not exposed.
-		"history":                  historyPayload,
-		"pending_approvals":        approvals,
-		"resolved_approvals":       resolvedCards,
-		"pending_memory_proposals": memProposals,
-		"schedules":                schedules,
+		"history":                   historyPayload,
+		"pending_approvals":         approvals,
+		"resolved_approvals":        resolvedCards,
+		"pending_memory_proposals":  memProposals,
+		"schedules":                 schedules,
+		"ui_autosubmits":            uiAutoSubmits,
+		"autonomous_accepted":       autonomousAccepted,
+		"autonomous_policy_version": store.CurrentAutonomousPolicyVersion,
 	})
 }
 
 // handleConversationApprovalGet bounds one-shot review to the requested card;
 // unrelated pending email bodies must not block a small action's settlement.
 func (s *Server) handleConversationApprovalGet(w http.ResponseWriter, r *http.Request, user, convID, approvalID string) {
+	s.handleConversationApprovalGetWithMode(w, r, user, convID, approvalID, false)
+}
+
+func (s *Server) handleConversationApprovalGetWithMode(w http.ResponseWriter, r *http.Request, user, convID, approvalID string, isAutonomousConv bool) {
 	a, err := s.store.GetApproval(r.Context(), user, approvalID)
 	if err != nil {
 		http.Error(w, "could not load approval", http.StatusInternalServerError)
@@ -250,6 +314,7 @@ func (s *Server) handleConversationApprovalGet(w http.ResponseWriter, r *http.Re
 	pending, resolved := []map[string]any{}, []map[string]any{}
 	if a.Status == "pending" {
 		card := approvalRequiredEvent(a, a.ArgsJSON, convID)
+		applyCallNoSessionFlag(card, a.ToolName, a.ArgsJSON, isAutonomousConv)
 		pending = append(pending, card)
 	} else {
 		card := s.approvalClientState(a)
@@ -314,6 +379,9 @@ func (s *Server) handleConversationTruncate(w http.ResponseWriter, r *http.Reque
 	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if !s.cancelAutoSubmitsOrFail(r.Context(), w, id) {
 		return
 	}
 	if err := s.store.TruncateAfter(r.Context(), user, id, pivot); err != nil {
@@ -550,9 +618,20 @@ func (s *Server) handleAutoApproveSet(w http.ResponseWriter, r *http.Request, us
 			http.Error(w, "invalid approval_mode: must be manual, auto, or autonomous", http.StatusBadRequest)
 			return
 		}
+		if mode == store.ConversationApprovalAutonomous && !s.requireAutonomousAcceptance(w, r, user) {
+			return
+		}
 		if err := s.store.SetApprovalMode(r.Context(), user, id, mode); err != nil {
 			writeConversationMutationError(w, err)
 			return
+		}
+		if mode != store.ConversationApprovalAutonomous {
+			// SetApprovalMode already cancelled active ui_autosubmits and queued
+			// autosubmit:* rows atomically inside its database transaction; notify
+			// live SSE/queue listeners best-effort without turning a committed
+			// mode update into a false 500.
+			s.cancelConversationAutoSubmits(r.Context(), id)
+			s.emitQueueUpdate(r.Context(), user, id)
 		}
 		w.WriteHeader(http.StatusNoContent)
 		return
@@ -564,6 +643,10 @@ func (s *Server) handleAutoApproveSet(w http.ResponseWriter, r *http.Request, us
 	if err := s.store.SetAutoApprove(r.Context(), user, id, enabled); err != nil {
 		writeConversationMutationError(w, err)
 		return
+	}
+	if !enabled {
+		s.cancelConversationAutoSubmits(r.Context(), id)
+		s.emitQueueUpdate(r.Context(), user, id)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -730,84 +813,38 @@ func writeStopResult(w http.ResponseWriter, res inputStop, finishedMsg string) {
 // handleConversationCancel serves POST /conversations/{id}/cancel.
 //
 // Explicit Stop button. Owner-scoped by default (scope=all / scope=turn), while
+func decodeConversationCancelBody(r *http.Request) (scope, turnID, inputID string) {
+	scope = "all"
+	if r.Body == nil {
+		return scope, "", ""
+	}
+	var body struct {
+		Scope   string `json:"scope"`
+		TurnID  string `json:"turn_id"`
+		InputID string `json:"input_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err == nil {
+		if strings.EqualFold(body.Scope, "turn") {
+			scope = "turn"
+		}
+		turnID = strings.TrimSpace(body.TurnID)
+		inputID = strings.TrimSpace(body.InputID)
+	}
+	return scope, turnID, inputID
+}
+
 // a non-owner multiplayer participant may stop their own input by `input_id`
 // (or cancel the active turn via `turn_id` / `scope=turn` without sweeping
 // other participants' queued inputs).
 func (s *Server) handleConversationCancel(w http.ResponseWriter, r *http.Request, user, id string, conv *store.Conversation) {
 	isOwner := conv == nil || conv.UserEmail == "" || strings.EqualFold(conv.UserEmail, user)
-	// Stop semantics (#785): default scope "all" covers the active turn
-	// AND every still-queued follow-up — Stop means "stop working", not
-	// "stop this one and surprise me with the next". scope=turn cancels
-	// only the active turn and lets the queue drain.
-	//
-	// turn_id targets ONE turn: it is cancelled only while it is the running
-	// turn (204); once it has ended the request stops nothing and answers
-	// 409, so the caller reads the turn's own outcome rather than taking the
-	// Stop for a cancellation. A client that watched a specific turn
-	// (`fleet acp`) therefore cannot cancel a successor that started between
-	// its decision to stop and this request landing. A targeted Stop is turn-scoped: it never sweeps the
-	// queue.
-	//
-	// input_id targets ONE input by its idempotency key, wherever it is: a
-	// still-queued row is withdrawn, a running turn for it is cancelled, and
-	// a turn not registered yet (a direct claim still being prepared, a row
-	// the drain just claimed, or a submission still in transit) is refused
-	// when it tries to register. A key no row holds yet is taken with a
-	// cancelled row, so a submission still in transit is answered
-	// "cancelled" even after the in-memory mark is gone. A client whose answer was lost (`fleet acp`)
-	// can stop its own input without knowing which of those states it is in.
-	scope := "all"
-	turnID, inputID := "", ""
-	if r.Body != nil {
-		var body struct {
-			Scope   string `json:"scope"`
-			TurnID  string `json:"turn_id"`
-			InputID string `json:"input_id"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err == nil {
-			if strings.EqualFold(body.Scope, "turn") {
-				scope = "turn"
-			}
-			turnID = strings.TrimSpace(body.TurnID)
-			inputID = strings.TrimSpace(body.InputID)
-		}
-	}
+	scope, turnID, inputID := decodeConversationCancelBody(r)
 	if len(inputID) > maxInputIDLen {
 		http.Error(w, fmt.Sprintf("input_id is limited to %d bytes", maxInputIDLen), http.StatusBadRequest)
 		return
 	}
 	if inputID != "" {
-		if !isOwner {
-			mpInputID := effectiveMultiplayerInputID(user, inputID)
-			existing, err := s.store.LookupInput(r.Context(), id, mpInputID)
-			if err != nil {
-				http.Error(w, "the input could not be withdrawn from the queue", http.StatusInternalServerError)
-				return
-			}
-			if existing != nil {
-				inputID = mpInputID
-			} else {
-				rawExisting, err := s.store.LookupInput(r.Context(), id, inputID)
-				if err != nil {
-					http.Error(w, "the input could not be withdrawn from the queue", http.StatusInternalServerError)
-					return
-				}
-				if rawExisting != nil {
-					if !strings.EqualFold(rawExisting.UserEmail, user) {
-						http.Error(w, "only the conversation owner or the message sender can cancel this input", http.StatusForbidden)
-						return
-					}
-				} else {
-					inputID = mpInputID
-				}
-			}
-		}
-		res, ok := s.stopInput(r.Context(), user, id, inputID)
-		if !ok {
-			http.Error(w, "the input could not be withdrawn from the queue", http.StatusInternalServerError)
-			return
-		}
-		writeStopResult(w, res, "the input had already finished")
+		s.handleConversationCancelByInputID(w, r, user, id, inputID, isOwner)
 		return
 	}
 	if turnID != "" {
@@ -818,75 +855,100 @@ func (s *Server) handleConversationCancel(w http.ResponseWriter, r *http.Request
 				return
 			}
 		}
-		// Nothing stopped (the named turn had ended, or completed as the
-		// cancel landed) is said so, not a bare 204, so a caller that
-		// watched the turn reads its real outcome instead of reporting it
-		// cancelled.
-		writeStopResult(w, stopFromTurn(s.cancelInflightTurn(id, turnID)), "the named turn is not running")
+		stopped := s.cancelInflightTurn(id, turnID)
+		if !s.cancelAutoSubmitsOrFail(r.Context(), w, id) {
+			return
+		}
+		writeStopResult(w, stopFromTurn(stopped), "the named turn is not running")
 		return
 	}
 	if !isOwner {
-		// Allow a non-owner multiplayer participant to stop their own active
-		// turn and/or their own queued inputs via bodyless POST /cancel, while
-		// refusing attempts to cancel another user's turn.
-		stoppedOwnTurn := false
-		if entry, ok := s.getInflight(id); ok && entry.IsRunning() && entry.steer != nil && strings.EqualFold(entry.steer.user, user) {
-			_ = s.cancelInflightTurn(id, entry.turnID)
-			stoppedOwnTurn = true
-		}
-		cancelledQueued := 0
-		if scope == "all" {
-			epoch := s.store.AcceptedInputSeq()
-			qctx, qcancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
-			if n, err := s.store.CancelQueuedInputs(qctx, user, id, epoch); err != nil {
-				logging.From(r.Context()).Error("cancel queued inputs failed", "conv_id", id, "err", err)
-			} else if n > 0 {
-				cancelledQueued = n
-				s.emitQueueUpdate(qctx, user, id)
-			}
-			qcancel()
-		}
-		if !stoppedOwnTurn && cancelledQueued == 0 {
-			http.Error(w, "only the conversation owner can stop another user's turns in this conversation", http.StatusForbidden)
-			return
-		}
-		w.WriteHeader(http.StatusNoContent)
+		s.handleNonOwnerConversationCancel(w, r, user, id, scope)
 		return
 	}
 	if scope == "all" {
-		// One lock section records the Stop boundary, arms the drain
-		// interlock and captures the running turn (beginStopSweep). The
-		// cancelled turn's completion tail-calls maybeDrainQueue, which
-		// must not claim the FIFO head while this sweep is still on its way
-		// to cancelling it; a drain that claimed just before is refused by
-		// the boundary (stopGateForRow) or the generation (registerTurnGated).
-		// endStopSweep lifts the interlock and re-kicks the drain for
-		// anything accepted after the Stop.
-		//
-		// The captured turn is cancelled FIRST, before any database work:
-		// the model must stop the instant the button is pressed, even if the
-		// sweep below stalls on a slow or unreachable store — and it is
-		// exactly the turn present when the Stop began, not one a direct
-		// submission registered a moment later.
 		epoch, entry, running := s.beginStopSweep(id)
 		defer s.endStopSweep(id)
 		if running {
 			entry.cancel()
 		}
-		// Fresh context: Stop must sweep the queue even when the client
-		// aborts the request the moment the button is pressed. The sweep is
-		// bounded to rows accepted before the Stop began (#1477): a
-		// follow-up submitted after Stop, while the cancelled turn was still
-		// finishing, keeps its 202 and runs on the re-kick.
 		qctx, qcancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
+		defer qcancel()
 		if n, err := s.store.CancelQueuedInputs(qctx, "", id, epoch); err != nil {
 			logging.From(r.Context()).Error("cancel queued inputs failed", "conv_id", id, "err", err)
 		} else if n > 0 {
 			s.emitQueueUpdate(qctx, "", id)
 		}
-		qcancel()
+		if !s.cancelAutoSubmitsOrFail(qctx, w, id) {
+			return
+		}
 	} else {
 		s.cancelInflight(id)
+		if !s.cancelAutoSubmitsOrFail(r.Context(), w, id) {
+			return
+		}
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleConversationCancelByInputID(w http.ResponseWriter, r *http.Request, user, id, inputID string, isOwner bool) {
+	if !isOwner {
+		mpInputID := effectiveMultiplayerInputID(user, inputID)
+		existing, err := s.store.LookupInput(r.Context(), id, mpInputID)
+		if err != nil {
+			http.Error(w, "the input could not be withdrawn from the queue", http.StatusInternalServerError)
+			return
+		}
+		if existing != nil {
+			inputID = mpInputID
+		} else {
+			rawExisting, err := s.store.LookupInput(r.Context(), id, inputID)
+			if err != nil {
+				http.Error(w, "the input could not be withdrawn from the queue", http.StatusInternalServerError)
+				return
+			}
+			if rawExisting != nil {
+				if !strings.EqualFold(rawExisting.UserEmail, user) {
+					http.Error(w, "only the conversation owner or the message sender can cancel this input", http.StatusForbidden)
+					return
+				}
+			} else {
+				inputID = mpInputID
+			}
+		}
+	}
+	res, ok := s.stopInput(r.Context(), user, id, inputID)
+	if !ok {
+		http.Error(w, "the input could not be withdrawn from the queue", http.StatusInternalServerError)
+		return
+	}
+	if isOwner && !s.cancelAutoSubmitsOrFail(r.Context(), w, id) {
+		return
+	}
+	writeStopResult(w, res, "the input had already finished")
+}
+
+func (s *Server) handleNonOwnerConversationCancel(w http.ResponseWriter, r *http.Request, user, id, scope string) {
+	stoppedOwnTurn := false
+	if entry, ok := s.getInflight(id); ok && entry.IsRunning() && entry.steer != nil && strings.EqualFold(entry.steer.user, user) {
+		_ = s.cancelInflightTurn(id, entry.turnID)
+		stoppedOwnTurn = true
+	}
+	cancelledQueued := 0
+	if scope == "all" {
+		epoch := s.store.AcceptedInputSeq()
+		qctx, qcancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
+		if n, err := s.store.CancelQueuedInputs(qctx, user, id, epoch); err != nil {
+			logging.From(r.Context()).Error("cancel queued inputs failed", "conv_id", id, "err", err)
+		} else if n > 0 {
+			cancelledQueued = n
+			s.emitQueueUpdate(qctx, user, id)
+		}
+		qcancel()
+	}
+	if !stoppedOwnTurn && cancelledQueued == 0 {
+		http.Error(w, "only the conversation owner can stop another user's turns in this conversation", http.StatusForbidden)
+		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

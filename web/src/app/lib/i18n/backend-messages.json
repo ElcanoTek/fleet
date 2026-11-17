@@ -185,6 +185,7 @@
     "external session lookup failed",
     "external session revocation failed",
     "external sessions unavailable",
+    "failed to cancel pending auto-submit",
     "failed to create prompt",
     "failed to delete prompt",
     "failed to export prompts",
@@ -219,11 +220,13 @@
     "invalid JSON payload",
     "invalid access action",
     "invalid approval_mode: must be manual, auto, or autonomous",
+    "invalid chat_patrol action",
     "invalid conversation id",
     "invalid email payload",
     "invalid file name",
     "invalid filename: path traversal not allowed",
     "invalid focus",
+    "invalid json body",
     "invalid logical file name",
     "invalid ops_role (want none|readonly|client|admin, or none|view|run)",
     "invalid ops_scope (want none|view|run)",
@@ -347,6 +350,7 @@
     "staged path is occupied by a non-regular file",
     "stat failed",
     "store returned nil approval",
+    "store unavailable",
     "streaming unsupported",
     "suggestion has no frozen model target; dismiss it and request a new suggestion",
     "task is not awaiting a wake",
@@ -674,6 +678,12 @@
       "message": "{0}: url must be an absolute http(s) URL with a host",
       "fields": [
         "%w"
+      ]
+    },
+    {
+      "message": "APPROVAL_DENIED: the user pre-denied {0} for this conversation (session policy). Do NOT retry",
+      "fields": [
+        "%s"
       ]
     },
     {
@@ -1016,6 +1026,12 @@
       ]
     },
     {
+      "message": "encode chat_patrol result: {0}",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
       "message": "encode connector_studio result: {0}",
       "fields": [
         "%w"
@@ -1295,6 +1311,12 @@
     },
     {
       "message": "parse bash args: {0}",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "parse chat_patrol args: {0}",
       "fields": [
         "%w"
       ]

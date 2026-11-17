@@ -388,6 +388,12 @@ func (s *cardGetStore) GetBranchOrigin(context.Context, string, string) (*store.
 func (s *cardGetStore) ListChatSchedules(context.Context, string, string, bool) ([]store.ChatSchedule, error) {
 	return nil, nil
 }
+func (s *cardGetStore) ListActiveUIAutoSubmits(context.Context, string) ([]store.UIAutoSubmit, error) {
+	return nil, nil
+}
+func (s *cardGetStore) GetAutonomousAcceptance(context.Context, string) (int, bool, error) {
+	return 0, false, nil
+}
 
 // pending_approvals and resolved_approvals carry the stored card; a row with
 // none, or with one that no longer validates, carries no card field.

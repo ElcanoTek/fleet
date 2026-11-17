@@ -120,6 +120,10 @@ type Card struct {
 	// than a new message each time. Display metadata only: it never changes
 	// what the card can do or send.
 	Panel string `json:"panel,omitempty"`
+	// AutoSubmit optionally opts a card in or out of server-side 10-second
+	// auto-submission in Autonomous mode. Nil defaults to eligible when all
+	// safety and completeness checks pass; explicit false disables auto-submit.
+	AutoSubmit *bool `json:"auto_submit,omitempty"`
 	// HasInputs reports whether the validated card declares any input
 	// components (or selectable tables), including inside repeaters.
 	HasInputs bool `json:"-"`
@@ -436,10 +440,10 @@ func Validate(raw []byte) (Card, []Issue) {
 		return c, []Issue{{Message: "arguments are not a JSON object: " + err.Error()}}
 	}
 	v := &validator{fields: map[string]*field{}}
-	allowedTop := map[string]bool{"title": true, "description": true, "components": true, "actions": true, "replaces": true, "field_errors": true, "panel": true}
+	allowedTop := map[string]bool{"title": true, "description": true, "components": true, "actions": true, "replaces": true, "field_errors": true, "panel": true, "auto_submit": true}
 	for k := range top {
 		if !allowedTop[k] {
-			v.addf(k, "unknown top-level key (allowed: title, description, components, actions, replaces, field_errors, panel)")
+			v.addf(k, "unknown top-level key (allowed: title, description, components, actions, replaces, field_errors, panel, auto_submit)")
 		}
 	}
 	title, _ := top["title"].(string)
@@ -492,6 +496,11 @@ func Validate(raw []byte) (Card, []Issue) {
 	if pk, ok := top["panel"]; ok {
 		if s, isStr := pk.(string); !isStr || !ValidPanelKey(s) {
 			v.addf("panel", "must be a short panel key: 1-%d characters of a-z, 0-9, '-' or '_' (e.g. \"revenue\" or \"open-deals\"); reuse the same key to update that panel", MaxPanelKeyLen)
+		}
+	}
+	if as, ok := top["auto_submit"]; ok && as != nil {
+		if _, isBool := as.(bool); !isBool {
+			v.addf("auto_submit", "must be a boolean")
 		}
 	}
 	v.fieldErrors(top["field_errors"])

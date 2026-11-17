@@ -11,9 +11,11 @@ import (
 )
 
 type exprCase struct {
-	Expr  string   `json:"expr"`
-	Valid bool     `json:"valid"`
-	Refs  []string `json:"refs"`
+	Expr  string          `json:"expr"`
+	Valid bool            `json:"valid"`
+	Refs  []string        `json:"refs"`
+	Scope map[string]any  `json:"scope"`
+	Want  json.RawMessage `json:"want"`
 }
 
 func TestExpressionsFixture(t *testing.T) {
@@ -27,13 +29,20 @@ func TestExpressionsFixture(t *testing.T) {
 	if err := json.Unmarshal(raw, &fx); err != nil {
 		t.Fatal(err)
 	}
+	evaluated := 0
 	for _, c := range fx.Cases {
 		refs, err := ParseExpr(c.Expr)
 		if c.Valid != (err == nil) {
 			t.Errorf("%q: valid=%v, got err=%v", c.Expr, c.Valid, err)
 			continue
 		}
-		if c.Valid && c.Refs != nil {
+		if !c.Valid {
+			if _, evalErr := Evaluate(c.Expr, c.Scope); evalErr == nil {
+				t.Errorf("%q: invalid expression succeeded in Evaluate", c.Expr)
+			}
+			continue
+		}
+		if c.Refs != nil {
 			if refs == nil {
 				refs = []string{}
 			}
@@ -41,6 +50,24 @@ func TestExpressionsFixture(t *testing.T) {
 				t.Errorf("%q: refs %v, want %v", c.Expr, refs, c.Refs)
 			}
 		}
+		if len(c.Want) > 0 {
+			evaluated++
+			got, evalErr := Evaluate(c.Expr, c.Scope)
+			if evalErr != nil {
+				t.Errorf("%q: Evaluate error: %v", c.Expr, evalErr)
+				continue
+			}
+			gotBytes, _ := json.Marshal(got)
+			var gotNorm, wantNorm any
+			_ = json.Unmarshal(gotBytes, &gotNorm)
+			_ = json.Unmarshal(c.Want, &wantNorm)
+			if !reflect.DeepEqual(gotNorm, wantNorm) {
+				t.Errorf("%q: Evaluate(%v) = %s, want %s", c.Expr, c.Scope, gotBytes, c.Want)
+			}
+		}
+	}
+	if evaluated == 0 {
+		t.Fatal("expected expression evaluation cases in testdata/expressions.json")
 	}
 }
 

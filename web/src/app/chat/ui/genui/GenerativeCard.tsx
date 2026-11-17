@@ -50,14 +50,17 @@ import {
   tabsOf,
   walkInputs,
   type Action,
+  type AutoSubmitPauseResult,
   type CardSpec,
   type Component,
   type IncludeExclude,
   type Reply,
   type Submission,
   type Tone,
+  type UIAutoSubmitState,
   type Values,
 } from "./model";
+import { GenUiContext } from "./transcript";
 import { copyText } from "@/app/shared/lib/clipboard";
 
 // ───────────────────────── context ─────────────────────────
@@ -202,6 +205,12 @@ export type GenerativeCardProps = {
     onUnsent: () => void,
     stillHeld?: () => boolean,
   ) => void;
+  /** Server-owned Autonomous 10s auto-submit state for this card, if any. */
+  autoSubmit?: UIAutoSubmitState | null;
+  /** Pauses a pending server auto-submit countdown for this card. */
+  onPauseAutoSubmit?: (cardId: string) => void | Promise<void | AutoSubmitPauseResult>;
+  /** Notifies the host when a pending countdown reaches its server deadline. */
+  onAutoSubmitDue?: (cardId: string) => void;
 };
 
 const DRAFT_PREFIX = "fleet.genui.draft.";
@@ -650,7 +659,11 @@ function CardBody({
   occurrence,
   onSubmit,
   onResumeHeld,
+  autoSubmit,
+  onPauseAutoSubmit,
+  onAutoSubmitDue,
 }: GenerativeCardProps) {
+  const genUiCtx = useContext(GenUiContext);
   // The key this card's draft and pending hold are stored under.
   const occId = occurrence ? `${cardId}#${occurrence}` : cardId;
   const storeId = storageScope ? `${storageScope}:${occId}` : occId;
@@ -769,7 +782,132 @@ function CardBody({
     }
   }
   const locked = !!readOnly || !!retired || !!superseded || (submittedAction !== null && !editing);
-  const fieldsLocked = locked || awaiting !== null || sending !== null;
+  const baseFieldsLocked = locked || awaiting !== null || sending !== null;
+
+  const effectiveAutoSubmit =
+    autoSubmit !== undefined ? autoSubmit : (genUiCtx.autoSubmits?.get(cardId) ?? null);
+  const effectivePauseHandler = onPauseAutoSubmit ?? genUiCtx.onPauseAutoSubmit;
+  const effectiveDueHandler = onAutoSubmitDue ?? genUiCtx.onAutoSubmitDue;
+  const [localPausedKey, setLocalPausedKey] = useState<string | null>(null);
+  const [localFiredKey, setLocalFiredKey] = useState<string | null>(null);
+  const pauseSentRef = useRef<string | null>(null);
+  const autoSubmitKey = effectiveAutoSubmit
+    ? `${cardId}:${effectiveAutoSubmit.id ?? effectiveAutoSubmit.deadline_ms}`
+    : "";
+  const [autoSubmitNowMs, setAutoSubmitNowMs] = useState<number>(() => Date.now());
+  const [anchoredDeadline, setAnchoredDeadline] = useState<{ key: string; ms: number } | null>(null);
+  if (autoSubmitKey !== "" && effectiveAutoSubmit && anchoredDeadline?.key !== autoSubmitKey) {
+    const anchoredMs =
+      typeof effectiveAutoSubmit.client_deadline_ms === "number"
+        ? effectiveAutoSubmit.client_deadline_ms
+        : typeof effectiveAutoSubmit.remaining_ms === "number"
+          ? autoSubmitNowMs + Math.max(0, effectiveAutoSubmit.remaining_ms)
+          : effectiveAutoSubmit.deadline_ms;
+    setAnchoredDeadline({ key: autoSubmitKey, ms: anchoredMs });
+  }
+  const effectiveDeadlineMs = !effectiveAutoSubmit
+    ? 0
+    : typeof effectiveAutoSubmit.client_deadline_ms === "number"
+      ? effectiveAutoSubmit.client_deadline_ms
+      : anchoredDeadline?.key === autoSubmitKey
+        ? anchoredDeadline.ms
+        : typeof effectiveAutoSubmit.remaining_ms === "number"
+          ? autoSubmitNowMs + Math.max(0, effectiveAutoSubmit.remaining_ms)
+          : effectiveAutoSubmit.deadline_ms;
+
+  const autoSubmitStatus =
+    !effectiveAutoSubmit || readOnly || baseFieldsLocked || submittedAction !== null
+      ? null
+      : localFiredKey === autoSubmitKey || effectiveAutoSubmit.status === "fired"
+        ? "fired"
+        : effectiveAutoSubmit.status === "pending" && localPausedKey === autoSubmitKey
+          ? "paused"
+          : effectiveAutoSubmit.status;
+
+  const remainingAutoSubmitMs = effectiveAutoSubmit ? effectiveDeadlineMs - autoSubmitNowMs : 0;
+  const remainingAutoSubmitSec = Math.max(0, Math.ceil(remainingAutoSubmitMs / 1000));
+  const autoSubmitSubmitting =
+    !baseFieldsLocked &&
+    submittedAction === null &&
+    (autoSubmitStatus === "fired" || (autoSubmitStatus === "pending" && remainingAutoSubmitMs <= 0));
+  const fieldsLocked = baseFieldsLocked || autoSubmitSubmitting;
+
+  const pauseAutoSubmit = useCallback(() => {
+    if (!effectiveAutoSubmit || effectiveAutoSubmit.status !== "pending" || autoSubmitSubmitting) return;
+    const key = `${cardId}:${effectiveAutoSubmit.id ?? effectiveAutoSubmit.deadline_ms}`;
+    setLocalPausedKey(key);
+    if (pauseSentRef.current === key) return;
+    pauseSentRef.current = key;
+    if (effectivePauseHandler) {
+      void Promise.resolve(effectivePauseHandler(cardId)).then((resStatus) => {
+        if (resStatus === "fired") {
+          setLocalPausedKey((cur) => (cur === key ? null : cur));
+          setLocalFiredKey(key);
+          effectiveDueHandler?.(cardId);
+        } else if (resStatus === "cancelled" || resStatus === "error") {
+          setLocalPausedKey((cur) => (cur === key ? null : cur));
+          if (resStatus === "error") pauseSentRef.current = null;
+        }
+      });
+    } else if (storageScope && !readOnly) {
+      void fetch(
+        `/api/chat/conversations/${encodeURIComponent(storageScope)}/autosubmit/pause`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ call_id: cardId }),
+        },
+      )
+        .then(async (res) => {
+          if (!res.ok) {
+            setLocalPausedKey((cur) => (cur === key ? null : cur));
+            pauseSentRef.current = null;
+            return;
+          }
+          const body = (await res.json().catch(() => null)) as {
+            ui_autosubmits?: UIAutoSubmitState[];
+          } | null;
+          const rows = Array.isArray(body?.ui_autosubmits) ? body.ui_autosubmits : [];
+          const matched = rows.find((r) => r?.call_id === cardId) ?? rows[0];
+          if (matched?.status === "fired") {
+            setLocalPausedKey((cur) => (cur === key ? null : cur));
+            setLocalFiredKey(key);
+            effectiveDueHandler?.(cardId);
+          } else if (!matched || matched.status !== "paused") {
+            setLocalPausedKey((cur) => (cur === key ? null : cur));
+            pauseSentRef.current = null;
+          }
+        })
+        .catch(() => {
+          setLocalPausedKey((cur) => (cur === key ? null : cur));
+          pauseSentRef.current = null;
+        });
+    }
+  }, [
+    autoSubmitSubmitting,
+    cardId,
+    effectiveAutoSubmit,
+    effectiveDueHandler,
+    effectivePauseHandler,
+    readOnly,
+    storageScope,
+  ]);
+
+  const dueNotifiedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (autoSubmitStatus !== "pending" || !effectiveAutoSubmit) return;
+    const tick = () => {
+      const now = Date.now();
+      setAutoSubmitNowMs(now);
+      if (now >= effectiveDeadlineMs && dueNotifiedRef.current !== autoSubmitKey) {
+        dueNotifiedRef.current = autoSubmitKey;
+        effectiveDueHandler?.(cardId);
+      }
+    };
+    tick();
+    const id = window.setInterval(tick, 250);
+    return () => window.clearInterval(id);
+  }, [autoSubmitStatus, autoSubmitKey, cardId, effectiveAutoSubmit, effectiveDeadlineMs, effectiveDueHandler]);
 
   // Another tab holding (or releasing) this card: storage events reach every
   // other tab, so the same card open twice cannot queue the same answer twice.
@@ -855,6 +993,7 @@ function CardBody({
 
   const setValues = useCallback(
     (fn: (v: Values) => Values) => {
+      pauseAutoSubmit();
       setValuesState((prev) => {
         const next = fn(prev);
         if (!readOnly) {
@@ -884,7 +1023,7 @@ function CardBody({
         return next;
       });
     },
-    [storeId, readOnly, spec.components],
+    [pauseAutoSubmit, storeId, readOnly, spec.components],
   );
 
   const setField = useCallback(
@@ -980,6 +1119,7 @@ function CardBody({
   );
 
   const resetCard = useCallback(() => {
+    pauseAutoSubmit();
     const next = initialValues(spec);
     replaceValues(next);
     clearedRef.current = new Set();
@@ -990,7 +1130,7 @@ function CardBody({
     setShowErrors(false);
     setNotice(null);
     setConfirming(null);
-  }, [spec, readOnly, storeId, editing]);
+  }, [pauseAutoSubmit, spec, readOnly, storeId, editing]);
 
   const send = async (action: Action) => {
     if (!onSubmit) return;
@@ -1156,6 +1296,9 @@ function CardBody({
   };
 
   const onAction = (action: Action) => {
+    const isLocal = action.kind === "copy" || action.kind === "reset";
+    if (!isLocal && autoSubmitSubmitting) return;
+    if (action.kind !== "copy") pauseAutoSubmit();
     if (!passesGates(action)) return;
     if (typeof action.confirm === "string" && action.confirm.trim()) {
       setConfirming(action);
@@ -1250,6 +1393,24 @@ function CardBody({
         data-card-id={cardId}
         data-state={superseded ? "superseded" : submittedAction && !editing ? "submitted" : "open"}
         data-variant={variant ?? "inline"}
+        onPointerDownCapture={
+          !fieldsLocked
+            ? (e) => {
+                const el = e.target as HTMLElement | null;
+                if (el?.closest?.('[data-action-id], [data-testid="genui-autosubmit-pause"]')) return;
+                pauseAutoSubmit();
+              }
+            : undefined
+        }
+        onFocusCapture={
+          !fieldsLocked
+            ? (e) => {
+                const el = e.target as HTMLElement | null;
+                if (el?.closest?.('[data-action-id], [data-testid="genui-autosubmit-pause"]')) return;
+                pauseAutoSubmit();
+              }
+            : undefined
+        }
         className={
           variant === "panel"
             ? "min-w-0 text-[0.8125rem] leading-[1.5] text-[var(--color-text-primary)]"
@@ -1300,7 +1461,7 @@ function CardBody({
         <div className="grid min-w-0 gap-3 px-3.5 py-3">
           <Nodes list={spec.components} />
         </div>
-        {actions.length > 0 || sentLabel || (retired && !readOnly && !superseded) ? (
+        {actions.length > 0 || sentLabel || (retired && !readOnly && !superseded) || autoSubmitStatus === "pending" || autoSubmitStatus === "paused" || autoSubmitStatus === "fired" ? (
           <div className="flex flex-col gap-2 border-t border-[var(--color-border)] px-3.5 py-2.5">
             {retired && !readOnly && !superseded && !sentLabel ? (
               <div data-testid="genui-retired" className="text-[0.75rem] text-[var(--color-text-muted)]">
@@ -1312,11 +1473,50 @@ function CardBody({
                 <span data-testid="genui-submitted">
         {rich("Sent · {0}", sentLabel)}
       </span>
+                {submission?.autoSubmitted ? (
+                  <span
+                    data-testid="genui-submitted-auto"
+                    className="rounded-full border border-[var(--color-border-strong)] bg-[var(--color-surface-1)] px-2 py-0.5 text-[0.68rem] text-[var(--color-text-muted)]"
+                  >
+                    {tr("Auto-submitted")}
+                  </span>
+                ) : null}
                 {!readOnly && !retired && onSubmit && submission && (spec.actions ?? []).some((a) => !a.kind || a.kind === "submit") ? (
                   <button type="button" className="underline hover:text-[var(--color-text-primary)]" onClick={() => setEditing(true)}>
                     {tr("Edit and resend")}
                   </button>
                 ) : null}
+              </div>
+            ) : null}
+            {!locked && !awaiting && sending === null && (autoSubmitStatus === "pending" || autoSubmitStatus === "fired") ? (
+              <div
+                role="status"
+                data-testid="genui-autosubmit-countdown"
+                className="flex min-h-[1.75rem] flex-wrap items-center justify-between gap-2 rounded-[var(--radius-md)] border border-[var(--color-warning-border)] bg-[var(--color-warning-tint)] px-2.5 py-1 text-[0.75rem] text-[var(--color-warning-text)]"
+              >
+                <span>
+                  {autoSubmitStatus === "pending" && remainingAutoSubmitSec > 0
+                    ? tr("Auto-submitting in {0}s", [remainingAutoSubmitSec])
+                    : tr("Auto-submitting...")}
+                </span>
+                {autoSubmitStatus === "pending" && remainingAutoSubmitMs > 0 ? (
+                  <button
+                    type="button"
+                    data-testid="genui-autosubmit-pause"
+                    onClick={pauseAutoSubmit}
+                    className="rounded-[var(--radius-sm)] border border-[var(--color-warning-border)] bg-[var(--color-surface-1)] px-2 py-0.5 text-[0.72rem] font-semibold text-[var(--color-text-primary)] transition hover:bg-[var(--color-surface-2)]"
+                  >
+                    {tr("Pause")}
+                  </button>
+                ) : null}
+              </div>
+            ) : !locked && !awaiting && sending === null && autoSubmitStatus === "paused" ? (
+              <div
+                role="status"
+                data-testid="genui-autosubmit-paused"
+                className="flex min-h-[1.75rem] flex-wrap items-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] px-2.5 py-1 text-[0.75rem] text-[var(--color-text-muted)]"
+              >
+                <span>{tr("Auto-submit paused")}</span>
               </div>
             ) : null}
             {!locked && awaiting ? (
@@ -1351,7 +1551,7 @@ function CardBody({
                   const isLocal = a.kind === "copy" || a.kind === "reset";
                   const disabled =
                     sending !== null ||
-                    (!isLocal && !onSubmit) ||
+                    (!isLocal && (!onSubmit || autoSubmitSubmitting)) ||
                     (a.kind === "reset" && !isModified) ||
                     (typeof a.disabled_if === "string" && truthy(evaluateSafe(a.disabled_if, scope, false)));
                   const style = a.style ?? (a.kind === "message" || isLocal ? "secondary" : "primary");

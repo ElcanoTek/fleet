@@ -121,6 +121,15 @@ func (c *turnCommits) commitUser(ctx context.Context, entry agent.HistoryEntry) 
 	return nil
 }
 
+func (c *turnCommits) hasCommittedUser() bool {
+	if c == nil {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.userID > 0
+}
+
 // commitTerminal transactionally projects the turn's transcript before the
 // terminal event is advertised (TurnInput.CommitTerminal). A degraded journal
 // refuses success outright: the turn's side-effect record is incomplete.

@@ -170,7 +170,12 @@ func (g *Gateway) registerAuth(mux *http.ServeMux) {
 			unauthorized(w)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]string{"email": s.Email})
+		accepted, ver := g.memberAutonomousAcceptance(s)
+		writeJSON(w, http.StatusOK, bootSession{
+			Email:                   s.Email,
+			AutonomousAccepted:      accepted,
+			AutonomousPolicyVersion: ver,
+		})
 	})
 	// GET /api/version — the deploy-drift probe: the build id in the body and
 	// in X-App-Version (decorate sets it on every response).

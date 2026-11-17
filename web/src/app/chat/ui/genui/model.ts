@@ -70,7 +70,26 @@ export type CardSpec = {
    * genui.ValidPanelKey (internal/genui/spec.go); anything else is dropped.
    */
   panel?: string;
+  /**
+   * Optional opt-out/opt-in hint for Autonomous mode 10s server auto-submit.
+   * When explicitly false, the server never arms an auto-submit countdown.
+   */
+  auto_submit?: boolean;
 };
+
+/** Server-owned 10-second auto-submit countdown row (chat.ui_autosubmits). */
+export type UIAutoSubmitState = {
+  id?: string;
+  conversation_id?: string;
+  call_id: string;
+  action_id: string;
+  deadline_ms: number;
+  remaining_ms?: number;
+  client_deadline_ms?: number;
+  status: "pending" | "paused" | "fired" | "cancelled";
+};
+
+export type AutoSubmitPauseResult = "paused" | "fired" | "cancelled" | "error";
 
 /** Mirrors genui.ValidPanelKey: 1–40 of a-z, 0-9, '-', '_'. */
 export function isPanelKey(v: unknown): v is string {
@@ -146,6 +165,7 @@ function parseCardSpecUncached(input: string): CardSpec | null {
     actions: Array.isArray(o.actions) ? (o.actions.filter((a) => a && typeof a === "object" && typeof (a as Action).id === "string") as Action[]) : [],
     replaces: typeof o.replaces === "string" ? o.replaces : undefined,
     panel: isPanelKey(o.panel) ? o.panel : undefined,
+    auto_submit: typeof o.auto_submit === "boolean" ? o.auto_submit : undefined,
     field_errors: Array.isArray(o.field_errors)
       ? (o.field_errors.filter(
           (e) => e && typeof e === "object" && typeof (e as { field?: unknown }).field === "string",
@@ -713,20 +733,27 @@ export type Submission = {
   cardId: string;
   actionId: string;
   values: Values;
+  /** True when queued by the server's Autonomous 10s auto-submit sweeper. */
+  autoSubmitted?: boolean;
   /** The transcript message it came from — two identical resends differ here. */
   messageId?: number;
 };
 
-const SUBMISSION_RE = /^\[UI submission\] card=(\S+) action=(\S+)\n```json\n([\s\S]*)\n```\s*$/;
+const SUBMISSION_RE = /^\[UI submission\] card=(\S+) action=(\S+)(?: (auto=1))?\n```json\n([\s\S]*)\n```\s*$/;
 
 export function parseSubmissionMessage(text: string): Submission | null {
   if (!text.startsWith(UI_SUBMISSION_PREFIX)) return null;
   const m = SUBMISSION_RE.exec(text);
   if (!m) return null;
   try {
-    const v = JSON.parse(m[3]);
+    const v = JSON.parse(m[4]);
     if (!v || typeof v !== "object" || Array.isArray(v)) return null;
-    return { cardId: m[1], actionId: m[2], values: v as Values };
+    return {
+      cardId: m[1],
+      actionId: m[2],
+      values: v as Values,
+      ...(m[3] === "auto=1" ? { autoSubmitted: true } : {}),
+    };
   } catch {
     return null;
   }

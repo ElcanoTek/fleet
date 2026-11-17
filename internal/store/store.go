@@ -70,6 +70,11 @@ type Store struct {
 	// the token CRUD then fails closed via secretbox.ErrNoCipher rather than
 	// storing plaintext. Set via SetTokenCipher right after Open.
 	tokenCipher *secretbox.Cipher
+	// uiAutoSubmitBootGateMs holds the startup cutoff timestamp (unix ms) when
+	// cmd/fleet requires pre-restart show_ui countdown recovery before the
+	// sweeper may enqueue due rows. Cleared to 0 once RecoverUIAutoSubmits
+	// commits.
+	uiAutoSubmitBootGateMs atomic.Int64
 }
 
 // SetTokenCipher installs the AES-256-GCM cipher used to encrypt per-user
@@ -1355,7 +1360,7 @@ func (s *Store) SetAutoApprove(ctx context.Context, userEmail, convID string, en
 			"auto_approve = TRUE, approval_mode = CASE WHEN approval_mode = 'autonomous' THEN 'autonomous' ELSE 'auto' END",
 		)
 	}
-	return s.updateOwnedConversation(ctx, userEmail, convID, "auto_approve = FALSE, approval_mode = 'manual'")
+	return s.setOwnedApprovalModeAndCancelAutoSubmits(ctx, userEmail, convID, ConversationApprovalManual, false)
 }
 
 // SetApprovalMode sets the per-conversation approval mode ("manual", "auto",
@@ -1366,6 +1371,9 @@ func (s *Store) SetApprovalMode(ctx context.Context, userEmail, convID, mode str
 		return fmt.Errorf("invalid approval_mode %q: must be manual, auto, or autonomous", mode)
 	}
 	autoApprove := normalized != ConversationApprovalManual
+	if normalized != ConversationApprovalAutonomous {
+		return s.setOwnedApprovalModeAndCancelAutoSubmits(ctx, userEmail, convID, normalized, autoApprove)
+	}
 	return s.updateOwnedConversation(ctx, userEmail, convID, "approval_mode = $1, auto_approve = $2", normalized, autoApprove)
 }
 

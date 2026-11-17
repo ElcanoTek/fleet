@@ -1179,11 +1179,17 @@ func checkAgentPolicy(bundle *clientconfig.Bundle, bundleErr error) checkResult 
 		CriticalToolSuffixes:          p.CriticalToolSuffixes,
 		CriticalToolNoSessionApproval: p.CriticalToolNoSessionApproval,
 	})...)
-	// critical_tool_autonomous: members must be critical and must not be
-	// outbound email tools; the boot install drops any invalid entry.
+	// critical_tool_autonomous (deprecated compatibility list): members must be
+	// critical and must not be outbound email tools.
 	problems = append(problems, agentcore.AutonomousApprovalProblems(agentcore.AgentPolicy{
 		CriticalToolSuffixes:   p.CriticalToolSuffixes,
 		CriticalToolAutonomous: p.CriticalToolAutonomous,
+	})...)
+	// critical_tool_autonomous_blocked: members must be in critical_tools so a
+	// typo does not leave an intended tool unblocked in Autonomous mode.
+	problems = append(problems, agentcore.AutonomousBlockedProblems(agentcore.AgentPolicy{
+		CriticalToolSuffixes:          p.CriticalToolSuffixes,
+		CriticalToolAutonomousBlocked: p.CriticalToolAutonomousBlocked,
 	})...)
 	// critical_tool_card_describers: the key must be critical, the describer
 	// must be parallel-safe and must not be critical (it runs without an

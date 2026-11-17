@@ -99,6 +99,7 @@ import {
 import { useStickToBottom, requestHoldPosition } from "./stickToBottom";
 import { assistantDisplayContent } from "./turnNarration";
 import { ReplyBubble, SubmissionBubble } from "./genui/SubmissionBubble";
+import type { AutoSubmitPauseResult, UIAutoSubmitState } from "./genui/model";
 import { answerOf, cardSpecOf, deriveGenUiState, GenUiContext, isRenderableCardCall } from "./genui/transcript";
 import { DashboardTranscriptContext } from "./dashboard/context";
 import type { TranscriptModelCatalog } from "./useChatModelCatalog";
@@ -205,6 +206,9 @@ export type ChatTranscriptProps = {
   setSelectedModel: Dispatch<SetStateAction<string>>;
   modelCatalog: TranscriptModelCatalog;
   onMcpServersUpdated?: (enabledOptional: string[]) => void;
+  uiAutoSubmits?: ReadonlyMap<string, UIAutoSubmitState>;
+  onPauseAutoSubmit?: (cardId: string) => void | Promise<void | AutoSubmitPauseResult>;
+  onAutoSubmitDue?: (cardId: string) => void;
 };
 
 // The transcript is virtualized (@tanstack/react-virtual): only the rows near
@@ -311,6 +315,9 @@ export function ChatTranscript({
   setSelectedModel,
   modelCatalog,
   onMcpServersUpdated,
+  uiAutoSubmits,
+  onPauseAutoSubmit,
+  onAutoSubmitDue,
 }: ChatTranscriptProps) {
   "use no memo";
   const { setModelPickerOpen, setModelSearchQuery, loadRankedModels, loadCatalogModels } = modelCatalog;
@@ -520,7 +527,16 @@ export function ChatTranscript({
 
   // Card state (spec, submission, replaced) is derived from the transcript
   // itself — see genui/transcript.ts.
-  const genUi = useMemo(() => deriveGenUiState(messages), [messages]);
+  const derivedGenUi = useMemo(() => deriveGenUiState(messages), [messages]);
+  const genUi = useMemo(
+    () => ({
+      ...derivedGenUi,
+      autoSubmits: uiAutoSubmits,
+      onPauseAutoSubmit,
+      onAutoSubmitDue,
+    }),
+    [derivedGenUi, uiAutoSubmits, onPauseAutoSubmit, onAutoSubmitDue],
+  );
   const dashboard = useContext(DashboardTranscriptContext);
 
   // Dashboard view's "approvals waiting" light asks for a message that may
@@ -1023,6 +1039,9 @@ export function ChatTranscript({
                                           occurrence={genUi.occurrences.get(tc) ?? 0}
                                           retired={isPreSummary}
                                           storageScope={realConvId(currentConvKey) ?? currentConvKey}
+                                          autoSubmit={owns ? (uiAutoSubmits?.get(tc.id) ?? null) : null}
+                                          onPauseAutoSubmit={owns ? onPauseAutoSubmit : undefined}
+                                          onAutoSubmitDue={owns ? onAutoSubmitDue : undefined}
                                           onSubmit={(text, onUnsent, onHeld, stillHeld, model) =>
                                             submitPrompt(text, { fromCard: true, onUnsent, onHeld, stillHeld, model })
                                           }

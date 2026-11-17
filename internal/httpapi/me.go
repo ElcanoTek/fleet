@@ -20,6 +20,7 @@ package httpapi
 // so a read-only viewer can see its team but not change it.
 
 import (
+	"context"
 	"errors"
 	"net/http"
 
@@ -35,16 +36,20 @@ type meResponse struct {
 	TeamID string `json:"team_id"`
 	// Admin is the effective admin flag (ADMIN_EMAILS env allowlist OR
 	// users.role = 'admin'), the same OR adminMiddleware applies. Clients use
-	// it to phrase the "ask an admin" path — authorization stays server-side.
-	Admin bool `json:"admin"`
+	// it to phrase the "ask an admin" path; authorization stays server-side.
+	Admin                   bool `json:"admin"`
+	AutonomousAccepted      bool `json:"autonomous_accepted"`
+	AutonomousPolicyVersion int  `json:"autonomous_policy_version"`
 }
 
-func (s *Server) meResponseFor(u *store.User) meResponse {
+func (s *Server) meResponseFor(ctx context.Context, u *store.User) meResponse {
 	return meResponse{
-		Email:  u.Email,
-		Role:   u.Role,
-		TeamID: u.TeamID,
-		Admin:  s.isAdmin(u.Email) || u.Role == store.RoleAdmin,
+		Email:                   u.Email,
+		Role:                    u.Role,
+		TeamID:                  u.TeamID,
+		Admin:                   s.isAdmin(u.Email) || u.Role == store.RoleAdmin,
+		AutonomousAccepted:      s.hasAcceptedAutonomous(ctx, u.Email),
+		AutonomousPolicyVersion: store.CurrentAutonomousPolicyVersion,
 	}
 }
 
@@ -59,20 +64,20 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		s.writeUserLookupError(w, err)
 		return
 	}
-	writeJSON(w, r, s.meResponseFor(u))
+	writeJSON(w, r, s.meResponseFor(r.Context(), u))
 }
 
-// teamResponse is meResponse plus what LEAVING would cost — the two counts the
+// teamResponse is meResponse plus what LEAVING would cost: the two counts the
 // Leave confirm quotes ("you'll lose access to N team-shared projects; M chats
 // you shared there stop being shared"). Only GET /me/team computes them: /me is
-// read on every page and must stay one query.
+// read on every page and must stay fast.
 type teamResponse struct {
 	meResponse
 	store.LeaveTeamImpact
 }
 
-// handleMyTeamGet serves GET /me/team — the caller's own team plus the leave
-// impact, so Settings → Team can state consequences BEFORE acting rather than
+// handleMyTeamGet serves GET /me/team: the caller's own team plus the leave
+// impact, so Settings -> Team can state consequences BEFORE acting rather than
 // reporting them afterwards (Item A4).
 func (s *Server) handleMyTeamGet(w http.ResponseWriter, r *http.Request) {
 	u, err := s.store.GetUser(r.Context(), userFromCtx(r.Context()))
@@ -80,7 +85,7 @@ func (s *Server) handleMyTeamGet(w http.ResponseWriter, r *http.Request) {
 		s.writeUserLookupError(w, err)
 		return
 	}
-	out := teamResponse{meResponse: s.meResponseFor(u)}
+	out := teamResponse{meResponse: s.meResponseFor(r.Context(), u)}
 	// Best-effort: the counts are confirm-dialog copy, so a failure leaves them
 	// ABSENT rather than breaking the page that shows which team you are in.
 	// Absent, not zero — the counts are pointers precisely so the confirm can
@@ -138,7 +143,7 @@ func (s *Server) handleMyTeam(w http.ResponseWriter, r *http.Request) {
 	s.reconcileAllMultiplayerAccess(r.Context(), affectedConvIDs...)
 	// %q escapes CR/LF, so the request-supplied team cannot forge a log line.
 	logging.From(r.Context()).Info("teams: user set own team", "user", u.Email, "team_id", u.TeamID)
-	writeJSON(w, r, s.meResponseFor(u))
+	writeJSON(w, r, s.meResponseFor(r.Context(), u))
 }
 
 // writeUserLookupError maps the store's user errors onto the two statuses this

@@ -260,6 +260,7 @@ func chatRoutes() []chatRoute {
 		{"GET /api/me", fixed("/me"), noBody, textJSON},
 		{"GET /api/me/team", fixed("/me/team"), noBody, textJSON},
 		{"PUT /api/me/team", fixed("/me/team"), jsonBodyIfAny, textJSON},
+		{"POST /api/chat/autonomous-accept", fixed("/chat/autonomous-accept"), jsonBodyIfAny, textJSON},
 
 		// ── conversations ──
 		{"GET /api/conversations", func(r *http.Request) string {
@@ -295,6 +296,8 @@ func chatRoutes() []chatRoute {
 		}, noBody, textJSON},
 		{"POST /api/conversations/{id}/archive", func(r *http.Request) string { return conv(r) + "/archive" }, jsonBodyIfAny, textOK},
 		{"POST /api/conversations/{id}/auto-approve", func(r *http.Request) string { return conv(r) + "/auto-approve" }, jsonBodyIfAny, textJSON},
+		{"POST /api/conversations/{id}/autosubmit/pause", func(r *http.Request) string { return conv(r) + "/autosubmit/pause" }, jsonBodyIfAny, textJSON},
+		{"POST /api/chat/conversations/{id}/autosubmit/pause", func(r *http.Request) string { return conv(r) + "/autosubmit/pause" }, jsonBodyIfAny, textJSON},
 		{"POST /api/conversations/{id}/branch", func(r *http.Request) string { return conv(r) + "/branch" }, jsonBodyIfAny, textJSON},
 		{"POST /api/conversations/{id}/cancel", func(r *http.Request) string { return conv(r) + "/cancel" }, noBody, textOK},
 		{"GET /api/conversations/{id}/inflight", func(r *http.Request) string { return conv(r) + "/inflight" }, noBody, textJSON},

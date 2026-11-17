@@ -1281,6 +1281,27 @@ func budgetWindDownStep(orch *orchestrationState, sink *streamSink) fantasy.Prep
 	}
 }
 
+func approvalModeNoticeStep(orch *orchestrationState) fantasy.PrepareStepFunction {
+	if orch == nil {
+		return nil
+	}
+	return func(ctx context.Context, opts fantasy.PrepareStepFunctionOptions) (context.Context, fantasy.PrepareStepResult, error) {
+		orch.mu.Lock()
+		sink := orch.approvalSink
+		orch.mu.Unlock()
+		notifier, ok := sink.(LiveApprovalModeNotifier)
+		if !ok || notifier == nil {
+			return ctx, fantasy.PrepareStepResult{}, nil
+		}
+		notice := strings.TrimSpace(notifier.LiveApprovalModeNotice(ctx))
+		if notice == "" {
+			return ctx, fantasy.PrepareStepResult{}, nil
+		}
+		messages := append(append([]fantasy.Message(nil), opts.Messages...), fantasy.NewUserMessage(notice))
+		return ctx, fantasy.PrepareStepResult{Messages: messages}, nil
+	}
+}
+
 // stepStopConditions turns the configured per-round step cap into a fantasy
 // stop condition. Zero (or negative) means "no cap" — loop until the model
 // stops on its own (bounded by the per-turn timeout + cost ceiling). This is
@@ -1955,6 +1976,7 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 			// hard ceiling in budgetGuardedStep above still blocks first once
 			// the budget is fully spent.
 			budgetWindDownStep(r.orch, sink),
+			approvalModeNoticeStep(r.orch),
 			// Tool-call inputs that are not JSON objects are normalized before
 			// any provider sees them (a raw one 400s the whole request on
 			// Anthropic/Bedrock); before the reducers, which size the final slice.

@@ -216,14 +216,17 @@ type fakeChatStore struct {
 	// claimAfterEnqueue marks each enqueued row claimed (running) at once.
 	claimAfterEnqueue bool
 	// memoriesErr makes ListMemories (turn preparation) fail.
-	memoriesErr error
+	memoriesErr           error
+	autonomousAcceptances map[string]int
+	uiAutoSubmits         []store.UIAutoSubmit
 }
 
 func newFakeChatStore() *fakeChatStore {
 	return &fakeChatStore{
-		convs:   map[string]*store.Conversation{},
-		history: map[string][]agent.HistoryEntry{},
-		users:   map[string]*store.User{},
+		convs:                 map[string]*store.Conversation{},
+		history:               map[string][]agent.HistoryEntry{},
+		users:                 map[string]*store.User{},
+		autonomousAcceptances: map[string]int{},
 	}
 }
 
@@ -317,10 +320,14 @@ func (s *fakeChatStore) Get(_ context.Context, userEmail, convID string) (*store
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	c := s.convs[convID]
-	if c != nil && c.UserEmail != "" && userEmail != "" && !strings.EqualFold(c.UserEmail, userEmail) {
+	if c == nil {
 		return nil, nil
 	}
-	return c, nil
+	if c.UserEmail != "" && userEmail != "" && !strings.EqualFold(c.UserEmail, userEmail) {
+		return nil, nil
+	}
+	cp := *c
+	return &cp, nil
 }
 
 func (s *fakeChatStore) LoadHistory(_ context.Context, convID string) ([]agent.HistoryEntry, error) {
@@ -760,6 +767,17 @@ func (s *fakeChatStore) ListSharedAndMultiplayerConversations(_ context.Context,
 	}
 	return out, nil
 }
+func (s *fakeChatStore) ListFiltered(_ context.Context, userEmail string, _ store.ListFilter) ([]store.Conversation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []store.Conversation
+	for _, c := range s.convs {
+		if strings.EqualFold(c.UserEmail, userEmail) {
+			out = append(out, *c)
+		}
+	}
+	return out, nil
+}
 func (s *fakeChatStore) MarkProjectSharedChat(context.Context, string, string) error { return nil }
 
 // Bulk conversation operations (#279) — default no-ops; the /chat turn path
@@ -788,6 +806,284 @@ func (s *fakeChatStore) DeleteAllUnpinned(_ context.Context, _ string) (int, err
 }
 func (s *fakeChatStore) BulkPatch(_ context.Context, _ string, ids []string, _ *bool, _ []string) (int, error) {
 	return len(ids), nil
+}
+
+func (s *fakeChatStore) GetAutonomousAcceptance(_ context.Context, userEmail string) (int, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v := s.autonomousAcceptances[strings.ToLower(strings.TrimSpace(userEmail))]
+	return v, v >= store.CurrentAutonomousPolicyVersion, nil
+}
+
+func (s *fakeChatStore) AcceptAutonomousPolicy(_ context.Context, userEmail string, version int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.autonomousAcceptances == nil {
+		s.autonomousAcceptances = map[string]int{}
+	}
+	if version <= 0 {
+		version = store.CurrentAutonomousPolicyVersion
+	}
+	key := strings.ToLower(strings.TrimSpace(userEmail))
+	if version > s.autonomousAcceptances[key] {
+		s.autonomousAcceptances[key] = version
+	}
+	return nil
+}
+
+func (s *fakeChatStore) CreateUIAutoSubmit(_ context.Context, row store.UIAutoSubmit) (store.UIAutoSubmit, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, q := range s.queue {
+		if q.ConversationID != row.ConversationID || strings.HasPrefix(q.ClientInputID, store.UIAutoSubmitClientInputPrefix) || q.Mode == store.InputModeResume {
+			continue
+		}
+		if q.State == store.InputStateQueued || (q.State == store.InputStateRunning && strings.HasPrefix(q.TurnID, store.ClaimTurnPrefix)) {
+			return store.UIAutoSubmit{}, store.ErrUIAutoSubmitSuperseded
+		}
+	}
+	nowMs := time.Now().UnixMilli()
+	if row.ID == "" {
+		row.ID = fmt.Sprintf("autosub-%d", len(s.uiAutoSubmits)+1)
+	}
+	if row.CreatedAtMs <= 0 {
+		row.CreatedAtMs = nowMs
+	}
+	if row.UpdatedAtMs <= 0 {
+		row.UpdatedAtMs = row.CreatedAtMs
+	}
+	if row.DeadlineMs <= 0 {
+		row.DeadlineMs = row.CreatedAtMs + store.UIAutoSubmitDelayMs
+	}
+	if row.Status == "" {
+		row.Status = store.UIAutoSubmitStatusPending
+	}
+	var userMsgs int64
+	for _, h := range s.history[row.ConversationID] {
+		if h.Role == "user" {
+			userMsgs++
+		}
+	}
+	row.BaselineUserMsgID = userMsgs
+	row.BaselineInputSeq = s.acceptedSeq.Load()
+	for i := range s.uiAutoSubmits {
+		r := &s.uiAutoSubmits[i]
+		if r.ConversationID == row.ConversationID && r.CallID == row.CallID &&
+			(r.Status == store.UIAutoSubmitStatusPending || r.Status == store.UIAutoSubmitStatusPaused) {
+			r.Status = store.UIAutoSubmitStatusCancelled
+			r.UpdatedAtMs = row.UpdatedAtMs
+		}
+	}
+	row = row.WithRemainingMs(nowMs)
+	s.uiAutoSubmits = append(s.uiAutoSubmits, row)
+	return row, nil
+}
+
+func (s *fakeChatStore) ListActiveUIAutoSubmits(_ context.Context, convID string) ([]store.UIAutoSubmit, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	nowMs := time.Now().UnixMilli()
+	var out []store.UIAutoSubmit
+	for _, r := range s.uiAutoSubmits {
+		if r.ConversationID == convID && (r.Status == store.UIAutoSubmitStatusPending || r.Status == store.UIAutoSubmitStatusPaused) {
+			out = append(out, r.WithRemainingMs(nowMs))
+		}
+	}
+	return out, nil
+}
+
+func (s *fakeChatStore) PauseUIAutoSubmits(_ context.Context, convID, callID string) ([]store.UIAutoSubmit, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	nowMs := time.Now().UnixMilli()
+	var out []store.UIAutoSubmit
+	for i := len(s.uiAutoSubmits) - 1; i >= 0; i-- {
+		r := &s.uiAutoSubmits[i]
+		if r.ConversationID != convID {
+			continue
+		}
+		if callID != "" {
+			if r.CallID == callID && (r.Status == store.UIAutoSubmitStatusPending || r.Status == store.UIAutoSubmitStatusPaused) {
+				r.Status = store.UIAutoSubmitStatusPaused
+				r.UpdatedAtMs = nowMs
+				out = append(out, r.WithRemainingMs(nowMs))
+				break
+			}
+		} else if r.Status == store.UIAutoSubmitStatusPending {
+			r.Status = store.UIAutoSubmitStatusPaused
+			r.UpdatedAtMs = nowMs
+			out = append(out, r.WithRemainingMs(nowMs))
+		}
+	}
+	if callID != "" && len(out) == 0 {
+		for i := len(s.uiAutoSubmits) - 1; i >= 0; i-- {
+			r := s.uiAutoSubmits[i]
+			if r.ConversationID == convID && r.CallID == callID {
+				out = append(out, r.WithRemainingMs(nowMs))
+				break
+			}
+		}
+	}
+	return out, nil
+}
+
+func (s *fakeChatStore) CancelPendingUIAutoSubmits(_ context.Context, convID, callID string) ([]store.UIAutoSubmit, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	nowMs := time.Now().UnixMilli()
+	var out []store.UIAutoSubmit
+	for i := range s.uiAutoSubmits {
+		r := &s.uiAutoSubmits[i]
+		if r.ConversationID != convID || r.Status != store.UIAutoSubmitStatusPending {
+			continue
+		}
+		if callID != "" && r.CallID != callID {
+			continue
+		}
+		r.Status = store.UIAutoSubmitStatusCancelled
+		r.UpdatedAtMs = nowMs
+		out = append(out, r.WithRemainingMs(nowMs))
+	}
+	return out, nil
+}
+
+func (s *fakeChatStore) CancelActiveUIAutoSubmits(_ context.Context, convID, callID string) ([]store.UIAutoSubmit, int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	nowMs := time.Now().UnixMilli()
+	nowSec := nowMs / 1000
+	cancelledQueued := 0
+	cancelledAutoIDs := make(map[string]bool)
+	for i := range s.queue {
+		q := &s.queue[i]
+		if q.ConversationID != convID || !strings.HasPrefix(q.ClientInputID, store.UIAutoSubmitClientInputPrefix) {
+			continue
+		}
+		if callID != "" && !strings.HasPrefix(q.Message, "[UI submission] card="+callID+" ") {
+			continue
+		}
+		if q.State == store.InputStateQueued || (q.State == store.InputStateRunning && strings.HasPrefix(q.TurnID, store.ClaimTurnPrefix)) {
+			q.State = store.InputStateCancelled
+			q.UpdatedAt = nowSec
+			cancelledQueued++
+			if id := strings.TrimPrefix(q.ClientInputID, store.UIAutoSubmitClientInputPrefix); id != "" && id != q.ClientInputID {
+				cancelledAutoIDs[id] = true
+			}
+		}
+	}
+	var out []store.UIAutoSubmit
+	for i := range s.uiAutoSubmits {
+		r := &s.uiAutoSubmits[i]
+		if r.ConversationID != convID {
+			continue
+		}
+		if callID != "" && r.CallID != callID {
+			continue
+		}
+		canCancelFired := r.Status == store.UIAutoSubmitStatusFired && cancelledAutoIDs[r.ID]
+		if r.Status != store.UIAutoSubmitStatusPending && r.Status != store.UIAutoSubmitStatusPaused && !canCancelFired {
+			continue
+		}
+		r.Status = store.UIAutoSubmitStatusCancelled
+		r.UpdatedAtMs = nowMs
+		out = append(out, r.WithRemainingMs(nowMs))
+	}
+	return out, cancelledQueued, nil
+}
+
+func (s *fakeChatStore) SweepAndEnqueueDueUIAutoSubmits(_ context.Context, nowMs int64, limit, maxPending int) ([]store.SweptUIAutoSubmit, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if limit <= 0 {
+		limit = 64
+	}
+	var out []store.SweptUIAutoSubmit
+	for i := range s.uiAutoSubmits {
+		if len(out) >= limit {
+			break
+		}
+		r := &s.uiAutoSubmits[i]
+		if r.Status != store.UIAutoSubmitStatusPending || r.DeadlineMs > nowMs {
+			continue
+		}
+		cancelRow := func() {
+			r.Status = store.UIAutoSubmitStatusCancelled
+			r.UpdatedAtMs = nowMs
+			out = append(out, store.SweptUIAutoSubmit{Row: r.WithRemainingMs(nowMs), Enqueued: false})
+		}
+		c := s.convs[r.ConversationID]
+		if c == nil {
+			cancelRow()
+			continue
+		}
+		owner := c.UserEmail
+		if owner == "" {
+			owner = r.UserEmail
+		}
+		if !strings.EqualFold(owner, r.UserEmail) || c.EffectiveApprovalMode() != store.ConversationApprovalAutonomous {
+			cancelRow()
+			continue
+		}
+		if s.autonomousAcceptances[strings.ToLower(strings.TrimSpace(r.UserEmail))] < store.CurrentAutonomousPolicyVersion {
+			cancelRow()
+			continue
+		}
+		var userMsgs int64
+		for _, h := range s.history[r.ConversationID] {
+			if h.Role == "user" {
+				userMsgs++
+			}
+		}
+		newer := userMsgs > r.BaselineUserMsgID
+		pendingCount := 0
+		cardPrefix := "[UI submission] card=" + r.CallID + " "
+		for _, q := range s.queue {
+			if q.ConversationID != r.ConversationID {
+				continue
+			}
+			if q.State == store.InputStateQueued {
+				pendingCount++
+			}
+			if q.AcceptedSeq > r.BaselineInputSeq &&
+				(q.Mode == store.InputModeQueued || q.Mode == store.InputModeSteer || q.Mode == store.InputModeDirect) &&
+				!strings.HasPrefix(q.ClientInputID, store.UIAutoSubmitClientInputPrefix) {
+				newer = true
+			}
+			if (q.State == store.InputStateQueued || q.State == store.InputStateRunning || q.State == store.InputStateInjected) &&
+				strings.HasPrefix(q.Message, cardPrefix) {
+				newer = true
+			}
+		}
+		if newer || (maxPending > 0 && pendingCount >= maxPending) {
+			cancelRow()
+			continue
+		}
+		msg := fmt.Sprintf("[UI submission] card=%s action=%s auto=1\n```json\n%s\n```", r.CallID, r.ActionID, r.ValuesJSON)
+		nowSec := nowMs / 1000
+		inputRow := store.InputQueueRow{
+			ID:             fmt.Sprintf("autoq-%s", r.ID),
+			ConversationID: r.ConversationID,
+			UserEmail:      r.UserEmail,
+			ClientInputID:  store.UIAutoSubmitClientInputPrefix + r.ID,
+			Message:        msg,
+			Attachments:    "[]",
+			Mode:           store.InputModeQueued,
+			State:          store.InputStateQueued,
+			Position:       int64(len(s.queue) + 1),
+			CreatedAt:      nowSec,
+			UpdatedAt:      nowSec,
+			AcceptedSeq:    s.acceptedSeq.Add(1),
+		}
+		s.queue = append(s.queue, inputRow)
+		r.Status = store.UIAutoSubmitStatusFired
+		r.UpdatedAtMs = nowMs
+		out = append(out, store.SweptUIAutoSubmit{
+			Row:      r.WithRemainingMs(nowMs),
+			Input:    &inputRow,
+			Enqueued: true,
+		})
+	}
+	return out, nil
 }
 
 func newDefaultChatServer(t *testing.T, engine turnEngine, st chatStore) *Server {

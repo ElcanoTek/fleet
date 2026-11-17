@@ -12,6 +12,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/logging"
+	"github.com/ElcanoTek/fleet/internal/store"
 )
 
 // ── /personas ──────────────────────────────────────────────────────────────
@@ -49,6 +50,8 @@ type serverConfigResponse struct {
 	// non-lockdown chats created by team members automatically start shared
 	// with their team and unfiled chats can be shared directly with the team.
 	TeamChatsSharedByDefault bool `json:"team_chats_shared_by_default"`
+	AutonomousAccepted       bool `json:"autonomous_accepted"`
+	AutonomousPolicyVersion  int  `json:"autonomous_policy_version"`
 }
 
 func (s *Server) serverConfig(w http.ResponseWriter, r *http.Request) {
@@ -56,11 +59,14 @@ func (s *Server) serverConfig(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	accepted := s.hasAcceptedAutonomous(r.Context(), userFromCtx(r.Context()))
 	resp := serverConfigResponse{
 		LockdownAvailable:        s.cfg.LockdownAvailable(),
 		LockdownOnly:             s.cfg.LockdownOnly,
 		UploadMaxBytes:           s.cfg.UploadMaxBytes,
 		TeamChatsSharedByDefault: s.cfg.LiveTeamChatsSharedByDefault(),
+		AutonomousAccepted:       accepted,
+		AutonomousPolicyVersion:  store.CurrentAutonomousPolicyVersion,
 	}
 	if resp.LockdownAvailable {
 		resp.LockdownAllowedModels = append(resp.LockdownAllowedModels, s.cfg.LockdownModels()...)

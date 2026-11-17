@@ -44,7 +44,31 @@ type ShowUIParams struct {
 	Actions     []any      `json:"actions,omitempty" description:"Footer buttons: [{id, label, kind: submit|message|copy|reset, style: primary|secondary|danger, message, validate, confirm, visible_if, disabled_if}]. Required (with at least one kind=submit) when the card collects answers, optional on live calculators/checklists where every input drives an expression."`
 	Replaces    string     `json:"replaces,omitempty" description:"card_id of an earlier card this one updates. The old card collapses to a 'replaced' note so only the newest version is interactive."`
 	Panel       string     `json:"panel,omitempty" description:"Optional dashboard panel key (1-40 chars of a-z, 0-9, '-', '_'; e.g. \"revenue\"). The card becomes that panel on the user's dashboard board, and a later card with the same panel key updates it in place. Use for numbers, charts and tables the user will keep watching."`
+	AutoSubmit  *bool      `json:"auto_submit,omitempty" description:"Optional boolean. In Autonomous mode, fully prefilled input cards with a clear primary submit button auto-submit after a 10-second server countdown; pass false when a card requires human judgement even in Autonomous mode."`
 	FieldErrors []any      `json:"field_errors,omitempty" description:"Inline errors to show next to inputs: [{field: \"id\" or \"repeater_id[i].field_id\", message}], where i is the item's 0-based position in the repeater's array (the first item is [0], unlike the 1-based index in expressions). Use when re-showing a card after checking the user's answers; the field must be editable (not disabled)."`
+}
+
+// ShowUIDisplayedHandler is invoked whenever show_ui validates and displays a
+// card (either inline or resolved via from_result). Injected onto the turn
+// context by httpapi to arm or supersede server-side Autonomous auto-submits.
+type ShowUIDisplayedHandler func(ctx context.Context, callID string, specJSON []byte)
+
+type showUIDisplayedHandlerKey struct{}
+
+// WithShowUIDisplayedHandler attaches a per-turn ShowUIDisplayedHandler to ctx.
+func WithShowUIDisplayedHandler(ctx context.Context, h ShowUIDisplayedHandler) context.Context {
+	if h == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, showUIDisplayedHandlerKey{}, h)
+}
+
+func showUIDisplayedHandlerFrom(ctx context.Context) ShowUIDisplayedHandler {
+	if ctx == nil {
+		return nil
+	}
+	h, _ := ctx.Value(showUIDisplayedHandlerKey{}).(ShowUIDisplayedHandler)
+	return h
 }
 
 const showUIDescription = `Show the user an interactive card inline in the chat — a form, a picker, a multi-item editor, a comparison, a checklist, a small calculator or a chart — built on the fly from a fixed component catalog. Use it when a visual or interactive answer serves the user better than prose: collecting several related values at once (instead of asking one question per message), letting them choose among options you fetched, editing a list of items, reviewing proposed changes, or showing numbers they will want to compare or tweak. Plain questions still get plain text.
@@ -90,7 +114,13 @@ func NewShowUITool() fantasy.AgentTool {
 func showUI(ctx context.Context, callID string, input []byte) fantasy.ToolResponse {
 	var top map[string]json.RawMessage
 	if json.Unmarshal(input, &top) != nil || top["from_result"] == nil {
-		return ShowUIResult(callID, input)
+		resp := ShowUIResult(callID, input)
+		if !resp.IsError {
+			if h := showUIDisplayedHandlerFrom(ctx); h != nil {
+				h(ctx, callID, input)
+			}
+		}
+		return resp
 	}
 	spec, refusal := resolveShowUIRef(ctx, callID, top)
 	if refusal != nil {
@@ -109,6 +139,9 @@ func showUI(ctx context.Context, callID string, input []byte) fantasy.ToolRespon
 	}
 	if seam, ok := showUISeamFrom(ctx); ok {
 		seam.ShowCard(callID, resp.Content, string(spec))
+	}
+	if h := showUIDisplayedHandlerFrom(ctx); h != nil {
+		h(ctx, callID, spec)
 	}
 	return resp
 }

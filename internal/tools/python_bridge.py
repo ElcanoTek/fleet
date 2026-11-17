@@ -9,13 +9,17 @@ import os
 import queue
 import re
 import signal
+import string
 import subprocess
 import sys
 import tempfile
 import time
 import uuid
 
-from jupyter_client import BlockingKernelClient
+try:
+    from jupyter_client import BlockingKernelClient
+except ModuleNotFoundError:  # host-mode unit tests run without jupyter_client
+    BlockingKernelClient = None
 
 # Global state
 kernel_process = None
@@ -143,26 +147,372 @@ def reap_stale_kernels():
                 os.kill(pid, signal.SIGKILL)
 
 
+GIT_PUSH_APPROVAL_ERROR = (
+    "REFUSED: git push is disabled inside run_python; "
+    "run git push via the bash tool so Fleet can stage an approval card."
+)
+
+GIT_PUSH_URL_PREFIXES = (
+    "https://",
+    "http://",
+    "ssh://",
+    "git://",
+    "ftps://",
+    "ftp://",
+    "file://",
+    "git@",
+    *tuple(string.ascii_letters + string.digits + "/._~["),
+)
+
+# Bootstrap executed via `python -c KERNEL_BOOTSTRAP_CODE <connection_file>`.
+# Keeps the literal substring `ipykernel_launcher` in /proc/<pid>/cmdline so
+# reap_stale_kernels() continues to match orphaned kernels across turns, and
+# installs a non-removable CPython C audit hook before user cells can run.
+KERNEL_BOOTSTRAP_CODE = """
+import os as _os
+import re as _re
+import runpy as _runpy
+import sys as _sys
+
+
+def _install_fleet_git_push_guard():
+    err_msg = (
+        "REFUSED: git push is disabled inside run_python; "
+        "run git push via the bash tool so Fleet can stage an approval card."
+    )
+    protected_git_env = {
+        k: v for k, v in _os.environ.items() if k.startswith("GIT_CONFIG")
+    }
+    protected_exec_path = _os.environ.get("GIT_EXEC_PATH")
+    watched_events = frozenset({
+        "subprocess.Popen",
+        "os.posix_spawn",
+        "os.exec",
+        "os.spawn",
+        "os.system",
+        "os.putenv",
+        "os.unsetenv",
+        "ctypes.dlsym",
+    })
+    blocked_c_symbols = frozenset({
+        "system",
+        "popen",
+        "execl",
+        "execle",
+        "execlp",
+        "execlpe",
+        "execv",
+        "execve",
+        "execvp",
+        "execvpe",
+        "fexecve",
+        "posix_spawn",
+        "posix_spawnp",
+        "putenv",
+        "setenv",
+        "unsetenv",
+        "clearenv",
+    })
+    shell_names = frozenset({
+        "sh",
+        "bash",
+        "dash",
+        "zsh",
+        "ksh",
+        "mksh",
+        "ash",
+        "csh",
+        "tcsh",
+        "fish",
+    })
+    wrapper_names = frozenset({
+        "nice",
+        "nohup",
+        "setsid",
+        "stdbuf",
+        "timeout",
+        "chrt",
+        "ionice",
+        "xargs",
+        "command",
+        "builtin",
+        "exec",
+        "time",
+    })
+    git_opts_with_value = frozenset({
+        "-C",
+        "-c",
+        "--git-dir",
+        "--work-tree",
+        "--namespace",
+        "--exec-path",
+        "--super-prefix",
+        "--list-cmds",
+    })
+    env_ignore_re = _re.compile(
+        r"(?:^|[\\s;&|()])env\\s+(?:-[^\\s]*i|--ignore-environment)\\b"
+    )
+    git_word_re = _re.compile(r"\\bgit\\b")
+    push_word_re = _re.compile(r"\\b(?:push|send-pack|receive-pack)\\b")
+
+    def to_str(val):
+        if val is None:
+            return ""
+        if isinstance(val, bytes):
+            return val.decode("utf-8", "replace")
+        if isinstance(val, _os.PathLike):
+            return to_str(_os.fspath(val))
+        return str(val)
+
+    def is_protected_env_key(key):
+        up = key.upper()
+        return up.startswith("GIT_CONFIG") or up == "GIT_EXEC_PATH"
+
+    def env_preserves_guard(child_env):
+        if hasattr(child_env, "items"):
+            norm = {to_str(k): to_str(v) for k, v in child_env.items()}
+        else:
+            norm = {}
+            for entry in child_env:
+                text = to_str(entry)
+                if "=" in text:
+                    k, v = text.split("=", 1)
+                    norm[k] = v
+        git_cfg = {k: v for k, v in norm.items() if k.startswith("GIT_CONFIG")}
+        if git_cfg != protected_git_env:
+            return False
+        if protected_exec_path is not None and norm.get("GIT_EXEC_PATH") != protected_exec_path:
+            return False
+        return True
+
+    def text_attempts_git_push(text):
+        low = text.lower()
+        if (
+            "git_config" in low
+            or "git_exec_path" in low
+            or "fleet-approval-required" in low
+            or "pushinsteadof" in low
+            or "git-push" in low
+            or "git-send-pack" in low
+            or "git-receive-pack" in low
+            or "environ.clear" in low
+            or "clearenv" in low
+        ):
+            return True
+        if env_ignore_re.search(low):
+            return True
+        return bool(git_word_re.search(low) and push_word_re.search(low))
+
+    def config_override_is_unsafe(cfg):
+        low = cfg.lower()
+        if "pushinsteadof" in low or "fleet-approval-required" in low:
+            return True
+        return "alias." in low and (
+            "push" in low or "send-pack" in low or "!" in low
+        )
+
+    def git_args_attempt_push(git_args):
+        j = 0
+        n = len(git_args)
+        while j < n:
+            arg = git_args[j]
+            if arg == "--":
+                j += 1
+                break
+            if arg in ("--config-env", ) or arg.startswith("--config-env="):
+                return True
+            if arg == "-c":
+                if j + 1 < n and config_override_is_unsafe(git_args[j + 1]):
+                    return True
+                j += 2
+                continue
+            if arg.startswith("-c") and len(arg) > 2:
+                if config_override_is_unsafe(arg[2:]):
+                    return True
+                j += 1
+                continue
+            if arg in git_opts_with_value:
+                j += 2
+                continue
+            if arg.startswith("-C") and len(arg) > 2:
+                j += 1
+                continue
+            if arg.startswith("-"):
+                j += 1
+                continue
+            sub = arg.lower()
+            rest = [x.lower() for x in git_args[j + 1 :]]
+            if sub in ("push", "send-pack", "receive-pack"):
+                return True
+            if sub == "submodule":
+                return any(push_word_re.search(x) for x in rest)
+            if sub == "config":
+                joined = " ".join(rest)
+                return (
+                    "pushinsteadof" in joined
+                    or "fleet-approval-required" in joined
+                    or "alias." in joined
+                )
+            return False
+        return False
+
+    def tokens_attempt_git_push(toks):
+        i = 0
+        n = len(toks)
+        while i < n:
+            tok = toks[i]
+            if "=" in tok and not tok.startswith("-"):
+                key = tok.split("=", 1)[0]
+                if key and is_protected_env_key(key):
+                    return True
+                i += 1
+                continue
+            base = _os.path.basename(tok).lower()
+            if base == "env":
+                i += 1
+                while i < n:
+                    opt = toks[i]
+                    if opt in ("-i", "--ignore-environment"):
+                        return True
+                    if opt in ("-u", "--unset"):
+                        return True
+                    if opt.startswith("--unset="):
+                        return True
+                    if opt in ("-S", "--split-string"):
+                        if i + 1 < n and text_attempts_git_push(toks[i + 1]):
+                            return True
+                        i += 2
+                        continue
+                    if opt.startswith("-") and opt != "-":
+                        flags = opt[1:]
+                        if not opt.startswith("--") and ("i" in flags or "u" in flags):
+                            return True
+                        i += 1
+                        continue
+                    if "=" in opt:
+                        key = opt.split("=", 1)[0]
+                        if key and is_protected_env_key(key):
+                            return True
+                        i += 1
+                        continue
+                    break
+                continue
+            if base in wrapper_names:
+                if base == "xargs" and text_attempts_git_push(" ".join(toks[i + 1 :])):
+                    return True
+                for pos in range(i + 1, n):
+                    sub_base = _os.path.basename(toks[pos]).lower()
+                    if sub_base in ("git-push", "git-send-pack", "git-receive-pack"):
+                        return True
+                    if sub_base == "git" and git_args_attempt_push(toks[pos + 1 :]):
+                        return True
+                return False
+            if base in ("git-push", "git-send-pack", "git-receive-pack"):
+                return True
+            if base == "git":
+                return git_args_attempt_push(toks[i + 1 :])
+            if base in shell_names or base.startswith(
+                ("python", "pypy", "perl", "ruby", "node")
+            ):
+                return any(text_attempts_git_push(x) for x in toks[i + 1 :])
+            return False
+        return False
+
+    def argv_attempts_git_push(exe, argv):
+        if isinstance(argv, (str, bytes, _os.PathLike)):
+            raw_tokens = [to_str(argv)]
+        else:
+            raw_tokens = [to_str(x) for x in (argv or ())]
+        candidates = []
+        if raw_tokens:
+            candidates.append(raw_tokens)
+        exe_str = to_str(exe)
+        if exe_str:
+            candidates.append([exe_str, *raw_tokens[1:]])
+        return any(tokens_attempt_git_push(c) for c in candidates)
+
+    def audit_hook(event, args):
+        if event not in watched_events:
+            return
+        if event in ("os.putenv", "os.unsetenv"):
+            if args and is_protected_env_key(to_str(args[0])):
+                raise PermissionError(err_msg)
+            return
+        if event == "ctypes.dlsym":
+            if len(args) >= 2 and to_str(args[1]) in blocked_c_symbols:
+                raise PermissionError(err_msg)
+            return
+        if event == "os.system":
+            if args and text_attempts_git_push(to_str(args[0])):
+                raise PermissionError(err_msg)
+            return
+        if event == "subprocess.Popen":
+            exe, argv, _, child_env = args
+        elif event == "os.spawn":
+            _, exe, argv, child_env = args
+        else:
+            exe, argv, child_env = args
+        if child_env is not None and not env_preserves_guard(child_env):
+            raise PermissionError(err_msg)
+        if argv_attempts_git_push(exe, argv):
+            raise PermissionError(err_msg)
+
+    _sys.addaudithook(audit_hook)
+
+
+_install_fleet_git_push_guard()
+del _install_fleet_git_push_guard
+_conn_file = _sys.argv[1]
+_sys.argv = ["ipykernel_launcher", "-f", _conn_file]
+del _conn_file
+_runpy.run_module("ipykernel_launcher", run_name="__main__")
+"""
+
+
+def build_kernel_git_guard_env(base_env=None):
+    """Build a kernel environment that blocks git push transports by default."""
+    env = dict(os.environ if base_env is None else base_env)
+    try:
+        idx = max(0, int(env.get("GIT_CONFIG_COUNT", "0")))
+    except ValueError:
+        idx = 0
+    for prefix in GIT_PUSH_URL_PREFIXES:
+        env[f"GIT_CONFIG_KEY_{idx}"] = "url.fleet-approval-required:///.pushInsteadOf"
+        env[f"GIT_CONFIG_VALUE_{idx}"] = prefix
+        idx += 1
+    env[f"GIT_CONFIG_KEY_{idx}"] = "protocol.fleet-approval-required.allow"
+    env[f"GIT_CONFIG_VALUE_{idx}"] = "never"
+    idx += 1
+    env["GIT_CONFIG_COUNT"] = str(idx)
+    return env
+
+
+def build_kernel_launch_spec(conn_file, base_env=None):
+    """Return (cmd, env) for launching the guarded IPython kernel."""
+    cmd = [sys.executable, "-c", KERNEL_BOOTSTRAP_CODE, conn_file]
+    return cmd, build_kernel_git_guard_env(base_env=base_env)
+
+
 def start_kernel():
     """Starts a new IPython kernel and returns the connection file path.
 
     The connection file (kernel-<pid>.json) goes into the OS temp dir so
     it doesn't clutter whatever cwd the bridge was launched from. The
     Go side's `run_python` tool holds one bridge per turn and calls
-    `terminateBridge()` at turn end, which SIGTERMs us → cleanup() runs
-    → the file is deleted. If we crash hard (OOM, kill -9), the OS
+    `terminateBridge()` at turn end, which SIGTERMs us -> cleanup() runs
+    -> the file is deleted. If we crash hard (OOM, kill -9), the OS
     reaps /tmp on reboot anyway.
     """
     global kernel_process, connection_file
 
     # Reap any kernel orphaned by a previously-SIGKILLed bridge before we add
-    # ours — keeps a persistent (surviving) container from accumulating zombie
+    # ours - keeps a persistent (surviving) container from accumulating zombie
     # kernels across cancelled/timed-out turns (#213).
     reap_stale_kernels()
 
     # tempfile.mkstemp creates a unique empty file and returns (fd, path).
     # We close the fd immediately since ipykernel will overwrite the
-    # content — we only needed the unique name.
+    # content - we only needed the unique name.
     fd, connection_file = tempfile.mkstemp(
         prefix=f"kernel-{os.getpid()}-", suffix=".json"
     )
@@ -174,16 +524,17 @@ def start_kernel():
     with contextlib.suppress(OSError):
         os.unlink(connection_file)
 
-    # Start the kernel
-    cmd = [sys.executable, "-m", "ipykernel_launcher", "-f", connection_file]
+    # Start the kernel with the CPython audit hook and Git push transport guard.
+    cmd, kernel_env = build_kernel_launch_spec(connection_file)
 
     # Start process detached to avoid signal interference
-    # S603 waived on the Popen below: every element of cmd is internal —
-    # sys.executable, literal flags, and a connection-file path this process
-    # just created with mkstemp in the OS temp dir. Nothing model- or
+    # S603 waived on the Popen below: every element of cmd is internal -
+    # sys.executable, literal bootstrap code, and a connection-file path this
+    # process just created with mkstemp in the OS temp dir. Nothing model- or
     # user-controlled reaches the argv.
     kernel_process = subprocess.Popen(  # noqa: S603
         cmd,
+        env=kernel_env,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         start_new_session=True,

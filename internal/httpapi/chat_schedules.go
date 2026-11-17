@@ -455,10 +455,11 @@ func (s *Server) handleScheduleList(w http.ResponseWriter, r *http.Request, user
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	effectiveMode := s.effectiveOwnerApprovalMode(r.Context(), convOwnerEmail(conv, user), conv)
 	writeJSON(w, r, map[string]any{
 		"schedules":     items,
-		"auto_approve":  conv.AutoApprove,
-		"approval_mode": conv.EffectiveApprovalMode(),
+		"auto_approve":  effectiveMode != store.ConversationApprovalManual,
+		"approval_mode": effectiveMode,
 	})
 }
 
@@ -481,6 +482,9 @@ func (s *Server) applyScheduleApprovalMutation(
 		}
 		conv.ApprovalMode = parsedMode
 		conv.AutoApprove = parsedMode != store.ConversationApprovalManual
+		if parsedMode != store.ConversationApprovalAutonomous {
+			s.cancelConversationAutoSubmits(ctx, conv.ID)
+		}
 	case autoApprove != nil:
 		if err := s.store.SetAutoApprove(ctx, user, conv.ID, *autoApprove); err != nil {
 			return err
@@ -492,6 +496,7 @@ func (s *Server) applyScheduleApprovalMutation(
 			}
 		} else {
 			conv.ApprovalMode = store.ConversationApprovalManual
+			s.cancelConversationAutoSubmits(ctx, conv.ID)
 		}
 	case defaultAutoWhenUnset && !conv.AutoApprove:
 		if err := s.store.SetAutoApprove(ctx, user, conv.ID, true); err == nil {
@@ -523,6 +528,9 @@ func (s *Server) handleScheduleCreate(w http.ResponseWriter, r *http.Request, us
 		parsedMode, ok = store.ParseConversationApprovalMode(*req.ApprovalMode)
 		if !ok {
 			http.Error(w, "invalid approval_mode: must be manual, auto, or autonomous", http.StatusBadRequest)
+			return
+		}
+		if parsedMode == store.ConversationApprovalAutonomous && !s.requireAutonomousAcceptance(w, r, user) {
 			return
 		}
 	}
@@ -578,6 +586,9 @@ func (s *Server) handleSchedulePatch(w http.ResponseWriter, r *http.Request, use
 		parsedMode, ok = store.ParseConversationApprovalMode(*req.ApprovalMode)
 		if !ok {
 			http.Error(w, "invalid approval_mode: must be manual, auto, or autonomous", http.StatusBadRequest)
+			return
+		}
+		if parsedMode == store.ConversationApprovalAutonomous && !s.requireAutonomousAcceptance(w, r, user) {
 			return
 		}
 	}
@@ -696,11 +707,12 @@ func (s *Server) handleScheduleRunNow(w http.ResponseWriter, r *http.Request, us
 			}
 		}
 	}
+	effectiveMode := s.effectiveOwnerApprovalMode(r.Context(), convOwnerEmail(conv, user), conv)
 	writeJSON(w, r, map[string]any{
 		"schedule":      *target,
 		"input_id":      delivery.InputID,
 		"schedules":     items,
-		"auto_approve":  conv.AutoApprove,
-		"approval_mode": conv.EffectiveApprovalMode(),
+		"auto_approve":  effectiveMode != store.ConversationApprovalManual,
+		"approval_mode": effectiveMode,
 	})
 }
