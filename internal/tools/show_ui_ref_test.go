@@ -212,3 +212,42 @@ func TestShowUIRef_Panel(t *testing.T) {
 		t.Fatalf("a bad panel key beside from_result was accepted: %+v", bad)
 	}
 }
+
+func TestShowUIRef_AutoSubmitOverrideSafety(t *testing.T) {
+	noAutoCard := `{"title":"Review","auto_submit":false,"components":[{"type":"text_input","id":"advertiser","label":"Advertiser","value":"Acme"}],"actions":[{"id":"go","label":"Submit"}]}`
+	results := []PriorToolResult{
+		{CallID: "c_optout", Tool: "mcp_p_review_card", Text: `{"show_ui":` + noAutoCard + `}`},
+		{CallID: "c_default", Tool: "mcp_p_intake_card", Text: `{"show_ui":` + refCard + `}`},
+	}
+
+	// 1. Model may NOT override auto_submit to true or null on a from_result card.
+	for _, badArgs := range []string{
+		`{"from_result":{"call_id":"c_optout"},"auto_submit":true}`,
+		`{"from_result":{"call_id":"c_optout"},"auto_submit":null}`,
+		`{"from_result":{"call_id":"c_default"},"auto_submit":true}`,
+		`{"from_result":{"call_id":"c_default"},"auto_submit":null}`,
+		`{"from_result":{"call_id":"c_default"},"auto_submit":"false"}`,
+	} {
+		shown := shownCards{}
+		seam := refSeam(results, shown)
+		resp := runShowUIWith(t, &seam, badArgs)
+		if !resp.IsError || shown["ui_1"] != "" {
+			t.Fatalf("expected error refusal for %s, got %+v (shown=%q)", badArgs, resp, shown["ui_1"])
+		}
+		if !strings.Contains(badArgs, `"false"`) && !strings.HasPrefix(resp.Content, "UI_INVALID") {
+			t.Fatalf("expected UI_INVALID prefix for %s, got %+v", badArgs, resp)
+		}
+	}
+
+	// 2. Model MAY set "auto_submit": false to disable auto-submit on a from_result card.
+	shown := shownCards{}
+	seam := refSeam(results, shown)
+	resp := runShowUIWith(t, &seam, `{"from_result":{"call_id":"c_default"},"auto_submit":false}`)
+	if resp.IsError {
+		t.Fatalf("expected auto_submit:false override to succeed, got %+v", resp)
+	}
+	var spec map[string]any
+	if err := json.Unmarshal([]byte(shown["ui_1"]), &spec); err != nil || spec["auto_submit"] != false {
+		t.Fatalf("shown spec auto_submit = %v (%v), want false", spec["auto_submit"], err)
+	}
+}

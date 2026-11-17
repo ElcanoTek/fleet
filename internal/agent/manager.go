@@ -1789,6 +1789,55 @@ func enableConnectorsWiredForTurn(ctx context.Context, in TurnInput) bool {
 	return in.InputKind != InputKindChatPatrol && tools.HasEnableMCPConnectorsHandler(ctx)
 }
 
+func (m *Manager) resolvePatrolFallbackModel(
+	ctx context.Context,
+	in TurnInput,
+	modelSlug string,
+	providerFallbacks []fantasy.LanguageModel,
+) fantasy.LanguageModel {
+	if in.InputKind != InputKindChatPatrol || len(providerFallbacks) > 0 {
+		return nil
+	}
+	fbSlug := agentcore.CurrentFallbackModel()
+	if fbSlug == "" || fbSlug == modelSlug || (in.Lockdown && !m.config.LockdownAllows(fbSlug)) {
+		return nil
+	}
+	fb, err := m.modelResolver().Resolve(ctx, fbSlug)
+	if err != nil {
+		return nil
+	}
+	return fb
+}
+
+func (m *Manager) bindTurnOverlayMCPScope(
+	stager ApprovalStager,
+	overlay *RemoteMCPOverlay,
+	turnBroker agentcore.MCPBroker,
+	turnCatalog []mcp.ServerTool,
+	turnSelection agentcore.MCPSelection,
+	persona string,
+) {
+	if !overlay.Active() {
+		return
+	}
+	binder, ok := stager.(MCPScopeBinder)
+	if !ok || binder == nil {
+		return
+	}
+	broker, catalog := overlay.ComposeWith(turnBroker, turnCatalog)
+	dynServers := make(map[string]bool, len(overlay.Servers))
+	for srv := range overlay.Servers {
+		dynServers[srv] = true
+	}
+	binder.BindTurnMCPScope(TurnMCPScope{
+		Broker:               broker,
+		Catalog:              catalog,
+		Selection:            append(append(agentcore.MCPSelection(nil), turnSelection...), overlay.SeatSelection()...),
+		PersonaPolicy:        m.personaPolicy(persona),
+		DynamicRemoteServers: dynServers,
+	})
+}
+
 // RunTurn executes one interactive turn: it builds the per-turn system prompt +
 // sandbox + tools, resolves the model, drives RunInteractiveTurn (which streams
 // through the sink), then maps the accumulated transcript to history + usage.
@@ -1866,21 +1915,16 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 	if !enableConnectorsWired {
 		turnTools.Tools = dropToolByName(turnTools.Tools, tools.EnableMCPConnectorsToolName)
 	}
+	if in.InputKind == InputKindChatPatrol {
+		turnTools.Tools = dropToolByName(turnTools.Tools, tools.ShowUIToolName)
+	}
 
 	model, providerFallbacks, err := m.modelResolver().ResolveWithFallbacks(ctx, in.Model)
 	if err != nil {
 		return nil, fmt.Errorf("resolve model: %w", err)
 	}
 	modelSlug := model.Model()
-	var turnFallbackModel fantasy.LanguageModel
-	if in.InputKind == InputKindChatPatrol && len(providerFallbacks) == 0 {
-		fbSlug := agentcore.CurrentFallbackModel()
-		if fbSlug != "" && fbSlug != modelSlug && (!in.Lockdown || m.config.LockdownAllows(fbSlug)) {
-			if fb, ferr := m.modelResolver().Resolve(ctx, fbSlug); ferr == nil {
-				turnFallbackModel = fb
-			}
-		}
-	}
+	turnFallbackModel := m.resolvePatrolFallbackModel(ctx, in, modelSlug, providerFallbacks)
 
 	// Open the per-user hosted (remote) MCP overlay BEFORE composing the system
 	// prompt: the prompt's "not mounted this turn" section needs the overlay's
@@ -1899,17 +1943,7 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 	// must resolve against the composite the loop dispatches on, and its
 	// staged card must record the {connection, account} seat that was
 	// actually mounted — the seat approval execution reopens verbatim.
-	if overlay.Active() {
-		if binder, ok := in.ApprovalStager.(MCPScopeBinder); ok && binder != nil {
-			broker, catalog := overlay.ComposeWith(turnBroker, turnCatalog)
-			binder.BindTurnMCPScope(TurnMCPScope{
-				Broker:        broker,
-				Catalog:       catalog,
-				Selection:     append(append(agentcore.MCPSelection(nil), turnSelection...), overlay.SeatSelection()...),
-				PersonaPolicy: m.personaPolicy(persona),
-			})
-		}
-	}
+	m.bindTurnOverlayMCPScope(in.ApprovalStager, overlay, turnBroker, turnCatalog, turnSelection, persona)
 
 	// One interactive_hidden_tools snapshot per turn: the prompt's tool-gated
 	// sections and the run gate read the same list (a policy reload between
@@ -2476,6 +2510,9 @@ func hostMemoryBytes() (uint64, error) {
 func emailAttachmentSnapshotter(conversationID, emailAttachmentDir string) func(map[string]any) (func(), error) {
 	staging := tools.OutboundAttachmentStagingDir(emailAttachmentDir)
 	return func(args map[string]any) (func(), error) {
+		if err := tools.MaterializeContentFileMap(conversationID, args); err != nil {
+			return func() {}, err
+		}
 		return tools.SnapshotEmailAttachments(conversationID, args, staging)
 	}
 }

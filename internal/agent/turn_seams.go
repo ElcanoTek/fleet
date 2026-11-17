@@ -37,6 +37,12 @@ type TurnMCPScope struct {
 	// = no narrowing. A stager that calls a tool itself (an approval-card
 	// describer) must not call one the persona's roster would not offer.
 	PersonaPolicy *agentcore.PersonaToolPermissions
+	// DynamicRemoteServers names registered server identities mounted from the
+	// user's dynamic remote MCP overlay (not declared in the bundle's
+	// manifest.yaml mcp_servers). Autonomous mode keeps Auto-mode gating for
+	// these servers so untrusted dynamic remote tools cannot bypass
+	// no_session_approval or destructiveHint gates.
+	DynamicRemoteServers map[string]bool
 }
 
 // MCPScopeBinder is the optional half of ApprovalStager. RunTurn calls it once

@@ -208,11 +208,14 @@ active**, **Timer armed**, or **Paused**), cadence, run count, and countdown to
 the next run, along with **Run now**, **Pause / Resume**, and **Stop** buttons.
 Choosing **⚡ Auto-approve** (in the Patrol popover, Patrol bar, or **Approval
 mode** under **More options** in the composer) lets session-approvable tool
-calls run hands-free while you are away, while **Autonomous** also runs
-deployment-allowlisted checked plans (`agent_policy.critical_tool_autonomous`)
-without pausing and leaves durable receipt cards in the transcript (outbound
-email, scheduled-task cards, and non-allowlisted per-call actions still ask, and
-only turns triggered by the conversation owner use Auto-approve or Autonomous).
+calls run hands-free while you are away, while **Autonomous** (after you accept
+the one-time risk notice) runs bundle-configured live platform actions, optional
+connector activations, and self-addressed owner emails without pausing and
+leaves durable receipt cards in the transcript (external emails/chats/invites,
+scheduled-task and patrol schedule changes, bundle-blocked destructive actions
+in `agent_policy.critical_tool_autonomous_blocked`, and `git push` still ask,
+and only turns triggered by the conversation owner use Auto-approve or
+Autonomous).
 If a patrol turn does stage an approval card, the card stays open for 24 hours
 and automatically resumes the patrol turn as soon as you approve it.
 Conversations with an active or paused patrol are exempt from retention sweeps
@@ -1025,12 +1028,15 @@ can also set the conversation's **Approval mode** under **More options** (`•�
 in the composer toolbar (even while a reply is streaming): **Manual** asks on
 every critical tool, **Auto-approve** shows a lightning-bolt badge on the
 toolbar and runs session-approvable connector actions and shell commands without
-stopping on a card, and **Autonomous** shows an amber **Autonomous** badge and
-also runs deployment-allowlisted checked plans
-(`agent_policy.critical_tool_autonomous`) without pausing while recording
-durable receipt and result cards in the chat (outbound email, scheduled-task
-cards, and non-allowlisted per-call actions still ask, and only turns sent by
-the conversation owner use Auto-approve or Autonomous). Cards are not for exploring what an action would change; ask the assistant to
+stopping on a card, and **Autonomous** (after accepting the one-time risk
+notice) shows an amber **Autonomous** badge and runs live platform actions,
+optional connector activations, self-addressed owner emails, and eligible
+prefilled forms (after a 10-second countdown you can pause) without pausing
+while recording durable receipt and result cards in the chat (external
+messages/invites, scheduled-task and patrol schedule changes, bundle-blocked
+destructive actions in `agent_policy.critical_tool_autonomous_blocked`, and
+`git push` still ask, and only turns sent by the conversation owner use
+Auto-approve or Autonomous). Cards are not for exploring what an action would change; ask the assistant to
 describe the change first, then approve the card once you agree with it.
 
 Which tools are gated and which merely report is set per deployment, not by the

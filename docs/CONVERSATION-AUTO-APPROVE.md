@@ -56,20 +56,29 @@ high-consequence gates.
    - **Auto-approve (`auto`)**: applies to executable critical tools eligible
      for session pre-approval (`SessionApprovalAllowed(toolName)`), emitting
      `tool.auto_resolved` (`via: "conversation_auto_approve"`).
-   - **Autonomous (`autonomous`)**: includes everything in `auto` AND allows
-     bundle-declared checked pipelines in `agent_policy.critical_tool_autonomous`
-     (such as `execute_plan` and `apply_first_party_plan`) to run without
-     blocking, while persisting an approved audit record in `chat.approvals`
-     (`"Ran without asking: this chat is in Autonomous mode."`), rendering a
-     muted receipt card (`tool.action_recorded`), and attaching the tool's
-     structured `result_card` once execution finishes.
+   - **Autonomous (`autonomous`)**: requires one-time server-enforced risk
+     acceptance (`chat.autonomous_acceptances`, `POST /api/chat/autonomous-accept`,
+     `CurrentAutonomousPolicyVersion = 1`). In owner-initiated turns and owner
+     patrols, default-allows bundle-configured critical tools and
+     `critical_tool_no_session_approval` tools (plus inline
+     `enable_mcp_connectors`, self-addressed owner emails, and eligible
+     prefilled `show_ui` forms after a 10-second server-owned countdown in
+     `chat.ui_autosubmits`), persisting an approved audit record in
+     `chat.approvals` (`"Ran without asking: this chat is in Autonomous mode."`),
+     rendering a muted receipt card (`tool.action_recorded`), and attaching the
+     tool's structured `result_card` once execution finishes.
    - **Always excluded even in `Autonomous` mode** (still stage an explicit card):
-     - Handler-only approval cards (`schedule_task`, `manage_tasks`,
-       `preview_email`, `suggest_advanced_model`).
-     - Outbound email tools to external recipients (`send_email`,
-       `send_template_email`, and `mcp_*_send_email` / `mcp_*_send_template_email`).
-     - Raw ad-hoc writes listed in `critical_tool_no_session_approval` that are
-       not opted into `critical_tool_autonomous`.
+     - Bundle-blocked suffixes in `agent_policy.critical_tool_autonomous_blocked`.
+     - External outbound messages: non-self `send_email` / `send_template_email`,
+       M365 mail/chat/channel/calendar/sharing/rules/batch tools, and vendor
+       outbound report/message tools (`tl_async_email_advertiser_report`,
+       `mgpub_send_deal_request_message`).
+     - Privilege-persistence & untrusted-server floor: `schedule_task`,
+       `manage_tasks`, `chat_patrol` `create`/`update`, `connector_studio`
+       mutating/probe actions, and user-connected dynamic remote MCP tools
+       (which keep `auto` mode gating).
+     - Multiplexed destructive storage/sharing (`mcp_fast_io_share` and
+       `mcp_fast_io_storage` `delete`/`purge`/`trash`/`remove`) and `git push`.
    - Explicit session-level deny policies (`SessionApprovalRegistry` `mode:
      "deny"`) are evaluated before `auto_approve` and always take precedence.
 

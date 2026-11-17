@@ -98,8 +98,8 @@ Use chat_patrol when a user asks you to:
 - View, pause, resume, update, or stop an active patrol/timer in this chat
 
 Best practices:
-1. Because chat_patrol executes immediately without ending your turn, when a user asks you to start a patrol AND do an initial check, call chat_patrol(action="create", ...) to arm the recurring schedule and also perform the initial check in the same turn.
-2. Check approval_mode in the tool result ("manual", "auto", or "autonomous"). In "manual" mode, critical tools pause on approval cards; in "auto" mode, routine workspace actions run without cards while checked external plan executors still pause; in "autonomous" mode, both routine workspace actions and bundle-declared checked plan executors run without blocking and leave a receipt card in chat (external emails and raw un-planned writes still stage a card). Tell the user which mode to select in the Patrol bar or composer when their patrol needs unattended actions.`
+1. Calling chat_patrol(action="create", ...) or chat_patrol(action="update", ...) stages an approval card so the conversation owner can confirm the recurring schedule and prompt; actions 'list', 'pause', 'resume', and 'cancel' run immediately without a card. When a user asks you to start a patrol AND do an initial check, perform the initial check in the same turn and stage the patrol schedule card for their confirmation.
+2. Check approval_mode in the tool result ("manual", "auto", or "autonomous"). In "manual" mode, critical tools pause on approval cards; in "auto" mode, routine workspace actions run without cards while external SSP/platform writes still pause; in "autonomous" mode, bundle-configured critical tools, optional connectors, self-addressed emails to the owner, and prefilled show_ui forms run without asking (recording receipt cards in chat), while external emails/chats/invites, recurring schedules, destructive deletions/permission changes, and git push still stage an approval card. Tell the user which mode to select in the Patrol bar or composer when their patrol needs unattended actions.`
 
 // NewChatPatrolTool constructs the interactive chat_patrol tool.
 func NewChatPatrolTool() fantasy.AgentTool {
@@ -107,7 +107,7 @@ func NewChatPatrolTool() fantasy.AgentTool {
 		ChatPatrolToolName,
 		chatPatrolDescription,
 		func(ctx context.Context, params ChatPatrolParams, _ fantasy.ToolCall) (fantasy.ToolResponse, error) {
-			action := normalizeChatPatrolAction(params.Action)
+			action := NormalizeChatPatrolAction(params.Action)
 			if action == "" {
 				return fantasy.NewTextErrorResponse(
 					"invalid action: must be one of 'create', 'list', 'update', 'pause', 'resume', or 'cancel'",
@@ -134,7 +134,9 @@ func NewChatPatrolTool() fantasy.AgentTool {
 	)
 }
 
-func normalizeChatPatrolAction(raw string) string {
+// NormalizeChatPatrolAction maps a chat_patrol action name or alias (trimmed,
+// case-insensitive) to its canonical action, or "" when unrecognized.
+func NormalizeChatPatrolAction(raw string) string {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case "create", "start", "set", "schedule":
 		return ChatPatrolActionCreate

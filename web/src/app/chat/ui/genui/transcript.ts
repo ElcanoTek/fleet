@@ -18,9 +18,11 @@ import {
   parseSubmissionMessage,
   SHOW_UI_TOOL,
   walkInputs,
+  type AutoSubmitPauseResult,
   type CardSpec,
   type Reply,
   type Submission,
+  type UIAutoSubmitState,
 } from "./model";
 import { plural } from "@/app/shared/lib/format";
 
@@ -51,6 +53,10 @@ export type GenUiState = {
    * matching text, so typing the same words yourself locks nothing.
    */
   replies: Map<string, Reply>;
+  /** Server-owned Autonomous auto-submit countdowns keyed by card call_id. */
+  autoSubmits?: ReadonlyMap<string, UIAutoSubmitState>;
+  onPauseAutoSubmit?: (cardId: string) => void | Promise<void | AutoSubmitPauseResult>;
+  onAutoSubmitDue?: (cardId: string) => void;
 };
 
 export const EMPTY_GENUI_STATE: GenUiState = {

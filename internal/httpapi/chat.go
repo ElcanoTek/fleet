@@ -226,8 +226,13 @@ func (s *Server) applyTurnConversationFlags(w http.ResponseWriter, r *http.Reque
 	}
 	ownerEmail := convOwnerEmail(conv, user)
 	isOwner := strings.EqualFold(ownerEmail, user)
-	// Sending a message to an archived conversation un-archives it (#282) —
-	// mirrors how replying to an archived email brings it back to the inbox.
+	if approvalMode != nil && isOwner && parsedMode == store.ConversationApprovalAutonomous {
+		if !s.requireAutonomousAcceptance(w, r, ownerEmail) {
+			return false
+		}
+	}
+	// Sending a message to an archived conversation un-archives it (#282)
+	// mirroring how replying to an archived email brings it back to the inbox.
 	if conv.ArchivedAt != nil {
 		if err := s.store.SetArchived(r.Context(), ownerEmail, conv.ID, false); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -242,6 +247,9 @@ func (s *Server) applyTurnConversationFlags(w http.ResponseWriter, r *http.Reque
 		}
 		conv.ApprovalMode = parsedMode
 		conv.AutoApprove = parsedMode != store.ConversationApprovalManual
+		if parsedMode != store.ConversationApprovalAutonomous {
+			s.cancelConversationAutoSubmits(r.Context(), conv.ID)
+		}
 	} else if approvalMode == nil && autoApprove != nil && *autoApprove != conv.AutoApprove && isOwner {
 		if err := s.store.SetAutoApprove(r.Context(), ownerEmail, conv.ID, *autoApprove); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -254,6 +262,7 @@ func (s *Server) applyTurnConversationFlags(w http.ResponseWriter, r *http.Reque
 			}
 		} else {
 			conv.ApprovalMode = store.ConversationApprovalManual
+			s.cancelConversationAutoSubmits(r.Context(), conv.ID)
 		}
 	}
 	return true
@@ -426,6 +435,16 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+		if req.ApprovalMode != nil {
+			parsedMode, ok := store.ParseConversationApprovalMode(*req.ApprovalMode)
+			if !ok {
+				http.Error(w, "invalid approval_mode: must be manual, auto, or autonomous", http.StatusBadRequest)
+				return
+			}
+			if parsedMode == store.ConversationApprovalAutonomous && !s.requireAutonomousAcceptance(w, r, user) {
+				return
+			}
+		}
 		conv, err = s.store.CreateConversation(r.Context(), user, title, persona, reqModel, lockdown)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -444,6 +463,9 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 	// Vault any password/secret fields from a `[UI submission]` card before the
 	// message is queued, claimed, persisted, or sent to the LLM.
 	req.Message = s.vaultUISubmissionSecrets(r.Context(), user, conv.ID, req.Message)
+	// Cancel any pending show_ui auto-submit countdown whenever a new user
+	// message or manual card submission arrives.
+	s.cancelConversationAutoSubmits(r.Context(), conv.ID)
 
 	// Busy path (#785): a running turn means this submission QUEUES — never an
 	// implicit cancel. The row is durable before the 202 acknowledgement;
@@ -1068,6 +1090,9 @@ func (s *Server) seedConversationMCP(w http.ResponseWriter, r *http.Request, use
 			http.Error(w, "invalid approval_mode: must be manual, auto, or autonomous", http.StatusBadRequest)
 			return false
 		}
+		if parsedMode == store.ConversationApprovalAutonomous && !s.requireAutonomousAcceptance(w, r, user) {
+			return false
+		}
 	}
 	if enabledOptional != nil {
 		valid := s.optionalServerWhitelist(r.Context(), user)
@@ -1276,37 +1301,9 @@ func (s *Server) runTurnAsync(
 
 	journal := newTurnJournalWriter(s.store, buf.turnID)
 	commits := &turnCommits{store: s.turnStore(buf), convID: conv.ID, turnID: buf.turnID, journal: journal}
-	turnCtx = tools.WithChatPatrolHandler(turnCtx, s.newChatPatrolHandler(conv, user, buf))
-	turnCtx = tools.WithManageTasksShowHandler(turnCtx, s.newManageTasksShowHandler(user))
-	turnCtx = tools.WithPersonaStudioHandler(turnCtx, s.newPersonaStudioHandler(user))
-	turnCtx = tools.WithConnectorStudioHandler(turnCtx, s.newConnectorStudioHandler(conv, user))
-	turnCtx = tools.WithPlaywrightBrowserContext(turnCtx, s.newPlaywrightBrowserContext(conv, user))
-	// A "user:<name>" persona runs as its bundle base plus the owner's layer
-	// (only when the turn sender is the owner; non-owner participants run on
-	// the caller's own persona layer or the bundle base without exposing the
-	// owner's private user persona instructions).
-	var turnPersona string
-	var personaLayer *agent.UserPersonaLayer
-	if strings.EqualFold(conv.UserEmail, user) || conv.UserEmail == "" {
-		turnPersona, personaLayer = s.resolveTurnPersona(turnCtx, conv)
-	} else {
-		callerConv := *conv
-		callerConv.UserEmail = user
-		turnPersona, personaLayer = s.resolveTurnPersona(turnCtx, &callerConv)
-	}
-
-	turnStager := s.newTurnStager(turnCtx, conv, user, buf)
-	turnStager.inputKind = inputKind
-	var availableOptional []agent.OptionalServerInfo
-	if inputKind != agent.InputKindChatPatrol {
-		availableOptional = s.availableOptionalConnectorsForUser(turnCtx, user, conv.MCPAccounts)
-		turnCtx = tools.WithEnableMCPConnectorsHandler(turnCtx, s.newEnableMCPConnectorsHandler(conv, user, buf, turnStager, availableOptional))
-	}
-	senderEmail := ""
-	if conv.Multiplayer || (conv.UserEmail != "" && !strings.EqualFold(conv.UserEmail, user)) {
-		senderEmail = user
-	}
-	injectedContext = appendTurnApprovalModeContext(injectedContext, conv, user)
+	turnCtx, turnPersona, personaLayer, turnStager, availableOptional, senderEmail, injectedContext := s.prepareTurnExecutionContext(
+		turnCtx, conv, user, inputKind, userInput, injectedContext, buf,
+	)
 	res, err := s.agent.RunTurn(turnCtx, TurnInput{
 		UserMessage:                 userInput,
 		InjectedContext:             injectedContext,
@@ -1511,16 +1508,73 @@ func (s *Server) runTurnAsync(
 	escCancel()
 }
 
-func appendTurnApprovalModeContext(injectedContext string, conv *store.Conversation, user string) string {
-	if !strings.EqualFold(convOwnerEmail(conv, user), user) {
+func (s *Server) prepareTurnExecutionContext(
+	turnCtx context.Context,
+	conv *store.Conversation,
+	user, inputKind, userInput, injectedContext string,
+	buf *turnBuffer,
+) (
+	context.Context,
+	string,
+	*agent.UserPersonaLayer,
+	*approvalStager,
+	[]agent.OptionalServerInfo,
+	string,
+	string,
+) {
+	turnCtx = tools.WithChatPatrolHandler(turnCtx, s.newChatPatrolHandler(conv, user, buf))
+	turnCtx = tools.WithManageTasksShowHandler(turnCtx, s.newManageTasksShowHandler(user))
+	turnCtx = tools.WithPersonaStudioHandler(turnCtx, s.newPersonaStudioHandler(user))
+	turnCtx = tools.WithConnectorStudioHandler(turnCtx, s.newConnectorStudioHandler(conv, user))
+	turnCtx = tools.WithPlaywrightBrowserContext(turnCtx, s.newPlaywrightBrowserContext(conv, user))
+
+	var turnPersona string
+	var personaLayer *agent.UserPersonaLayer
+	if strings.EqualFold(conv.UserEmail, user) || conv.UserEmail == "" {
+		turnPersona, personaLayer = s.resolveTurnPersona(turnCtx, conv)
+	} else {
+		callerConv := *conv
+		callerConv.UserEmail = user
+		turnPersona, personaLayer = s.resolveTurnPersona(turnCtx, &callerConv)
+	}
+
+	turnStager := s.newTurnStager(turnCtx, conv, user, buf)
+	turnStager.inputKind = inputKind
+	var availableOptional []agent.OptionalServerInfo
+	if inputKind != agent.InputKindChatPatrol {
+		availableOptional = s.availableOptionalConnectorsForUser(turnCtx, user, conv.MCPAccounts)
+		turnCtx = tools.WithEnableMCPConnectorsHandler(turnCtx, s.newEnableMCPConnectorsHandler(conv, user, buf, turnStager, availableOptional))
+		turnCtx = tools.WithShowUIDisplayedHandler(turnCtx, s.newShowUIDisplayedHandler(conv, user, inputKind, userInput, buf, turnStager))
+	}
+	senderEmail := ""
+	if conv.Multiplayer || (conv.UserEmail != "" && !strings.EqualFold(conv.UserEmail, user)) {
+		senderEmail = user
+	}
+	if s.store != nil && conv != nil && conv.ID != "" {
+		if latest, lerr := s.store.Get(turnCtx, convOwnerEmail(conv, user), conv.ID); lerr == nil && latest != nil {
+			conv.AutoApprove = latest.AutoApprove
+			conv.ApprovalMode = latest.ApprovalMode
+		}
+	}
+	injectedContext = s.appendTurnApprovalModeContext(turnCtx, injectedContext, conv, user, inputKind)
+	return turnCtx, turnPersona, personaLayer, turnStager, availableOptional, senderEmail, injectedContext
+}
+
+func (s *Server) appendTurnApprovalModeContext(ctx context.Context, injectedContext string, conv *store.Conversation, user, inputKind string) string {
+	ownerEmail := convOwnerEmail(conv, user)
+	if conv == nil || !strings.EqualFold(ownerEmail, user) {
 		return injectedContext
 	}
 	var note string
-	switch conv.EffectiveApprovalMode() {
+	switch s.effectiveOwnerApprovalMode(ctx, ownerEmail, conv) {
 	case store.ConversationApprovalAutonomous:
-		note = "[Conversation approval mode: autonomous. Routine workspace tools and bundle-declared checked plan executors run without blocking and leave a receipt card in chat; external emails and raw un-planned writes still stage an approval card.]"
+		if inputKind == agent.InputKindChatPatrol {
+			note = "[Conversation approval mode: autonomous. Bundle-configured critical tools and self-addressed emails to the owner run without asking and record receipt cards in chat; external emails/chats/invites, recurring schedules, connector_studio probes/writes, destructive storage/permission actions, bundle-blocked tools, and git push still stage an approval card.]"
+		} else {
+			note = "[Conversation approval mode: autonomous. Bundle-configured critical tools, optional connectors, self-addressed emails to the owner, and eligible prefilled show_ui forms (after a 10s server countdown) run without asking and record receipt cards in chat; external emails/chats/invites, recurring schedules (schedule_task, manage_tasks, chat_patrol create/update), connector_studio probes/writes, destructive storage/permission actions, bundle-blocked tools, and git push still stage an approval card.]"
+		}
 	case store.ConversationApprovalAuto:
-		note = "[Conversation approval mode: auto. Routine workspace tools run without approval cards; per-call external writes and checked plan executors still stage an approval card unless the owner switches this chat to Autonomous mode.]"
+		note = "[Conversation approval mode: auto. Routine session-approvable workspace tools run without approval cards; per-call external writes, emails, schedules, and engine-floor actions still stage an approval card unless the owner switches this chat to Autonomous mode.]"
 	default:
 		return injectedContext
 	}
@@ -1534,10 +1588,11 @@ func appendTurnApprovalModeContext(injectedContext string, conv *store.Conversat
 // escalation check builds a second one with a fresh context, so both stage
 // cards on the same stream under the same timeouts.
 func (s *Server) newTurnStager(ctx context.Context, conv *store.Conversation, user string, buf *turnBuffer) *approvalStager {
-	isOwner := strings.EqualFold(convOwnerEmail(conv, user), user)
+	ownerEmail := convOwnerEmail(conv, user)
+	isOwner := strings.EqualFold(ownerEmail, user)
 	initialMode := store.ConversationApprovalManual
 	if isOwner {
-		initialMode = conv.EffectiveApprovalMode()
+		initialMode = s.effectiveOwnerApprovalMode(ctx, ownerEmail, conv)
 	}
 	return &approvalStager{
 		ctx:             ctx,
@@ -1558,7 +1613,7 @@ func (s *Server) newTurnStager(ctx context.Context, conv *store.Conversation, us
 			if !isOwner {
 				return false
 			}
-			latest, err := s.store.Get(c, convOwnerEmail(conv, user), conv.ID)
+			latest, err := s.store.Get(c, ownerEmail, conv.ID)
 			if err != nil || latest == nil {
 				return false
 			}
@@ -1568,11 +1623,11 @@ func (s *Server) newTurnStager(ctx context.Context, conv *store.Conversation, us
 			if !isOwner {
 				return store.ConversationApprovalManual
 			}
-			latest, err := s.store.Get(c, convOwnerEmail(conv, user), conv.ID)
+			latest, err := s.store.Get(c, ownerEmail, conv.ID)
 			if err != nil || latest == nil {
 				return store.ConversationApprovalManual
 			}
-			return latest.EffectiveApprovalMode()
+			return s.effectiveOwnerApprovalMode(c, ownerEmail, latest)
 		},
 		autoApproveInTest: s.cfg.AutoApproveInTest,
 		push:              s.push,

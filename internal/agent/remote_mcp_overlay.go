@@ -1062,6 +1062,12 @@ func BuildRemoteMCPOverlay(ctx context.Context, resolver RemoteMCPResolver, emai
 	}
 
 	overlay.Catalog = client.GetAllTools()
+	for i := range overlay.Catalog {
+		ann := overlay.Catalog[i].Tool.Annotations
+		if ann != nil && ann.DestructiveHint != nil && *ann.DestructiveHint {
+			overlay.Catalog[i].Tool.Critical = true
+		}
+	}
 	return overlay, nil
 }
 

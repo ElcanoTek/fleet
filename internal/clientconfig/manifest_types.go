@@ -312,18 +312,19 @@ type AgentPolicy struct {
 	//	agent_policy:
 	//	  critical_tool_no_session_approval: [create_deal, update_deal]
 	CriticalToolNoSessionApproval []string `yaml:"critical_tool_no_session_approval"`
-	// CriticalToolAutonomous is an OPTIONAL list of critical suffixes (same
-	// suffix matching as critical_tools) that a conversation owner may authorize
-	// to run without blocking on an approval card by setting that conversation's
-	// approval_mode to "autonomous" (for example, checked SSP deal-plan
-	// executors such as execute_plan and apply_first_party_plan). Each call in
-	// Autonomous mode writes a durable record in chat.approvals and renders a
-	// muted "ran without asking" receipt card. Members must be in critical_tools
-	// and must NOT be outbound email tools.
+	// CriticalToolAutonomous is a deprecated compatibility field kept so
+	// yaml.Strict() continues accepting older client manifests. Default-allow
+	// Autonomous mode now runs bundle critical tools with durable receipts
+	// unless matched by CriticalToolAutonomousBlocked or the engine floor.
+	CriticalToolAutonomous []string `yaml:"critical_tool_autonomous"`
+	// CriticalToolAutonomousBlocked is an OPTIONAL list of critical suffixes
+	// (same suffix matching as critical_tools) that must continue staging a
+	// blocking approval card even when a conversation owner enables Autonomous
+	// mode. Members must be in critical_tools.
 	//
 	//	agent_policy:
-	//	  critical_tool_autonomous: [execute_plan, apply_first_party_plan]
-	CriticalToolAutonomous []string `yaml:"critical_tool_autonomous"`
+	//	  critical_tool_autonomous_blocked: [delete_page, set_deal_rev_share]
+	CriticalToolAutonomousBlocked []string `yaml:"critical_tool_autonomous_blocked"`
 	// CriticalToolCardDescribers is an OPTIONAL map from a critical suffix to
 	// a read-only "describer" tool suffix on the same server. When a matching
 	// call is staged for approval, fleet calls the describer with the same

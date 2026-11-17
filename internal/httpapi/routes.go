@@ -138,6 +138,7 @@ func (s *Server) Routes() http.Handler {
 	// mutate keeps a read-only viewer read-only here too.
 	mux.Handle("/me", auth(member(http.HandlerFunc(s.handleMe))))
 	mux.Handle("/me/team", auth(member(mutate(http.HandlerFunc(s.handleMyTeam)))))
+	mux.Handle("/chat/autonomous-accept", auth(member(mutate(http.HandlerFunc(s.handleAutonomousAccept)))))
 	mux.Handle("/auth/verify", s.gatewayUserMiddleware(http.HandlerFunc(s.handleAuthVerify)))
 	// /auth/session-epoch is off member for the same reason as /auth/verify:
 	// the web tier's mint paths call it before a session exists, and it must answer

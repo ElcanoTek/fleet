@@ -764,6 +764,7 @@ func (b *Bundle) AgentPolicy() AgentPolicy {
 		SettleableCreateTools:         append([]string(nil), b.AgentPolicyConfig.SettleableCreateTools...),
 		CriticalToolNoSessionApproval: append([]string(nil), b.AgentPolicyConfig.CriticalToolNoSessionApproval...),
 		CriticalToolAutonomous:        append([]string(nil), b.AgentPolicyConfig.CriticalToolAutonomous...),
+		CriticalToolAutonomousBlocked: append([]string(nil), b.AgentPolicyConfig.CriticalToolAutonomousBlocked...),
 		CriticalToolResume:            append([]string(nil), b.AgentPolicyConfig.CriticalToolResume...),
 		CriticalToolResumeMaxPerHour:  b.AgentPolicyConfig.CriticalToolResumeMaxPerHour,
 		CriticalToolGroupApproval:     append([]string(nil), b.AgentPolicyConfig.CriticalToolGroupApproval...),

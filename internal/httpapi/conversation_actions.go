@@ -221,17 +221,25 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, u
 		sanitized.OptionalMCPServersEnabled = s.effectiveOptionalMCPServersForCaller(r.Context(), user, conv)
 		conv = &sanitized
 	}
+	uiAutoSubmits, _ := s.store.ListActiveUIAutoSubmits(r.Context(), id)
+	if uiAutoSubmits == nil {
+		uiAutoSubmits = []store.UIAutoSubmit{}
+	}
+	autonomousAccepted := s.hasAcceptedAutonomous(r.Context(), user)
 	writeJSON(w, r, map[string]any{
 		"conversation":  conv,
 		"branch_origin": origin,
 		// historyForParticipant: the owner's own entries carry
 		// `injected_context`; another multiplayer participant's are omitted
 		// so their attachment paths are not exposed.
-		"history":                  historyPayload,
-		"pending_approvals":        approvals,
-		"resolved_approvals":       resolvedCards,
-		"pending_memory_proposals": memProposals,
-		"schedules":                schedules,
+		"history":                   historyPayload,
+		"pending_approvals":         approvals,
+		"resolved_approvals":        resolvedCards,
+		"pending_memory_proposals":  memProposals,
+		"schedules":                 schedules,
+		"ui_autosubmits":            uiAutoSubmits,
+		"autonomous_accepted":       autonomousAccepted,
+		"autonomous_policy_version": store.CurrentAutonomousPolicyVersion,
 	})
 }
 
@@ -550,9 +558,15 @@ func (s *Server) handleAutoApproveSet(w http.ResponseWriter, r *http.Request, us
 			http.Error(w, "invalid approval_mode: must be manual, auto, or autonomous", http.StatusBadRequest)
 			return
 		}
+		if mode == store.ConversationApprovalAutonomous && !s.requireAutonomousAcceptance(w, r, user) {
+			return
+		}
 		if err := s.store.SetApprovalMode(r.Context(), user, id, mode); err != nil {
 			writeConversationMutationError(w, err)
 			return
+		}
+		if mode != store.ConversationApprovalAutonomous {
+			s.cancelConversationAutoSubmits(r.Context(), id)
 		}
 		w.WriteHeader(http.StatusNoContent)
 		return
@@ -564,6 +578,9 @@ func (s *Server) handleAutoApproveSet(w http.ResponseWriter, r *http.Request, us
 	if err := s.store.SetAutoApprove(r.Context(), user, id, enabled); err != nil {
 		writeConversationMutationError(w, err)
 		return
+	}
+	if !enabled {
+		s.cancelConversationAutoSubmits(r.Context(), id)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -776,6 +793,8 @@ func (s *Server) handleConversationCancel(w http.ResponseWriter, r *http.Request
 		http.Error(w, fmt.Sprintf("input_id is limited to %d bytes", maxInputIDLen), http.StatusBadRequest)
 		return
 	}
+	// Cancel any pending show_ui auto-submit countdown on Stop.
+	s.cancelConversationAutoSubmits(r.Context(), id)
 	if inputID != "" {
 		if !isOwner {
 			mpInputID := effectiveMultiplayerInputID(user, inputID)

@@ -422,6 +422,16 @@ type chatStore interface {
 	UpdateChatSchedule(ctx context.Context, userEmail, convID, scheduleID string, patch store.ChatSchedulePatch) (*store.ChatSchedule, error)
 	CancelChatSchedule(ctx context.Context, userEmail, convID, scheduleID string) (*store.ChatSchedule, error)
 	DeliverChatScheduleFire(ctx context.Context, fire models.ChatScheduleFire, maxPending int) (models.ChatScheduleDelivery, error)
+
+	// Autonomous mode risk acceptance + 10-second show_ui auto-submit queue (migration 0201).
+	GetAutonomousAcceptance(ctx context.Context, userEmail string) (int, bool, error)
+	AcceptAutonomousPolicy(ctx context.Context, userEmail string, version int) error
+	CreateUIAutoSubmit(ctx context.Context, row store.UIAutoSubmit) (store.UIAutoSubmit, error)
+	ListActiveUIAutoSubmits(ctx context.Context, convID string) ([]store.UIAutoSubmit, error)
+	PauseUIAutoSubmits(ctx context.Context, convID, callID string) ([]store.UIAutoSubmit, error)
+	CancelPendingUIAutoSubmits(ctx context.Context, convID, callID string) ([]store.UIAutoSubmit, error)
+	CancelActiveUIAutoSubmits(ctx context.Context, convID, callID string) ([]store.UIAutoSubmit, int, error)
+	SweepAndEnqueueDueUIAutoSubmits(ctx context.Context, nowMs int64, limit, maxPending int) ([]store.SweptUIAutoSubmit, error)
 }
 
 // Compile-time proof that the concrete Postgres store satisfies the interface —

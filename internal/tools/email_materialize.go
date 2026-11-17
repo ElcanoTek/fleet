@@ -51,63 +51,82 @@ func MaterializeContentFile(convID, rawInput string) (string, error) {
 	if err := json.Unmarshal([]byte(rawInput), &args); err != nil {
 		return rawInput, nil //nolint:nilerr // non-JSON args pass through unchanged
 	}
+	if _, ok := args["content_file"].(string); !ok {
+		return rawInput, nil
+	}
+	if strings.TrimSpace(args["content_file"].(string)) == "" {
+		return rawInput, nil
+	}
+	if err := MaterializeContentFileMap(convID, args); err != nil {
+		return "", err
+	}
+	out, err := json.Marshal(args)
+	if err != nil {
+		return rawInput, err
+	}
+	return string(out), nil
+}
+
+// MaterializeContentFileMap resolves args["content_file"] inside the
+// conversation workspace and replaces it in place with inline args["content"].
+// No-op when content_file is absent or blank.
+func MaterializeContentFileMap(convID string, args map[string]any) error {
+	if args == nil {
+		return nil
+	}
 	file, _ := args["content_file"].(string)
 	file = strings.TrimSpace(file)
 	if file == "" {
-		return rawInput, nil
+		return nil
 	}
 
-	// content_file takes precedence over inline content — the tool descriptions
+	// content_file takes precedence over inline content: the tool descriptions
 	// for both preview_email and send_email document this contract, and the MCP
 	// sendgrid server enforces the same rule. Always read the file when
 	// content_file is set, replacing any inline content the agent may have provided.
 	//
 	// content_file is model-controlled (steerable via prompt injection), and its
-	// bytes become an OUTBOUND email body — so containment here is what stops an
-	// agent inlining host secrets (/proc/self/environ, ~/.aws/credentials) into
+	// bytes become an OUTBOUND email body, so containment here stops an agent
+	// from inlining host secrets (/proc/self/environ, ~/.aws/credentials) into
 	// mail (#573). Three rules, mirroring SafeWorkspaceJoin:
-	//   1. No $VAR / ~ expansion — an attacker-supplied path must resolve
-	//      literally, never through the fleet process environment.
+	//   1. No $VAR / ~ expansion: an attacker-supplied path resolves literally,
+	//      never through the fleet process environment.
 	//   2. An absolute path must already live under the conversation workspace;
 	//      anything else is rejected outright.
 	//   3. The (now relative) path goes through SafeWorkspaceJoin, which rejects
 	//      ".." components and symlink escapes.
 	workspace, err := filepath.Abs(WorkspaceDirForConversation(convID))
 	if err != nil {
-		return "", fmt.Errorf("resolve workspace for content_file %q: %w", file, err)
+		return fmt.Errorf("resolve workspace for content_file %q: %w", file, err)
 	}
 	rel := file
 	if filepath.IsAbs(file) {
 		r, err := filepath.Rel(workspace, filepath.Clean(file))
 		if err != nil || r == ".." || strings.HasPrefix(r, ".."+string(filepath.Separator)) {
-			return "", fmt.Errorf("content_file %q is outside the conversation workspace %s", file, workspace)
+			return fmt.Errorf("content_file %q is outside the conversation workspace %s", file, workspace)
 		}
 		rel = r
 	}
 	path, err := SafeWorkspaceJoin(workspace, rel)
 	if err != nil {
-		return "", fmt.Errorf("read content_file %q: %w", file, err)
+		return fmt.Errorf("read content_file %q: %w", file, err)
 	}
 
 	info, err := os.Stat(path)
 	if err != nil {
-		return "", fmt.Errorf("read content_file %q: %w", file, err)
+		return fmt.Errorf("read content_file %q: %w", file, err)
 	}
 	if info.Size() > MaxInlinedContentBytes {
-		return "", fmt.Errorf("content_file %q is %d bytes, exceeds %d-byte inline cap", file, info.Size(), MaxInlinedContentBytes)
+		return fmt.Errorf("content_file %q is %d bytes, exceeds %d-byte inline cap", file, info.Size(), MaxInlinedContentBytes)
 	}
 	data, err := os.ReadFile(path) //nolint:gosec // path validated by SafeWorkspaceJoin to live under the conversation workspace
 	if err != nil {
-		return "", fmt.Errorf("read content_file %q: %w", file, err)
+		return fmt.Errorf("read content_file %q: %w", file, err)
 	}
 
 	args["content"] = string(data)
 	delete(args, "content_file")
-	out, err := json.Marshal(args)
-	if err != nil {
-		return rawInput, err
-	}
-	return string(out), nil
+	return nil
 }
 
 // MaterializeAttachmentPaths rewrites every relative `path` inside the

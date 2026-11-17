@@ -63,7 +63,11 @@ type approvalStager struct {
 	// personaPolicy is the turn's persona tool policy (nil = no narrowing),
 	// so a describer call never reaches a tool the persona does not offer.
 	personaPolicy *agentcore.PersonaToolPermissions
-	// mcpMu guards the four fields above: BindTurnMCPScope runs on the turn
+	// dynamicRemoteServers names registered server identities mounted from the
+	// user's dynamic remote MCP overlay (not declared in the bundle's
+	// manifest.yaml mcp_servers).
+	dynamicRemoteServers map[string]bool
+	// mcpMu guards the five fields above: BindTurnMCPScope runs on the turn
 	// goroutine before the loop starts, but Stage can be reached from a
 	// parallel tool dispatch.
 	mcpMu sync.RWMutex
@@ -155,6 +159,57 @@ func (a *approvalStager) BindTurnMCPScope(scope agent.TurnMCPScope) {
 	}
 	a.mcpSeats = seats
 	a.personaPolicy = scope.PersonaPolicy
+	if scope.DynamicRemoteServers != nil {
+		dyn := make(map[string]bool, len(scope.DynamicRemoteServers))
+		for k, v := range scope.DynamicRemoteServers {
+			if v {
+				dyn[k] = true
+			}
+		}
+		a.dynamicRemoteServers = dyn
+	} else {
+		a.dynamicRemoteServers = nil
+	}
+}
+
+func (a *approvalStager) isDynamicRemoteServerTool(toolName string) bool {
+	a.mcpMu.RLock()
+	catalog := a.mcpCatalog
+	dyn := a.dynamicRemoteServers
+	a.mcpMu.RUnlock()
+	if len(dyn) == 0 {
+		return false
+	}
+	if srv, _, err := resolveMCPTool(catalog, toolName); err == nil {
+		return dyn[srv]
+	}
+	for srv := range dyn {
+		if srv != "" && strings.HasPrefix(toolName, agentcore.MCPToolName(srv, "")) {
+			return true
+		}
+	}
+	return false
+}
+
+func (a *approvalStager) isDestructiveDynamicRemoteTool(toolName string) bool {
+	a.mcpMu.RLock()
+	catalog := a.mcpCatalog
+	dyn := a.dynamicRemoteServers
+	a.mcpMu.RUnlock()
+	if len(dyn) == 0 {
+		return false
+	}
+	srv, bare, err := resolveMCPTool(catalog, toolName)
+	if err != nil || !dyn[srv] {
+		return false
+	}
+	for _, st := range catalog {
+		if st.ServerName == srv && st.Tool.Name == bare {
+			ann := st.Tool.Annotations
+			return ann != nil && ann.DestructiveHint != nil && *ann.DestructiveHint
+		}
+	}
+	return false
 }
 
 // mcpScope reads the staging-time credential context under the lock.
@@ -379,6 +434,41 @@ func (a *approvalStager) isAutonomous() bool {
 	return a.effectiveApprovalMode() == store.ConversationApprovalAutonomous
 }
 
+func approvalModeRank(mode string) int {
+	switch mode {
+	case store.ConversationApprovalAutonomous:
+		return 2
+	case store.ConversationApprovalAuto:
+		return 1
+	default:
+		return 0
+	}
+}
+
+// LiveApprovalModeNotice implements agentcore.LiveApprovalModeNotifier so a
+// mid-turn downgrade from Autonomous (or Auto) is reflected in the model's next
+// step context immediately.
+func (a *approvalStager) LiveApprovalModeNotice(_ context.Context) string {
+	initial, ok := store.ParseConversationApprovalMode(a.convApprovalMode)
+	if !ok {
+		if a.convAutoApprove {
+			initial = store.ConversationApprovalAuto
+		} else {
+			initial = store.ConversationApprovalManual
+		}
+	}
+	cur := a.effectiveApprovalMode()
+	if approvalModeRank(cur) >= approvalModeRank(initial) {
+		return ""
+	}
+	switch cur {
+	case store.ConversationApprovalAuto:
+		return "[Live approval mode downgraded mid-turn to: auto. Per-call external writes, non-self emails, schedules, and engine-floor actions now stage an explicit approval card.]"
+	default:
+		return "[Live approval mode downgraded mid-turn to: manual. Critical actions now stage an explicit approval card.]"
+	}
+}
+
 func (a *approvalStager) recordAutonomousAction(toolName, toolCallID, rawInput string) error {
 	if a.store == nil {
 		return errors.New("approval store is not configured")
@@ -423,16 +513,96 @@ func (a *approvalStager) recordAutonomousAction(toolName, toolCallID, rawInput s
 	return nil
 }
 
-// isSelfAddressedPatrolEmail reports whether an outbound email call during an
-// unattended in-chat patrol/timer turn is addressed exclusively to the
-// conversation owner (with no cc/bcc and inline content that requires no
-// staging-time file materialization), so a user whose scheduled check-in or
-// patrol fires unattended can receive their own status/digest email without a
-// manual approval card (even when conversation-wide auto-approve is off).
-// Any inline_attachments such a call carries are checked and copied when it is
-// dispatched (agentcore.Deps.PrepareEmailAttachments), as for an approved card.
-func (a *approvalStager) isSelfAddressedPatrolEmail(toolName, rawInput string) bool {
-	if !a.isPatrolOrPatrolResume() || strings.TrimSpace(a.userEmail) == "" {
+var allowedSelfOwnerEmailKeys = map[string]bool{
+	"to":                    true,
+	"to_email":              true,
+	"cc":                    true,
+	"bcc":                   true,
+	"cc_email":              true,
+	"cc_emails":             true,
+	"bcc_email":             true,
+	"bcc_emails":            true,
+	"reply_to":              true,
+	"reply_to_email":        true,
+	"from":                  true,
+	"from_email":            true,
+	"from_name":             true,
+	"sender":                true,
+	"subject":               true,
+	"content":               true,
+	"content_file":          true,
+	"content_type":          true,
+	"html":                  true,
+	"html_content":          true,
+	"text":                  true,
+	"text_content":          true,
+	"plain_text":            true,
+	"body":                  true,
+	"attachments":           true,
+	"inline_attachments":    true,
+	"template_id":           true,
+	"template":              true,
+	"template_data":         true,
+	"dynamic_template_data": true,
+	"variables":             true,
+}
+
+func matchesExclusiveOwnerRecipient(raw any, ownerEmail string) bool {
+	owner := strings.TrimSpace(ownerEmail)
+	if owner == "" {
+		return false
+	}
+	switch v := raw.(type) {
+	case string:
+		s := strings.TrimSpace(v)
+		if s == "" || strings.ContainsAny(s, ",;<> \t\r\n") {
+			return false
+		}
+		return strings.EqualFold(s, owner)
+	case []any:
+		if len(v) != 1 {
+			return false
+		}
+		s, ok := v[0].(string)
+		if !ok {
+			return false
+		}
+		s = strings.TrimSpace(s)
+		if s == "" || strings.ContainsAny(s, ",;<> \t\r\n") {
+			return false
+		}
+		return strings.EqualFold(s, owner)
+	default:
+		return false
+	}
+}
+
+func isEmptyEmailHeaderValue(raw any, allowEmptySlice bool) bool {
+	if raw == nil {
+		return true
+	}
+	switch v := raw.(type) {
+	case string:
+		return strings.TrimSpace(v) == ""
+	case []any:
+		return allowEmptySlice && len(v) == 0
+	default:
+		return false
+	}
+}
+
+// isSelfAddressedOwnerEmail reports whether an outbound email call in an
+// owner-authorized Autonomous turn/patrol (or an unattended patrol/timer turn)
+// is addressed exclusively to the signed-in conversation owner a.userEmail,
+// with no cc, bcc, reply_to, custom from, or unexpected recipient keys.
+//
+// In Stage(), this runs AFTER MaterializeContentFile, MaterializeAttachmentPaths,
+// validateEmailHasContent, and prevalidateEmail so workspace content_file and
+// attachment paths are validated and materialized before any self-email is
+// allowed to proceed.
+func (a *approvalStager) isSelfAddressedOwnerEmail(toolName, rawInput string) bool {
+	owner := strings.TrimSpace(a.userEmail)
+	if owner == "" || (!a.isAutonomous() && !a.isPatrolOrPatrolResume()) {
 		return false
 	}
 	if !tools.IsEmailToolName(toolName) && !agentcore.IsOutboundEmailTool(toolName) {
@@ -441,47 +611,64 @@ func (a *approvalStager) isSelfAddressedPatrolEmail(toolName, rawInput string) b
 	if toolName == previewEmailToolName {
 		return false
 	}
-	if err := validateEmailHasContent(toolName, rawInput); err != nil {
+	in := parseCallInput(rawInput)
+	if !in.object {
 		return false
+	}
+	seenKeys := make(map[string]bool, len(in.args))
+	for _, arg := range in.args {
+		folded := strings.ToLower(strings.TrimSpace(arg.name))
+		if seenKeys[folded] || !allowedSelfOwnerEmailKeys[folded] {
+			return false
+		}
+		seenKeys[folded] = true
 	}
 	var payload map[string]any
 	if err := json.Unmarshal([]byte(rawInput), &payload); err != nil {
 		return false
 	}
-	if cf, _ := payload["content_file"].(string); strings.TrimSpace(cf) != "" {
-		return false
-	}
-	if att, ok := payload["attachments"]; ok && att != nil {
-		return false
-	}
-	for _, field := range []string{"cc", "bcc", "cc_emails", "bcc_emails"} {
-		switch v := payload[field].(type) {
-		case string:
-			if strings.TrimSpace(v) != "" {
-				return false
-			}
-		case []any:
-			if len(v) > 0 {
-				return false
-			}
-		}
-	}
-	toRaw, ok := payload["to_email"]
-	if !ok {
-		toRaw = payload["to"]
-	}
-	switch v := toRaw.(type) {
-	case string:
-		return strings.EqualFold(strings.TrimSpace(v), strings.TrimSpace(a.userEmail))
-	case []any:
-		if len(v) != 1 {
+	if tools.IsEmailToolName(toolName) {
+		hasInline := validateEmailHasContent(toolName, rawInput) == nil
+		cf, _ := payload["content_file"].(string)
+		if !hasInline && strings.TrimSpace(cf) == "" {
 			return false
 		}
-		s, ok := v[0].(string)
-		return ok && strings.EqualFold(strings.TrimSpace(s), strings.TrimSpace(a.userEmail))
-	default:
-		return false
+	} else {
+		// send_template_email: require a non-empty template identifier.
+		tplID := strings.TrimSpace(firstString(payload, "template_id"))
+		if tplID == "" {
+			tplID = strings.TrimSpace(firstString(payload, "template"))
+		}
+		if tplID == "" {
+			return false
+		}
 	}
+	for _, field := range []string{"cc", "bcc", "cc_email", "cc_emails", "bcc_email", "bcc_emails"} {
+		if val, exists := payload[field]; exists && !isEmptyEmailHeaderValue(val, true) {
+			return false
+		}
+	}
+	for _, field := range []string{"reply_to", "reply_to_email", "from", "from_email", "from_name", "sender"} {
+		if val, exists := payload[field]; exists && !isEmptyEmailHeaderValue(val, false) {
+			return false
+		}
+	}
+	hasTo := false
+	for _, field := range []string{"to", "to_email"} {
+		val, exists := payload[field]
+		if !exists || val == nil {
+			continue
+		}
+		hasTo = true
+		if !matchesExclusiveOwnerRecipient(val, owner) {
+			return false
+		}
+	}
+	return hasTo
+}
+
+func (a *approvalStager) isSelfAddressedPatrolEmail(toolName, rawInput string) bool {
+	return a.isSelfAddressedOwnerEmail(toolName, rawInput)
 }
 
 func (a *approvalStager) emitUserScoped(name string, payload map[string]any) {
@@ -491,7 +678,7 @@ func (a *approvalStager) emitUserScoped(name string, payload map[string]any) {
 	a.sink.Emit(name, payload)
 }
 
-func (a *approvalStager) tryPreResolveStage(toolName, toolCallID, rawInput string) (string, bool) {
+func (a *approvalStager) tryPreResolveBeforeMaterialize(toolName, rawInput string) (string, bool) {
 	// Auto-approve-in-test (#225): a CI/test escape hatch (FLEET_AUTO_APPROVE_IN_TEST,
 	// off by default) for pipelines that have no human present and run against a
 	// mocked backend.
@@ -504,29 +691,47 @@ func (a *approvalStager) tryPreResolveStage(toolName, toolCallID, rawInput strin
 		return agentcore.PreApprovedSentinel, true
 	}
 	// Session pre-approval (#300): an explicit session deny policy takes
-	// precedence over conversation-wide auto-approve and autonomous modes.
-	if a.sessionRegistry != nil && !handlerOnlyApproval(toolName) && agentcore.SessionApprovalAllowed(toolName) {
+	// precedence over conversation-wide auto-approve and autonomous modes, even
+	// on tools whose cards do not normally offer session-wide approval.
+	if a.sessionRegistry != nil && !handlerOnlyApproval(toolName) {
 		if p, ok := a.sessionRegistry.MatchForUser(a.conversationID, a.userEmail, toolName, rawInput); ok {
-			a.emitUserScoped("tool.auto_resolved", map[string]any{
-				"tool":    toolName,
-				"mode":    p.Mode,
-				"pattern": p.Pattern,
-			})
 			if p.Mode == "deny" {
+				a.emitUserScoped("tool.auto_resolved", map[string]any{
+					"tool":    toolName,
+					"mode":    "deny",
+					"pattern": p.Pattern,
+				})
 				return agentcore.PreDeniedSentinel, true
 			}
-			return agentcore.PreApprovedSentinel, true
+			if agentcore.SessionApprovalAllowed(toolName) {
+				a.emitUserScoped("tool.auto_resolved", map[string]any{
+					"tool":    toolName,
+					"mode":    p.Mode,
+					"pattern": p.Pattern,
+				})
+				return agentcore.PreApprovedSentinel, true
+			}
 		}
 	}
-	// Per-conversation Autonomous mode: bundle-declared checked plan executors
-	// (agent_policy.critical_tool_autonomous) run without blocking on a card,
-	// while writing a durable record in chat.approvals and posting a muted
-	// "ran without asking" receipt card. Recording is required, not best-effort.
-	if !handlerOnlyApproval(toolName) && !tools.IsEmailToolName(toolName) && !agentcore.IsOutboundEmailTool(toolName) &&
-		a.isAutonomous() && agentcore.AutonomousApprovalAllowed(toolName) {
-		if err := a.recordAutonomousAction(toolName, toolCallID, rawInput); err != nil {
-			logging.From(a.ctx).Warn("autonomous-mode record failed; falling back to a blocking approval card", "tool", safe.LogSafe(toolName), "conv_id", safe.LogSafe(a.conversationID), "err", err)
-		} else {
+	return "", false
+}
+
+func (a *approvalStager) tryPreResolveAfterMaterialize(toolName, toolCallID, rawInput string) (string, bool) {
+	if handlerOnlyApproval(toolName) {
+		return "", false
+	}
+	// 1. Outbound email tools: ONLY self-addressed owner emails may proceed
+	// without a blocking card (after content_file/attachments materialization
+	// and prevalidation in Stage).
+	if tools.IsEmailToolName(toolName) || agentcore.IsOutboundEmailTool(toolName) {
+		if !a.isSelfAddressedOwnerEmail(toolName, rawInput) {
+			return "", false
+		}
+		if a.isAutonomous() {
+			if err := a.recordAutonomousAction(toolName, toolCallID, rawInput); err != nil {
+				logging.From(a.ctx).Warn("autonomous-mode email record failed; falling back to a blocking approval card", "tool", safe.LogSafe(toolName), "conv_id", safe.LogSafe(a.conversationID), "err", err)
+				return "", false
+			}
 			a.emitUserScoped("tool.auto_resolved", map[string]any{
 				"tool": toolName,
 				"mode": "approve",
@@ -534,11 +739,67 @@ func (a *approvalStager) tryPreResolveStage(toolName, toolCallID, rawInput strin
 			})
 			return agentcore.RecordedSentinel, true
 		}
+		if a.isPatrolOrPatrolResume() && agentcore.SessionApprovalAllowed(toolName) {
+			a.emitUserScoped("tool.auto_resolved", map[string]any{
+				"tool": toolName,
+				"mode": "approve",
+				"via":  "conversation_auto_approve",
+			})
+			return agentcore.PreApprovedSentinel, true
+		}
+		return "", false
 	}
-	// Per-conversation auto-approve (or a self-addressed status/digest email in
-	// an unattended in-chat patrol/timer turn).
-	if !handlerOnlyApproval(toolName) && agentcore.SessionApprovalAllowed(toolName) &&
-		((a.isAutoApprove() && !tools.IsEmailToolName(toolName) && !agentcore.IsOutboundEmailTool(toolName)) || a.isSelfAddressedPatrolEmail(toolName, rawInput)) {
+
+	// 2. Routine bash and browser steps stay lightweight via SSE tool.auto_resolved
+	// (PreApprovedSentinel) rather than writing a chat.approvals row on every
+	// shell/browser step, while git push and other floor-blocked actions remain
+	// blocked even in Autonomous mode.
+	if toolName == "bash" || toolName == tools.PlaywrightBrowserToolName {
+		if (a.isAutonomous() || a.isAutoApprove()) &&
+			agentcore.SessionApprovalAllowed(toolName) &&
+			!agentcore.AutonomousBlocked(toolName) &&
+			!agentcore.IsAutonomousHardBlocked(toolName, rawInput) {
+			via := "conversation_auto_approve"
+			if a.isAutonomous() {
+				via = "conversation_autonomous"
+			}
+			a.emitUserScoped("tool.auto_resolved", map[string]any{
+				"tool": toolName,
+				"mode": "approve",
+				"via":  via,
+			})
+			return agentcore.PreApprovedSentinel, true
+		}
+		return "", false
+	}
+
+	// 3. Default-allow Autonomous mode for bundle-configured critical and
+	// critical_tool_no_session_approval tools, EXCEPT when blocked by
+	// critical_tool_autonomous_blocked, the Engine Hard-Block Floor, or mounted
+	// from an untrusted user-connected dynamic remote MCP server.
+	if a.isAutonomous() &&
+		!agentcore.AutonomousBlocked(toolName) &&
+		!agentcore.IsAutonomousHardBlocked(toolName, rawInput) &&
+		!a.isDynamicRemoteServerTool(toolName) {
+		if err := a.recordAutonomousAction(toolName, toolCallID, rawInput); err != nil {
+			logging.From(a.ctx).Warn("autonomous-mode record failed; falling back to a blocking approval card", "tool", safe.LogSafe(toolName), "conv_id", safe.LogSafe(a.conversationID), "err", err)
+			return "", false
+		}
+		a.emitUserScoped("tool.auto_resolved", map[string]any{
+			"tool": toolName,
+			"mode": "approve",
+			"via":  "conversation_autonomous",
+		})
+		return agentcore.RecordedSentinel, true
+	}
+
+	// 4. Auto-approve mode (and user-connected dynamic remote MCP servers in
+	// Autonomous mode): allow session-approvable, non-floor, non-destructive tools.
+	if a.isAutoApprove() &&
+		agentcore.SessionApprovalAllowed(toolName) &&
+		!agentcore.AutonomousBlocked(toolName) &&
+		!agentcore.IsAutonomousHardBlocked(toolName, rawInput) &&
+		!a.isDestructiveDynamicRemoteTool(toolName) {
 		a.emitUserScoped("tool.auto_resolved", map[string]any{
 			"tool": toolName,
 			"mode": "approve",
@@ -556,41 +817,24 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 	if err := prevalidateStagedTaskPrompt(toolName, rawInput); err != nil {
 		return "", err
 	}
-	if sentinel, ok := a.tryPreResolveStage(toolName, toolCallID, rawInput); ok {
+	if sentinel, ok := a.tryPreResolveBeforeMaterialize(toolName, rawInput); ok {
 		return sentinel, nil
 	}
-	// For email tools that accept content_file, inline the file bytes
-	// now. run_python writes to workspace/<convID>/, but the Go server
-	// and the sendgrid MCP process each have their own cwd, so a bare
-	// filename the agent passes never resolves downstream — the user
-	// sees the filename rendered in the preview card, and the MCP call
-	// errors out with "Content file not found" when they click Send.
-	// Materializing here (the one place that has convID + the file is
-	// still on disk) closes both gaps at once. See the email-delivery incident logs.
+	// Materialize workspace content_file and attachment paths and run email
+	// validation BEFORE self-addressed owner email checks so both staged cards
+	// and un-carded Autonomous/patrol self-emails validate the real body and
+	// resolved workspace paths.
 	if tools.IsEmailToolName(toolName) {
 		inlined, err := tools.MaterializeContentFile(a.conversationID, rawInput)
 		if err != nil {
 			return "", err
 		}
 		rawInput = inlined
-		// Same cwd-mismatch problem as content_file: the sendgrid MCP
-		// subprocess does os.path.abspath against ITS cwd, so a bare
-		// filename like "chart.png" written by run_python into
-		// workspace/<convID>/ never resolves at send time. Rewrite
-		// relative attachment paths to absolute now so the args
-		// replayed post-approval carry resolvable paths.
 		rewritten, err := tools.MaterializeAttachmentPaths(a.conversationID, rawInput)
 		if err != nil {
 			return "", err
 		}
 		rawInput = rewritten
-		// Hard-reject empty content. Without this, preview_email stages a
-		// card with an empty iframe (user sees nothing and reports "I
-		// can't see the preview"), and send_email stages an approval
-		// that the actual SendGrid call will reject AFTER the user has
-		// clicked Send — wasting their time. The agent gets a clear
-		// retry signal instead. See logs/Email-Report-Analysis-and-Summary
-		// for the failure mode this catches.
 		if err := validateEmailHasContent(toolName, rawInput); err != nil {
 			return "", err
 		}
@@ -599,6 +843,25 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 				return "", err
 			}
 		}
+	} else if agentcore.IsOutboundEmailTool(toolName) {
+		inlined, err := tools.MaterializeContentFile(a.conversationID, rawInput)
+		if err != nil {
+			return "", err
+		}
+		rawInput = inlined
+		rewritten, err := tools.MaterializeAttachmentPaths(a.conversationID, rawInput)
+		if err != nil {
+			return "", err
+		}
+		rawInput = rewritten
+		if broker, _, _ := a.mcpScope(); broker != nil {
+			if err := a.prevalidateEmail(toolName, rawInput); err != nil {
+				return "", err
+			}
+		}
+	}
+	if sentinel, ok := a.tryPreResolveAfterMaterialize(toolName, toolCallID, rawInput); ok {
+		return sentinel, nil
 	}
 
 	// A scheduled task inherits this conversation's connectors (ADR-0068): snap

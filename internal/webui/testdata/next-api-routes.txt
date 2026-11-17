@@ -47,6 +47,8 @@ POST /api/browser-sessions/{id}/input
 POST /api/browser-sessions/{id}/close
 GET /api/catwalk-models
 POST /api/chat
+POST /api/chat/autonomous-accept
+POST /api/chat/conversations/{conversationId}/autosubmit/pause
 GET /api/client-config
 GET /api/connector-prefs
 PUT /api/connector-prefs
@@ -56,6 +58,7 @@ GET /api/conversations/{conversationId}/approvals/{approvalId}
 POST /api/conversations/{conversationId}/approvals/{approvalId}
 POST /api/conversations/{conversationId}/approvals/{approvalId}/stop
 POST /api/conversations/{conversationId}/archive
+POST /api/conversations/{conversationId}/autosubmit/pause
 POST /api/conversations/{conversationId}/branch
 POST /api/conversations/{conversationId}/cancel
 GET /api/conversations/{conversationId}/export

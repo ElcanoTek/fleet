@@ -76,10 +76,18 @@ export function SubmissionBubble({
       data-card-id={submission.cardId}
       className="min-w-0 [overflow-wrap:anywhere] rounded-[1.1rem] bg-[var(--color-overlay-soft)] px-3 py-2.5 text-[0.8125rem] leading-[1.5] text-[var(--color-text-primary)] sm:rounded-[1.25rem] sm:px-4 sm:py-3"
     >
-      <div className="flex items-center gap-1.5 font-medium">
+      <div className="flex flex-wrap items-center gap-1.5 font-medium">
         <span aria-hidden>◧</span>
         <span>{spec?.title ?? tr("Card")}</span>
         <span className="text-[var(--color-text-muted)]">· {action}</span>
+        {submission.autoSubmitted ? (
+          <span
+            data-testid="genui-auto-submitted"
+            className="rounded-full border border-[var(--color-border-strong)] bg-[var(--color-surface-1)] px-2 py-0.5 text-[0.68rem] font-normal text-[var(--color-text-muted)]"
+          >
+            {tr("Auto-submitted")}
+          </span>
+        ) : null}
       </div>
       {entries.length > 0 ? (
         <dl className="mt-1.5 grid grid-cols-[minmax(5rem,auto)_1fr] gap-x-3 gap-y-0.5 text-[0.78rem]">

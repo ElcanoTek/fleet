@@ -25,7 +25,11 @@ export type BootBranding = {
 export type Bootstrap = {
   buildId: string;
   branding: BootBranding;
-  session: { email: string } | null;
+  session: {
+    email: string;
+    autonomous_accepted?: boolean;
+    autonomous_policy_version?: number;
+  } | null;
   login: {
     /** False on a Fleet that signs in through central Auth only (Go PasswordLoginEnabled). */
     passwordLoginEnabled: boolean;

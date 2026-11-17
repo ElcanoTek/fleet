@@ -96,17 +96,15 @@ type AgentPolicy struct {
 	// matching tool. Members must be critical suffixes; see
 	// NoSessionApprovalProblems. Empty = every card keeps apply-all, as before.
 	CriticalToolNoSessionApproval []string
-	// CriticalToolAutonomous lists critical suffixes (typically checked plan
-	// executors such as execute_plan and apply_first_party_plan) that a
-	// conversation owner may authorize to run without blocking on an approval
-	// card by opting that single chat into Autonomous mode
-	// (conversations.approval_mode = "autonomous"). Even in Autonomous mode,
-	// each call writes a durable audit record in chat.approvals and renders a
-	// muted "ran without asking" receipt card in the chat transcript. Members
-	// must be critical suffixes and must NOT be non-reversible email suffixes
-	// (see AutonomousApprovalProblems); raw un-planned writes omitted from this
-	// list continue to stage an approval card even in Autonomous mode.
+	// CriticalToolAutonomous is a deprecated compatibility field kept so
+	// existing bundles continue to validate cleanly.
 	CriticalToolAutonomous []string
+	// CriticalToolAutonomousBlocked lists critical suffixes that must continue
+	// staging a blocking approval card even when a conversation owner selects
+	// Autonomous mode. Matched by suffix or exact name like
+	// CriticalToolNoSessionApproval; members must be critical suffixes (see
+	// AutonomousBlockedProblems).
+	CriticalToolAutonomousBlocked []string
 	// CriticalToolCardDescribers maps a critical suffix to a read-only
 	// "describer" tool suffix on the same server. When a matching call is
 	// staged for approval, the stager calls the describer with the same
@@ -254,10 +252,13 @@ var (
 	// activeNoSessionApproval is the set of critical suffixes whose cards take
 	// one decision per call (no apply-all). Empty by default.
 	activeNoSessionApproval = map[string]bool{}
-	// activeAutonomousApproval is the set of critical suffixes eligible to run
-	// with a recorded receipt card when a chat's owner selects Autonomous mode.
-	// Empty by default.
+	// activeAutonomousApproval is the deprecated compatibility set of suffixes
+	// from critical_tool_autonomous. Empty by default.
 	activeAutonomousApproval = map[string]bool{}
+	// activeAutonomousBlocked is the set of critical suffixes from
+	// critical_tool_autonomous_blocked that continue staging a blocking card
+	// even in Autonomous mode. Empty by default.
+	activeAutonomousBlocked = map[string]bool{}
 	// activeCardDescribers maps a critical suffix to its describer suffix.
 	// Empty by default: no card is described.
 	activeCardDescribers = map[string]string{}
@@ -330,14 +331,10 @@ func ConfigureAgentPolicy(p AgentPolicy) {
 	}
 	activeCriticalSuffixes = critical
 	classes, aliasProblems := buildCriticalAliasClasses(p.CriticalToolAliases, seen)
-	for _, problem := range aliasProblems {
-		slog.Warn("agent_policy: config problem", "problem", problem)
-	}
+	warnPolicyProblems(aliasProblems)
 	activeCriticalAliasClass = classes
 	emailLast, settleable, emailLastProblems := buildEmailLastSets(p, seen)
-	for _, problem := range emailLastProblems {
-		slog.Warn("agent_policy: config problem", "problem", problem)
-	}
+	warnPolicyProblems(emailLastProblems)
 
 	subs := make(map[string][]string, len(p.CriticalToolSubstitutes))
 	for k, v := range p.CriticalToolSubstitutes {
@@ -355,9 +352,52 @@ func ConfigureAgentPolicy(p AgentPolicy) {
 		}
 	}
 	activeCriticalTimeouts = timeouts
+	activeCriticalModes = buildCriticalModesMap(p.CriticalToolModes)
+	activeCriticalUndoHints = buildTrimmedStringMap(p.CriticalToolUndoHints)
+	activeBatchPerDeal = buildSecondsDurationMap(p.BatchSecondsPerDeal)
+	activeApprovedCallTimeout = buildSecondsDurationMap(p.ApprovedCallTimeoutSeconds)
 
-	modes := make(map[string]string, len(p.CriticalToolModes))
-	for k, v := range p.CriticalToolModes {
+	noSession, noSessionProblems := buildNoSessionApprovalSet(p.CriticalToolNoSessionApproval, seen)
+	warnPolicyProblems(noSessionProblems)
+	activeNoSessionApproval = noSession
+	activeAutonomousApproval = installAutonomousSet(p.CriticalToolAutonomous, seen)
+	autonomousBlocked, autonomousBlockedProblems := buildAutonomousBlockedSet(p.CriticalToolAutonomousBlocked, seen)
+	warnPolicyProblems(autonomousBlockedProblems)
+	activeAutonomousBlocked = autonomousBlocked
+
+	describers, describerProblems := buildCardDescribers(p.CriticalToolCardDescribers, critical, parallel)
+	warnPolicyProblems(describerProblems)
+	activeCardDescribers = describers
+
+	resume, resumeMax, resumeProblems := buildResumeSet(p, seen)
+	warnPolicyProblems(resumeProblems)
+	activeResume, activeResumeMaxPerHour = resume, resumeMax
+
+	group, groupProblems := buildStagedCardSuffixSet("critical_tool_group_approval", p.CriticalToolGroupApproval, p.CriticalToolModes, seen)
+	warnPolicyProblems(groupProblems)
+	activeGroupApproval = group
+
+	progress, progressProblems := buildStagedCardSuffixSet("critical_tool_progress", p.CriticalToolProgress, p.CriticalToolModes, seen)
+	warnPolicyProblems(progressProblems)
+	activeProgress = progress
+
+	activeResultCards = installResultCardSet(p.CriticalToolResultCards, seen)
+
+	activeNarrowableArgs = installNarrowableArgs(p.CriticalToolNarrowableArgs, p.CriticalToolModes, seen)
+	activeStop = installStopSet(p.CriticalToolStop, p.CriticalToolModes, seen)
+	activeInteractiveHidden = installInteractiveHiddenList(p.InteractiveHiddenTools)
+	activeUnattendedDisabled = installUnattendedDisabledSet(p.UnattendedDisabledTools)
+}
+
+func warnPolicyProblems(problems []string) {
+	for _, problem := range problems {
+		slog.Warn("agent_policy: config problem", "problem", problem)
+	}
+}
+
+func buildCriticalModesMap(raw map[string]string) map[string]string {
+	modes := make(map[string]string, len(raw))
+	for k, v := range raw {
 		k = strings.TrimSpace(k)
 		v = strings.ToLower(strings.TrimSpace(v))
 		if k == "" {
@@ -368,75 +408,33 @@ func ConfigureAgentPolicy(p AgentPolicy) {
 			continue
 		}
 		if v == ApprovalModeNotify && nonReversibleSuffixes[k] {
-			slog.Warn("agent_policy: refusing approval mode — a sent message cannot be undone, so its approval card is the review step", "mode", ApprovalModeNotify, "tool", k, "pinned_to", ApprovalModeApprove)
+			slog.Warn("agent_policy: refusing approval mode: a sent message cannot be undone, so its approval card is the review step", "mode", ApprovalModeNotify, "tool", k, "pinned_to", ApprovalModeApprove)
 			continue
 		}
 		modes[k] = v
 	}
-	activeCriticalModes = modes
+	return modes
+}
 
-	hints := make(map[string]string, len(p.CriticalToolUndoHints))
-	for k, v := range p.CriticalToolUndoHints {
+func buildTrimmedStringMap(raw map[string]string) map[string]string {
+	out := make(map[string]string, len(raw))
+	for k, v := range raw {
 		k, v = strings.TrimSpace(k), strings.TrimSpace(v)
 		if k != "" && v != "" {
-			hints[k] = v
+			out[k] = v
 		}
 	}
-	activeCriticalUndoHints = hints
+	return out
+}
 
-	perDeal := make(map[string]time.Duration, len(p.BatchSecondsPerDeal))
-	for server, secs := range p.BatchSecondsPerDeal {
+func buildSecondsDurationMap(raw map[string]int) map[string]time.Duration {
+	out := make(map[string]time.Duration, len(raw))
+	for server, secs := range raw {
 		if server = strings.TrimSpace(server); server != "" && secs > 0 {
-			perDeal[server] = time.Duration(secs) * time.Second
+			out[server] = time.Duration(secs) * time.Second
 		}
 	}
-	activeBatchPerDeal = perDeal
-
-	approved := make(map[string]time.Duration, len(p.ApprovedCallTimeoutSeconds))
-	for server, secs := range p.ApprovedCallTimeoutSeconds {
-		if server = strings.TrimSpace(server); server != "" && secs > 0 {
-			approved[server] = time.Duration(secs) * time.Second
-		}
-	}
-	activeApprovedCallTimeout = approved
-
-	noSession, noSessionProblems := buildNoSessionApprovalSet(p.CriticalToolNoSessionApproval, seen)
-	for _, problem := range noSessionProblems {
-		slog.Warn("agent_policy: config problem", "problem", problem)
-	}
-	activeNoSessionApproval = noSession
-	activeAutonomousApproval = installAutonomousSet(p.CriticalToolAutonomous, seen)
-
-	describers, describerProblems := buildCardDescribers(p.CriticalToolCardDescribers, critical, parallel)
-	for _, problem := range describerProblems {
-		slog.Warn("agent_policy: config problem", "problem", problem)
-	}
-	activeCardDescribers = describers
-
-	resume, resumeMax, resumeProblems := buildResumeSet(p, seen)
-	for _, problem := range resumeProblems {
-		slog.Warn("agent_policy: config problem", "problem", problem)
-	}
-	activeResume, activeResumeMaxPerHour = resume, resumeMax
-
-	group, groupProblems := buildStagedCardSuffixSet("critical_tool_group_approval", p.CriticalToolGroupApproval, p.CriticalToolModes, seen)
-	for _, problem := range groupProblems {
-		slog.Warn("agent_policy: config problem", "problem", problem)
-	}
-	activeGroupApproval = group
-
-	progress, progressProblems := buildStagedCardSuffixSet("critical_tool_progress", p.CriticalToolProgress, p.CriticalToolModes, seen)
-	for _, problem := range progressProblems {
-		slog.Warn("agent_policy: config problem", "problem", problem)
-	}
-	activeProgress = progress
-
-	activeResultCards = installResultCardSet(p.CriticalToolResultCards, seen)
-
-	activeNarrowableArgs = installNarrowableArgs(p.CriticalToolNarrowableArgs, p.CriticalToolModes, seen)
-	activeStop = installStopSet(p.CriticalToolStop, p.CriticalToolModes, seen)
-	activeInteractiveHidden = installInteractiveHiddenList(p.InteractiveHiddenTools)
-	activeUnattendedDisabled = installUnattendedDisabledSet(p.UnattendedDisabledTools)
+	return out
 }
 
 // suffixMatches reports whether a tool (or a suffix standing for one) is
@@ -670,7 +668,7 @@ func AutonomousApprovalAllowed(toolName string) bool {
 }
 
 // AutonomousToolSuffixes returns the sorted list of installed
-// critical_tool_autonomous suffixes for system-prompt documentation.
+// critical_tool_autonomous suffixes for compatibility callers.
 func AutonomousToolSuffixes() []string {
 	policyMu.RLock()
 	defer policyMu.RUnlock()
@@ -679,6 +677,73 @@ func AutonomousToolSuffixes() []string {
 	}
 	out := make([]string, 0, len(activeAutonomousApproval))
 	for s := range activeAutonomousApproval {
+		out = append(out, s)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// buildAutonomousBlockedSet resolves critical_tool_autonomous_blocked into a
+// suffix set. A member that is not in critical_tools is reported by preflight
+// validation (so typos fail `fleet validate-config`), while still being
+// installed at runtime because blocking in Autonomous mode is the safe
+// direction.
+func buildAutonomousBlockedSet(members []string, critical map[string]bool) (map[string]bool, []string) {
+	set := make(map[string]bool, len(members))
+	var problems []string
+	for _, s := range members {
+		s = strings.TrimSpace(s)
+		if s == "" || set[s] {
+			continue
+		}
+		if !critical[s] {
+			problems = append(problems, fmt.Sprintf("critical_tool_autonomous_blocked member %q is not in critical_tools, so no approval card is ever staged for it unless added to critical_tools", s))
+		}
+		set[s] = true
+	}
+	return set, problems
+}
+
+// AutonomousBlockedProblems validates p.CriticalToolAutonomousBlocked against
+// p.CriticalToolSuffixes for `fleet validate-config`.
+func AutonomousBlockedProblems(p AgentPolicy) []string {
+	critical := make(map[string]bool, len(baseCriticalToolSuffixes)+len(p.CriticalToolSuffixes))
+	for _, s := range baseCriticalToolSuffixes {
+		critical[s] = true
+	}
+	for _, s := range p.CriticalToolSuffixes {
+		if s != "" {
+			critical[s] = true
+		}
+	}
+	_, problems := buildAutonomousBlockedSet(p.CriticalToolAutonomousBlocked, critical)
+	return problems
+}
+
+// AutonomousBlocked reports whether toolName matches an entry in
+// agent_policy.critical_tool_autonomous_blocked (exact match or "_<suffix>"
+// suffix match, mirroring SessionApprovalAllowed).
+func AutonomousBlocked(toolName string) bool {
+	policyMu.RLock()
+	defer policyMu.RUnlock()
+	for suffix := range activeAutonomousBlocked {
+		if toolName == suffix || strings.HasSuffix(toolName, "_"+suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+// AutonomousBlockedSuffixes returns the sorted list of installed
+// critical_tool_autonomous_blocked suffixes for system-prompt documentation.
+func AutonomousBlockedSuffixes() []string {
+	policyMu.RLock()
+	defer policyMu.RUnlock()
+	if len(activeAutonomousBlocked) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(activeAutonomousBlocked))
+	for s := range activeAutonomousBlocked {
 		out = append(out, s)
 	}
 	sort.Strings(out)

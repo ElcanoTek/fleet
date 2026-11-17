@@ -179,7 +179,7 @@ export function PatrolBanner({
                       {
                         id: "autonomous" as const,
                         label: tr("Autonomous"),
-                        title: tr("Autonomous: routine tools and checked plans run unattended with receipt cards; external emails still ask."),
+                        title: tr("Autonomous: live platform actions run unattended with receipt cards; external messages, schedules, destructive changes, and git push still ask."),
                       },
                     ]
                   ).map((opt) => {
@@ -350,10 +350,14 @@ export type CreatePatrolInput = {
 
 export function PatrolPopover({
   initialPrompt,
+  autonomousAccepted,
+  onRequireAutonomousAccept,
   onStartPatrol,
   onClose,
 }: {
   initialPrompt?: string;
+  autonomousAccepted?: boolean;
+  onRequireAutonomousAccept?: (onAccepted: () => void) => void;
   onStartPatrol: (input: CreatePatrolInput) => boolean | void | Promise<boolean | void>;
   onClose: () => void;
 }) {
@@ -615,7 +619,7 @@ export function PatrolPopover({
               </div>
               <div className="picker-row__desc">
                 {patrolApprovalMode === "autonomous"
-                  ? tr("Runs routine workspace tools and checked plans unattended with receipt cards; external emails still ask.")
+                  ? tr("Runs live platform actions unattended with receipt cards; external messages, schedules, destructive changes, and git push still ask.")
                   : patrolApprovalMode === "auto"
                     ? tr("Skips cards for routine workspace actions; checked plans and external emails still ask.")
                     : tr("Waits on interactive approval cards for every critical action.")}
@@ -646,7 +650,19 @@ export function PatrolPopover({
                     type="button"
                     role="radio"
                     aria-checked={selected}
-                    onClick={() => setPatrolApprovalMode(opt.id)}
+                    onClick={() => {
+                      if (
+                        opt.id === "autonomous" &&
+                        autonomousAccepted === false &&
+                        onRequireAutonomousAccept
+                      ) {
+                        onRequireAutonomousAccept(() =>
+                          setPatrolApprovalMode("autonomous"),
+                        );
+                        return;
+                      }
+                      setPatrolApprovalMode(opt.id);
+                    }}
                     className={`rounded-[var(--radius-md)] border px-2.5 py-1.5 text-center text-[0.75rem] font-semibold transition ${
                       selected
                         ? activeTone
