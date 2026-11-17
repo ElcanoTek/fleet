@@ -1033,15 +1033,15 @@ can also set the conversation's **Approval mode** under **More options** (`â€¢â€
 in the composer toolbar (even while a reply is streaming): **Manual** asks on
 every critical tool, **Auto-approve** shows a lightning-bolt badge on the
 toolbar and runs session-approvable connector actions and shell commands without
-stopping on a card, and **Autonomous** (after accepting the one-time risk
-notice) shows an amber **Autonomous** badge and runs live platform actions,
+stopping on a card, and **Autonomous** (after confirming the Autonomous risk
+prompt) shows an amber **Autonomous** badge and runs live platform actions,
 optional connector activations, self-addressed owner emails, and eligible
 prefilled forms (after a 10-second countdown you can pause) without pausing
 while recording durable receipt and result cards in the chat (external
-messages/invites, scheduled-task and patrol schedule changes, bundle-blocked
-destructive actions in `agent_policy.critical_tool_autonomous_blocked`, and
-`git push` still ask, and only turns sent by the conversation owner use
-Auto-approve or Autonomous). Cards are not for exploring what an action would change; ask the assistant to
+messages/invites, scheduled-task and patrol schedule changes, destructive
+storage or permission changes, bundle-blocked actions in
+`agent_policy.critical_tool_autonomous_blocked`, and `git push` still ask, and
+only turns sent by the conversation owner use Auto-approve or Autonomous). Cards are not for exploring what an action would change; ask the assistant to
 describe the change first, then approve the card once you agree with it.
 
 Which tools are gated and which merely report is set per deployment, not by the

@@ -56,9 +56,11 @@ high-consequence gates.
    - **Auto-approve (`auto`)**: applies to executable critical tools eligible
      for session pre-approval (`SessionApprovalAllowed(toolName)`), emitting
      `tool.auto_resolved` (`via: "conversation_auto_approve"`).
-   - **Autonomous (`autonomous`)**: requires one-time server-enforced risk
+   - **Autonomous (`autonomous`)**: requires server-enforced risk
      acceptance (`chat.autonomous_acceptances`, `POST /api/chat/autonomous-accept`,
-     `CurrentAutonomousPolicyVersion = 1`). In owner-initiated turns and owner
+     `CurrentAutonomousPolicyVersion = 1`), and switching a chat or Launchpad
+     patrol into `Autonomous` prompts the confirmation dialog (`AutonomousRiskModal`)
+     each time the user enters `Autonomous` mode. In owner-initiated turns and owner
      patrols, default-allows bundle-configured critical tools and
      `critical_tool_no_session_approval` tools (plus inline
      `enable_mcp_connectors`, self-addressed owner emails, and eligible
