@@ -129,6 +129,15 @@ func (s *Server) cancelConversationAutoSubmits(ctx context.Context, convID strin
 	}
 }
 
+func (s *Server) cancelAutoSubmitsIfTurnStopped(turnCtx context.Context, convID string) {
+	if turnCtx.Err() == nil {
+		return
+	}
+	cctx, cancel := context.WithTimeout(context.WithoutCancel(turnCtx), 5*time.Second)
+	defer cancel()
+	s.cancelConversationAutoSubmits(cctx, convID)
+}
+
 func (s *Server) cancelConversationAutoSubmitsErr(ctx context.Context, convID string) error {
 	if s == nil || s.store == nil || strings.TrimSpace(convID) == "" {
 		return nil
@@ -308,7 +317,13 @@ func (s *Server) newShowUIDisplayedHandler(
 		if strings.TrimSpace(callID) == "" || !eligible {
 			return
 		}
+		if ctx.Err() != nil {
+			return
+		}
 		if s.consecutiveAutoSubmitChainDepth(ctx, conv.ID, currentUserInput, userCommitted) >= maxAutoSubmitChain {
+			return
+		}
+		if ctx.Err() != nil {
 			return
 		}
 
@@ -325,9 +340,15 @@ func (s *Server) newShowUIDisplayedHandler(
 			UpdatedAtMs:    nowMs,
 		})
 		if err != nil {
-			if !errors.Is(err, store.ErrUIAutoSubmitSuperseded) {
+			if !errors.Is(err, store.ErrUIAutoSubmitSuperseded) && ctx.Err() == nil {
 				logging.From(ctx).Warn("autosubmit arm failed", "conv_id", safe.LogSafe(conv.ID), "call_id", safe.LogSafe(callID), "err", err)
 			}
+			return
+		}
+		if ctx.Err() != nil {
+			cancelCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			s.cancelConversationAutoSubmits(cancelCtx, conv.ID)
+			cancel()
 			return
 		}
 		s.emitUIAutoSubmit(buf, conv.ID, stored)

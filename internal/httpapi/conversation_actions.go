@@ -843,42 +843,8 @@ func (s *Server) handleConversationCancel(w http.ResponseWriter, r *http.Request
 		http.Error(w, fmt.Sprintf("input_id is limited to %d bytes", maxInputIDLen), http.StatusBadRequest)
 		return
 	}
-	// Cancel any pending show_ui auto-submit countdown before acknowledging Stop.
-	if !s.cancelAutoSubmitsOrFail(r.Context(), w, id) {
-		return
-	}
 	if inputID != "" {
-		if !isOwner {
-			mpInputID := effectiveMultiplayerInputID(user, inputID)
-			existing, err := s.store.LookupInput(r.Context(), id, mpInputID)
-			if err != nil {
-				http.Error(w, "the input could not be withdrawn from the queue", http.StatusInternalServerError)
-				return
-			}
-			if existing != nil {
-				inputID = mpInputID
-			} else {
-				rawExisting, err := s.store.LookupInput(r.Context(), id, inputID)
-				if err != nil {
-					http.Error(w, "the input could not be withdrawn from the queue", http.StatusInternalServerError)
-					return
-				}
-				if rawExisting != nil {
-					if !strings.EqualFold(rawExisting.UserEmail, user) {
-						http.Error(w, "only the conversation owner or the message sender can cancel this input", http.StatusForbidden)
-						return
-					}
-				} else {
-					inputID = mpInputID
-				}
-			}
-		}
-		res, ok := s.stopInput(r.Context(), user, id, inputID)
-		if !ok {
-			http.Error(w, "the input could not be withdrawn from the queue", http.StatusInternalServerError)
-			return
-		}
-		writeStopResult(w, res, "the input had already finished")
+		s.handleConversationCancelByInputID(w, r, user, id, inputID, isOwner)
 		return
 	}
 	if turnID != "" {
@@ -889,75 +855,100 @@ func (s *Server) handleConversationCancel(w http.ResponseWriter, r *http.Request
 				return
 			}
 		}
-		// Nothing stopped (the named turn had ended, or completed as the
-		// cancel landed) is said so, not a bare 204, so a caller that
-		// watched the turn reads its real outcome instead of reporting it
-		// cancelled.
-		writeStopResult(w, stopFromTurn(s.cancelInflightTurn(id, turnID)), "the named turn is not running")
+		stopped := s.cancelInflightTurn(id, turnID)
+		if !s.cancelAutoSubmitsOrFail(r.Context(), w, id) {
+			return
+		}
+		writeStopResult(w, stopFromTurn(stopped), "the named turn is not running")
 		return
 	}
 	if !isOwner {
-		// Allow a non-owner multiplayer participant to stop their own active
-		// turn and/or their own queued inputs via bodyless POST /cancel, while
-		// refusing attempts to cancel another user's turn.
-		stoppedOwnTurn := false
-		if entry, ok := s.getInflight(id); ok && entry.IsRunning() && entry.steer != nil && strings.EqualFold(entry.steer.user, user) {
-			_ = s.cancelInflightTurn(id, entry.turnID)
-			stoppedOwnTurn = true
-		}
-		cancelledQueued := 0
-		if scope == "all" {
-			epoch := s.store.AcceptedInputSeq()
-			qctx, qcancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
-			if n, err := s.store.CancelQueuedInputs(qctx, user, id, epoch); err != nil {
-				logging.From(r.Context()).Error("cancel queued inputs failed", "conv_id", id, "err", err)
-			} else if n > 0 {
-				cancelledQueued = n
-				s.emitQueueUpdate(qctx, user, id)
-			}
-			qcancel()
-		}
-		if !stoppedOwnTurn && cancelledQueued == 0 {
-			http.Error(w, "only the conversation owner can stop another user's turns in this conversation", http.StatusForbidden)
-			return
-		}
-		w.WriteHeader(http.StatusNoContent)
+		s.handleNonOwnerConversationCancel(w, r, user, id, scope)
 		return
 	}
 	if scope == "all" {
-		// One lock section records the Stop boundary, arms the drain
-		// interlock and captures the running turn (beginStopSweep). The
-		// cancelled turn's completion tail-calls maybeDrainQueue, which
-		// must not claim the FIFO head while this sweep is still on its way
-		// to cancelling it; a drain that claimed just before is refused by
-		// the boundary (stopGateForRow) or the generation (registerTurnGated).
-		// endStopSweep lifts the interlock and re-kicks the drain for
-		// anything accepted after the Stop.
-		//
-		// The captured turn is cancelled FIRST, before any database work:
-		// the model must stop the instant the button is pressed, even if the
-		// sweep below stalls on a slow or unreachable store — and it is
-		// exactly the turn present when the Stop began, not one a direct
-		// submission registered a moment later.
 		epoch, entry, running := s.beginStopSweep(id)
 		defer s.endStopSweep(id)
 		if running {
 			entry.cancel()
 		}
-		// Fresh context: Stop must sweep the queue even when the client
-		// aborts the request the moment the button is pressed. The sweep is
-		// bounded to rows accepted before the Stop began (#1477): a
-		// follow-up submitted after Stop, while the cancelled turn was still
-		// finishing, keeps its 202 and runs on the re-kick.
 		qctx, qcancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
+		defer qcancel()
 		if n, err := s.store.CancelQueuedInputs(qctx, "", id, epoch); err != nil {
 			logging.From(r.Context()).Error("cancel queued inputs failed", "conv_id", id, "err", err)
 		} else if n > 0 {
 			s.emitQueueUpdate(qctx, "", id)
 		}
-		qcancel()
+		if !s.cancelAutoSubmitsOrFail(qctx, w, id) {
+			return
+		}
 	} else {
 		s.cancelInflight(id)
+		if !s.cancelAutoSubmitsOrFail(r.Context(), w, id) {
+			return
+		}
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleConversationCancelByInputID(w http.ResponseWriter, r *http.Request, user, id, inputID string, isOwner bool) {
+	if !isOwner {
+		mpInputID := effectiveMultiplayerInputID(user, inputID)
+		existing, err := s.store.LookupInput(r.Context(), id, mpInputID)
+		if err != nil {
+			http.Error(w, "the input could not be withdrawn from the queue", http.StatusInternalServerError)
+			return
+		}
+		if existing != nil {
+			inputID = mpInputID
+		} else {
+			rawExisting, err := s.store.LookupInput(r.Context(), id, inputID)
+			if err != nil {
+				http.Error(w, "the input could not be withdrawn from the queue", http.StatusInternalServerError)
+				return
+			}
+			if rawExisting != nil {
+				if !strings.EqualFold(rawExisting.UserEmail, user) {
+					http.Error(w, "only the conversation owner or the message sender can cancel this input", http.StatusForbidden)
+					return
+				}
+			} else {
+				inputID = mpInputID
+			}
+		}
+	}
+	res, ok := s.stopInput(r.Context(), user, id, inputID)
+	if !ok {
+		http.Error(w, "the input could not be withdrawn from the queue", http.StatusInternalServerError)
+		return
+	}
+	if isOwner && !s.cancelAutoSubmitsOrFail(r.Context(), w, id) {
+		return
+	}
+	writeStopResult(w, res, "the input had already finished")
+}
+
+func (s *Server) handleNonOwnerConversationCancel(w http.ResponseWriter, r *http.Request, user, id, scope string) {
+	stoppedOwnTurn := false
+	if entry, ok := s.getInflight(id); ok && entry.IsRunning() && entry.steer != nil && strings.EqualFold(entry.steer.user, user) {
+		_ = s.cancelInflightTurn(id, entry.turnID)
+		stoppedOwnTurn = true
+	}
+	cancelledQueued := 0
+	if scope == "all" {
+		epoch := s.store.AcceptedInputSeq()
+		qctx, qcancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
+		if n, err := s.store.CancelQueuedInputs(qctx, user, id, epoch); err != nil {
+			logging.From(r.Context()).Error("cancel queued inputs failed", "conv_id", id, "err", err)
+		} else if n > 0 {
+			cancelledQueued = n
+			s.emitQueueUpdate(qctx, user, id)
+		}
+		qcancel()
+	}
+	if !stoppedOwnTurn && cancelledQueued == 0 {
+		http.Error(w, "only the conversation owner can stop another user's turns in this conversation", http.StatusForbidden)
+		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

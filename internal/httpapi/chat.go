@@ -1348,6 +1348,7 @@ func (s *Server) runTurnAsync(
 		SenderEmail:    senderEmail,
 		MCPUser:        mcpUser,
 	}, buf)
+	s.cancelAutoSubmitsIfTurnStopped(turnCtx, conv.ID)
 	if err != nil {
 		// No result, so no card; the deferred drain above counts the
 		// classifier request already sent.
