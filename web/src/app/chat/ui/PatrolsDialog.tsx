@@ -138,7 +138,51 @@ export type PatrolFormValues = {
   timezone?: string;
   durationSeconds?: number;
   approvalMode: ConversationApprovalMode;
+  /** Whether any schedule control was touched. An edit that did not touch
+   *  them keeps the schedule exactly as it was (the form cannot show every
+   *  duration the assistant can set, e.g. 90 seconds). */
+  scheduleChanged: boolean;
 };
+
+// The extra ask before a chat with a running patrol goes Autonomous: its
+// next run then takes live platform actions without stopping for cards.
+// The Patrol bar's dropdown asks the same; every path that can switch the
+// mode (the dialog's mode control and both forms) goes through this.
+function AutonomousConfirm({
+  onKeep,
+  onConfirm,
+}: {
+  onKeep: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div
+      role="alert"
+      data-testid="patrols-autonomous-confirm"
+      className="grid gap-2.5 rounded-[var(--radius-md)] border border-[var(--color-warning-border)] bg-[var(--color-warning-tint)] p-2.5 pl-3"
+    >
+      <span className="text-[0.78rem] leading-[1.45] text-[var(--color-warning-text)]">
+        {tr("Switch this running patrol to Autonomous? Its next run takes live platform actions without stopping for approval cards.")}
+      </span>
+      <div className="flex flex-wrap justify-end gap-2">
+        <button
+          type="button"
+          onClick={onKeep}
+          className="h-8 rounded-[var(--radius-md)] border border-[var(--color-border-strong)] px-2.5 text-[0.8125rem] font-medium whitespace-nowrap text-[var(--color-text-primary)]"
+        >
+          {tr("Keep current")}
+        </button>
+        <button
+          type="button"
+          onClick={onConfirm}
+          className="h-8 rounded-[var(--radius-md)] border border-[var(--color-warning-border)] bg-[color-mix(in_srgb,var(--color-warning)_28%,transparent)] px-2.5 text-[0.8125rem] font-semibold whitespace-nowrap text-[var(--color-warning-text)]"
+        >
+          {tr("Switch to Autonomous")}
+        </button>
+      </div>
+    </div>
+  );
+}
 
 export function PatrolForm({
   mode,
@@ -151,8 +195,11 @@ export function PatrolForm({
   canCancel,
   onCancel,
   onSubmit,
+  confirmAutonomous = false,
 }: {
   mode: "new" | "edit";
+  /** A patrol in this chat is running: picking Autonomous asks once more. */
+  confirmAutonomous?: boolean;
   /** The schedule being edited (edit mode). */
   schedule?: ChatSchedule;
   initialPrompt?: string;
@@ -179,6 +226,9 @@ export function PatrolForm({
     isEdit ? approvalMode : approvalMode === "manual" ? "auto" : approvalMode,
   );
   const [submitting, setSubmitting] = useState(false);
+  const [scheduleChanged, setScheduleChanged] = useState(false);
+  const [confirmingAutonomous, setConfirmingAutonomous] = useState(false);
+  const touch = () => setScheduleChanged(true);
   const idPrefix = `patrol-form-${mode}-${schedule?.id ?? "new"}`;
 
   const repeat = REPEAT_PRESETS.find((p) => p.id === presetId);
@@ -215,7 +265,10 @@ export function PatrolForm({
         key={id}
         type="button"
         aria-pressed={selected}
-        onClick={() => setPresetId(id)}
+        onClick={() => {
+          touch();
+          setPresetId(id);
+        }}
         className="pill-btn hit-area-touch h-[34px] px-3.5 text-[0.8125rem]"
       >
         {text}
@@ -240,6 +293,7 @@ export function PatrolForm({
             timezone: kind === "patrol" ? timezone : undefined,
             durationSeconds,
             approvalMode: approval,
+            scheduleChanged,
           });
         } finally {
           setSubmitting(false);
@@ -287,8 +341,14 @@ export function PatrolForm({
               compact
               cron={customCron}
               timezone={customTz}
-              onChangeCron={setCustomCron}
-              onChangeTimezone={setCustomTz}
+              onChangeCron={(c) => {
+                touch();
+                setCustomCron(c);
+              }}
+              onChangeTimezone={(z) => {
+                touch();
+                setCustomTz(z);
+              }}
               testIdPrefix="patrol-popover-schedule"
             />
           </div>
@@ -305,6 +365,7 @@ export function PatrolForm({
                   type="button"
                   aria-pressed={timerAmount === tp.value && timerUnit === tp.unit}
                   onClick={() => {
+                    touch();
                     setTimerAmount(tp.value);
                     setTimerUnit(tp.unit);
                   }}
@@ -323,11 +384,12 @@ export function PatrolForm({
                   max={maxTimerAmount}
                   aria-label={tr("Timer duration")}
                   value={timerAmount}
-                  onChange={(e) =>
+                  onChange={(e) => {
+                    touch();
                     setTimerAmount(
                       Math.min(maxTimerAmount, Math.max(1, Math.round(Number(e.target.value) || 1))),
-                    )
-                  }
+                    );
+                  }}
                   className="h-9 bg-[var(--color-surface-1)] px-2.5 text-[0.8125rem]"
                 />
               </label>
@@ -339,6 +401,7 @@ export function PatrolForm({
                   onChange={(e) => {
                     const nextUnit = e.target.value as "minutes" | "hours";
                     const nextMax = nextUnit === "hours" ? 168 : 1440;
+                    touch();
                     setTimerUnit(nextUnit);
                     setTimerAmount((prev) => Math.min(nextMax, Math.max(1, Math.round(prev || 1))));
                   }}
@@ -363,6 +426,11 @@ export function PatrolForm({
             labelledBy={`${idPrefix}-approval`}
             value={approval}
             onChange={(next) => {
+              setConfirmingAutonomous(false);
+              if (next === "autonomous" && approval !== "autonomous" && confirmAutonomous) {
+                setConfirmingAutonomous(true);
+                return;
+              }
               if (next === "autonomous" && autonomousAccepted === false && onRequireAutonomousAccept) {
                 onRequireAutonomousAccept(() => setApproval("autonomous"));
                 return;
@@ -370,6 +438,19 @@ export function PatrolForm({
               setApproval(next);
             }}
           />
+          {confirmingAutonomous ? (
+            <AutonomousConfirm
+              onKeep={() => setConfirmingAutonomous(false)}
+              onConfirm={() => {
+                setConfirmingAutonomous(false);
+                if (autonomousAccepted === false && onRequireAutonomousAccept) {
+                  onRequireAutonomousAccept(() => setApproval("autonomous"));
+                  return;
+                }
+                setApproval("autonomous");
+              }}
+            />
+          ) : null}
           <p className="m-0 text-[0.78rem] leading-[1.45] text-[var(--color-text-muted)]">{approvalDesc}</p>
         </div>
       ) : null}
@@ -526,6 +607,8 @@ export function PatrolsDialog({
   const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [justAddedId, setJustAddedId] = useState<string | null>(null);
+  const [confirmAutonomousId, setConfirmAutonomousId] = useState<string | null>(null);
+  const anyArmed = schedules.some((s) => s.status === "active");
   const [nowSec, setNowSec] = useState(() => Math.floor(Date.now() / 1000));
   const knownIdsRef = useRef<Set<string> | null>(null);
   const panelRef = useRef<HTMLDivElement | null>(null);
@@ -645,6 +728,7 @@ export function PatrolsDialog({
                           aria-expanded={isExpanded}
                           onClick={() => {
                             setExpandedId(isExpanded ? null : sc.id);
+                            setConfirmAutonomousId(null);
                             setEditingId(null);
                             setConfirmRemoveId(null);
                             setJustAddedId(null);
@@ -732,9 +816,24 @@ export function PatrolsDialog({
                                 testIdPrefix="patrols-mode"
                                 value={approvalMode}
                                 onChange={(next) => {
-                                  if (next !== approvalMode) onChangeApprovalMode(next);
+                                  setConfirmAutonomousId(null);
+                                  if (next === approvalMode) return;
+                                  if (next === "autonomous" && anyArmed) {
+                                    setConfirmAutonomousId(sc.id);
+                                    return;
+                                  }
+                                  onChangeApprovalMode(next);
                                 }}
                               />
+                              {confirmAutonomousId === sc.id ? (
+                                <AutonomousConfirm
+                                  onKeep={() => setConfirmAutonomousId(null)}
+                                  onConfirm={() => {
+                                    setConfirmAutonomousId(null);
+                                    onChangeApprovalMode("autonomous");
+                                  }}
+                                />
+                              ) : null}
                               <p className="m-0 text-[0.78rem] leading-[1.45] text-[var(--color-text-muted)]">
                                 {APPROVAL_MODE_OPTIONS.find((o) => o.id === approvalMode)?.desc}
                                 {schedules.length > 1 ? ` ${tr("Applies to every patrol in this chat.")}` : ""}
@@ -811,6 +910,7 @@ export function PatrolsDialog({
                             showApprovalMode={canChangeApprovalMode}
                             autonomousAccepted={autonomousAccepted}
                             onRequireAutonomousAccept={onRequireAutonomousAccept}
+                            confirmAutonomous={anyArmed}
                             canCancel
                             onCancel={() => setEditingId(null)}
                             onSubmit={async (v) => {
@@ -858,6 +958,7 @@ export function PatrolsDialog({
               approvalMode={approvalMode}
               autonomousAccepted={autonomousAccepted}
               onRequireAutonomousAccept={onRequireAutonomousAccept}
+              confirmAutonomous={anyArmed}
               canCancel={hasPatrols}
               onCancel={() => setAdding(false)}
               onSubmit={async (v) => {
@@ -894,6 +995,7 @@ export function editBody(sc: ChatSchedule, v: PatrolFormValues): UpdateScheduleB
   const body: UpdateScheduleBody = {};
   if (v.title !== sc.title) body.title = v.title;
   if (v.prompt !== sc.prompt) body.prompt = v.prompt;
+  if (!v.scheduleChanged) return body;
   if (v.kind === "patrol") {
     const cur = (sc.cron ?? sc.cron_expr ?? "").trim();
     if (sc.kind === "timer" || v.cron !== cur || (v.timezone && v.timezone !== sc.timezone)) {

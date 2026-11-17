@@ -300,6 +300,8 @@ export type ComposerProps = {
   onOpenPatrols?: () => void;
   /** Armed or paused patrols and timers in this chat. */
   activePatrolCount?: number;
+  /** Of those, the ones armed (not paused). */
+  armedPatrolCount?: number;
   patrolsOpen?: boolean;
   patrolBarHidden?: boolean;
   patrolAttention?: boolean;
@@ -396,6 +398,7 @@ export function Composer({
   onStopPressed,
   onOpenPatrols,
   activePatrolCount = 0,
+  armedPatrolCount = 0,
   patrolsOpen = false,
   patrolBarHidden = false,
   patrolAttention = false,
@@ -1799,7 +1802,11 @@ export function Composer({
                               </span>
                             </span>
                             <span className="inline-flex shrink-0 items-center gap-1 text-[0.7rem] font-medium text-[var(--color-text-muted)]">
-                              {activePatrolCount > 0 ? tr("{0} active", [activePatrolCount]) : tr("Set up")}
+                              {armedPatrolCount > 0
+                                ? tr("{0} active", [armedPatrolCount])
+                                : activePatrolCount > 0
+                                  ? tr("Paused")
+                                  : tr("Set up")}
                               <Icon name="chevron-right" className="size-3.5" />
                             </span>
                           </button>

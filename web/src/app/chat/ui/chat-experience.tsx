@@ -8153,6 +8153,7 @@ export function ChatExperience({
                   setPatrolsOpen(true);
                 }}
                 activePatrolCount={livePatrols.length}
+                armedPatrolCount={activePatrolCount}
                 patrolsOpen={patrolsOpen}
                 patrolBarHidden={patrolBarHidden && livePatrols.length > 0}
                 patrolAttention={pendingApprovalCount > 0 && livePatrols.length > 0}

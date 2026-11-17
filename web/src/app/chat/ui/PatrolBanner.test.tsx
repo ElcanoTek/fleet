@@ -310,6 +310,30 @@ describe("PatrolsDialog", () => {
     });
   });
 
+  it("asks before the dialog's mode control switches a running patrol to Autonomous", () => {
+    const props = renderDialog();
+    fireEvent.click(cardToggle(0));
+    fireEvent.click(screen.getByTestId("patrols-mode-autonomous"));
+    expect(props.onChangeApprovalMode).not.toHaveBeenCalled();
+    const confirm = screen.getByTestId("patrols-autonomous-confirm");
+    fireEvent.click(within(confirm).getByRole("button", { name: "Keep current" }));
+    expect(props.onChangeApprovalMode).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId("patrols-mode-autonomous"));
+    fireEvent.click(screen.getByRole("button", { name: "Switch to Autonomous" }));
+    expect(props.onChangeApprovalMode).toHaveBeenCalledWith("autonomous");
+  });
+
+  it("asks before the edit form picks Autonomous while a patrol runs", () => {
+    renderDialog();
+    fireEvent.click(cardToggle(0));
+    fireEvent.click(screen.getByRole("button", { name: "Edit schedule & task" }));
+    const form = screen.getByTestId("patrol-form-edit");
+    fireEvent.click(within(form).getByRole("radio", { name: "Autonomous" }));
+    expect(within(form).getByRole("radio", { name: "Autonomous" })).toHaveAttribute("aria-checked", "false");
+    fireEvent.click(within(form).getByRole("button", { name: "Switch to Autonomous" }));
+    expect(within(form).getByRole("radio", { name: "Autonomous" })).toHaveAttribute("aria-checked", "true");
+  });
+
   it("keeps the remove confirmation armed when the DELETE fails", async () => {
     const props = renderDialog({ onRemove: vi.fn().mockResolvedValue(false) });
     fireEvent.click(cardToggle(0));
@@ -397,6 +421,7 @@ describe("editBody", () => {
         cron: "0 */2 * * *",
         timezone: "America/New_York",
         approvalMode: "auto",
+        scheduleChanged: false,
       }),
     ).toEqual({ title: "New name" });
   });
@@ -410,7 +435,21 @@ describe("editBody", () => {
         cron: "0 9 * * *",
         timezone: "UTC",
         approvalMode: "auto",
+        scheduleChanged: true,
       }),
     ).toEqual({ cron: "0 9 * * *", timezone: "UTC" });
+  });
+
+  it("never re-arms a timer the form cannot show exactly (90s) on a rename", () => {
+    expect(
+      editBody({ ...timerSchedule, duration_seconds: 90 }, {
+        title: "Renamed",
+        prompt: timerSchedule.prompt,
+        kind: "timer",
+        durationSeconds: 120,
+        approvalMode: "auto",
+        scheduleChanged: false,
+      }),
+    ).toEqual({ title: "Renamed" });
   });
 });
