@@ -7,6 +7,7 @@ import { t as tr } from "@/app/lib/i18n";
 // bounces them to /login first. This is the safety-net for a 401 /me after
 // that gate, plus the "Use Elcano email" handoff when magic-link is enabled.
 
+import { withReturnTo } from "@/app/chat/ui/bootstrapFailure";
 import { Link } from "@/app/lib/Link";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -16,6 +17,11 @@ export type OrchestratorLoginProps = {
 };
 
 export function OrchestratorLogin({ magicLinkLoginEnabled }: OrchestratorLoginProps) {
+  // The page the card is on — a task link's ?task= while it is still waiting
+  // to open, a tab — goes through sign-in with the visitor, so they come back
+  // to it rather than to the start page (internal/webui/returnto.go).
+  const returnTo =
+    typeof window === "undefined" ? null : window.location.pathname + window.location.search;
   return (
     <Card className="auth-section" role="region" aria-label={tr("Authentication")}>
       <div className="auth-fields stack-form">
@@ -32,7 +38,7 @@ export function OrchestratorLogin({ magicLinkLoginEnabled }: OrchestratorLoginPr
           // soft-navigation would never perform it.
           <Button asChild className="btn btn-primary">
             <a
-              href="/api/orchestrator/auth/elcano-login"
+              href={withReturnTo("/api/orchestrator/auth/elcano-login", returnTo)}
               aria-label={tr("Sign in with your Elcano email")}
             >
               {tr("Use Elcano email")}
@@ -42,7 +48,7 @@ export function OrchestratorLogin({ magicLinkLoginEnabled }: OrchestratorLoginPr
           // /login IS a real page (app/login/page.tsx), so this is genuine
           // in-app navigation and belongs to the client router.
           <Button asChild className="btn btn-primary">
-            <Link href="/login">
+            <Link href={withReturnTo("/login", returnTo)}>
               {tr("Sign in via Chat")}
             </Link>
           </Button>

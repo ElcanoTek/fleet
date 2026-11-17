@@ -128,7 +128,12 @@ keyboard. Actions:
 - The composer's persona menu groups **Yours** above **Workspace**, shows
   display names, and links to the Personas page.
 - `/chat?persona=<ref>&draft=<text>` opens a fresh chat on the persona with the
-  draft in the composer and strips both parameters.
+  draft in the composer and strips both parameters. Either parameter may be
+  used alone (`/chat?draft=<text>` drafts on the default persona).
+- **The link survives sign-in.** Opened signed out, or with an expired or
+  revoked session, the link is parked through sign-in (password, single
+  sign-on or the Elcano email link) and the visitor lands on it with the draft
+  in the composer: [DEEP-LINK-SIGN-IN.md](DEEP-LINK-SIGN-IN.md).
 
 ## Deliberately deferred
 

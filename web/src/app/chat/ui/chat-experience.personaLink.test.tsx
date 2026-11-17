@@ -1,7 +1,16 @@
+import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { ChatExperience, type ConversationSummary } from "./chat-experience";
 import { clearChatSession } from "./chatSessionStore";
+import { bootstrapFailureDestination } from "./bootstrapFailure";
+
+// Wrapped, not replaced: the real destination is computed, and the test can
+// read what the boot passed and got back.
+vi.mock("./bootstrapFailure", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./bootstrapFailure")>();
+  return { ...actual, bootstrapFailureDestination: vi.fn(actual.bootstrapFailureDestination) };
+});
 
 // The new-chat link Settings → Personas uses (?persona=<ref>&draft=<text>,
 // docs/USER-PERSONAS.md): it opens a FRESH chat on the persona — not the most
@@ -72,6 +81,93 @@ describe("persona new-chat link", () => {
     expect(window.location.search).toBe("");
     // The most recent conversation is NOT opened over the new chat.
     expect(fetchMock.mock.calls.some(([u]) => String(u) === "/api/conversations/conv-a")).toBe(false);
+  });
+
+  // The gateway parks a signed-out link through sign-in; a session revoked
+  // after the page loaded is found by the boot fetches instead, after the
+  // params are stripped. Sign-in must still be sent on to the original link.
+  it("sends a revoked session to sign-in with the original link", async () => {
+    const link = "/chat?draft=Book%20Manifest%20intake%20ELC07431%20(intake%2042)";
+    window.history.replaceState(null, "", link);
+    const fetchMock = mockBackend();
+    const base = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) =>
+      String(input) === "/api/conversations"
+        ? new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401 })
+        : base(input, init),
+    );
+    const destination = vi.mocked(bootstrapFailureDestination);
+    destination.mockClear();
+    render(<ChatExperience initialUserEmail="user@example.com" />);
+
+    await waitFor(() => expect(destination).toHaveBeenCalledWith(401, link));
+    expect(destination.mock.results.at(-1)?.value).toBe(
+      `/login?return_to=${encodeURIComponent(link)}`,
+    );
+    // The params were still consumed from the address bar as usual.
+    expect(window.location.search).toBe("");
+  });
+
+  // `make dev` renders under <StrictMode>, which runs the boot effect twice:
+  // the second pass sees the URL the first pass already stripped. Both passes
+  // must still send sign-in on to the original link.
+  it("keeps the original link through StrictMode's effect replay", async () => {
+    const link = "/chat?persona=user%3Amy-twin&draft=Replay%20me";
+    window.history.replaceState(null, "", link);
+    const fetchMock = mockBackend();
+    const base = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) =>
+      String(input) === "/api/conversations"
+        ? new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401 })
+        : base(input, init),
+    );
+    const destination = vi.mocked(bootstrapFailureDestination);
+    destination.mockClear();
+    render(
+      <StrictMode>
+        <ChatExperience initialUserEmail="user@example.com" />
+      </StrictMode>,
+    );
+
+    await waitFor(() => expect(destination).toHaveBeenCalledTimes(2));
+    expect(destination.mock.calls).toEqual([
+      [401, link],
+      [401, link],
+    ]);
+  });
+
+  it("keeps any link parameter through sign-in, not only the persona link's", async () => {
+    const link = "/chat?project=proj-1&view=dashboard";
+    window.history.replaceState(null, "", link);
+    const fetchMock = mockBackend();
+    const base = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) =>
+      String(input) === "/api/conversations"
+        ? new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401 })
+        : base(input, init),
+    );
+    const destination = vi.mocked(bootstrapFailureDestination);
+    destination.mockClear();
+    render(<ChatExperience initialUserEmail="user@example.com" />);
+
+    await waitFor(() => expect(destination).toHaveBeenCalledWith(401, link));
+  });
+
+  it("sends a plain /chat with a revoked session to plain sign-in", async () => {
+    window.history.replaceState(null, "", "/chat");
+    const fetchMock = mockBackend();
+    const base = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) =>
+      String(input) === "/api/conversations"
+        ? new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401 })
+        : base(input, init),
+    );
+    const destination = vi.mocked(bootstrapFailureDestination);
+    destination.mockClear();
+    render(<ChatExperience initialUserEmail="user@example.com" />);
+
+    await waitFor(() => expect(destination).toHaveBeenCalledWith(401, null));
+    expect(destination.mock.results.at(-1)?.value).toBe("/login");
   });
 
   it("lets the user click Share in the composer from the start of a new chat and preserves the draft, title, and pre-chat options", async () => {

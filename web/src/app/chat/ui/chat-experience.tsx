@@ -6529,6 +6529,11 @@ export function ChatExperience({
   // fire concurrently and never gate `isLoadingHistory`, so returning to /chat
   // from /settings paints the conversation as soon as its history arrives
   // instead of after six serial round-trips.
+  //
+  // bootLinkRef holds the link this page was opened with (see bootLink
+  // below). A ref, so React's development StrictMode replay of this effect —
+  // whose second pass sees the URL the first pass already stripped — keeps it.
+  const bootLinkRef = useRef<{ link: string | null } | null>(null);
   useEffect(() => {
     let cancelled = false;
     // The personas fetch races the critical path. loadConversation sets the
@@ -6542,6 +6547,18 @@ export function ChatExperience({
     // this mount-once effect keeps `[]` deps); narrowed to string for the
     // callers below.
     const isRealConvId = (id: string | null): id is string => !isPendingKey(id);
+
+    // The link this page was opened with, kept before the blocks below
+    // consume and strip its parameters: if the boot fetches then find the
+    // session gone (revoked after the gateway let the page load), sign-in is
+    // sent on to it, so the link survives (bootstrapFailure.ts). The whole
+    // query is kept, not a list of known parameters, so a parameter added
+    // later (?project=, ?view=, …) survives too; null for a plain /chat.
+    // Read once per mount (bootLinkRef).
+    bootLinkRef.current ??= {
+      link: window.location.search ? window.location.pathname + window.location.search : null,
+    };
+    const bootLink = bootLinkRef.current.link;
 
     // Deep-link (?c=<conversation id>): open a specific conversation on boot.
     // Used by the orchestrator's "Discuss this run" bridge, which creates a
@@ -6772,7 +6789,10 @@ export function ChatExperience({
             return;
           }
           if (!sessionResponse.ok) {
-            const dest = bootstrapFailureDestination(sessionResponse.status);
+            const dest = bootstrapFailureDestination(
+              sessionResponse.status,
+              bootLink,
+            );
             if (dest) {
               window.location.replace(dest);
             } else if (!cancelled) {
@@ -6803,6 +6823,7 @@ export function ChatExperience({
         if (!conversationsResponse.ok) {
           const dest = bootstrapFailureDestination(
             conversationsResponse.status,
+            bootLink,
           );
           if (dest) {
             window.location.replace(dest);
@@ -6889,7 +6910,10 @@ export function ChatExperience({
         if (!sessionResponse.ok) {
           // A backend-down status is NOT a sign-out — treat it like the
           // transient failures below and keep the cached transcript.
-          const dest = bootstrapFailureDestination(sessionResponse.status);
+          const dest = bootstrapFailureDestination(
+            sessionResponse.status,
+            bootLink,
+          );
           if (dest) {
             window.location.replace(dest);
           }

@@ -99,6 +99,11 @@ there) and [`../.agents/skills/steward/SKILL.md`](../.agents/skills/steward/SKIL
   `x-fleet-api-version`, `x-fleet-key-types`, the tests that pin them, and the
   manifest contract-checker fact → spec-path map): [`docs/MANIFEST-CONTRACT.md`](MANIFEST-CONTRACT.md)
 - **One database** (both stores in one Postgres database, one schema each; the two-database layout and `fleet db consolidate` were removed): [`docs/ONE-DATABASE.md`](ONE-DATABASE.md) + [ADR-0098](adr/0098-one-database-two-schemas.md)
+- **Links that survive sign-in** (a signed-out or expired visitor's link —
+  `/chat?draft=…`, a team or task link, any page — parked in a `__Host-`
+  cookie and redeemed on the landing every sign-in leg ends on; the
+  open-redirect rules; the revoked-session `?return_to=`):
+  [`docs/DEEP-LINK-SIGN-IN.md`](DEEP-LINK-SIGN-IN.md)
 - **One identity table** (one `core.users` row per person, role plus Operations Center scope, the merge of the scheduler's users, the retired Operations Center bearer): [`docs/IDENTITY.md`](IDENTITY.md) + [ADR-0105](adr/0105-one-identity-table.md)
 - **Who is calling** (the typed request principal, the one account lookup both planes share, why no handler reads an identity header): [`docs/PRINCIPAL.md`](PRINCIPAL.md) + [ADR-0108](adr/0108-typed-principal.md)
 - **Database migrations** (the two runners, safe-DDL patterns, the migration DDL
@@ -289,6 +294,7 @@ above fails otherwise.
 - [`DASHBOARD-VIEW.md`](DASHBOARD-VIEW.md) — Dashboard view: the chat as a live board of show_ui panels beside a chat rail (`panel` key, `view: "dashboard"`)
 - [`DATASETS.md`](DATASETS.md) — Dataset / table agent
 - [`DEAD-LETTER-RECURRENCE.md`](DEAD-LETTER-RECURRENCE.md) — A dead-lettered recurring occurrence spawns its successor (ADR-0070)
+- [`DEEP-LINK-SIGN-IN.md`](DEEP-LINK-SIGN-IN.md) — Deep links survive sign-in
 - [`SCHEDULED-COMPACTION-CHECKPOINTS.md`](SCHEDULED-COMPACTION-CHECKPOINTS.md) — Scheduled runs pause their tool loop at the resend budget so compaction recurs, and summarize for real; when the prompt floor crowds the budget, the budget applies to the history alone (#1600); stale bulky tool results are trimmed to previews before a summary is bought (#1742)
 - [`DEPLOYMENT-KUBERNETES.md`](DEPLOYMENT-KUBERNETES.md) — Deploying fleet on Kubernetes
 - [`DEPLOYMENT.md`](DEPLOYMENT.md) — Deploying fleet
