@@ -24,8 +24,9 @@ describe("AutonomousRiskModal", () => {
     const modal = screen.getByTestId("autonomous-risk-modal");
     expect(modal).toHaveAttribute("role", "dialog");
     expect(modal).toHaveTextContent("Enable Autonomous mode");
-    expect(modal).toHaveTextContent("Live connected-platform writes");
+    expect(modal).toHaveTextContent("Bundle-configured connector actions");
     expect(modal).toHaveTextContent("10s countdown");
+    expect(modal).toHaveTextContent("marks as blocked");
     expect(modal).toHaveTextContent("git push");
 
     fireEvent.click(screen.getByTestId("autonomous-risk-cancel"));

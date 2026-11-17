@@ -112,7 +112,7 @@ export function AutonomousRiskModal({
             </div>
             <p className="m-0 mt-1 text-xs leading-relaxed text-[var(--color-text-primary)]">
               {tr(
-                "Live connected-platform writes, deployments, paid compute runs, optional connectors, self-addressed owner emails, and prefilled forms (after a 10s countdown) run without asking.",
+                "Bundle-configured connector actions (unless blocked by your deployment), optional connector activations, self-addressed owner emails, and eligible prefilled forms (after a 10s countdown) run without asking.",
               )}
             </p>
           </div>
@@ -124,7 +124,7 @@ export function AutonomousRiskModal({
             </div>
             <p className="m-0 mt-1 text-xs leading-relaxed text-[var(--color-text-secondary)]">
               {tr(
-                "External emails, chats, and calendar invites, recurring schedules, destructive deletions and permission changes, and git push still require approval.",
+                "Built-in external emails, Microsoft 365 messages and calendar invites, recurring task and patrol schedules, git push, and any connector actions your deployment marks as blocked still require approval.",
               )}
             </p>
           </div>

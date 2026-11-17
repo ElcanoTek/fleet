@@ -366,6 +366,20 @@ func TestAutonomousRiskAcceptanceGate_AllEndpoints(t *testing.T) {
 	}
 }
 
+type gateFakeEngine struct {
+	*fakeEngine
+	gate <-chan struct{}
+}
+
+func (g *gateFakeEngine) RunTurn(ctx context.Context, in TurnInput, sink agent.EventSink) (*TurnResult, error) {
+	select {
+	case <-g.gate:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	return g.fakeEngine.RunTurn(ctx, in, sink)
+}
+
 func TestUIAutoSubmit_ArmPauseCancelAndSweeper(t *testing.T) {
 	t.Parallel()
 
@@ -380,9 +394,13 @@ func TestUIAutoSubmit_ArmPauseCancelAndSweeper(t *testing.T) {
 	_ = st.SetApprovalMode(ctx, "alice@example.com", conv.ID, store.ConversationApprovalAutonomous)
 	updatedConv, _ := st.Get(ctx, "alice@example.com", conv.ID)
 
-	srv := newDefaultChatServer(t, &fakeEngine{}, st)
+	gateCh := make(chan struct{})
+	srv := newDefaultChatServer(t, &gateFakeEngine{fakeEngine: &fakeEngine{}, gate: gateCh}, st)
 	srv.cfg = &config.Config{}
-	defer srv.StopBackground()
+	defer func() {
+		close(gateCh)
+		srv.StopBackground()
+	}()
 	h := srv.Routes()
 
 	buf := newTurnBuffer("turn-auto", "")
@@ -558,7 +576,7 @@ func TestUIAutoSubmit_ArmPauseCancelAndSweeper(t *testing.T) {
 	// 7. Chain cap (maxAutoSubmitChain = 2): 2 consecutive auto=1 turns are allowed
 	//    (intake_card -> plan_table), 3rd consecutive auto=1 is refused, and a new
 	//    human message resets the chain!
-	verifyUIAutoSubmitChainCap(ctx, t, st, srv, conv.ID, eligibleSpec, buf, stager)
+	verifyUIAutoSubmitChainCap(ctx, t, st, srv, eligibleSpec, buf)
 }
 
 func verifyUIAutoSubmitChainCap(
@@ -566,14 +584,26 @@ func verifyUIAutoSubmitChainCap(
 	t *testing.T,
 	st *scheduleFakeStore,
 	srv *Server,
-	convID string,
 	eligibleSpec []byte,
 	buf *turnBuffer,
-	stager *approvalStager,
 ) {
 	t.Helper()
+	chainConv, err := st.CreateConversation(ctx, "alice@example.com", "Chain Cap Chat", "default", "m", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	convID := chainConv.ID
 	_ = st.SetApprovalMode(ctx, "alice@example.com", convID, store.ConversationApprovalAutonomous)
 	updatedConv, _ := st.Get(ctx, "alice@example.com", convID)
+	stager := &approvalStager{
+		ctx:              ctx,
+		store:            st,
+		conversationID:   convID,
+		userEmail:        "alice@example.com",
+		sink:             buf,
+		convApprovalMode: store.ConversationApprovalAutonomous,
+		liveApprovalMode: func(context.Context) string { return store.ConversationApprovalAutonomous },
+	}
 	appendUserMsg := func(text string) {
 		raw, _ := json.Marshal(agent.TextContent{Text: text})
 		_, _ = st.CommitTurnHistory(ctx, convID, "t-chain", []agent.HistoryEntry{{
