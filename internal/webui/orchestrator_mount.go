@@ -103,7 +103,14 @@ func (g *Gateway) registerOrchestrator(mux *http.ServeMux) {
 	// The gateway's own routes under the prefix.
 	mux.HandleFunc("POST "+OrchestratorPrefix+"/tasks/{taskId}/discuss", g.handleDiscuss)
 	mux.HandleFunc("GET "+OrchestratorPrefix+"/auth/elcano-login", func(w http.ResponseWriter, r *http.Request) {
-		g.elcanoLoginRedirect(w, r, "/orchestrator")
+		// The sign-in card passes the page it is on (?return_to=, a task
+		// link's ?task= included): parked like any signed-out link, it is
+		// redeemed on /, so the hand-off returns there (returnto.go).
+		back := "/orchestrator"
+		if g.parkLoginReturnParam(w, r) {
+			back = "/"
+		}
+		g.elcanoLoginRedirect(w, r, back)
 	})
 }
 

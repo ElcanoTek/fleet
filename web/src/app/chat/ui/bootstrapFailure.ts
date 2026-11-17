@@ -43,15 +43,20 @@ export function classifyBootstrapFailure(status: number): BootstrapFailure {
 // gateway checks and parks like any signed-out link (internal/webui/
 // returnto.go) — so a link opened on a session the server has since revoked
 // still lands where it pointed.
+// withReturnTo appends ?return_to=<link> to a sign-in entry (/login, or the
+// Operations Center's Elcano email hand-off) when there is a link to come
+// back to. The gateway checks and parks it (internal/webui/returnto.go).
+export function withReturnTo(entry: string, returnTo?: string | null): string {
+  return returnTo ? `${entry}?return_to=${encodeURIComponent(returnTo)}` : entry;
+}
+
 export function bootstrapFailureDestination(
   status: number,
   returnTo?: string | null,
 ): string | null {
   switch (classifyBootstrapFailure(status)) {
     case "unauthenticated":
-      return returnTo
-        ? `/login?return_to=${encodeURIComponent(returnTo)}`
-        : "/login";
+      return withReturnTo("/login", returnTo);
     case "forbidden":
       return "/no-access";
     default:

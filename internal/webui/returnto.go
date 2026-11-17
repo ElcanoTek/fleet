@@ -35,11 +35,13 @@ const (
 	// keeps the cookie under 2.8 KB, inside the 4 KB a browser keeps per
 	// cookie. A longer link is not parked and sign-in lands on the start page.
 	maxReturnToLen = 2048
-	// returnToParam is /login's own way in, for a link whose page already
-	// loaded: the chat page strips its link's parameters as it boots, so when
-	// its first fetches find the session revoked (a sign-out the gate's
-	// cookie check cannot see) it sends the visitor to
-	// /login?return_to=<link> (web/src/app/chat/ui/bootstrapFailure.ts).
+	// returnToParam is the sign-in entries' own way in, for a link whose page
+	// already loaded when the session turned out revoked (a sign-out the
+	// gate's cookie check cannot see): the chat page, which strips its link's
+	// parameters as it boots, sends the visitor to /login?return_to=<link>
+	// (web/src/app/chat/ui/bootstrapFailure.ts), and the Operations Center's
+	// sign-in card passes its page to /login or to its Elcano email hand-off
+	// the same way (OrchestratorLogin.tsx).
 	returnToParam = "return_to"
 )
 
@@ -160,21 +162,23 @@ func (g *Gateway) parkBouncedPage(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// parkLoginReturnParam parks /login?return_to=<link> for a signed-out visitor
-// (see returnToParam). The parameter names the newest link, so an unusable
-// one (over-long, or unsafe) still drops the links parked earlier, return and
-// team alike: sign-in then lands on the start page, as for any over-long
-// link. Without the parameter the login page renders as it always has.
-func (g *Gateway) parkLoginReturnParam(w http.ResponseWriter, r *http.Request) {
+// parkLoginReturnParam parks a sign-in entry's ?return_to=<link> (see
+// returnToParam) for a signed-out visitor, and reports whether it did. The
+// parameter names the newest link, so an unusable one (over-long, or unsafe)
+// still drops the links parked earlier, return and team alike: sign-in then
+// lands on the start page, as for any over-long link. Without the parameter
+// nothing changes.
+func (g *Gateway) parkLoginReturnParam(w http.ResponseWriter, r *http.Request) bool {
 	q := r.URL.Query()
 	if r.Method != http.MethodGet || !q.Has(returnToParam) {
-		return
+		return false
 	}
 	if target := q.Get(returnToParam); safeReturnPath(target) {
 		g.parkReturnPath(w, r, target)
-		return
+		return true
 	}
 	g.dropParkedLinks(w, r)
+	return false
 }
 
 // signedInLogin answers a signed-in visit to /login: on to the link that is

@@ -355,11 +355,11 @@ composer, a task) that you open while signed out, or after your session has
 expired, takes you to sign in first and then on to where it pointed. That
 works for 30 minutes after you open the link, in the same browser. After that,
 or in another browser (a sign-in email opened somewhere else, say), you land
-on your usual start page. A link you open later replaces one you opened
-earlier. A link longer than about 2,000 characters also lands on the start
-page, except the link for your team, which still opens its chat without the
-rest of the link. A message a link puts in the composer is never sent until
-you press Send.
+on your usual start page. If you open another such link before you sign in,
+or a Fleet page once you are signed in, it replaces the earlier one. A link
+longer than about 2,000 characters also lands on the start page, except the
+link for your team, which still opens its chat without the rest of the link.
+A message a link puts in the composer is never sent until you press Send.
 
 **Settings → General → Language** selects **English**, **Español**, or
 **Português** for the interface and these guides. Your choice is saved in this

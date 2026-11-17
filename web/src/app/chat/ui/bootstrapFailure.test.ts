@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   bootstrapFailureDestination,
   classifyBootstrapFailure,
+  withReturnTo,
 } from "./bootstrapFailure";
 
 // Regression contract for the /chat ↔ /login reload loop: a backend that is
@@ -30,6 +31,14 @@ describe("classifyBootstrapFailure", () => {
     // Only sign-in carries it: no-access and an unreachable backend do not.
     expect(bootstrapFailureDestination(403, link)).toBe("/no-access");
     expect(bootstrapFailureDestination(502, link)).toBeNull();
+  });
+
+  it("adds return_to to a sign-in entry only when there is a link", () => {
+    expect(withReturnTo("/login", "/orchestrator?task=t1")).toBe(
+      "/login?return_to=%2Forchestrator%3Ftask%3Dt1",
+    );
+    expect(withReturnTo("/login", null)).toBe("/login");
+    expect(withReturnTo("/login")).toBe("/login");
   });
 
   it("treats backend-down statuses as unreachable, never a redirect", () => {

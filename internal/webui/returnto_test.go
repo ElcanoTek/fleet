@@ -231,6 +231,36 @@ func TestDeepLinkSurvivesElcanoEmailLogin(t *testing.T) {
 	landAndFollow(t, e, landing, parked, manifestLink)
 }
 
+// The Operations Center's sign-in card hands its page (a task link) to its own
+// Elcano email entry: parked like any signed-out link, and the hand-off then
+// returns to /, the landing that redeems it.
+func TestOrchestratorElcanoLoginKeepsTheTaskLink(t *testing.T) {
+	e := newTestEnv(t, withOrigin(testOrigin))
+	link := "/orchestrator?task=" + testTeamLinkID
+	authWith := func(back string) string {
+		return "https://auth.elcanotek.com/?return_to=" + strings.ReplaceAll(url.QueryEscape(testOrigin+back), "+", "%20")
+	}
+	res := e.do(req("GET", "/api/orchestrator/auth/elcano-login?"+returnToParam+"="+url.QueryEscape(link), ""))
+	if res.StatusCode != http.StatusSeeOther || res.Header.Get("Location") != authWith("/") {
+		t.Fatalf("%d %q", res.StatusCode, res.Header.Get("Location"))
+	}
+	if got, ok := parkedValue(t, res); !ok || got != link {
+		t.Fatalf("parked %q (%v)", got, ok)
+	}
+	landAndFollow(t, e, withCookie(req("GET", "/", ""), "elcano_auth", e.mintElcano(t, "erin@example.com")), link, link)
+
+	// Without one, or with an unusable one, the hand-off returns to the
+	// Operations Center as before; an unusable one drops older parked links.
+	res = e.do(withParked(req("GET", "/api/orchestrator/auth/elcano-login", ""), manifestLink))
+	if res.Header.Get("Location") != authWith("/orchestrator") || strings.Contains(setCookies(res), returnToCookie) {
+		t.Fatalf("%q %q", res.Header.Get("Location"), setCookies(res))
+	}
+	res = e.do(withParked(req("GET", "/api/orchestrator/auth/elcano-login?"+returnToParam+"="+url.QueryEscape("//evil.example/"), ""), manifestLink))
+	if res.Header.Get("Location") != authWith("/orchestrator") || !returnCleared.MatchString(setCookies(res)) {
+		t.Fatalf("%q %q", res.Header.Get("Location"), setCookies(res))
+	}
+}
+
 // Already signed in through the shared elcano_auth cookie: the link opens
 // directly, with nothing parked.
 func TestDeepLinkWithCentralAuthCookieOpensDirectly(t *testing.T) {
