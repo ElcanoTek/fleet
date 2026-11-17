@@ -111,6 +111,13 @@ sidebar"), which `/help` renders.
   browser, so an admin's pin to their own chat never names it to anyone who
   cannot open it; the rail names a workspace pin from the member's own lists.
   An admin's `label` is kept: it is text written for everyone.
+- **Private for you, shared for the team.** Your own sidebar can pin any
+  chat, dashboard or project you can open, private ones included; it is
+  yours alone. The workspace editor offers only what the team can see — a
+  chat shared with the team or in multiplayer (yours or a teammate's), a
+  project shared with a team, and pages — and flags a pin already in the
+  default that is not shared ("Not shared with the team"), since it shows
+  only to the people who can open it.
 - **No background tasks in the workspace default.** Task visibility is
   owner-scoped for everyone but admins, so `PUT /api/admin/sidebar` refuses a
   `task` item (`sidebar.CheckWorkspace`), the workspace editor's picker does

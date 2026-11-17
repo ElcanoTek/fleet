@@ -5829,7 +5829,6 @@
   "Opens as": "Abre como",
   "Or an emoji 🚀": "Ou um emoji 🚀",
   "Pages": "Páginas",
-  "Pin a shared or multiplayer chat to give your whole team one place to meet.": "Fixe um chat partilhado ou multijogador para dar a toda a equipa um sítio de encontro.",
   "Pin what you use, hide what you don't, and make fleet open where you work. Changes show in your sidebar as you make them.": "Fixe o que usa, oculte o que não usa e faça o fleet abrir onde trabalha. As alterações aparecem na barra lateral à medida que as faz.",
   "Pin, hide, rename and reorder what's here": "Fixe, oculte, mude o nome e reordene o que está aqui",
   "Remove from sidebar": "Remover da barra lateral",
@@ -5874,5 +5873,8 @@
   "Show {0} on the Chat page": "Mostrar {0} na página de Chat",
   "Hidden — switch on to show": "Oculto: ative para mostrar",
   "Shown — switch off to hide": "Visível: desative para ocultar",
-  "Couldn't load your sidebar, so nothing was copied. Try again.": "Não foi possível carregar a sua barra lateral, por isso nada foi copiado. Tente novamente."
+  "Couldn't load your sidebar, so nothing was copied. Try again.": "Não foi possível carregar a sua barra lateral, por isso nada foi copiado. Tente novamente.",
+  "Only chats and projects shared with your team are listed. Pin a shared or multiplayer chat to give your whole team one place to meet.": "Só são listados os chats e projetos partilhados com a sua equipa. Fixe um chat partilhado ou multijogador para dar a toda a equipa um sítio de encontro.",
+  "Not shared with your team: only people who can open it will see this pin. Share it first, or remove it.": "Não partilhado com a sua equipa: só quem o pode abrir verá este atalho. Partilhe-o primeiro ou remova-o.",
+  "Not shared with the team": "Não partilhado com a equipa"
 }

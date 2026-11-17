@@ -229,6 +229,18 @@ function ItemsSection({
   const [announce, setAnnounce] = useState("");
   const listRef = useRef<HTMLOListElement | null>(null);
   const full = layout.items.length >= MAX_ITEMS;
+  // In the workspace editor, a pin to something the team cannot see is
+  // flagged: it shows only to the people who can open it (often just the
+  // admin), never to the rest.
+  const privateTargets = useMemo(
+    () =>
+      new Set(
+        mode === "workspace"
+          ? (entries ?? []).filter((e) => !e.shared && e.kind !== "page").map((e) => `${e.kind}:${e.ref}`)
+          : [],
+      ),
+    [entries, mode],
+  );
   const homeItem = layout.items.find((i) => i.id === layout.home);
 
   const move = (item: SidebarItem, delta: number, name: string) => {
@@ -298,6 +310,7 @@ function ItemsSection({
                 name={name}
                 isPatrol={isPatrol}
                 isHome={layout.home === item.id}
+                notShared={privateTargets.has(`${item.kind}:${item.ref}`)}
                 first={index === 0}
                 last={index === layout.items.length - 1}
                 onDragStart={(e) => {
@@ -345,6 +358,7 @@ function ItemRow({
   name,
   isPatrol,
   isHome,
+  notShared,
   first,
   last,
   onDragStart,
@@ -358,6 +372,8 @@ function ItemRow({
   name: string;
   isPatrol: boolean;
   isHome: boolean;
+  /** Workspace editor only: the team cannot see this target. */
+  notShared?: boolean;
   first: boolean;
   last: boolean;
   onDragStart: (e: DragEvent) => void;
@@ -458,6 +474,15 @@ function ItemRow({
         <span className="rounded-full bg-[var(--color-overlay-soft)] px-1.5 py-px text-[0.64rem] font-medium text-[var(--color-text-muted)]">
           {kindName(item, isPatrol)}
         </span>
+        {notShared ? (
+          <span
+            data-testid="sidebar-item-not-shared"
+            className="rounded-full bg-[var(--color-status-warning-bg)] px-1.5 py-px text-[0.64rem] font-medium text-[var(--color-status-warning-fg)]"
+            title={tr("Not shared with your team: only people who can open it will see this pin. Share it first, or remove it.")}
+          >
+            {tr("Not shared with the team")}
+          </span>
+        ) : null}
         {item.hidden ? (
           <span className="rounded-full border border-dashed border-[var(--color-border-strong)] px-1.5 py-px text-[0.64rem] font-medium text-[var(--color-text-secondary)]">
             {tr("Hidden")}
@@ -610,9 +635,11 @@ function AddShortcut({
       (entries ?? []).filter(
         (e) =>
           !(e.kind === "page" && e.ref === "analytics" && !isAdmin) &&
-          // Only its owner and admins can open a task, so a workspace sidebar
-          // cannot pin one (the server refuses it too).
-          !(e.kind === "task" && mode === "workspace"),
+          // The workspace sidebar offers only what the team can see: a chat
+          // or project shared with it, or a page (never a task: only its
+          // owner and admins can open one, and the server refuses it). A
+          // person's own sidebar offers everything they can open.
+          !(mode === "workspace" && !e.shared),
       ),
     [entries, isAdmin, mode],
   );
@@ -684,7 +711,7 @@ function AddShortcut({
           </CommandList>
           {mode === "workspace" ? (
             <p className="border-t border-[var(--color-border)] px-3 py-2 text-[0.68rem] leading-snug text-[var(--color-text-muted)]">
-              {tr("Pin a shared or multiplayer chat to give your whole team one place to meet.")}
+              {tr("Only chats and projects shared with your team are listed. Pin a shared or multiplayer chat to give your whole team one place to meet.")}
             </p>
           ) : null}
         </Command>

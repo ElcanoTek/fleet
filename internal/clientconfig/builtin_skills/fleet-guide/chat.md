@@ -445,7 +445,10 @@ dashboard); the same item reads **Remove from sidebar** once it is there.
 A pinned chat you can no longer open is shown faded, so you can unpin it.
 
 Administrators set the sidebar everyone starts with under **Settings → Admin
-→ Sidebar**: the same editor, saved with **Save for everyone**. People who
+→ Sidebar**: the same editor, saved with **Save for everyone**. Its **Add**
+list offers only chats and projects shared with your team (your own sidebar
+can pin private ones too), and a pin that is not shared is marked **Not
+shared with the team**. People who
 have not customized their own sidebar get it the next time they load a page,
 and **Reset to default** brings anyone back to it. A chat pinned there shows
 only to people who can open it, which makes a shared or multiplayer chat (a

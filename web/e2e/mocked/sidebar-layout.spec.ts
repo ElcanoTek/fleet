@@ -480,3 +480,35 @@ test("Start from my sidebar never copies a sidebar that failed to load", async (
   await page.getByTestId("admin-sidebar-copy-mine").click();
   await expect(names.first()).toHaveValue("Ops");
 });
+
+test("your own sidebar can pin a private chat; the workspace sidebar offers only what the team can see", async ({ page }) => {
+  await setup(page, { admin: true });
+  // Personal: a private chat (c5) is offered and pins.
+  await page.goto("/chat");
+  await page.getByTestId("account-menu-button").click();
+  await page.getByTestId("customize-sidebar").click();
+  const panel = page.getByTestId("sidebar-customizer");
+  await panel.getByTestId("sidebar-add-shortcut").click();
+  await expect(page.getByRole("option", { name: /Vendor comparison/ })).toBeVisible();
+  await page.getByRole("option", { name: /Vendor comparison/ }).click();
+  await expect(page.getByTestId("rail-nav").getByText("Vendor comparison")).toBeVisible();
+
+  // Workspace: the same private chat is not offered; the multiplayer chat is.
+  await page.route("**/api/admin/sidebar", (r: Route) =>
+    r.fulfill({
+      json: {
+        layout: { version: 1, items: [{ id: "s-p", kind: "chat", ref: "c5", title: "Vendor comparison" }], sections: [] },
+        updated_by: "e2e@example.com",
+        updated_at: 1_763_000_000,
+      },
+    }),
+  );
+  await page.goto("/settings/admin/sidebar");
+  const editor = page.getByTestId("admin-sidebar-editor");
+  // A private pin already in the workspace default is flagged.
+  await expect(editor.getByTestId("sidebar-item-not-shared")).toHaveCount(1);
+  await editor.getByTestId("sidebar-add-shortcut").click();
+  await expect(page.getByRole("option", { name: /All-hands war room/ }).first()).toBeVisible();
+  await expect(page.getByRole("option", { name: /Vendor comparison/ })).toHaveCount(0);
+  await expect(page.getByRole("option", { name: /Draft launch email/ })).toHaveCount(0);
+});
