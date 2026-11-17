@@ -6455,6 +6455,17 @@ export function ChatExperience({
     // callers below.
     const isRealConvId = (id: string | null): id is string => !isPendingKey(id);
 
+    // The link this page was opened with, kept before the blocks below
+    // consume and strip its parameters: if the boot fetches then find the
+    // session gone (revoked after the gateway let the page load), sign-in is
+    // sent on to it, so the link survives (bootstrapFailure.ts). null for a
+    // plain /chat.
+    const bootLink = ["c", "persona", "draft", "team"].some((k) =>
+      new URLSearchParams(window.location.search).has(k),
+    )
+      ? window.location.pathname + window.location.search
+      : null;
+
     // Deep-link (?c=<conversation id>): open a specific conversation on boot.
     // Used by the orchestrator's "Discuss this run" bridge, which creates a
     // seeded conversation and navigates here. The param is consumed once and
@@ -6637,7 +6648,10 @@ export function ChatExperience({
             return;
           }
           if (!sessionResponse.ok) {
-            const dest = bootstrapFailureDestination(sessionResponse.status);
+            const dest = bootstrapFailureDestination(
+              sessionResponse.status,
+              bootLink,
+            );
             if (dest) {
               window.location.replace(dest);
             } else if (!cancelled) {
@@ -6668,6 +6682,7 @@ export function ChatExperience({
         if (!conversationsResponse.ok) {
           const dest = bootstrapFailureDestination(
             conversationsResponse.status,
+            bootLink,
           );
           if (dest) {
             window.location.replace(dest);
@@ -6733,7 +6748,10 @@ export function ChatExperience({
         if (!sessionResponse.ok) {
           // A backend-down status is NOT a sign-out — treat it like the
           // transient failures below and keep the cached transcript.
-          const dest = bootstrapFailureDestination(sessionResponse.status);
+          const dest = bootstrapFailureDestination(
+            sessionResponse.status,
+            bootLink,
+          );
           if (dest) {
             window.location.replace(dest);
           }

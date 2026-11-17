@@ -128,7 +128,25 @@ keyboard. Actions:
 - The composer's persona menu groups **Yours** above **Workspace**, shows
   display names, and links to the Personas page.
 - `/chat?persona=<ref>&draft=<text>` opens a fresh chat on the persona with the
-  draft in the composer and strips both parameters.
+  draft in the composer and strips both parameters. Either parameter may be
+  used alone (`/chat?draft=<text>` drafts on the default persona).
+- **The link survives sign-in.** Opened signed out (or with an expired
+  session), the gateway parks the link's path and query in a short-lived
+  cookie (`fleet_return_to`: HttpOnly, SameSite=Lax, 30 minutes) on its way
+  to `/login`, and the landing after a successful sign-in sends the visitor on
+  to it — the password form, single sign-on (OIDC) and the Elcano email link
+  alike, since each ends on `/` (`internal/webui/returnto.go`). The same holds
+  for any page link (`/chat?c=…`, a team link with its other parameters, a
+  task link) and, for the chat's links, for a session the server revokes after
+  the page loaded: the chat then signs in through `/login?return_to=<link>`.
+  Already signed in through central Auth's shared cookie, the link simply
+  opens. Only a relative link to a Fleet page is kept — never a scheme, host,
+  `//`, backslash or an encoded form of one, never `/api/…` or `/login` — and
+  at most 2 048 characters as sent (a draft of several hundred characters
+  fits); a longer link signs in to the start page as before. The draft text
+  is never logged and never reaches the identity provider or central Auth.
+  The link is kept in the browser that opened it: an Elcano email sign-in
+  link opened in another browser signs in there to the start page.
 
 ## Deliberately deferred
 

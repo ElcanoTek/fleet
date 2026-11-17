@@ -20,6 +20,18 @@ describe("classifyBootstrapFailure", () => {
     }
   });
 
+  it("sends sign-in on to the page's own link when one is given", () => {
+    const link = "/chat?persona=user%3Atwin&draft=Book%20intake%20ELC07431";
+    expect(bootstrapFailureDestination(401, link)).toBe(
+      `/login?return_to=${encodeURIComponent(link)}`,
+    );
+    expect(bootstrapFailureDestination(401, null)).toBe("/login");
+    expect(bootstrapFailureDestination(401, "")).toBe("/login");
+    // Only sign-in carries it: no-access and an unreachable backend do not.
+    expect(bootstrapFailureDestination(403, link)).toBe("/no-access");
+    expect(bootstrapFailureDestination(502, link)).toBeNull();
+  });
+
   it("treats backend-down statuses as unreachable, never a redirect", () => {
     expect(classifyBootstrapFailure(502)).toBe("unreachable");
     expect(classifyBootstrapFailure(503)).toBe("unreachable");

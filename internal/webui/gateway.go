@@ -36,7 +36,9 @@ import (
 const BuildIDHeader = "X-App-Version"
 
 // Team links (`/chat?team=<id>`, docs/TEAM-SHARING.md) survive sign-in through
-// a short-lived cookie: no sign-in path carries a return URL.
+// a short-lived cookie: no sign-in path carries a return URL. Every other page
+// link (and a team link's whole query) is parked the same way in the return
+// cookie (returnto.go), which a landing redeems before this one.
 const (
 	teamLinkCookie        = "fleet_team_link"
 	teamLinkMaxAgeSeconds = 1800
@@ -207,6 +209,10 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if path == "/login" {
 		g.decorate(w, path)
 		if sess != nil {
+			if target := g.signedInLoginTarget(w, r); target != "" {
+				g.redirectToReturnPath(w, r, target)
+				return
+			}
 			if parked := parkedTeamLink(r); parked != "" {
 				g.redirectToParkedTeamLink(w, r, parked)
 				return
@@ -214,6 +220,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			temporaryRedirect(w, g.redirectURL(r, requestLanguagePath(r, "/chat")))
 			return
 		}
+		g.parkLoginReturnParam(w, r)
 		g.servePage(w, r, nil)
 		return
 	}
@@ -230,6 +237,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			unauthorized(w)
 			return
 		}
+		g.parkBouncedPage(w, r)
 		if path == "/chat" {
 			if id := r.URL.Query().Get("team"); teamLinkID.MatchString(id) {
 				setCookie(w, teamLinkCookie, id, teamLinkMaxAgeSeconds, g.secureRequest(r), "")
@@ -249,6 +257,11 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	_, cookieErr := r.Cookie(teamLinkCookie)
 	hasParked := cookieErr == nil
 	g.decorate(w, path)
+	// A parked deep link (returnto.go) is redeemed first: it carries the
+	// whole query, a team link's ?team= included.
+	if sess != nil && landing && g.redeemReturnPath(w, r) {
+		return
+	}
 	if sess != nil && landing && hasParked {
 		if parked := parkedTeamLink(r); parked != "" && !r.URL.Query().Has("team") {
 			g.redirectToParkedTeamLink(w, r, parked)

@@ -1,0 +1,239 @@
+// Copyright (c) 2026 ElcanoTek
+// SPDX-License-Identifier: MIT
+
+package webui
+
+import (
+	"encoding/base64"
+	"net/http"
+	"net/url"
+	"strings"
+
+	"github.com/ElcanoTek/fleet/internal/logging"
+)
+
+// Deep links survive sign-in. A signed-out visit to a page —
+// `/chat?persona=<ref>&draft=<text>` (docs/USER-PERSONAS.md), `/chat?c=<id>`,
+// a task notification's `/orchestrator/tasks/<id>` — parks that page's path
+// and query in a short-lived cookie on its way to /login, and the first
+// signed-in landing sends the visitor on to it. Every sign-in leg ends on `/`
+// with a fresh session (the password form's 303, the OIDC callback's 303,
+// central Auth's return_to for the Elcano email link), so that landing is the
+// one place the link is redeemed, whichever leg was used. It is the team-link
+// cookie's shape (gateway.go), generalised to any page and its whole query.
+//
+// A cookie, not a return URL threaded through the legs: the gate is the only
+// place that sees the original URL, and carrying it from there would mean the
+// login page, each leg, the OIDC state and central Auth's return_to all
+// passing it on — and the draft text landing in the IdP's and Auth's request
+// logs. The cookie never leaves this origin.
+const (
+	returnToCookie        = "fleet_return_to"
+	returnToMaxAgeSeconds = teamLinkMaxAgeSeconds
+	// maxReturnToLen caps the parked path+query as the browser sent it
+	// (percent-encoded). A draft of several hundred characters fits; base64
+	// keeps the cookie under 2.8 KB, inside the 4 KB a browser keeps per
+	// cookie. A longer link is not parked and sign-in lands on the start page.
+	maxReturnToLen = 2048
+	// returnToParam is /login's own way in, for a link whose page already
+	// loaded: the chat page strips its link's parameters as it boots, so when
+	// its first fetches find the session revoked (a sign-out the gate's
+	// cookie check cannot see) it sends the visitor to
+	// /login?return_to=<link> (web/src/app/chat/ui/bootstrapFailure.ts).
+	returnToParam = "return_to"
+)
+
+// returnRoute reports whether p, a decoded path, is a page a parked link may
+// lead to: one the SPA renders behind sign-in. /login and /no-access are
+// sign-in's own pages and would loop; / is the start page itself.
+func returnRoute(p string) bool {
+	switch {
+	case p == "/login" || p == "/no-access":
+		return false
+	case pagePaths[p]:
+		return true
+	case strings.HasPrefix(p, "/help/"):
+		_, ok := helpGuides[strings.TrimPrefix(p, "/help/")]
+		return ok
+	case strings.HasPrefix(p, "/orchestrator/tasks/"):
+		id := strings.TrimPrefix(p, "/orchestrator/tasks/")
+		return id != "" && !strings.Contains(id, "/")
+	}
+	return false
+}
+
+// safeReturnPath reports whether s, a path and query, may be parked and later
+// redirected to. It must be a path-absolute reference on this origin — no
+// scheme, host, userinfo or fragment, no "//" or "/\" prefix, no backslash,
+// space, control or non-ASCII byte — at most maxReturnToLen long, whose
+// decoded path names a page (returnRoute). The decoded check is what refuses
+// the encoded tricks: "/%2F%2Fevil.example", "/%5Cevil.example" and
+// "/chat/%2E%2E/api/x" decode to paths no page has.
+func safeReturnPath(s string) bool {
+	if s == "" || len(s) > maxReturnToLen || s[0] != '/' {
+		return false
+	}
+	if len(s) > 1 && (s[1] == '/' || s[1] == '\\') {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; c <= ' ' || c >= 0x7f || c == '\\' {
+			return false
+		}
+	}
+	u, err := url.Parse(s)
+	if err != nil || u.Scheme != "" || u.Host != "" || u.User != nil || u.Opaque != "" || u.Fragment != "" {
+		return false
+	}
+	return returnRoute(u.Path)
+}
+
+// requestReturnPath is r's path and query as the browser sent them.
+func requestReturnPath(r *http.Request) string {
+	p := r.URL.EscapedPath()
+	if r.URL.RawQuery != "" {
+		p += "?" + r.URL.RawQuery
+	}
+	return p
+}
+
+// parkReturnPath sets the return cookie to target. The value is base64url,
+// so a query's commas, quotes and semicolons never meet cookie syntax. The
+// caller has checked target with safeReturnPath.
+func (g *Gateway) parkReturnPath(w http.ResponseWriter, r *http.Request, target string) {
+	setCookie(w, returnToCookie, base64.RawURLEncoding.EncodeToString([]byte(target)), returnToMaxAgeSeconds, g.secureRequest(r), "")
+}
+
+func (g *Gateway) clearReturnPath(w http.ResponseWriter, r *http.Request) {
+	setCookie(w, returnToCookie, "", 0, g.secureRequest(r), "")
+}
+
+// parkedReturnPath is the parked link, re-checked: the cookie is ours, but a
+// sibling subdomain can set a cookie for the whole domain, so its value is
+// input like any other. present reports whether the cookie was sent at all,
+// so a caller can clear an unusable one.
+func parkedReturnPath(r *http.Request) (target string, present bool) {
+	c, err := r.Cookie(returnToCookie)
+	if err != nil {
+		return "", false
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(c.Value)
+	if err != nil || !safeReturnPath(string(raw)) {
+		return "", true
+	}
+	return string(raw), true
+}
+
+// parkBouncedPage is called for a signed-out request the gate is about to
+// send to /login. A GET of a page parks its link; a GET of a page whose link
+// cannot be parked (the start page — `/`, or `/chat` with no query — or an
+// over-long or unsafe link) drops a link parked by an earlier visit, so
+// sign-in never lands on an older link than the one just opened. Anything
+// that is not a page (a missing icon a browser asks for on its own, an API
+// call) leaves the parked link alone.
+func (g *Gateway) parkBouncedPage(w http.ResponseWriter, r *http.Request) {
+	p := r.URL.Path
+	if r.Method != http.MethodGet || (p != "/" && !returnRoute(p)) {
+		return
+	}
+	target := requestReturnPath(r)
+	startPage := p == "/" || (p == "/chat" && r.URL.RawQuery == "")
+	if !startPage && safeReturnPath(target) {
+		g.parkReturnPath(w, r, target)
+		return
+	}
+	if !startPage && len(target) > maxReturnToLen {
+		// The length only: the link's query can carry a user's draft.
+		logging.From(r.Context()).Debug("webui: link too long to keep through sign-in", "len", len(target))
+	}
+	if _, present := parkedReturnPath(r); present {
+		g.clearReturnPath(w, r)
+	}
+}
+
+// parkLoginReturnParam parks /login?return_to=<link> for a signed-out visitor
+// (see returnToParam). An unusable value is ignored: the login page renders
+// as it always has.
+func (g *Gateway) parkLoginReturnParam(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		return
+	}
+	if target := r.URL.Query().Get(returnToParam); safeReturnPath(target) {
+		g.parkReturnPath(w, r, target)
+	}
+}
+
+// signedInLoginTarget is where a signed-in visit to /login goes when a link is
+// waiting: /login's own ?return_to=, else the parked link. A parked cookie is
+// cleared either way. "" means no usable link.
+func (g *Gateway) signedInLoginTarget(w http.ResponseWriter, r *http.Request) string {
+	parked, present := parkedReturnPath(r)
+	if present {
+		g.clearReturnPath(w, r)
+	}
+	if target := r.URL.Query().Get(returnToParam); safeReturnPath(target) {
+		return target
+	}
+	return parked
+}
+
+// redeemReturnPath is a signed-in landing on `/` or `/chat` that carries the
+// return cookie: any such landing clears it, and a sign-in leg's bare landing
+// (startPageLanding) is sent on to the parked link. It reports whether it
+// answered the request.
+func (g *Gateway) redeemReturnPath(w http.ResponseWriter, r *http.Request) bool {
+	if r.Method != http.MethodGet {
+		return false
+	}
+	target, present := parkedReturnPath(r)
+	if !present {
+		return false
+	}
+	g.clearReturnPath(w, r)
+	if target == "" || !startPageLanding(r) {
+		return false
+	}
+	g.redirectToReturnPath(w, r, target)
+	return true
+}
+
+// redirectToReturnPath sends a signed-in visitor on to a checked link, with
+// the landing's language hint.
+func (g *Gateway) redirectToReturnPath(w http.ResponseWriter, r *http.Request, target string) {
+	temporaryRedirect(w, g.redirectURL(r, withReturnLanguage(target, requestLanguage(r))))
+}
+
+// startPageLanding reports whether a signed-in request is a sign-in leg's
+// landing: `/` or `/chat` carrying nothing but the optional lang hint. A
+// request naming its own page (`/chat?c=…`) is the visitor's newer choice.
+func startPageLanding(r *http.Request) bool {
+	if r.URL.Path != "/" && r.URL.Path != "/chat" {
+		return false
+	}
+	for k := range r.URL.Query() {
+		if k != "lang" {
+			return false
+		}
+	}
+	return true
+}
+
+// withReturnLanguage carries the landing's language hint (see
+// oidcLanguageCookie) onto the parked link, replacing a lang the link already
+// had. Only the lang pairs are touched; every other byte of the link's query
+// is kept as the browser sent it. language is a normalized tag (or "").
+func withReturnLanguage(target, language string) string {
+	if language == "" {
+		return target
+	}
+	path, query, _ := strings.Cut(target, "?")
+	var kept []string
+	for _, pair := range strings.Split(query, "&") {
+		key, _, _ := strings.Cut(pair, "=")
+		if k, err := url.QueryUnescape(key); pair == "" || (err == nil && k == "lang") {
+			continue
+		}
+		kept = append(kept, pair)
+	}
+	return path + "?" + strings.Join(append(kept, "lang="+language), "&")
+}

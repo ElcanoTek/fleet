@@ -36,12 +36,22 @@ export function classifyBootstrapFailure(status: number): BootstrapFailure {
 // IS an auth verdict, or null when it is not (backend unreachable: stay put
 // and say so). Call sites navigate with location.replace so the failed page
 // does not linger in history behind the destination.
+//
+// returnTo is the link the page was opened with when the page has already
+// consumed and stripped its parameters (the chat's ?c=, ?persona=, ?draft=,
+// ?team=). Sign-in is then sent on to it — /login?return_to=<link>, which the
+// gateway checks and parks like any signed-out link (internal/webui/
+// returnto.go) — so a link opened on a session the server has since revoked
+// still lands where it pointed.
 export function bootstrapFailureDestination(
   status: number,
-): "/login" | "/no-access" | null {
+  returnTo?: string | null,
+): string | null {
   switch (classifyBootstrapFailure(status)) {
     case "unauthenticated":
-      return "/login";
+      return returnTo
+        ? `/login?return_to=${encodeURIComponent(returnTo)}`
+        : "/login";
     case "forbidden":
       return "/no-access";
     default:

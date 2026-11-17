@@ -467,8 +467,10 @@ go: `owner` (open it normally), `open`, `not_on_team` (the chat IS currently
 shared; carries the audience `team_id` and nothing about the chat — no title,
 no project), or `not_shared` (anything else: unknown id, private, archived,
 deleted, unshared; carries the chat's project only when the caller can see that
-project anyway). Signed-out visitors are routed through sign-in by the web
-proxy; that half lives in `web/src/proxy.ts`.
+project anyway). Signed-out visitors are routed through sign-in by the
+gateway's request gate (`internal/webui/gateway.go`), which parks the link in
+a short-lived cookie and sends them on to it after sign-in — the whole link,
+other parameters included (`internal/webui/returnto.go`).
 
 **Per-person project state.** `project_user_state` stores, per user per
 project, "Keep personal" (the getting-started card dismissed for good), whether
