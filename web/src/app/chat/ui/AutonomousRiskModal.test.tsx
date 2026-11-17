@@ -28,6 +28,7 @@ describe("AutonomousRiskModal", () => {
     expect(modal).toHaveTextContent("Are you sure you want to use Autonomous mode?");
     expect(modal).toHaveTextContent("Bundle-configured connector actions");
     expect(modal).toHaveTextContent("10s countdown");
+    expect(modal).toHaveTextContent("destructive storage or permission changes");
     expect(modal).toHaveTextContent("marks as blocked");
     expect(modal).toHaveTextContent("git push");
 

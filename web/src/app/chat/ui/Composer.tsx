@@ -1869,6 +1869,7 @@ export function Composer({
                                         effectiveApprovalMode !== "autonomous"
                                       ) {
                                         setMoreMenuOpen(false);
+                                        moreButtonRef.current?.focus();
                                       }
                                       onChangeApprovalMode(opt.id);
                                     }}

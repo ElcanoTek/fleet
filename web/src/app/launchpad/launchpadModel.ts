@@ -186,7 +186,7 @@ export const MODE_OPTIONS: { id: PatrolMode; title: string; blurb: string }[] = 
   {
     id: "autonomous",
     title: tr("Autonomous"),
-    blurb: tr("Executes live platform actions without approval cards and logs a receipt for each. External messages and blocked actions still ask."),
+    blurb: tr("Executes live platform actions without approval cards and logs a receipt for each. External messages, schedules, destructive changes, and blocked actions still ask."),
   },
 ];
 

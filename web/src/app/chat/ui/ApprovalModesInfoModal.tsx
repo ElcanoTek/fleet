@@ -89,7 +89,7 @@ export function ApprovalModesInfoModal({
             <span>{tr("Autonomous")}</span>
           </div>
           <p className="m-0 mt-1 text-xs leading-relaxed text-[var(--color-text-primary)]">
-            {tr("Executes live platform actions and eligible prefilled forms (after a 10s countdown) with receipt cards; external messages, calendar invites, schedules, git push, and deployment-blocked actions still require approval.")}
+            {tr("Executes live platform actions and eligible prefilled forms (after a 10s countdown) with receipt cards; external messages, calendar invites, schedules, destructive storage or permission changes, git push, and deployment-blocked actions still require approval.")}
           </p>
         </div>
       </div>

@@ -538,9 +538,30 @@ describe("Composer — per-chat Auto-approve toggle", () => {
     expect(infoModal).toHaveTextContent("Manual");
     expect(infoModal).toHaveTextContent("Auto-approve");
     expect(infoModal).toHaveTextContent("Autonomous");
+    expect(infoModal).toHaveTextContent("destructive storage or permission changes");
     fireEvent.click(screen.getByTestId("approval-modes-info-close"));
     expect(screen.queryByTestId("approval-modes-info-modal")).toBeNull();
     expect(document.activeElement).toBe(screen.getByTestId("composer-more-button"));
+  });
+
+  it("closes More options and preserves focus on the More trigger when switching into Autonomous", () => {
+    const onChangeApprovalMode = vi.fn();
+    render(
+      <Host
+        overrides={{
+          approvalMode: "manual",
+          isAutoApprove: false,
+          onChangeApprovalMode,
+        }}
+      />,
+    );
+    const moreBtn = screen.getByTestId("composer-more-button");
+    fireEvent.click(moreBtn);
+    const menu = screen.getByTestId("composer-more-popover");
+    fireEvent.click(within(menu).getByTestId("composer-approval-mode-autonomous"));
+    expect(screen.queryByTestId("composer-more-popover")).toBeNull();
+    expect(onChangeApprovalMode).toHaveBeenCalledWith("autonomous");
+    expect(document.activeElement).toBe(moreBtn);
   });
 });
 

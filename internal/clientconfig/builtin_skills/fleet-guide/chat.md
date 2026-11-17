@@ -154,8 +154,9 @@ take them:
    the default), **Act for me** (turns the chat's **⚡ Auto-approve** on and
    lists everything it did), or **Autonomous** (executes live platform actions
    with receipt cards after you accept the Autonomous risk prompt, while
-   external messages, schedule changes, `git push`, and deployment-blocked
-   actions still ask). A note under the choice suggests starting at
+   external messages, calendar invites, schedule changes, destructive storage
+   or permission changes, `git push`, and deployment-blocked actions still
+   ask). A note under the choice suggests starting at
    **Suggest & ask** and stepping up later.
 4. **Choose a rhythm.** **Weekday mornings** (8:00, Monday–Friday; the
    default), **Twice a workday**, **Every 2 hours**, **Every hour**, **Every
@@ -211,14 +212,14 @@ active**, **Timer armed**, or **Paused**), cadence, run count, and countdown to
 the next run, along with **Run now**, **Pause / Resume**, and **Stop** buttons.
 Choosing **⚡ Auto-approve** (in the Patrol popover, Patrol bar, or **Approval
 mode** under **More options** in the composer) lets session-approvable tool
-calls run hands-free while you are away, while **Autonomous** (after you accept
-the one-time risk notice) runs bundle-configured live platform actions, optional
+calls run hands-free while you are away, while **Autonomous** (after you confirm
+the Autonomous risk prompt) runs bundle-configured live platform actions, optional
 connector activations, and self-addressed owner emails without pausing and
 leaves durable receipt cards in the transcript (external emails/chats/invites,
-scheduled-task and patrol schedule changes, bundle-blocked destructive actions
-in `agent_policy.critical_tool_autonomous_blocked`, and `git push` still ask,
-and only turns triggered by the conversation owner use Auto-approve or
-Autonomous).
+scheduled-task and patrol schedule changes, destructive storage or permission
+changes, bundle-blocked actions in `agent_policy.critical_tool_autonomous_blocked`,
+and `git push` still ask, and only turns triggered by the conversation owner use
+Auto-approve or Autonomous).
 If a patrol turn does stage an approval card, the card stays open for 24 hours
 and automatically resumes the patrol turn as soon as you approve it.
 Conversations with an active or paused patrol are exempt from retention sweeps

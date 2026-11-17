@@ -121,7 +121,7 @@ export function AutonomousRiskModal({
             </div>
             <p className="m-0 mt-1 text-xs leading-relaxed text-[var(--color-text-secondary)]">
               {tr(
-                "Built-in external emails, Microsoft 365 messages and calendar invites, recurring task and patrol schedules, git push, and any connector actions your deployment marks as blocked still require approval.",
+                "Built-in external emails, Microsoft 365 messages and calendar invites, recurring task and patrol schedules, destructive storage or permission changes, git push, and any connector actions your deployment marks as blocked still require approval.",
               )}
             </p>
           </div>
