@@ -464,7 +464,7 @@ func (s *Store) CancelActiveUIAutoSubmits(ctx context.Context, convID, callID st
 	if err != nil {
 		return nil, 0, err
 	}
-	var cancelledAutoIDs []string
+	cancelledAutoIDs := []string{}
 	qCount := 0
 	for qRows.Next() {
 		var cid string
@@ -490,18 +490,18 @@ func (s *Store) CancelActiveUIAutoSubmits(ctx context.Context, convID, callID st
 			    SET status = 'cancelled', updated_at_ms = $1
 			  WHERE conversation_id = $2
 			    AND call_id = $3
-			    AND (status IN ('pending', 'paused') OR (status = 'fired' AND id = ANY($4)))
+			    AND (status IN ('pending', 'paused') OR (status = 'fired' AND id = ANY($4::text[])))
 			 RETURNING `+uiAutoSubmitSelectCols,
-			nowMs, convID, callID, textArray{&cancelledAutoIDs},
+			nowMs, convID, callID, cancelledAutoIDs,
 		)
 	} else {
 		rows, err = tx.QueryContext(ctx,
 			`UPDATE chat.ui_autosubmits
 			    SET status = 'cancelled', updated_at_ms = $1
 			  WHERE conversation_id = $2
-			    AND (status IN ('pending', 'paused') OR (status = 'fired' AND id = ANY($3)))
+			    AND (status IN ('pending', 'paused') OR (status = 'fired' AND id = ANY($3::text[])))
 			 RETURNING `+uiAutoSubmitSelectCols,
-			nowMs, convID, textArray{&cancelledAutoIDs},
+			nowMs, convID, cancelledAutoIDs,
 		)
 	}
 	if err != nil {

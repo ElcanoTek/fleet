@@ -149,8 +149,8 @@ func TestUIAutoSubmitStoreLifecycleAndSingleClaimer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CancelActiveUIAutoSubmits: %v", err)
 	}
-	if len(cancelledRows) != 1 || cancelledRows[0].CallID != "call_card_1" {
-		t.Fatalf("expected paused call_card_1 cancelled, got %v", cancelledRows)
+	if len(cancelledRows) != 2 {
+		t.Fatalf("expected both paused call_card_1 and queued-fired call_reused cancelled, got %v", cancelledRows)
 	}
 	if cancelledQueued != 1 {
 		t.Fatalf("expected 1 queued autosubmit row cancelled, got %d", cancelledQueued)
