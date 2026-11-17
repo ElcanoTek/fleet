@@ -25,12 +25,13 @@ import (
 // manifestLink is the link Manifest's "Book in Fleet chat" button opens.
 const manifestLink = "/chat?draft=Book%20Manifest%20intake%20ELC07431%20(intake%2042)"
 
-// parkedValue is the fleet_return_to value res set, decoded; ok is false when
-// res set none (a deletion counts as none).
+// parkedValue is the return cookie value res set, decoded; ok is false when
+// res set none (a deletion counts as none). The tests run on an https origin,
+// where the cookie is __Host-fleet_return_to.
 func parkedValue(t *testing.T, res *response) (string, bool) {
 	t.Helper()
 	for _, c := range res.Cookies() {
-		if c.Name != returnToCookie || c.MaxAge <= 0 {
+		if c.Name != returnToHostCookie || c.MaxAge <= 0 {
 			continue
 		}
 		raw, err := base64.RawURLEncoding.DecodeString(c.Value)
@@ -42,10 +43,10 @@ func parkedValue(t *testing.T, res *response) (string, bool) {
 	return "", false
 }
 
-var returnCleared = regexp.MustCompile(`(?m)^fleet_return_to=;.*Max-Age=0`)
+var returnCleared = regexp.MustCompile(`(?m)^__Host-fleet_return_to=;.*Max-Age=0`)
 
 func withParked(r *http.Request, target string) *http.Request {
-	return withCookie(r, returnToCookie, base64.RawURLEncoding.EncodeToString([]byte(target)))
+	return withCookie(r, returnToHostCookie, base64.RawURLEncoding.EncodeToString([]byte(target)))
 }
 
 // bounce is a signed-out visit to link; it returns the value parked.
@@ -84,7 +85,7 @@ func TestDeepLinkParkedOnTheWayToLogin(t *testing.T) {
 			t.Errorf("%s: parked %q (%v)", link, got, ok)
 		}
 		c := setCookies(res)
-		for _, want := range []string{"fleet_return_to=", "HttpOnly", "SameSite=Lax", "Path=/", "Max-Age=1800", "Secure"} {
+		for _, want := range []string{"__Host-fleet_return_to=", "HttpOnly", "SameSite=Lax", "Path=/", "Max-Age=1800", "Secure"} {
 			if !strings.Contains(c, want) {
 				t.Errorf("%s: cookie %q lacks %q", link, c, want)
 			}
@@ -365,7 +366,7 @@ func TestNewerLinkSupersedesParkedTeamLink(t *testing.T) {
 		}
 	}
 	// An unusable parked link is not redeemed, so the team link still is.
-	res = e.do(withTeam(withCookie(signedIn(t, req("GET", "/", "")), returnToCookie, "garbage!")))
+	res = e.do(withTeam(withCookie(signedIn(t, req("GET", "/", "")), returnToHostCookie, "garbage!")))
 	if res.Header.Get("Location") != testOrigin+team {
 		t.Fatalf("%q", res.Header.Get("Location"))
 	}
@@ -593,7 +594,7 @@ func TestParkedValueRecheckedOnRedeem(t *testing.T) {
 		"not base64 !!",
 	} {
 		for _, p := range []string{"/", "/login"} {
-			res := e.do(withCookie(signedIn(t, req("GET", p, "")), returnToCookie, v))
+			res := e.do(withCookie(signedIn(t, req("GET", p, "")), returnToHostCookie, v))
 			if res.Header.Get("Location") != testOrigin+"/chat" || !returnCleared.MatchString(setCookies(res)) {
 				t.Errorf("%s with %q: %q %q", p, v, res.Header.Get("Location"), setCookies(res))
 			}
@@ -613,6 +614,49 @@ func TestWithReturnLanguage(t *testing.T) {
 		if got := withReturnLanguage(c.target, c.lang); got != c.want {
 			t.Errorf("withReturnLanguage(%q, %q) = %q, want %q", c.target, c.lang, got, c.want)
 		}
+	}
+}
+
+// On https the cookie is __Host-: a browser refuses one set with a Domain, so
+// a sibling subdomain cannot plant a domain-wide link that this gate would
+// redeem on every landing and could not delete. A plain-named cookie (what a
+// sibling can set) is not read there.
+func TestReturnCookieIsHostOnlyOnHTTPS(t *testing.T) {
+	e := newTestEnv(t, withOrigin(testOrigin))
+	res := e.do(req("GET", manifestLink, ""))
+	var c *http.Cookie
+	for _, k := range res.Cookies() {
+		if k.Name == returnToHostCookie {
+			c = k
+		}
+	}
+	// The browser's __Host- rules: Secure, Path=/, no Domain.
+	if c == nil || !c.Secure || c.Path != "/" || c.Domain != "" || !c.HttpOnly {
+		t.Fatalf("%q", setCookies(res))
+	}
+	if strings.Contains(setCookies(res), "\nfleet_return_to=") || strings.HasPrefix(setCookies(res), "fleet_return_to=") {
+		t.Fatalf("plain-named cookie set on https: %q", setCookies(res))
+	}
+	planted := withCookie(signedIn(t, req("GET", "/", "")), returnToCookie, base64.RawURLEncoding.EncodeToString([]byte(manifestLink)))
+	res = e.do(planted)
+	if res.Header.Get("Location") != testOrigin+"/chat" || strings.Contains(setCookies(res), "fleet_return_to") {
+		t.Fatalf("a plain-named cookie was redeemed or touched: %q %q", res.Header.Get("Location"), setCookies(res))
+	}
+}
+
+// On a plain-http origin (local and loopback installs) a __Host- cookie is
+// impossible, so the plain name is used, without Secure, and still works.
+func TestReturnCookieOnPlainHTTP(t *testing.T) {
+	e := newTestEnv(t, withOrigin("http://127.0.0.1:3000"))
+	res := e.do(req("GET", manifestLink, ""))
+	c := setCookies(res)
+	if !strings.HasPrefix(c, "fleet_return_to=") || strings.Contains(c, "Secure") || strings.Contains(c, "__Host-") {
+		t.Fatalf("%q", c)
+	}
+	landing := withCookie(signedIn(t, req("GET", "/", "")), returnToCookie, base64.RawURLEncoding.EncodeToString([]byte(manifestLink)))
+	res = e.do(landing)
+	if res.Header.Get("Location") != "http://127.0.0.1:3000"+manifestLink || !regexp.MustCompile(`(?m)^fleet_return_to=;.*Max-Age=0`).MatchString(setCookies(res)) {
+		t.Fatalf("%q %q", res.Header.Get("Location"), setCookies(res))
 	}
 }
 

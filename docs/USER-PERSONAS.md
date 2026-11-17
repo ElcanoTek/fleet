@@ -132,7 +132,8 @@ keyboard. Actions:
   used alone (`/chat?draft=<text>` drafts on the default persona).
 - **The link survives sign-in.** Opened signed out (or with an expired
   session), the gateway parks the link's path and query in a short-lived
-  cookie (`fleet_return_to`: HttpOnly, SameSite=Lax, 30 minutes) on its way
+  cookie (`__Host-fleet_return_to` on https, so no other subdomain can plant
+  one; `fleet_return_to` on plain http; HttpOnly, SameSite=Lax, 30 minutes) on its way
   to `/login`, and the landing after a successful sign-in sends the visitor on
   to it — the password form, single sign-on (OIDC) and the Elcano email link
   alike, since each ends on `/` (`internal/webui/returnto.go`). The same holds

@@ -28,7 +28,13 @@ import (
 // passing it on — and the draft text landing in the IdP's and Auth's request
 // logs. The cookie never leaves this origin.
 const (
+	// returnToCookie is the cookie's name on a plain-http origin (local and
+	// loopback installs). On https it is returnToHostCookie: a browser
+	// accepts a __Host- cookie only host-only, Secure and on Path=/, so no
+	// sibling subdomain can plant one for the whole domain — one this gate
+	// could neither tell from its own nor delete.
 	returnToCookie        = "fleet_return_to"
+	returnToHostCookie    = "__Host-" + returnToCookie
 	returnToMaxAgeSeconds = teamLinkMaxAgeSeconds
 	// maxReturnToLen caps the parked path+query as the browser sent it
 	// (percent-encoded). A draft of several hundred characters fits; base64
@@ -100,23 +106,32 @@ func requestReturnPath(r *http.Request) string {
 	return p
 }
 
+// returnCookieName is the return cookie's name for r's origin (see
+// returnToCookie).
+func (g *Gateway) returnCookieName(r *http.Request) string {
+	if g.secureRequest(r) {
+		return returnToHostCookie
+	}
+	return returnToCookie
+}
+
 // parkReturnPath sets the return cookie to target. The value is base64url,
 // so a query's commas, quotes and semicolons never meet cookie syntax. The
 // caller has checked target with safeReturnPath.
 func (g *Gateway) parkReturnPath(w http.ResponseWriter, r *http.Request, target string) {
-	setCookie(w, returnToCookie, base64.RawURLEncoding.EncodeToString([]byte(target)), returnToMaxAgeSeconds, g.secureRequest(r), "")
+	setCookie(w, g.returnCookieName(r), base64.RawURLEncoding.EncodeToString([]byte(target)), returnToMaxAgeSeconds, g.secureRequest(r), "")
 }
 
 func (g *Gateway) clearReturnPath(w http.ResponseWriter, r *http.Request) {
-	setCookie(w, returnToCookie, "", 0, g.secureRequest(r), "")
+	setCookie(w, g.returnCookieName(r), "", 0, g.secureRequest(r), "")
 }
 
-// parkedReturnPath is the parked link, re-checked: the cookie is ours, but a
-// sibling subdomain can set a cookie for the whole domain, so its value is
-// input like any other. present reports whether the cookie was sent at all,
-// so a caller can clear an unusable one.
-func parkedReturnPath(r *http.Request) (target string, present bool) {
-	c, err := r.Cookie(returnToCookie)
+// parkedReturnPath is the parked link, re-checked when read: the value is
+// input like any other (on plain http a sibling subdomain can still set a
+// cookie of this name for the whole domain). present reports whether the
+// cookie was sent at all, so a caller can clear an unusable one.
+func (g *Gateway) parkedReturnPath(r *http.Request) (target string, present bool) {
+	c, err := r.Cookie(g.returnCookieName(r))
 	if err != nil {
 		return "", false
 	}
@@ -157,7 +172,7 @@ func (g *Gateway) parkBouncedPage(w http.ResponseWriter, r *http.Request) {
 		// The length only: the link's query can carry a user's draft.
 		logging.From(r.Context()).Debug("webui: link too long to keep through sign-in", "len", len(target))
 	}
-	if _, present := parkedReturnPath(r); present {
+	if _, present := g.parkedReturnPath(r); present {
 		g.clearReturnPath(w, r)
 	}
 }
@@ -188,7 +203,7 @@ func (g *Gateway) parkLoginReturnParam(w http.ResponseWriter, r *http.Request) b
 // return cookie is cleared either way.
 func (g *Gateway) signedInLogin(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	target, present := parkedReturnPath(r)
+	target, present := g.parkedReturnPath(r)
 	if present {
 		g.clearReturnPath(w, r)
 	}
@@ -212,7 +227,7 @@ func (g *Gateway) signedInLogin(w http.ResponseWriter, r *http.Request) {
 
 // dropParkedLinks clears whichever of the return and team cookies r carries.
 func (g *Gateway) dropParkedLinks(w http.ResponseWriter, r *http.Request) {
-	if _, present := parkedReturnPath(r); present {
+	if _, present := g.parkedReturnPath(r); present {
 		g.clearReturnPath(w, r)
 	}
 	g.dropParkedTeamLink(w, r)
@@ -244,7 +259,7 @@ func (g *Gateway) redeemReturnPath(w http.ResponseWriter, r *http.Request) bool 
 	if p != "/" && p != "/chat" {
 		g.dropParkedTeamLink(w, r)
 	}
-	target, present := parkedReturnPath(r)
+	target, present := g.parkedReturnPath(r)
 	if !present {
 		return false
 	}
