@@ -24,7 +24,7 @@ describe("AutonomousRiskModal", () => {
     const modal = screen.getByTestId("autonomous-risk-modal");
     expect(modal).toHaveAttribute("role", "dialog");
     expect(modal).toHaveTextContent("Enable Autonomous mode");
-    expect(modal).toHaveTextContent("SSP deal plans and clones");
+    expect(modal).toHaveTextContent("Live connected-platform writes");
     expect(modal).toHaveTextContent("10s countdown");
     expect(modal).toHaveTextContent("git push");
 

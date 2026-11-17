@@ -112,7 +112,7 @@ export function AutonomousRiskModal({
             </div>
             <p className="m-0 mt-1 text-xs leading-relaxed text-[var(--color-text-primary)]">
               {tr(
-                "Live platform actions (SSP deal plans and clones, Pages publishes, paid Lens runs, optional connectors, self-addressed owner emails, and prefilled forms after a 10s countdown) run without asking.",
+                "Live connected-platform writes, deployments, paid compute runs, optional connectors, self-addressed owner emails, and prefilled forms (after a 10s countdown) run without asking.",
               )}
             </p>
           </div>

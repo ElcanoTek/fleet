@@ -177,15 +177,19 @@ func (s *Server) consecutiveAutoSubmitChainDepth(
 ) int {
 	var userTexts []string
 	if s != nil && s.store != nil && strings.TrimSpace(convID) != "" {
-		if hist, err := s.store.LoadHistory(ctx, convID); err == nil {
-			for _, h := range hist {
-				if h.Role != "user" || (h.Type != "" && h.Type != "text") || len(h.Content) == 0 {
-					continue
-				}
-				var tc agent.TextContent
-				if json.Unmarshal(h.Content, &tc) == nil && strings.TrimSpace(tc.Text) != "" {
-					userTexts = append(userTexts, tc.Text)
-				}
+		hist, err := s.store.LoadHistory(ctx, convID)
+		if err != nil {
+			// Fail closed: if history cannot be loaded to verify chain depth,
+			// treat the limit as reached rather than risking an uncapped loop.
+			return maxAutoSubmitChain
+		}
+		for _, h := range hist {
+			if h.Role != "user" || (h.Type != "" && h.Type != "text") || len(h.Content) == 0 {
+				continue
+			}
+			var tc agent.TextContent
+			if json.Unmarshal(h.Content, &tc) == nil && strings.TrimSpace(tc.Text) != "" {
+				userTexts = append(userTexts, tc.Text)
 			}
 		}
 	}
