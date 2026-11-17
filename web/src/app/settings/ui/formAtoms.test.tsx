@@ -71,6 +71,9 @@ describe("FormActions", () => {
     const create = screen.getByRole("button", { name: "Create" });
     const group = cancel.parentElement;
     expect(create.parentElement).toBe(group);
+    // The group itself must not wrap, or Cancel and submit can still split.
+    expect(group).toHaveClass("flex-nowrap");
+    expect(group).not.toHaveClass("flex-wrap");
     const footer = group?.parentElement;
     expect(Array.from(footer?.children ?? [])).toEqual([document.getElementById("m"), group]);
   });
