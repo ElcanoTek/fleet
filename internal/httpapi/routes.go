@@ -80,6 +80,8 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("/mcp/ms365-config", auth(member(mutate(http.HandlerFunc(s.handleMS365Config)))))
 	// Per-user connector availability prefs (unified connector UX).
 	mux.Handle("/connector-prefs", auth(member(mutate(http.HandlerFunc(s.connectorPrefs)))))
+	// Per-user saved left-rail layout (internal/sidebar, migration 0202).
+	mux.Handle("/sidebar", auth(member(mutate(http.HandlerFunc(s.handleSidebar)))))
 	// Per-user remote (hosted) MCP servers + OAuth (#443). The /oauth/mcp/callback
 	// completion is POSTed here by the browser-facing web-tier callback route.
 	mux.Handle("/remote-mcp-servers", auth(member(mutate(http.HandlerFunc(s.remoteMCPServers)))))
@@ -179,6 +181,9 @@ func (s *Server) Routes() http.Handler {
 	// only, never secrets.
 	mux.Handle("/admin/settings", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminSettings)))))
 	mux.Handle("/admin/settings/", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminSettingItem)))))
+	// Workspace default left-rail layout: admin-gated; applies to everyone
+	// who has not saved a layout of their own.
+	mux.Handle("/admin/sidebar", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminSidebar)))))
 	mux.Handle("/admin/models/rollout", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminModelRollout)))))
 	// Admin-managed task notification settings (internal/notifyadmin): secrets
 	// are write-only + sealed at rest; the test endpoint sends one real
