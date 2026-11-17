@@ -96,6 +96,14 @@ func TestPatrolDraftUserMessage(t *testing.T) {
 		t.Errorf("act mode should survive normalization:\n%s", withConn)
 	}
 
+	autoMsg := patrolDraftUserMessage(PatrolDraftInput{
+		Goals: []string{"Check deals"},
+		Mode:  "Autonomous",
+	})
+	if !strings.Contains(autoMsg, "Autonomy mode: autonomous") {
+		t.Errorf("autonomous mode should survive normalization:\n%s", autoMsg)
+	}
+
 	// Memories: the same cap as a turn's injection (50), not fewer.
 	mems := make([]string, 0, 60)
 	for i := 0; i < 60; i++ {

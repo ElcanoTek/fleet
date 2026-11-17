@@ -2,8 +2,8 @@ import { t as tr } from "@/app/lib/i18n";
 import { useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { CloseButton } from "@/app/shared/ui/CloseButton";
+import { DialogShell } from "@/app/shared/ui/DialogShell";
 import { Icon } from "@/app/shared/ui/Icon";
-import { useDialogA11y } from "@/app/shared/ui/useDialogA11y";
 import { errorMessage } from "@/app/shared/lib/errorMessage";
 import { Button } from "@/components/ui/button";
 
@@ -22,14 +22,13 @@ export function AutonomousRiskModal({
   const [error, setError] = useState<string | null>(null);
   const titleId = useId();
   const descId = useId();
-  const modalRef = useRef<HTMLDivElement | null>(null);
   const acceptBtnRef = useRef<HTMLButtonElement | null>(null);
 
-  useDialogA11y(open, modalRef, onClose, {
-    initialFocusRef: acceptBtnRef,
-  });
-
   if (!open) return null;
+
+  const dismiss = () => {
+    if (!submitting) onClose();
+  };
 
   const handleAccept = async () => {
     setSubmitting(true);
@@ -57,24 +56,16 @@ export function AutonomousRiskModal({
   };
 
   const modal = (
-    <div className="scrim fixed inset-0 z-[1300] flex items-center justify-center p-4">
-      <button
-        type="button"
-        tabIndex={-1}
-        aria-label={tr("Close Autonomous mode confirmation")}
-        onClick={onClose}
-        className="absolute inset-0 cursor-default"
-      />
-      <div
-        ref={modalRef}
-        tabIndex={-1}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={titleId}
-        aria-describedby={descId}
-        data-testid="autonomous-risk-modal"
-        className="motion-safe:animate-pop-up-base relative z-10 flex w-full max-w-[32rem] flex-col overflow-hidden rounded-[1.25rem] border border-[var(--color-border-strong)] bg-[var(--color-surface-1)] shadow-[var(--shadow-lg)] outline-none"
-      >
+    <DialogShell
+      labelledBy={titleId}
+      scrimLabel={tr("Close Autonomous mode confirmation")}
+      onDismiss={dismiss}
+      layer="topmost"
+      initialFocusRef={acceptBtnRef}
+      testId="autonomous-risk-modal"
+      className="flex max-w-[32rem] flex-col overflow-hidden"
+    >
+      <div aria-describedby={descId}>
         <header className="flex items-start gap-3 border-b border-[var(--color-border)] bg-[var(--gradient-surface-panel)] px-5 py-4">
           <span
             aria-hidden="true"
@@ -100,7 +91,7 @@ export function AutonomousRiskModal({
           </div>
           <CloseButton
             label={tr("Close Autonomous mode confirmation")}
-            onClick={onClose}
+            onClick={dismiss}
           />
         </header>
 
@@ -153,7 +144,7 @@ export function AutonomousRiskModal({
             size="sm"
             disabled={submitting}
             data-testid="autonomous-risk-cancel"
-            onClick={onClose}
+            onClick={dismiss}
           >
             {tr("Cancel")}
           </Button>
@@ -172,7 +163,7 @@ export function AutonomousRiskModal({
           </Button>
         </footer>
       </div>
-    </div>
+    </DialogShell>
   );
 
   if (typeof document === "undefined") {

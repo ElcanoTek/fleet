@@ -50,10 +50,11 @@ import {
 import { responseErrorText } from "@/app/lib/responseError";
 import { readPref, removePref, writePref } from "@/app/shared/lib/storage";
 import { errorMessage } from "@/app/shared/lib/errorMessage";
-import { fetchMe } from "@/app/shared/lib/account";
+import { fetchMe, invalidateMe } from "@/app/shared/lib/account";
 import { conversationApiUrl } from "@/app/lib/conversationApiUrl";
 import { createSchedule, PatrolApiError, runScheduleNow, setScheduleAction } from "@/app/shared/lib/patrolApi";
 import { plural } from "@/app/shared/lib/format";
+import { AutonomousRiskModal } from "@/app/chat/ui/AutonomousRiskModal";
 
 export const LAUNCHPAD_PROGRESS_ITEM = "fleet.launchpad.v1";
 
@@ -173,7 +174,10 @@ function loadSaved(): Saved {
     if (!raw) return { ...FRESH, timezone: browserTimeZone() };
     const parsed = JSON.parse(raw) as Partial<Saved>;
     const step = STEPS.some((s) => s.id === parsed.step) ? (parsed.step as StepId) : "why";
-    return { ...FRESH, timezone: browserTimeZone(), ...parsed, step };
+    const mode: PatrolMode = MODE_OPTIONS.some((m) => m.id === parsed.mode)
+      ? (parsed.mode as PatrolMode)
+      : FRESH.mode;
+    return { ...FRESH, timezone: browserTimeZone(), ...parsed, step, mode };
   } catch {
     return { ...FRESH, timezone: browserTimeZone() };
   }
@@ -230,6 +234,10 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
   // create a patrol (every write is refused for the viewer role), so the
   // flow stops there with an explanation instead of failing at Launch.
   const [readOnly, setReadOnly] = useState(false);
+  const [autonomousAccepted, setAutonomousAccepted] = useState(
+    () => getBootstrap().session?.autonomous_accepted === true,
+  );
+  const [pendingRiskAction, setPendingRiskAction] = useState<(() => void) | null>(null);
 
   // Each read takes a generation; only the latest one's answer lands, so a
   // slow earlier read (mount, then a focus refresh) cannot overwrite a newer.
@@ -286,6 +294,9 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
     // Unknown role (an unreadable record): the server still refuses what a
     // viewer cannot do.
     void fetchMe().then((me) => {
+      if (typeof me?.autonomous_accepted === "boolean") {
+        setAutonomousAccepted(me.autonomous_accepted);
+      }
       if (me?.role === "viewer") {
         setReadOnly(true);
         // A viewer sees only the preamble, even with progress saved on a
@@ -465,10 +476,14 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
   };
   const bodyRef = useRef<HTMLDivElement | null>(null);
 
-  const doLaunch = async () => {
+  const doLaunch = async (acceptedOverride = false) => {
     // Never launch over a draft in flight: it would save the template and
     // then show the assistant's text as if it had been launched.
     if (drafting) return;
+    if (state.mode === "autonomous" && !autonomousAccepted && !acceptedOverride) {
+      setPendingRiskAction(() => () => void doLaunch(true));
+      return;
+    }
     let phase: LaunchPhase = "conversation";
     const setPhase = (next: LaunchPhase) => {
       phase = next;
@@ -530,19 +545,38 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
 
       setPhase("schedule");
       const armStep = tr("Could not arm the patrol");
-      const sched = await createSchedule(
-        conversationId,
-        {
-          title: savedTitle,
-          prompt: prompt.trim(),
-          cron: state.cron.trim(),
-          timezone: state.timezone || "UTC",
-          auto_approve: state.mode === "act",
-        },
-        armStep,
-      ).catch((e: unknown) => {
+      const approvalMode =
+        state.mode === "autonomous"
+          ? "autonomous"
+          : state.mode === "act"
+            ? "auto"
+            : "manual";
+      let sched;
+      try {
+        sched = await createSchedule(
+          conversationId,
+          {
+            title: savedTitle,
+            prompt: prompt.trim(),
+            cron: state.cron.trim(),
+            timezone: state.timezone || "UTC",
+            auto_approve: approvalMode !== "manual",
+            approval_mode: approvalMode,
+          },
+          armStep,
+        );
+      } catch (e: unknown) {
+        if (state.mode === "autonomous" && e instanceof PatrolApiError && e.status === 409) {
+          setAutonomousAccepted(false);
+          invalidateMe();
+          const cleaned = await backToPlan();
+          if (cleaned) {
+            setPendingRiskAction(() => () => void doLaunch(true));
+          }
+          return;
+        }
         throw e instanceof PatrolApiError ? new Error(stepMessage(e.message, armStep)) : e;
-      });
+      }
       const scheduleId = sched.schedule?.id ?? "";
       setCreated({ ...created.current, scheduleId });
 
@@ -629,7 +663,7 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
   // hide its outcome (and a draft holds the one-per-user draft slot).
   const inFlight = drafting || (launch !== null && launch.phase !== "done" && !launch.error);
   const close = () => {
-    if (inFlight) return;
+    if (inFlight || pendingRiskAction !== null) return;
     // Closing on a failed, half-created launch rolls it back first, exactly
     // as Back to the plan does — dismissal must not leave a chat (or an
     // armed patrol) behind.
@@ -724,7 +758,13 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
                 connectors={(connectors ?? []).filter((c) => selected.includes(c.name))}
                 onGoals={(goals) => patch({ goals })}
                 onNotes={(notes) => patch({ notes })}
-                onMode={(mode) => patch({ mode })}
+                onMode={(mode) => {
+                  if (mode === "autonomous" && !autonomousAccepted) {
+                    setPendingRiskAction(() => () => patch({ mode: "autonomous" }));
+                    return;
+                  }
+                  patch({ mode });
+                }}
               />
             ) : null}
             {state.step === "schedule" ? (
@@ -846,6 +886,17 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
           </footer>
         </>
       )}
+      <AutonomousRiskModal
+        open={pendingRiskAction !== null}
+        onAccepted={() => {
+          const nextAction = pendingRiskAction;
+          setPendingRiskAction(null);
+          setAutonomousAccepted(true);
+          invalidateMe();
+          nextAction?.();
+        }}
+        onClose={() => setPendingRiskAction(null)}
+      />
     </DialogShell>
   );
 }
@@ -1025,6 +1076,8 @@ function WhyStep({ readOnly }: { readOnly: boolean }) {
           </span>
           <Icon name="arrow-right" className="size-3 text-[var(--color-text-muted)]" />
           <span className="rounded-full border border-[var(--color-border)] px-2 py-0.5">{tr("⚡ Act for me")}</span>
+          <Icon name="arrow-right" className="size-3 text-[var(--color-text-muted)]" />
+          <span className="rounded-full border border-[var(--color-border)] px-2 py-0.5">{tr("Autonomous")}</span>
         </p>
         <p className="mt-1.5">
         {rich("Start with {0}. Once you trust its calls, flip on ⚡ Auto-approve in the Patrol bar any time. {1}", <strong className="text-[var(--color-text-primary)]">{tr("Suggest & ask")}</strong>, <a
@@ -1546,7 +1599,7 @@ function WatchStep({
       </label>
       <fieldset className="mt-4">
         <legend className="text-[0.85rem] font-medium text-[var(--color-text-primary)]">{tr("How hands-on should it be?")}</legend>
-        <div className="mt-2 grid gap-2 sm:grid-cols-3">
+        <div className="mt-2 grid gap-2 sm:grid-cols-2">
           {MODE_OPTIONS.map((m) => (
             <label
               key={m.id}
@@ -1574,9 +1627,11 @@ function WatchStep({
         </div>
         <p className="mt-2 flex items-start gap-1.5 text-[0.78rem] leading-relaxed text-[var(--color-text-secondary)]" data-testid="launchpad-mode-nudge">
           <Icon name="info" className="mt-0.5 size-3.5 shrink-0 text-[var(--color-text-muted)]" />
-          {mode === "act"
-            ? tr("Bold — and you can always step back: turn ⚡ Auto-approve off in the Patrol bar and it goes back to asking first.")
-            : tr("Most people start here and graduate: once its recommendations keep being right, turn on ⚡ Auto-approve in the Patrol bar and let it act.")}
+          {mode === "autonomous"
+            ? tr("Full autonomy is on. Every action is logged with a receipt card, and you can step back to Manual or Auto-approve any time from the chat composer or Patrol bar.")
+            : mode === "act"
+              ? tr("Bold — and you can always step back: turn ⚡ Auto-approve off in the Patrol bar and it goes back to asking first.")
+              : tr("Most people start here and graduate: once its recommendations keep being right, turn on ⚡ Auto-approve in the Patrol bar and let it act.")}
         </p>
       </fieldset>
     </div>
@@ -1918,7 +1973,7 @@ function LaunchProgress({
                 </span>
               ), cadence)}
       </p>
-            {mode !== "act" ? (
+            {mode !== "act" && mode !== "autonomous" ? (
               <p className="mx-auto mt-3 max-w-md rounded-[var(--radius-md)] border border-dashed border-[var(--color-border-strong)] px-3 py-2 text-[0.8rem] text-[var(--color-text-secondary)]">
         {rich("{0} when its calls keep being right, switch on ⚡ Auto-approve in the Patrol bar and let it act for you.", <strong className="text-[var(--color-text-primary)]">{tr("Next rung of the ladder:")}</strong>)}
       </p>

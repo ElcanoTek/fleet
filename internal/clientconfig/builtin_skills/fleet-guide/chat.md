@@ -151,9 +151,12 @@ take them:
    Each card shows which of your ticked tools fit it (**Uses …**) or what kind
    of connector it would need. Then choose how hands-on it is: **Just report**
    (never changes anything), **Suggest & ask** (stages approval cards for you;
-   the default) or **Act for me** (turns the chat's **⚡ Auto-approve** on and
-   lists everything it did). A note under the choice suggests starting at
-   **Suggest & ask** and switching on **⚡ Auto-approve** later.
+   the default), **Act for me** (turns the chat's **⚡ Auto-approve** on and
+   lists everything it did), or **Autonomous** (executes live platform actions
+   with receipt cards after you accept the Autonomous risk prompt, while
+   external messages, schedule changes, `git push`, and deployment-blocked
+   actions still ask). A note under the choice suggests starting at
+   **Suggest & ask** and stepping up later.
 4. **Choose a rhythm.** **Weekday mornings** (8:00, Monday–Friday; the
    default), **Twice a workday**, **Every 2 hours**, **Every hour**, **Every
    morning** or **Monday kickoff**, or **Custom schedule** for the full
@@ -166,7 +169,7 @@ take them:
 
 Launching creates a new chat with your chosen persona and tools, attaches the
 patrol, and runs the first check straight away; **Watch it work** opens that
-chat; unless you chose **Act for me**, the success screen also suggests
+chat; unless you chose **Act for me** or **Autonomous**, the success screen also suggests
 turning on **⚡ Auto-approve** once its calls keep being right. From then on it
 is an ordinary in-chat patrol (below): pause or stop it
 from the Patrol bar, or ask in the chat to change it. Nothing is created until
