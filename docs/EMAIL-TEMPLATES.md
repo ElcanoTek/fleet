@@ -91,6 +91,14 @@ theme is; the table is the bundle's, and a table holding anything but #RRGGBB
 values is reported and not served, since its values are written into the
 preview.
 
+Before the form is open the example shows the palette field's `default` look,
+and custom colors are swapped in on top of that default look. A bundle whose
+default email theme is a brand therefore renders its examples in a plain
+palette, lists the brand as the default option with its table, and the example
+still opens as the branded email a person gets by changing nothing. When the
+default option's table is empty (the example is already that look) nothing
+changes.
+
 **Nothing is sent without the approval card.** Use prompt never sends anything:
 it fills the composer, and the person sends the message. When the assistant
 then calls `send_email`, a chat stages that call on an approval card that shows
