@@ -285,7 +285,7 @@ func chatRoutes() []chatRoute {
 		{"PUT /api/conversations/order", fixed("/conversations/order"), jsonBodyIfAny, textJSON},
 		{"GET /api/sidebar", fixed("/sidebar"), noBody, textJSON},
 		{"PUT /api/sidebar", fixed("/sidebar"), jsonBodyIfAny, textJSON},
-		{"DELETE /api/sidebar", fixed("/sidebar"), noBody, textJSON},
+		{"DELETE /api/sidebar", fixed("/sidebar"), jsonBodyIfAny, textJSON},
 		{"GET /api/conversations/{id}", conv, noBody, textJSON},
 		{"DELETE /api/conversations/{id}", conv, noBody, textOK},
 		{"POST /api/conversations/{id}/approval-groups/{groupId}", func(r *http.Request) string {

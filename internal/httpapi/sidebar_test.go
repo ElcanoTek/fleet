@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -177,7 +178,7 @@ func TestSidebar_StaleRowReadsAsAbsent(t *testing.T) {
 	h := s.Routes()
 	st := s.concreteStore(t)
 	ctx := context.Background()
-	if err := st.SetSidebarLayout(ctx, "me@x.com", []byte(`{"version":2,"items":[]}`)); err != nil {
+	if _, err := st.SetSidebarLayout(ctx, "me@x.com", []byte(`{"version":2,"items":[]}`), 0); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.SetWorkspaceSidebarLayout(ctx, []byte(`{"version":1,"items":[{"id":"a","kind":"chat","ref":"c","icon":"gone"}]}`), "boss@x.com"); err != nil {
@@ -232,5 +233,45 @@ func TestSidebar_WorkspaceDefaultIsRedactedForMembers(t *testing.T) {
 	// A person may still pin their own task in their own layout.
 	if w := doRaw(t, h, http.MethodPut, "/sidebar", task, "peon@x.com"); w.Code != http.StatusOK {
 		t.Errorf("own task pin = %d %s", w.Code, w.Body.String())
+	}
+}
+
+// TestSidebar_RevIsHonoured: a PUT or DELETE carrying an older rev than the
+// stored one answers stale and changes nothing.
+func TestSidebar_RevIsHonoured(t *testing.T) {
+	t.Parallel()
+
+	s := memberFixture(t, "me@x.com")
+	h := s.Routes()
+	put := func(home string, rev int) string {
+		t.Helper()
+		body := `{"version":1,"items":[{"id":"tasks","kind":"builtin"}],"sections":[],"home":"` + home + `","rev":` + strconv.Itoa(rev) + `}`
+		w := doRaw(t, h, http.MethodPut, "/sidebar", body, "me@x.com")
+		if w.Code != http.StatusOK {
+			t.Fatalf("PUT = %d %s", w.Code, w.Body.String())
+		}
+		return w.Body.String()
+	}
+	if body := put("tasks", 20); !strings.Contains(body, `"stale":false`) {
+		t.Errorf("first PUT = %s", body)
+	}
+	if body := put("", 10); !strings.Contains(body, `"stale":true`) {
+		t.Errorf("older PUT = %s; want stale", body)
+	}
+	got := decodeSidebar[sidebarGet](t, do(t, h, http.MethodGet, "/sidebar", nil, "me@x.com"))
+	if !strings.Contains(string(got.Layout), `"home":"tasks"`) {
+		t.Errorf("layout after an older PUT = %s", got.Layout)
+	}
+	if w := doRaw(t, h, http.MethodDelete, "/sidebar", `{"rev":15}`, "me@x.com"); !strings.Contains(w.Body.String(), `"stale":true`) {
+		t.Errorf("older DELETE = %d %s; want stale", w.Code, w.Body.String())
+	}
+	if w := doRaw(t, h, http.MethodDelete, "/sidebar", `{"rev":30}`, "me@x.com"); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"stale":false`) {
+		t.Errorf("newer DELETE = %d %s", w.Code, w.Body.String())
+	}
+	if got := decodeSidebar[sidebarGet](t, do(t, h, http.MethodGet, "/sidebar", nil, "me@x.com")); string(got.Layout) != "null" {
+		t.Errorf("layout after reset = %s; want null", got.Layout)
+	}
+	if w := doRaw(t, h, http.MethodPut, "/sidebar", `{"version":1,"rev":-1}`, "me@x.com"); w.Code != http.StatusBadRequest {
+		t.Errorf("negative rev = %d; want 400", w.Code)
 	}
 }

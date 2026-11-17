@@ -150,16 +150,27 @@ export function sidebarSettled(timeoutMs: number): Promise<SidebarState> {
   ]);
 }
 
+// Every edit is numbered (rev), increasing, and each save carries the number
+// of the layout it sends. The server applies a save only when its number is
+// newer than the stored one, so two requests that overlap — a save still in
+// flight when the page unloads and sends the next one with keepalive — can
+// never leave the older layout on top, whichever reaches it last.
+let lastRev = 0;
+let pendingRev = 0;
+function nextRev(): number {
+  lastRev = Math.max(Date.now(), lastRev + 1);
+  return lastRev;
+}
+
 function sendSave(keepalive: boolean): Promise<Response> {
   const own = state.own;
-  return own
-    ? fetch("/api/sidebar", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(own),
-        keepalive,
-      })
-    : fetch("/api/sidebar", { method: "DELETE", keepalive });
+  const rev = pendingRev;
+  return fetch("/api/sidebar", {
+    method: own ? "PUT" : "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(own ? { ...own, rev } : { rev }),
+    keepalive,
+  });
 }
 
 // Saves run one at a time, in order: each waits for the one before it to
@@ -196,6 +207,7 @@ async function sendInTurn(gen: number) {
 
 function scheduleSave() {
   const gen = ++editGen;
+  pendingRev = nextRev();
   if (saveTimer) clearTimeout(saveTimer);
   emit({ saving: true });
   saveTimer = setTimeout(() => {

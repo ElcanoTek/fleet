@@ -79,6 +79,15 @@ sidebar"), which `/help` renders.
   `PUT /api/sidebar` (a layout) → `{"layout": <normalized>}`.
   `DELETE /api/sidebar` → back to the default. These sit behind the member
   gate and `mutate`, so a Viewer account reads but cannot save.
+- **Saves are ordered by a revision number.** The browser numbers every edit
+  (increasing) and sends it as `rev` with a `PUT` (beside the layout's fields)
+  or a `DELETE` (`{"rev": n}`). The server applies a save only when its `rev`
+  is newer than the stored one and otherwise answers `"stale": true`, so two
+  requests that overlap — a save still in flight when the page unloads and
+  sends the next one with `keepalive` — can never leave the older layout on
+  top. A numbered reset keeps the row with the JSON value `null` and its
+  `rev`, so a late older save cannot bring the old layout back. A save
+  without `rev` (0) is unordered and always applies.
 - `GET`/`PUT`/`DELETE /api/admin/sidebar` (admin-gated like
   `/api/admin/settings`) → `{"layout", "updated_by", "updated_at"}`. Saves and
   resets are logged with the admin's identity.

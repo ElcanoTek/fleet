@@ -26,11 +26,11 @@ type WorkspaceSidebarLayout struct {
 }
 
 // SidebarLayout returns the user's saved layout JSON, or
-// ErrSidebarLayoutNotFound.
+// ErrSidebarLayoutNotFound when they have none (never saved, or reset).
 func (s *Store) SidebarLayout(ctx context.Context, userEmail string) ([]byte, error) {
 	var raw []byte
 	err := s.db.QueryRowContext(ctx,
-		`SELECT layout FROM chat.sidebar_layouts WHERE user_email = $1`,
+		`SELECT layout FROM chat.sidebar_layouts WHERE user_email = $1 AND layout <> 'null'::jsonb`,
 		normalizeEmail(userEmail),
 	).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -42,33 +42,56 @@ func (s *Store) SidebarLayout(ctx context.Context, userEmail string) ([]byte, er
 	return raw, nil
 }
 
-// SetSidebarLayout saves (replaces) the user's layout JSON.
-func (s *Store) SetSidebarLayout(ctx context.Context, userEmail string, layout []byte) error {
+// SetSidebarLayout saves the user's layout and reports whether it was
+// applied. rev orders the user's saves: a save whose rev is not newer than
+// the stored one is ignored (applied false), so overlapping requests can
+// never leave an older layout on top. rev 0 means "unordered" and always
+// applies (a client that does not number its saves).
+func (s *Store) SetSidebarLayout(ctx context.Context, userEmail string, layout []byte, rev int64) (bool, error) {
 	email := normalizeEmail(userEmail)
 	if email == "" {
-		return errors.New("sidebar layout: user_email is required")
+		return false, errors.New("sidebar layout: user_email is required")
 	}
-	if _, err := s.db.ExecContext(ctx,
-		`INSERT INTO chat.sidebar_layouts (user_email, layout, updated_at)
-		 VALUES ($1, $2::jsonb, $3)
-		 ON CONFLICT (user_email) DO UPDATE
-		   SET layout = EXCLUDED.layout, updated_at = EXCLUDED.updated_at`,
-		email, string(layout), time.Now().Unix(),
-	); err != nil {
-		return fmt.Errorf("save sidebar layout: %w", err)
-	}
-	return nil
+	return s.putSidebarLayout(ctx, email, string(layout), rev)
 }
 
-// DeleteSidebarLayout removes the user's layout (they fall back to the
-// workspace default). Deleting an absent layout is not an error.
-func (s *Store) DeleteSidebarLayout(ctx context.Context, userEmail string) error {
-	if _, err := s.db.ExecContext(ctx,
-		`DELETE FROM chat.sidebar_layouts WHERE user_email = $1`, normalizeEmail(userEmail),
-	); err != nil {
-		return fmt.Errorf("delete sidebar layout: %w", err)
+// DeleteSidebarLayout resets the user to the default layout and reports
+// whether it was applied. With a rev it is ordered like SetSidebarLayout: the
+// row keeps the JSON value null and the rev, so an older save that arrives
+// later cannot bring the old layout back. rev 0 deletes the row outright.
+func (s *Store) DeleteSidebarLayout(ctx context.Context, userEmail string, rev int64) (bool, error) {
+	email := normalizeEmail(userEmail)
+	if rev == 0 {
+		if _, err := s.db.ExecContext(ctx,
+			`DELETE FROM chat.sidebar_layouts WHERE user_email = $1`, email,
+		); err != nil {
+			return false, fmt.Errorf("delete sidebar layout: %w", err)
+		}
+		return true, nil
 	}
-	return nil
+	if email == "" {
+		return false, errors.New("sidebar layout: user_email is required")
+	}
+	return s.putSidebarLayout(ctx, email, "null", rev)
+}
+
+func (s *Store) putSidebarLayout(ctx context.Context, email, layout string, rev int64) (bool, error) {
+	res, err := s.db.ExecContext(ctx,
+		`INSERT INTO chat.sidebar_layouts (user_email, layout, updated_at, rev)
+		 VALUES ($1, $2::jsonb, $3, $4)
+		 ON CONFLICT (user_email) DO UPDATE
+		   SET layout = EXCLUDED.layout, updated_at = EXCLUDED.updated_at, rev = EXCLUDED.rev
+		   WHERE EXCLUDED.rev = 0 OR chat.sidebar_layouts.rev < EXCLUDED.rev`,
+		email, layout, time.Now().Unix(), rev,
+	)
+	if err != nil {
+		return false, fmt.Errorf("save sidebar layout: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("save sidebar layout: %w", err)
+	}
+	return n > 0, nil
 }
 
 // WorkspaceSidebarLayout returns the workspace default layout, or

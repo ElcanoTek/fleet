@@ -96,13 +96,24 @@ export const BUILTIN_LAYOUT: SidebarLayout = {
   home: "",
 };
 
-/** isEmojiIcon: a short run of non-ASCII characters (an emoji, possibly with modifiers). */
+/**
+ * isEmojiIcon: a short run of non-ASCII characters (an emoji, possibly with
+ * modifiers). The same rules as the server's (internal/sidebar validIcon), so
+ * the editor never accepts an icon a save would then refuse: no ASCII, no
+ * control, separator (any space) or format character except the zero-width
+ * joiner that joins emoji and the tag characters of a subdivision flag.
+ */
+const SEPARATOR = /\p{Z}/u;
+const FORMAT = /\p{Cf}/u;
+const CONTROL_CHAR = /\p{Cc}/u;
 export function isEmojiIcon(icon: string): boolean {
   const chars = Array.from(icon);
   if (chars.length < 1 || chars.length > 8) return false;
   return chars.every((c) => {
     const cp = c.codePointAt(0) ?? 0;
-    return cp >= 0x80 && !isControl(cp);
+    if (cp < 0x80 || cp === 0xfffd || CONTROL_CHAR.test(c) || SEPARATOR.test(c)) return false;
+    if (FORMAT.test(c)) return cp === 0x200d || (cp >= 0xe0020 && cp <= 0xe007f);
+    return true;
   });
 }
 

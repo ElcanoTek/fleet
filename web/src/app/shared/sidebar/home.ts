@@ -1,5 +1,6 @@
 import { sidebarSettled } from "./store";
 import { canOpen } from "./targets";
+import { fetchMe } from "@/app/shared/lib/account";
 import type { SidebarItem } from "./layout";
 
 // Home (docs/SIDEBAR.md): the sidebar item fleet opens to. It applies only
@@ -54,6 +55,12 @@ export async function resolveEntryHome(timeoutMs: number): Promise<SidebarItem |
   // Only its owner and admins can open a task, and only admins Analytics:
   // never a workspace Home.
   if (fromWorkspace && (item.kind === "task" || (item.kind === "page" && item.ref === "analytics"))) return null;
+  // A personal Analytics Home outlives the role that set it: follow it only
+  // while this account is still an admin, never into "admin access required".
+  if (item.kind === "page" && item.ref === "analytics") {
+    const me = await fetchMe().catch(() => null);
+    if (!me?.admin) return null;
+  }
   if (item.kind === "chat" || item.kind === "project") {
     // Home goes only where this account can go. A workspace Home that is not
     // confirmed openable (in time) is skipped, so nobody lands on an error

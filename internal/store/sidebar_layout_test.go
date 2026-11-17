@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -38,7 +39,7 @@ func TestSidebarLayout_User(t *testing.T) {
 		t.Fatalf("fresh layout err = %v, want ErrSidebarLayoutNotFound", err)
 	}
 	first := `{"version":1,"items":[{"id":"chat","kind":"builtin"}],"sections":[],"home":""}`
-	if err := s.SetSidebarLayout(ctx, me, []byte(first)); err != nil {
+	if _, err := s.SetSidebarLayout(ctx, me, []byte(first), 0); err != nil {
 		t.Fatal(err)
 	}
 	got, err := s.SidebarLayout(ctx, "rail@elcanotek.com")
@@ -48,7 +49,7 @@ func TestSidebarLayout_User(t *testing.T) {
 	jsonEqual(t, got, first)
 
 	second := `{"version":1,"items":[],"sections":[],"home":"","compact":true}`
-	if err := s.SetSidebarLayout(ctx, "rail@elcanotek.com", []byte(second)); err != nil {
+	if _, err := s.SetSidebarLayout(ctx, "rail@elcanotek.com", []byte(second), 0); err != nil {
 		t.Fatal(err)
 	}
 	got, err = s.SidebarLayout(ctx, me)
@@ -64,17 +65,17 @@ func TestSidebarLayout_User(t *testing.T) {
 	if _, err := s.SidebarLayout(ctx, "someone@elcanotek.com"); !errors.Is(err, ErrSidebarLayoutNotFound) {
 		t.Errorf("other user's layout err = %v, want not found", err)
 	}
-	if err := s.SetSidebarLayout(ctx, "", []byte(first)); err == nil {
+	if _, err := s.SetSidebarLayout(ctx, "", []byte(first), 0); err == nil {
 		t.Error("saved a layout for an empty email")
 	}
 
-	if err := s.DeleteSidebarLayout(ctx, me); err != nil {
+	if _, err := s.DeleteSidebarLayout(ctx, me, 0); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.SidebarLayout(ctx, me); !errors.Is(err, ErrSidebarLayoutNotFound) {
 		t.Errorf("after delete err = %v, want not found", err)
 	}
-	if err := s.DeleteSidebarLayout(ctx, me); err != nil {
+	if _, err := s.DeleteSidebarLayout(ctx, me, 0); err != nil {
 		t.Errorf("second delete = %v, want nil", err)
 	}
 }
@@ -139,7 +140,7 @@ func TestSidebarLayout_DeleteUserRemovesIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	layout := []byte(`{"version":1,"items":[],"sections":[],"home":""}`)
-	if err := s.SetSidebarLayout(ctx, me, layout); err != nil {
+	if _, err := s.SetSidebarLayout(ctx, me, layout, 0); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.SetWorkspaceSidebarLayout(ctx, layout, me); err != nil {
@@ -153,5 +154,75 @@ func TestSidebarLayout_DeleteUserRemovesIt(t *testing.T) {
 	}
 	if _, err := s.WorkspaceSidebarLayout(ctx); err != nil {
 		t.Errorf("workspace default after DeleteUser: %v", err)
+	}
+}
+
+// TestSidebarLayout_RevOrdersSaves: numbered saves apply only when newer than
+// the stored one, so a request that overlaps a later one (a save still in
+// flight when the page unloads and sends the next) can never win; a reset is
+// ordered the same way and an older save cannot undo it.
+func TestSidebarLayout_RevOrdersSaves(t *testing.T) {
+	t.Parallel()
+
+	s := newTestStore(t)
+	ctx := context.Background()
+	const me = "order@elcanotek.com"
+	older := `{"version":1,"items":[],"sections":[],"home":"older"}`
+	newer := `{"version":1,"items":[],"sections":[],"home":"newer"}`
+
+	read := func() string {
+		t.Helper()
+		raw, err := s.SidebarLayout(ctx, me)
+		if errors.Is(err, ErrSidebarLayoutNotFound) {
+			return "<none>"
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(raw)
+	}
+	apply := func(layout string, rev int64) bool {
+		t.Helper()
+		ok, err := s.SetSidebarLayout(ctx, me, []byte(layout), rev)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ok
+	}
+
+	if !apply(newer, 20) {
+		t.Fatal("first save not applied")
+	}
+	if apply(older, 10) {
+		t.Error("an older save was applied over a newer one")
+	}
+	if !strings.Contains(read(), `"newer"`) {
+		t.Errorf("after a late older save, layout = %s; want the newer one", read())
+	}
+	if apply(older, 20) {
+		t.Error("an equal rev was applied")
+	}
+
+	// A numbered reset wins over an older save that lands after it.
+	ok, err := s.DeleteSidebarLayout(ctx, me, 30)
+	if err != nil || !ok {
+		t.Fatalf("reset = %v, %v", ok, err)
+	}
+	if got := read(); got != "<none>" {
+		t.Errorf("after reset, layout = %s; want none", got)
+	}
+	if apply(older, 25) {
+		t.Error("an older save brought the layout back after a reset")
+	}
+	if got := read(); got != "<none>" {
+		t.Errorf("after a late save, layout = %s; want none", got)
+	}
+	// A newer save after the reset applies.
+	if !apply(newer, 40) || !strings.Contains(read(), `"newer"`) {
+		t.Errorf("a save after the reset was not applied: %s", read())
+	}
+	// Unnumbered (rev 0) always applies, as before.
+	if !apply(older, 0) || !strings.Contains(read(), `"older"`) {
+		t.Errorf("an unnumbered save was not applied: %s", read())
 	}
 }

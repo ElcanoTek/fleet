@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { addShortcut, BUILTIN_LAYOUT, normalizeLayout } from "./layout";
 import { setBootstrapForTest } from "@/app/lib/bootstrap";
+import { _resetMeForTests } from "@/app/shared/lib/account";
 import {
   flushSidebarSaveForTests,
   getSidebarState,
@@ -71,6 +72,9 @@ describe("sidebar store", () => {
     flushSidebarSaveForTests();
     const put = fetchMock.mock.calls.find((c) => c[1]?.method === "PUT");
     expect(put?.[1]?.keepalive).toBe(true);
+    // It carries the edit's number, so the server can order it against a
+    // save still in flight.
+    expect(JSON.parse(String(put?.[1]?.body)).rev).toBeGreaterThan(0);
     await vi.advanceTimersByTimeAsync(600);
     expect(fetchMock.mock.calls.filter((c) => c[1]?.method === "PUT")).toHaveLength(1);
   });
@@ -106,7 +110,8 @@ describe("sidebar store", () => {
     resetSidebarLayout();
     expect(getSidebarState().source).toBe("workspace");
     await vi.advanceTimersByTimeAsync(600);
-    expect(calls.some((c) => c.method === "DELETE")).toBe(true);
+    const del = calls.find((c) => c.method === "DELETE");
+    expect((del?.body as { rev?: number } | undefined)?.rev).toBeGreaterThan(0);
   });
 
   it("saves run one at a time, so an older one can never land after a newer one", async () => {
@@ -136,6 +141,7 @@ describe("sidebar store", () => {
     await vi.advanceTimersByTimeAsync(10);
     expect(sent).toHaveLength(2);
     expect(JSON.parse(sent[1]).items).toHaveLength(5); // the newer layout committed last
+    expect(JSON.parse(sent[1]).rev).toBeGreaterThan(JSON.parse(sent[0]).rev); // and is numbered after it
     expect(getSidebarState()).toMatchObject({ saving: false, saveError: false });
   });
 
@@ -232,6 +238,26 @@ describe("Home on entry", () => {
       listsAnswer.current = { layout: chatHome("c1"), workspace_default: null };
       stubLists(["c1"]);
       expect((await resolveEntryHome(1000))?.ref).toBe("c1");
+    });
+
+    it("follows a personal Analytics Home only while the account is an admin", async () => {
+      const analyticsHome = normalizeLayout({ items: [{ id: "s-a", kind: "page", ref: "analytics" }], home: "s-a" });
+      for (const [admin, expected] of [
+        [false, null],
+        [true, "analytics"],
+      ] as const) {
+        resetSidebarStoreForTests();
+        _resetMeForTests();
+        vi.stubGlobal(
+          "fetch",
+          vi.fn(async (url: string) =>
+            url === "/api/me"
+              ? Response.json({ email: "ana@example.com", role: admin ? "admin" : "member", admin })
+              : Response.json({ layout: analyticsHome, workspace_default: null }),
+          ),
+        );
+        expect((await resolveEntryHome(1000))?.ref ?? null).toBe(expected);
+      }
     });
 
     it("never takes a task as a workspace Home", async () => {

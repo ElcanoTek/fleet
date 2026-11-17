@@ -422,8 +422,8 @@ type chatStore interface {
 	// Saved left-rail layouts (migration 0202): the user's own and the
 	// workspace default. The JSON is validated by internal/sidebar.
 	SidebarLayout(ctx context.Context, userEmail string) ([]byte, error)
-	SetSidebarLayout(ctx context.Context, userEmail string, layout []byte) error
-	DeleteSidebarLayout(ctx context.Context, userEmail string) error
+	SetSidebarLayout(ctx context.Context, userEmail string, layout []byte, rev int64) (bool, error)
+	DeleteSidebarLayout(ctx context.Context, userEmail string, rev int64) (bool, error)
 	WorkspaceSidebarLayout(ctx context.Context) (store.WorkspaceSidebarLayout, error)
 	SetWorkspaceSidebarLayout(ctx context.Context, layout []byte, updatedBy string) (store.WorkspaceSidebarLayout, error)
 	DeleteWorkspaceSidebarLayout(ctx context.Context) error

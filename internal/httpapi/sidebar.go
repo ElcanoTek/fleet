@@ -1,9 +1,11 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 
 	"github.com/ElcanoTek/fleet/internal/logging"
@@ -24,6 +26,33 @@ import (
 
 // maxSidebarBody caps one layout PUT. A full 60-item layout is a few KiB.
 const maxSidebarBody = 64 << 10
+
+// sidebarRev is the ordering number a client may send with a save or a reset
+// ("rev", next to the layout's own fields): see store.SetSidebarLayout.
+type sidebarRev struct {
+	Rev int64 `json:"rev"`
+}
+
+// readSidebarRev reads "rev" from a request body and puts the body back for
+// the layout decode. An absent body or field is rev 0 (unordered).
+func readSidebarRev(w http.ResponseWriter, r *http.Request) (int64, bool) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxSidebarBody)
+	raw, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "bad json: body too large or unreadable", http.StatusBadRequest)
+		return 0, false
+	}
+	r.Body = io.NopCloser(bytes.NewReader(raw))
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return 0, true
+	}
+	var v sidebarRev
+	if err := json.Unmarshal(raw, &v); err != nil || v.Rev < 0 {
+		http.Error(w, "bad json: rev must be a non-negative integer", http.StatusBadRequest)
+		return 0, false
+	}
+	return v.Rev, true
+}
 
 // decodeSidebarBody reads and normalizes a PUT body, answering 400 itself on
 // bad JSON or a layout that breaks the contract.
@@ -99,6 +128,10 @@ func (s *Server) handleSidebar(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, r, map[string]any{"layout": mine, "workspace_default": ws})
 	case http.MethodPut:
+		rev, ok := readSidebarRev(w, r)
+		if !ok {
+			return
+		}
 		l, ok := decodeSidebarBody(w, r)
 		if !ok {
 			return
@@ -108,17 +141,24 @@ func (s *Server) handleSidebar(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		if err := s.store.SetSidebarLayout(ctx, user, raw); err != nil {
+		applied, err := s.store.SetSidebarLayout(ctx, user, raw, rev)
+		if err != nil {
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
-		writeJSON(w, r, map[string]any{"layout": l})
+		// stale: a newer save already landed; this one changed nothing.
+		writeJSON(w, r, map[string]any{"layout": l, "stale": !applied})
 	case http.MethodDelete:
-		if err := s.store.DeleteSidebarLayout(ctx, user); err != nil {
+		rev, ok := readSidebarRev(w, r)
+		if !ok {
+			return
+		}
+		applied, err := s.store.DeleteSidebarLayout(ctx, user, rev)
+		if err != nil {
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
-		writeJSON(w, r, map[string]any{"layout": nil})
+		writeJSON(w, r, map[string]any{"layout": nil, "stale": !applied})
 	default:
 		w.Header().Set("Allow", "GET, PUT, DELETE")
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

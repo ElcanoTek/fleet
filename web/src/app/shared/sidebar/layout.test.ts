@@ -155,5 +155,11 @@ describe("text and icons", () => {
     expect(isValidIcon("not-an-icon")).toBe(false);
     expect(isValidIcon("a")).toBe(false);
     expect(isValidIcon("🚀🚀🚀🚀🚀🚀🚀🚀🚀")).toBe(false);
+    // The server's rules: no separators or stray format characters.
+    expect(isValidIcon("🚀\u00a0🚀")).toBe(false); // no-break space
+    expect(isValidIcon("🚀\u200b")).toBe(false); // zero-width space
+    expect(isValidIcon("\u202e🚀")).toBe(false); // bidi override
+    expect(isValidIcon("🏴\u{e0067}\u{e0062}\u{e0073}\u{e0063}\u{e0074}\u{e007f}")).toBe(true); // tag flag
+    expect(isValidIcon("🧑\u200d🚀")).toBe(true); // joined with ZWJ
   });
 });
