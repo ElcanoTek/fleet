@@ -218,7 +218,7 @@ reload explicitly instead of reporting a false success. Production broker
 reload keeps credential-bearing connector configuration inside the child.
 
 The scheduled `Agent` accepts the same broker/catalog pair and threads it into
-its existing `agentcore.Run`; governed sub-agents inherit that pair, and the
+its existing `agentcore.Run`, and the
 per-user remote overlay composes over it. Broker mode does not advertise the
 in-process `mcp_load_servers` mutation tool because it has no mutable local
 client.

@@ -199,9 +199,7 @@ func TestOutOfRoster_DeferredCallRunsThroughToolCall(t *testing.T) {
 }
 
 // When MCP tools are registered directly (below the disclosure threshold) and a
-// model calls tool_call {"name": "mcp_...", "arguments": {...}} — e.g. a
-// sub-agent whose parent had a deferred roster and wrote "use tool_call" in the
-// task string — outOfRoster unwraps the call into the direct MCP tool, while a
+// model calls tool_call {"name": "mcp_...", "arguments": {...}}, outOfRoster unwraps the call into the direct MCP tool, while a
 // gated tool is still refused with its gate explanation.
 func TestOutOfRoster_ToolCallUnwrapsDirectMCPToolWhenNotDeferred(t *testing.T) {
 	broker := &fakeBroker{}

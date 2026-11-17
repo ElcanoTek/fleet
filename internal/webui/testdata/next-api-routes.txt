@@ -85,7 +85,6 @@ POST /api/conversations/{conversationId}/share-with-team
 POST /api/conversations/{conversationId}/share
 DELETE /api/conversations/{conversationId}/share
 GET /api/conversations/{conversationId}/stream
-GET /api/conversations/{conversationId}/subagents/{childId}
 POST /api/conversations/{conversationId}/suggest-prompt
 POST /api/conversations/{conversationId}/summarize
 GET /api/conversations/{conversationId}/team-files/{path...}
@@ -129,7 +128,6 @@ GET /api/orchestrator/auth/elcano-login
 # retired: POST /api/orchestrator/auth/logout
 GET /api/orchestrator/config
 GET /api/orchestrator/logs/{taskId}
-GET /api/orchestrator/logs/{taskId}/subagents/{childId}
 # retired: PUT /api/orchestrator/mcp-servers/{server}/accounts/{account}
 # retired: DELETE /api/orchestrator/mcp-servers/{server}/accounts/{account}
 # retired: GET /api/orchestrator/mcp-servers/{server}/accounts

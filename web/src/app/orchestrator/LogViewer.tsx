@@ -1,6 +1,4 @@
-import { subagentRoleLabel } from "@/app/chat/ui/history";
 import { formatFixed } from "@/app/lib/i18n";
-import { localizeError } from "@/app/lib/i18n/errors";
 import { rich } from "@/app/lib/i18n/rich";
 import { getLanguage } from "@/app/lib/i18n";
 import { t as tr } from "@/app/lib/i18n";
@@ -18,7 +16,7 @@ import type {
   TaskStreamFrame,
 } from "@/app/shared/lib/orchestratorApi";
 import { orchestratorApi, OrchestratorError } from "@/app/shared/lib/orchestratorApi";
-import { formatTimeFirst, stripAnsiCodes } from "@/app/shared/lib/format";
+import { formatTimeFirst } from "@/app/shared/lib/format";
 import { CloseButton } from "@/app/shared/ui/CloseButton";
 import { runStateLabel, RunStatusChip } from "@/app/shared/ui/StatusChip";
 import { useDialogA11y } from "@/app/shared/ui/useDialogA11y";
@@ -294,175 +292,6 @@ function CorrelationID({ label, value }: { label: string; value: string }) {
   );
 }
 
-// ── #1043 sub-agent child cards ──────────────────────────────────────────────
-// A spawn is productized as a card (id, role, status, spend, workdir) instead
-// of a raw JSON blob. Two sources feed it: the parent log's `subagent_spawned`
-// linkage entries (stored transcript) and the spawn_subagent tool call/result
-// frames (live stream).
-
-type SubagentInfo = {
-  childSessionId?: string;
-  role?: string;
-  workdir?: string;
-  costUsd?: number;
-  tokens?: number;
-  success?: boolean;
-  result?: string;
-  pending?: boolean;
-  /** Live step count + current action while the child is still running. */
-  steps?: number;
-  current?: string;
-};
-
-// parseSubagentPayload reads either shape — the linkage entry
-// {child_session_id, role, workdir, cost_usd, tokens, success} or the tool
-// result {…same…, result} — returning null on unparseable content.
-function parseSubagentPayload(raw: string | undefined): SubagentInfo | null {
-  if (!raw) return null;
-  try {
-    const p = JSON.parse(raw) as Record<string, unknown>;
-    if (typeof p !== "object" || p === null) return null;
-    return {
-      childSessionId:
-        typeof p.child_session_id === "string" ? p.child_session_id : undefined,
-      role: typeof p.role === "string" ? p.role : undefined,
-      workdir: typeof p.workdir === "string" ? p.workdir : undefined,
-      costUsd: typeof p.cost_usd === "number" ? p.cost_usd : undefined,
-      tokens: typeof p.tokens === "number" ? p.tokens : undefined,
-      success: typeof p.success === "boolean" ? p.success : undefined,
-      result: typeof p.result === "string" ? p.result : undefined,
-    };
-  } catch {
-    return null;
-  }
-}
-
-function subagentStatus(info: SubagentInfo): {
-  label: string;
-  tone: "running" | "done" | "failed";
-} {
-  if (info.pending) return { label: tr("running"), tone: "running" };
-  if (info.success) return { label: tr("done"), tone: "done" };
-  // A refusal never built a child, so it has no session id.
-  if (!info.childSessionId) return { label: tr("refused"), tone: "failed" };
-  if ((info.result ?? "").includes("timed out")) return { label: tr("timed out"), tone: "failed" };
-  return { label: tr("failed"), tone: "failed" };
-}
-
-function SubagentCard({ info, taskId }: { info: SubagentInfo; taskId?: string }) {
-  const status = subagentStatus(info);
-  const shortId = info.childSessionId
-    ? info.childSessionId.replace(/^subagent-/, "").slice(0, 8)
-    : null;
-  return (
-    <article
-      className={`subagent-card subagent-card--${status.tone}`}
-      data-testid="subagent-card"
-    >
-      <div className="subagent-card-head">
-        <span className="subagent-card-title">
-        {rich("Sub-agent{0}", shortId ? <code> {shortId}…</code> : null)}
-      </span>
-        {info.role ? <span className="subagent-card-role">{subagentRoleLabel(info.role)}</span> : null}
-        <span className={`subagent-card-status subagent-card-status--${status.tone}`}>
-          {status.label}
-        </span>
-      </div>
-      {/* What the child is doing right now — the live half of the card. */}
-      {info.current ? (
-        <div className="subagent-card-activity" data-testid="subagent-card-activity">
-          {info.current}
-        </div>
-      ) : null}
-      <div className="subagent-card-meta">
-        {typeof info.steps === "number" && info.steps > 0 ? (
-          <span>
-        {rich("{0} steps", info.steps)}
-      </span>
-        ) : null}
-        {typeof info.costUsd === "number" && info.costUsd > 0 ? (
-          <span>${formatFixed(info.costUsd, 4)}</span>
-        ) : null}
-        {typeof info.tokens === "number" && info.tokens > 0 ? (
-          <span>
-        {rich("{0} tokens", info.tokens.toLocaleString(getLanguage()))}
-      </span>
-        ) : null}
-        {info.workdir ? (
-          <code className="subagent-card-workdir" title={info.workdir}>
-            {info.workdir}
-          </code>
-        ) : null}
-      </div>
-      {info.result ? (
-        <details className="subagent-card-result">
-          <summary>{tr("Result")}</summary>
-          <pre className="log-pre">{stripAnsiCodes(info.result)}</pre>
-        </details>
-      ) : null}
-      {taskId && info.childSessionId && !info.pending ? (
-        <SubagentTranscript taskId={taskId} childSessionId={info.childSessionId} />
-      ) : null}
-    </article>
-  );
-}
-
-// SubagentTranscript lazy-loads a child's own session log (#1043) the first
-// time its disclosure opens and renders it with the same message cards the
-// parent transcript uses. The transcript file is best-effort (it lives on the
-// serving host, not in the DB) — a 404 renders as an inline note, never an
-// error state for the whole card.
-function SubagentTranscript({
-  taskId,
-  childSessionId,
-}: {
-  taskId: string;
-  childSessionId: string;
-}) {
-  const [state, setState] = useState<"idle" | "loading" | "error" | "loaded">("idle");
-  const [error, setError] = useState("");
-  const [session, setSession] = useState<LogSession | null>(null);
-  const load = useCallback(async () => {
-    setState((prev) => (prev === "idle" || prev === "error" ? "loading" : prev));
-    try {
-      const s = await orchestratorApi.taskSubagentLog(taskId, childSessionId);
-      setSession(s);
-      setState("loaded");
-    } catch (e) {
-      setError(localizeError(e instanceof Error ? e.message : String(e)));
-      setState("error");
-    }
-  }, [taskId, childSessionId]);
-  return (
-    <details
-      className="subagent-card-transcript"
-      data-testid="subagent-transcript"
-      onToggle={(e) => {
-        if ((e.target as HTMLDetailsElement).open && state !== "loaded" && state !== "loading") {
-          void load();
-        }
-      }}
-    >
-      <summary>{tr("Transcript")}</summary>
-      {state === "loading" ? (
-        <p className="subagent-card-transcript-note">{tr("Loading transcript…")}</p>
-      ) : null}
-      {state === "error" ? (
-        <p className="subagent-card-transcript-note">
-        {rich("Transcript unavailable: {0}", error)}
-      </p>
-      ) : null}
-      {state === "loaded" && session ? (
-        <TranscriptTimeline
-          messages={session.messages ?? []}
-          taskId={taskId}
-          withFilters={false}
-        />
-      ) : null}
-    </details>
-  );
-}
-
 // ── #508 live activity view ──────────────────────────────────────────────────
 
 type ActivityEntry = {
@@ -475,69 +304,7 @@ type ActivityEntry = {
   isError?: boolean;
   pending?: boolean;
   repeats?: number;
-  /**
-   * Live sub-agent activity for a spawn_subagent entry (#1043 follow-up), fed
-   * by subagent_progress frames. Without it a delegation showed "running…" for
-   * its whole (multi-minute) life with nothing underneath.
-   */
-  subagent?: LiveSubagentActivity;
 };
-
-type LiveSubagentActivity = {
-  childSessionId?: string;
-  role?: string;
-  steps: number;
-  current?: string;
-};
-
-/**
- * liveSubagentActivity folds one subagent_progress frame into an entry's live
- * activity. Pure, and tolerant of a frame that arrives before the spawn entry's
- * own tool_call (the caller drops those).
- */
-export function liveSubagentActivity(
-  prev: LiveSubagentActivity | undefined,
-  frame: TaskStreamFrame,
-): LiveSubagentActivity {
-  const base: LiveSubagentActivity = prev ?? { steps: 0 };
-  const next: LiveSubagentActivity = {
-    childSessionId: frame.child_session_id || base.childSessionId,
-    role: frame.role || base.role,
-    steps:
-      typeof frame.steps === "number"
-        ? frame.steps
-        : typeof frame.step === "number"
-          ? Math.max(base.steps, frame.step)
-          : base.steps,
-    current: base.current,
-  };
-  switch (frame.phase) {
-    case "started":
-      next.current = tr("starting…");
-      break;
-    case "tool":
-      next.current = frame.tool
-        ? `${frame.tool}${frame.detail ? ` · ${frame.detail}` : ""}`
-        : base.current;
-      break;
-    case "tool_result":
-      next.current = frame.tool ? tr("{0} returned", [frame.tool]) : base.current;
-      break;
-    case "text":
-      next.current = frame.detail ? tr("writing: {0}", [frame.detail]) : tr("writing…");
-      break;
-    case "thinking":
-      next.current = frame.detail ? tr("thinking: {0}", [frame.detail]) : tr("thinking…");
-      break;
-    case "note":
-      next.current = frame.detail || base.current;
-      break;
-    case "finished":
-      next.current = undefined;
-      break;
-  }
-  return next;
-}
 
 function sameFailedCall(a: ActivityEntry, b: ActivityEntry) {
   return a.kind === "tool" && b.kind === "tool" && a.isError && b.isError &&
@@ -660,19 +427,6 @@ function LiveTaskView({
           const entry: ActivityEntry = { key: `e${seq.current++}`, kind: "message", text: content };
           return [...prev, entry].slice(-1000);
         });
-        return;
-      } else if (frame.type === "subagent_progress") {
-        // A spawned child's step, attached to the spawn entry that produced it.
-        // A frame whose call we have not rendered yet (reconnect mid-child) is
-        // dropped rather than inventing an entry with no task text.
-        if (!frame.tool_call_id) return;
-        setEntries((prev) =>
-          prev.map((e) =>
-            e.kind === "tool" && e.callId === frame.tool_call_id
-              ? { ...e, subagent: liveSubagentActivity(e.subagent, frame) }
-              : e,
-          ),
-        );
         return;
       } else if (frame.type === "tool_call") {
         // task_tracker is represented once by the dedicated progress panel.
@@ -891,26 +645,6 @@ function LiveTaskView({
                 <div key={e.key} className="live-activity-message" data-testid="live-assistant-message">
                   {e.text}
                 </div>
-              ) : e.name === "spawn_subagent" ? (
-                // Live child card (#1043): pending until the spawn's result
-                // frame lands, then status/spend from the tool's JSON result —
-                // never a raw JSON blob.
-                <SubagentCard
-                  key={e.key}
-                  taskId={task.id}
-                  info={
-                    e.pending
-                      ? {
-                          pending: true,
-                          ...(parseSubagentPayload(e.text) ?? {}),
-                          childSessionId: e.subagent?.childSessionId,
-                          role: e.subagent?.role,
-                          steps: e.subagent?.steps,
-                          current: e.subagent?.current,
-                        }
-                      : (parseSubagentPayload(e.result) ?? { success: !e.isError })
-                  }
-                />
               ) : (
                 // The same step card the finished transcript uses, so a live
                 // run and its stored log read alike.
@@ -1270,12 +1004,6 @@ function LogViewerBody({
               key={attemptId ?? "latest"}
               messages={messages}
               taskId={task.id}
-              renderSubagent={(msg) => {
-                // Sub-agent linkage entries (#1043) render as child cards,
-                // not raw JSON tool messages.
-                const info = parseSubagentPayload(msg.content);
-                return info ? <SubagentCard info={info} taskId={task.id} /> : null;
-              }}
             />
           )}
         </div>

@@ -23,7 +23,7 @@ ignore** and annotates the two failure modes the engine can see.
      turn's request is then a strict prefix of the next one, which an
      implicit-only provider cache (Gemini 4 Argon) needs to keep hitting
      across turns. See [PROMPT-CACHE-CONTRACT.md](PROMPT-CACHE-CONTRACT.md).
-   - *Scheduled and sub-agent runs* get it from `agentcore.Run` as a trailing
+   - *Scheduled runs* get it from `agentcore.Run` as a trailing
      message; the run is one transcript, so it stays put for every step.
 2. **Day-granular system-prompt date, strengthened.** The existing
    `runtimeDateContext` block now also names `runtime_today` and

@@ -982,16 +982,6 @@ type TaskCreate struct {
 	// never auto-escalate through a connector. (The #177 webhook path predates
 	// this gate and always inherits — unchanged.)
 	AllowEventTriggers bool `json:"allow_event_triggers,omitempty"`
-	// AllowDelegation gates agent delegation for THIS task (#264, #1043): the
-	// spawn_subagent native tool is registered so the run can fan out scoped
-	// subtasks to governed child runs (sliced budget, depth/fan-out caps,
-	// parent_task_id linkage). Tri-state: nil (field omitted) means the DEFAULT,
-	// which since #1043 is TRUE — delegation is opt-OUT, the parent agent decides
-	// whether to actually spawn. Explicit false is the per-task kill switch. It
-	// composes with the fleet-wide FLEET_SUBAGENTS_ENABLED operator flag as AND
-	// (both must be on for the tool to be registered). Resolve via
-	// DelegationAllowed(), never by reading the pointer directly.
-	AllowDelegation *bool `json:"allow_delegation,omitempty"`
 	// Persona is the optional per-task persona override (#221): a personas/<name>.yaml
 	// (named without extension, e.g. "security-auditor") whose domain-expertise
 	// block is injected into the system prompt. Empty = the runner's global
@@ -1178,11 +1168,6 @@ type Task struct {
 	// task's write-capable connectors. Default false ⇒ native tools only; see
 	// TaskCreate.AllowEventTriggers.
 	AllowEventTriggers bool `json:"allow_event_triggers,omitempty"`
-	// AllowDelegation gates agent delegation for this task (#264, #1043). Default
-	// TRUE since #1043 (delegation is opt-out); see TaskCreate.AllowDelegation.
-	// Serialized WITHOUT omitempty so an explicit false survives the round trip
-	// to clients now that false is the non-default value.
-	AllowDelegation bool `json:"allow_delegation"`
 	// Persona is the per-task persona override (#221). See TaskCreate.Persona.
 	Persona string `json:"persona,omitempty"`
 	// Description is optional operator documentation (#281). See TaskCreate.Description.
@@ -1416,19 +1401,6 @@ func DeriveDispatchState(triggerType TriggerType, runIf *RunIf, scheduledFor *ti
 }
 
 // NewTask creates a new Task with defaults.
-// DelegationAllowed resolves the tri-state AllowDelegation: nil (field omitted
-// by the client / an older export / a bundle template) means the DEFAULT, which
-// since #1043 is TRUE — sub-agent delegation is opt-OUT. An explicit pointer
-// value wins either way. Every consumer of TaskCreate.AllowDelegation must go
-// through this so the default lives in exactly one place.
-func (tc TaskCreate) DelegationAllowed() bool {
-	return tc.AllowDelegation == nil || *tc.AllowDelegation
-}
-
-// BoolPtr returns a pointer to v — for populating tri-state *bool fields
-// (e.g. TaskCreate.AllowDelegation) from a concrete task's stored value.
-func BoolPtr(v bool) *bool { return &v }
-
 // defaultMaxRetries is the deployment-wide MaxRetries a task gets when its
 // create request omits max_retries (#1538). Set once at boot from
 // FLEET_TASK_DEFAULT_MAX_RETRIES via SetDefaultMaxRetries; a process that never
@@ -1565,7 +1537,6 @@ func NewTask(tc TaskCreate) *Task {
 		AllowNetwork:               tc.AllowNetwork,
 		CarryContext:               tc.CarryContext,
 		AllowEventTriggers:         tc.AllowEventTriggers,
-		AllowDelegation:            tc.DelegationAllowed(),
 		Persona:                    tc.Persona,
 		Description:                tc.Description,
 		Status:                     status,
@@ -1712,7 +1683,6 @@ func TaskToCreate(t *Task) TaskCreate {
 		// the very feature after occurrence #1 (issue #565).
 		CarryContext:       t.CarryContext,
 		AllowEventTriggers: t.AllowEventTriggers,
-		AllowDelegation:    BoolPtr(t.AllowDelegation),
 		// Persona (#221) is part of the recipe so a recurrence/clone runs under the
 		// same per-task persona override rather than falling back to the global
 		// default on occurrence #2+ (issue #565).

@@ -421,8 +421,7 @@ func deferredCallInput(name, input string) (string, bool) {
 // parseBridgeCallInput extracts the target tool name and normalized JSON
 // arguments object from a tool_call payload {"name": ..., "arguments": ...}
 // when a model calls tool_call in a run whose MCP roster was small enough to
-// register directly (e.g. a sub-agent whose parent had a deferred roster and
-// wrote "use tool_call" in the delegated task string).
+// register directly.
 func parseBridgeCallInput(input string) (string, string, bool) {
 	raw := strings.TrimSpace(input)
 	if raw == "" {

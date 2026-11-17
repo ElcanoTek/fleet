@@ -19,9 +19,12 @@ worker/kernel processes are *not* a security sandbox — and it gives the model
 maximal latitude: one `ipython` tool, direct writes to its own harness state,
 uncapped subagent fan-out. fleet is a governed multi-user platform: mandatory
 sandbox, one governed loop, credentials brokered host-side, human approval on
-every durable write. Where the feature sets overlap (budgets, subagents,
+every durable write. Where the feature sets overlap (budgets,
 scheduling, memory, skills), fleet's version is generally the more governed
-one — subagents get hard budget slices vs. no fan-out cap at all; scheduling
+one — fleet no longer has sub-agents at all (it shipped governed,
+budget-sliced ones when this was written and removed them unused,
+[ADR-0112](adr/0112-remove-sub-agents.md)) vs. Prime Agent's uncapped
+fan-out; scheduling
 has leases/retries/DLQ vs. per-session JSON files; memory is human-approved
 vs. self-written. What Prime Agent does better is **context hygiene over very
 long horizons**: its compaction machinery, its habit of re-announcing
@@ -94,7 +97,8 @@ existing governance — no invariant was touched, no ADR needed.
   revisiting if fleet ever builds an approval-gated refinement loop.
 - **Agent-to-agent messaging / retained subagents.** Real machinery in Prime
   Agent (family-scoped reach, rate limits, quiescence barriers) and a real
-  gap in fleet (delegation is one synchronous round trip). Too large and too
+  gap in fleet (which has had no sub-agents since
+  [ADR-0112](adr/0112-remove-sub-agents.md)). Too large and too
   governance-sensitive to ride along here; if wanted it should be its own
   issue with an ADR.
 - **Kernel snapshot/restore (`dill`) and daemon session trees.** fleet's

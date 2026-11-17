@@ -491,8 +491,8 @@ func buildFantasyTools(
 			continue
 		}
 		// Interactive-hidden tools (agent_policy.interactive_hidden_tools,
-		// interactive_hidden.go): a chat turn, and a sub-agent spawned from
-		// one, drops these HERE, before the disclosure decision, for the same
+		// interactive_hidden.go): a chat turn
+		// drops these HERE, before the disclosure decision, for the same
 		// reason Gate-4 is applied here (#570): a tool that deferred behind
 		// the bridges would otherwise stay discoverable via tool_search and
 		// callable via tool_call. Scheduled runs pass no list.

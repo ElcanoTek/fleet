@@ -150,8 +150,6 @@ func Registry() []Spec {
 		// env-file reload keep working and serve again on Reset. 0 = no ceiling.
 		{Key: "max_total_tokens", Kind: KindInt, Min: 10000, Max: 1000000000, MinZeroOK: true,
 			EnvVar: "FLEET_MAX_TOTAL_TOKENS"},
-		{Key: "subagents_enabled", Kind: KindBool,
-			EnvVar: "FLEET_SUBAGENTS_ENABLED"},
 
 		// Model tiers (#1187): the two frontier role slots the chat UI pins —
 		// what a new conversation starts on (default_model), and the fallback

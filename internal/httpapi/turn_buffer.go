@@ -601,7 +601,7 @@ func sanitizeTurnEventForViewer(name string, data []byte, viewerEmail, convOwner
 		return sanitizeQueueUpdatedEvent(data, viewerEmail)
 	case "turn.completed", "turn.cancelled", "turn.error", "turn.model_required":
 		return sanitizeTerminalTurnEvent(name, data, viewerEmail, convOwnerEmail)
-	case "tool.approval_required", "tool.approval_card_fallback", "tool.approval_superseded", "tool.action_recorded", "tool.action_record_card", "tool.auto_resolved", "tool.call", "tool.result", "subagent.progress", "reasoning.start", "reasoning.delta", "reasoning.end", "memory.proposed", "patrol.updated":
+	case "tool.approval_required", "tool.approval_card_fallback", "tool.approval_superseded", "tool.action_recorded", "tool.action_record_card", "tool.auto_resolved", "tool.call", "tool.result", "reasoning.start", "reasoning.delta", "reasoning.end", "memory.proposed", "patrol.updated":
 		if len(data) == 0 {
 			return data, true
 		}

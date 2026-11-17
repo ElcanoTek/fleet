@@ -11,8 +11,6 @@ import (
 
 	"charm.land/fantasy"
 
-	"github.com/ElcanoTek/fleet/internal/config"
-
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/tools"
 )
@@ -125,21 +123,5 @@ func TestScheduledRun_EmailAttachmentsFromTheJobDirectory(t *testing.T) {
 	}
 	if _, err := os.Stat(b.paths[0]); !os.IsNotExist(err) {
 		t.Fatalf("copy %s still present after the run (stat err %v)", b.paths[0], err)
-	}
-}
-
-// A scheduled run's sub-agents, at every depth, carry the run's attachment
-// step.
-func TestScheduledRun_SubagentsInheritTheEmailAttachmentStep(t *testing.T) {
-	parent := NewAgent(Options{
-		Config:                  &config.Config{MaxIterations: 10},
-		SystemPrompt:            "task",
-		Subagent:                SubagentOptions{Enabled: true, MaxDepth: 2, MaxChildren: 5},
-		PrepareEmailAttachments: func(map[string]any) (func(), error) { return func() {}, nil },
-	})
-	child := parent.buildChild(SubagentRoleWorker, nil, nil, nil, 0, 0, 0)
-	grandchild := child.buildChild(SubagentRoleExplore, nil, nil, nil, 0, 0, 0)
-	if child.prepareEmailAttachments == nil || grandchild.prepareEmailAttachments == nil {
-		t.Fatal("a scheduled run's sub-agent carries no email attachment step")
 	}
 }

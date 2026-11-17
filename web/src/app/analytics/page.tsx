@@ -1408,7 +1408,7 @@ function AnalyticsInner() {
                                 {tr("Server Resources & Live Agent Concurrency")}
                               </h2>
                               <p className="mt-0.5 text-[0.82rem] text-[var(--color-text-secondary)]">
-                                {tr("Real-time bot and sub-agent execution counts, tool & LLM activity, warm sandboxes, host CPU/memory/disk, and read-only storage overview.")}
+                                {tr("Real-time bot execution counts, tool & LLM activity, warm sandboxes, host CPU/memory/disk, and read-only storage overview.")}
                               </p>
                             </div>
                           </div>

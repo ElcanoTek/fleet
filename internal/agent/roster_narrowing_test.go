@@ -9,70 +9,12 @@ import (
 	"charm.land/fantasy"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
-	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 )
 
 // driverDeniesAll stands in for the scheduled driver's never-matching deny
 // entry (scheduledrun rosterNarrowingDeniesAll).
 const driverDeniesAll = "__roster_narrowing_denies_all_tools__"
-
-// deniesAll reports whether an allowlist entry registers none of a server's
-// tools: the driver's deny entry, or the explore derivation's sentinel.
-func deniesAll(list []string) bool {
-	return len(list) == 1 && (list[0] == driverDeniesAll || list[0] == exploreNoToolsSentinel)
-}
-
-// A sub-agent of a narrowed run (#1603) can never see more MCP tools than its
-// parent: the exhaustive flag carries over, and an explore child's derivation —
-// which reads a missing entry as "allow all" — gets an explicit entry for every
-// catalog server first. The parent's allowlist is the shape the scheduled
-// driver produces for required_tools [mcp_pages_get_page_data]: the required
-// server's own entry and an explicit deny for every other dispatch-catalog
-// server, the seat included. pages_archive stands for a catalog server the
-// allowlist has no entry for: the parent's exact Gate-2 registers nothing of
-// it, so neither child may inherit the pages entry through the keying rule.
-func TestBuildChild_InheritsTheNarrowedRoster(t *testing.T) {
-	catalog := []mcp.ServerTool{
-		{ServerName: "pages", Tool: mcp.Tool{Name: "get_page_data"}},
-		{ServerName: "pages", Tool: mcp.Tool{Name: "deploy_page_upload"}},
-		{ServerName: "pages_acct", Tool: mcp.Tool{Name: "get_page_data"}},
-		{ServerName: "pages_archive", Tool: mcp.Tool{Name: "get_page_data"}},
-		{ServerName: "fast_io", Tool: mcp.Tool{Name: "list_files"}},
-	}
-	parent := NewAgent(Options{
-		Config:     &config.Config{},
-		MCPCatalog: catalog,
-		MCPToolAllowlist: agentcore.MCPAllowlist{
-			"pages":      {"get_page_data"},
-			"pages_acct": {driverDeniesAll},
-			"fast_io":    {driverDeniesAll},
-		},
-		MCPRosterNarrowing: "required_tools_only",
-		SystemPrompt:       "parent",
-	})
-	for _, role := range []string{SubagentRoleWorker, SubagentRoleExplore} {
-		child := parent.buildChild(role, nil, nil, nil, 0, 0, 0)
-		if child.mcpRosterNarrowing != "required_tools_only" {
-			t.Fatalf("%s child lost the exhaustive Gate-2", role)
-		}
-		allow := child.mcpToolAllowlist
-		if got := allow["pages"]; !slices.Equal(got, []string{"get_page_data"}) {
-			t.Fatalf("%s child: pages = %v, want the parent's [get_page_data]", role, got)
-		}
-		for _, server := range []string{"pages_acct", "pages_archive", "fast_io"} {
-			if got := allow[server]; !deniesAll(got) {
-				t.Fatalf("%s child: %s = %v, want a deny-all entry (the parent registers none of it)", role, server, got)
-			}
-		}
-	}
-
-	// An un-narrowed parent's child is derived exactly as before.
-	open := NewAgent(Options{Config: &config.Config{}, MCPCatalog: catalog, SystemPrompt: "parent"})
-	if child := open.buildChild(SubagentRoleWorker, nil, nil, nil, 0, 0, 0); child.mcpRosterNarrowing != "" || child.mcpToolAllowlist != nil {
-		t.Fatalf("an un-narrowed parent's worker child changed: narrowing=%q allowlist=%v", child.mcpRosterNarrowing, child.mcpToolAllowlist)
-	}
-}
 
 // End to end through the scheduled driver: the tool list the model is sent is
 // the narrowed MCP roster plus the native set (confirm_audit, task_tracker, …),

@@ -10,7 +10,6 @@ import (
 	"charm.land/fantasy"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
-	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/sandbox"
@@ -103,11 +102,11 @@ type TurnConfig struct {
 	Persona       string
 	PersonaPolicy *agentcore.PersonaToolPermissions
 	// HiddenToolSuffixes is agent_policy.interactive_hidden_tools: MCP tools
-	// this turn (and any sub-agent it spawns) neither offers nor calls. The
+	// this turn neither offers nor calls. The
 	// Manager sets it from agentcore.InteractiveHiddenTools(); nil = none.
 	HiddenToolSuffixes []string
 	// PrepareEmailAttachments is agentcore.Deps.PrepareEmailAttachments for
-	// this turn and any sub-agent it spawns. The Manager binds it to the
+	// this turn. The Manager binds it to the
 	// conversation's workspace (tools.SnapshotEmailAttachments).
 	PrepareEmailAttachments func(args map[string]any) (cleanup func(), err error)
 
@@ -149,17 +148,6 @@ type TurnConfig struct {
 	// SteerSource is the mid-turn input seam (#785): acknowledged messages
 	// inject at PrepareStep boundaries. nil = no steering.
 	SteerSource agentcore.SteerSource
-
-	// Subagent configures spawn_subagent for this turn (#1043). The Manager sets
-	// Enabled from the fleet-wide flag alone (chat has no per-conversation
-	// column; the fleet toggle is the only chat opt-out). When Enabled, the same
-	// tool the scheduled driver registers is added to the turn's roster, and a
-	// spawned child runs the scheduled (run-to-completion) loop through the one
-	// governed core, budget-sliced from and charged back to THIS turn's policy.
-	Subagent SubagentOptions
-	// Config supplies the child runs' runtime config (iteration/budget
-	// defaults). Required when Subagent.Enabled; unused otherwise.
-	Config *config.Config
 }
 
 // messagesInput adapts a pre-built message slice to agentcore.InputSource.
@@ -192,22 +180,6 @@ func RunInteractiveTurn(ctx context.Context, tc TurnConfig, obs agentcore.Observ
 	if tc.SkillProposer != nil {
 		policy.SetSkillProposer(tc.SkillProposer)
 		nativeTools = append(append([]fantasy.AgentTool{}, nativeTools...), tools.NewProposeSkillTool())
-	}
-	// spawn_subagent in interactive chat (#1043): registered when the fleet-wide
-	// flag is on, mirroring the scheduled driver's structural gate. The tool is
-	// bound to a host *Agent carrying this turn's wiring (model, sandbox, MCP
-	// scope, roster) for buildChild to inherit — and to the TURN's
-	// InteractivePolicy as its budget seam, so a child's sliced ceiling and
-	// charge-back run against the same accounting the chat cost chip reads.
-	// Same walls as scheduled: depth 1, fan-out 20, 10% remaining, refuse
-	// over-cap, monotonic privilege.
-	if tc.Subagent.Enabled {
-		// obs is the turn's SSE sink: handing it to the host is what lets a
-		// child's steps stream to the browser as subagent.progress events while
-		// it runs, instead of the chip sitting on the spawn arguments until the
-		// child returns (#1043 follow-up).
-		host := newInteractiveSpawnHost(tc, policy, obs)
-		nativeTools = append(append([]fantasy.AgentTool{}, nativeTools...), host.newSpawnSubagentTool())
 	}
 
 	deps := agentcore.Deps{
@@ -256,85 +228,6 @@ func RunInteractiveTurn(ctx context.Context, tc TurnConfig, obs agentcore.Observ
 		EnableResendBudget:  tc.EnableResendBudget,
 	}
 	return agentcore.Run(ctx, agentcore.ModeInteractive, cfg, deps)
-}
-
-// newInteractiveSpawnHost builds the *Agent the interactive spawn_subagent tool
-// binds to (#1043): a carrier for the turn's wiring that children inherit
-// (model, sandbox, MCP client/broker/catalog, tool roster, system prompt) — it
-// never runs a loop of its own. Its runtimePolicy is the TURN's
-// InteractivePolicy, so budget slicing and charge-back share the turn's
-// accounting. The turn's opted-in MCP servers become the host's loaded set —
-// the set a child inherits or narrows (childSelection intersects; never
-// widens). Children run with the turn user's DEFAULT MCP accounts; per-server
-// account choices beyond the default are not threaded into children (see
-// docs/SUBAGENTS.md). obs is the turn's Observer — the host forwards each
-// child's relabeled progress events onto it (nil is fine: no forwarding).
-func newInteractiveSpawnHost(tc TurnConfig, policy *agentcore.InteractivePolicy, obs agentcore.Observer) *Agent {
-	host := NewAgent(Options{
-		AuditProtocolRef: tc.AuditProtocolRef,
-		Config:           tc.Config,
-		Model:            tc.Model,
-		FallbackModel:    tc.FallbackModel,
-		FallbackModels:   tc.FallbackModels,
-		MCPClient:        tc.MCPClient,
-		MCPBroker:        tc.MCPBroker,
-		MCPCatalog:       tc.MCPCatalog,
-		MCPToolAllowlist: tc.Allowlist,
-		OptionalServers:  tc.OptionalServers,
-		NativeTools:      tc.NativeTools,
-		SystemPrompt:     tc.SystemPrompt,
-		Persona:          tc.Persona,
-		MaxIterations:    tc.MaxIterations,
-		Sandbox:          tc.Sandbox,
-		NoteProposer:     tc.NoteProposer,
-		PersonaPolicy:    tc.PersonaPolicy,
-		// Children inherit the turn's hidden tools (buildChild copies them).
-		HiddenToolSuffixes: tc.HiddenToolSuffixes,
-		// Children send email under the same attachment rule as the turn.
-		PrepareEmailAttachments: tc.PrepareEmailAttachments,
-		Overlay:                 tc.Overlay,
-		Subagent:                tc.Subagent,
-	})
-	host.runtimePolicy = policy
-	host.spawnObserver = obs
-	for _, choice := range tc.Selection {
-		s := strings.TrimSpace(choice.Server)
-		if s != "" {
-			host.loadedServers[s] = true
-		}
-		if reg := strings.TrimSpace(agentcore.RegisteredMCPName(choice.Server, choice.Account)); reg != "" {
-			host.loadedServers[reg] = true
-			if s != "" && reg != s {
-				if host.seatBaseServers == nil {
-					host.seatBaseServers = make(map[string]string)
-				}
-				host.seatBaseServers[reg] = s
-			}
-		}
-	}
-	for _, choice := range tc.Overlay.SeatSelection() {
-		s := strings.TrimSpace(choice.Server)
-		if s != "" {
-			host.loadedServers[s] = true
-		}
-		if reg := strings.TrimSpace(agentcore.RegisteredMCPName(choice.Server, choice.Account)); reg != "" {
-			host.loadedServers[reg] = true
-			if s != "" && reg != s {
-				if host.seatBaseServers == nil {
-					host.seatBaseServers = make(map[string]string)
-				}
-				host.seatBaseServers[reg] = s
-			}
-		}
-	}
-	if tc.Overlay != nil {
-		for reg, ok := range tc.Overlay.Servers {
-			if ok && strings.TrimSpace(reg) != "" {
-				host.loadedServers[strings.TrimSpace(reg)] = true
-			}
-		}
-	}
-	return host
 }
 
 // buildInteractiveFinalize returns the agentcore finalize hook implementing

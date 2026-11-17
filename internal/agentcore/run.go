@@ -94,7 +94,7 @@ type RunConfig struct {
 	// HiddenToolSuffixes are tool-name suffixes (the critical_tools suffix
 	// rule) whose MCP tools this run neither offers nor calls: the bundle's
 	// agent_policy.interactive_hidden_tools, which the interactive driver
-	// sets on a chat turn and a sub-agent spawned from it inherits
+	// sets on a chat turn
 	// (interactive_hidden.go). A hidden tool is dropped before the
 	// disclosure decision, so it is in neither the tool list nor the
 	// tool_search/tool_call registry, and a call to one is refused before
@@ -140,7 +140,7 @@ type RunConfig struct {
 	// runtime_today note (RuntimeDateMessage), persisted with the user turn so
 	// the next turn replays it in place. Run then does not append its own
 	// request-local note. The interactive driver sets it; a one-shot run
-	// (scheduled, sub-agent child) leaves it false and gets the tail, which is
+	// (scheduled) leaves it false and gets the tail, which is
 	// cache-stable there because the whole run is one append-only transcript.
 	RuntimeDateInInput bool
 }
@@ -496,8 +496,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 	// basePrompt is the driver's system prompt as authored (persona, protocols,
 	// skills, notes). The live-registry section is appended below, once the
 	// tool roster exists — see live_registry.go for why it cannot be written
-	// earlier. Sub-agent children receive the base (internal/agent/subagent.go)
-	// and run through this same loop, so each appends its own roster's section.
+	// earlier.
 	basePrompt, messages, label, err := deps.Input.Prompt(ctx)
 	if err != nil {
 		return Result{}, fmt.Errorf("input source: %w", err)
@@ -651,8 +650,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 	//     recorder rides ctx because those tools are constructed by the driver
 	//     before this run (and its policy) exists — the same context seam the
 	//     ask/notify handlers use. Tool calls inherit this ctx through the
-	//     stream, and a spawned sub-agent's own Run re-binds the key to the
-	//     child's state, so spend is always attributed to the run that paid.
+	//     stream, so spend is always attributed to the run that paid.
 	// Both route through updateAuxUsage, not updateUsage: aux calls accumulate
 	// into the ceiling/billing totals but must not overwrite the LastStep*
 	// per-call input-size signals, which belong to the MAIN loop's steps.

@@ -105,7 +105,7 @@ request-local tail:
   request-local copy. A user row written before this has no day and replays
   with no note, exactly as it was sent: an existing chat takes one cache miss
   on its first turn after the upgrade and is append-only from then on.
-- **One-shot runs** (scheduled tasks, sub-agent children) keep the
+- **One-shot runs** (scheduled tasks) keep the
   request-local tail from `agentcore.Run`: the whole run is one append-only
   transcript, so the tail stays put for every step.
 - **Guard:** `TestTurnRequestIsAPrefixOfTheNext` (`internal/agent`) builds two

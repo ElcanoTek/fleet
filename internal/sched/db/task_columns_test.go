@@ -172,7 +172,7 @@ func TestTaskRegistrySchemaAgreement(t *testing.T) {
 	}
 
 	for name := range schemaCols {
-		if !registryCols[name] {
+		if !registryCols[name] && retiredTaskColumns[name] == "" {
 			t.Errorf("tasks column %q exists in the migrated schema but has no taskColumnRegistry row — a new column is one migration + one registry row (#1126)", name)
 		}
 	}
@@ -247,7 +247,6 @@ func TestTaskRegistryRoundTrip(t *testing.T) {
 		AllowNetwork:               true,
 		CarryContext:               true,
 		AllowEventTriggers:         true,
-		AllowDelegation:            models.BoolPtr(true),
 		Persona:                    "security-auditor",
 		Description:                "round-trip fixture",
 		Timezone:                   "America/New_York",

@@ -29,9 +29,9 @@ const SETTINGS: Resolved[] = [
     default: "off",
   },
   {
-    key: "subagents_enabled",
+    key: "memory_autoindex_enabled",
     kind: "bool",
-    env_var: "FLEET_SUBAGENTS_ENABLED",
+    env_var: "FLEET_MEMORY_AUTOINDEX_ENABLED",
     value: "false",
     source: "default",
     default: "false",
@@ -73,7 +73,7 @@ async function mockAdmin(page: Page) {
   );
 
   await page.route("**/api/admin/settings", (r: Route) => r.fulfill({ json: { settings: SETTINGS } }));
-  await page.route("**/api/admin/settings/subagents_enabled", (r: Route) => {
+  await page.route("**/api/admin/settings/memory_autoindex_enabled", (r: Route) => {
     if (r.request().method() === "PUT") {
       return r.fulfill({
         json: {
@@ -103,11 +103,11 @@ test("the Features page renders, toggles live, and resets to default", async ({ 
   await expect(panel).toBeVisible({ timeout: 15_000 });
   await expect(panel).toContainText("PII redaction");
   await expect(panel).toContainText(/Privacy & data protection/i);
-  await expect(panel).toContainText("FLEET_SUBAGENTS_ENABLED");
+  await expect(panel).toContainText("FLEET_MEMORY_AUTOINDEX_ENABLED");
 
-  // Toggle sub-agents on: PUT round-trip flips the switch, and the row's
+  // Toggle memory auto-index on: PUT round-trip flips the switch, and the row's
   // badge flips to the design's Overridden state with a Reset affordance.
-  const toggle = page.getByTestId("toggle-subagents_enabled");
+  const toggle = page.getByTestId("toggle-memory_autoindex_enabled");
   await expect(toggle).toHaveAttribute("aria-checked", "false");
   await toggle.click();
   await expect(toggle).toHaveAttribute("aria-checked", "true");
@@ -115,7 +115,7 @@ test("the Features page renders, toggles live, and resets to default", async ({ 
   await expect(panel).toContainText("set by admin@example.com");
 
   // Reset: DELETE reverts to the env default.
-  await page.getByTestId("reset-subagents_enabled").click();
+  await page.getByTestId("reset-memory_autoindex_enabled").click();
   await expect(toggle).toHaveAttribute("aria-checked", "false");
   await expect(panel).not.toContainText("Overridden");
 });
@@ -127,8 +127,8 @@ test("the Features filter narrows rows and hides empty groups", async ({ page })
   const panel = page.getByTestId("feature-settings-panel");
   await expect(panel).toBeVisible({ timeout: 15_000 });
 
-  await page.getByRole("textbox", { name: "Filter settings" }).fill("sub-agent");
-  await expect(panel).toContainText("Sub-agent delegation");
+  await page.getByRole("textbox", { name: "Filter settings" }).fill("auto-index");
+  await expect(panel).toContainText("Memory auto-index");
   await expect(panel).not.toContainText("PII redaction");
 
   await page.getByRole("textbox", { name: "Filter settings" }).fill("zzz-no-match");

@@ -68,7 +68,6 @@ needs a restart, ever.
 | `monthly_soft_spend_limit_usd` | decimal 1–1000000 (cents allowed), or 0 = unlimited | `FLEET_MONTHLY_SOFT_SPEND_LIMIT_USD` | Monthly workspace soft spend allowance in USD across billed models displayed on `/analytics` (`config.LiveMonthlySoftSpendLimitUSD`) |
 | `approval_timeout_seconds` | int 60–604800 | `FLEET_APPROVAL_TIMEOUT_SECONDS` | Default-deny window for pending approval cards; read at stager construction, so an edit governs the next staged card ([AGENT-RUNTIME.md](AGENT-RUNTIME.md), [APPROVAL-CARDS.md](APPROVAL-CARDS.md)) |
 | `phone_a_friend_enabled` | bool | `FLEET_PHONE_A_FRIEND_ENABLED` | One-time super-LLM review of scheduled runs ([AGENT-RUNTIME.md](AGENT-RUNTIME.md)) |
-| `subagents_enabled` | bool | `FLEET_SUBAGENTS_ENABLED` | Fleet-wide **kill switch** for sub-agent delegation — default **on** (#1043); composes AND with per-task `allow_delegation` ([SUBAGENTS.md](SUBAGENTS.md)) |
 | `default_model` | model slug (`provider/model`) | `FLEET_DEFAULT_MODEL` | What a new conversation starts on — the first pinned "recommended" picker row (#1187). Falls back to the compiled-in `agentcore.DefaultCoreModel` |
 | `advanced_model` | model slug (`provider/model`) | `FLEET_ADVANCED_MODEL` | The escalation target `suggest_advanced_model` and the spreadsheet nudge switch to; the second pinned picker row (#1187). Falls back to `agentcore.DefaultMaxModel` |
 | `task_model` | model slug (`provider/model`); the env default may be empty | `FLEET_TASK_MODEL` | The task tier: what the Operations Center form pre-fills, what a chat-scheduled task is pinned to when the agent names no model, and what an unpinned task runs on. Empty (the usual default) means **follow `advanced_model`** live (`agentcore.CurrentTaskModel`). See [TASK-MODEL-TIER.md](TASK-MODEL-TIER.md) |
@@ -121,7 +120,7 @@ knob. These deliberately did **not** move into the panel:
   while set (`config.LiveMaxCostUSD` / `config.LiveMaxTotalTokens`), so a
   reload still records the env value and serves it again on Reset. The
   remaining knobs can follow the same shape when someone needs them.
-- **Fine-grained tuning** — sub-agent depth/children/budget-fraction, model
+- **Fine-grained tuning** — model
   slug overrides (`FLEET_PHONE_A_FRIEND_MODEL`, `FLEET_MEMORY_MODEL`,
   `FLEET_ERROR_ANALYSIS_MODEL`), compaction thresholds, task-memory caps.
   Env-only for now; the master toggles above are the administrable surface.

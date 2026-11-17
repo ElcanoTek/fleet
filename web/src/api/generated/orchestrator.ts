@@ -1384,54 +1384,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/logs/{task_id}/subagents/{child_session_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                task_id: string;
-                child_session_id: string;
-            };
-            cookie?: never;
-        };
-        /**
-         * Fetch a spawned sub-agent's own transcript (#1043).
-         * @description Returns the sibling session log (LogSession shape) a sub-agent child run wrote. Same auth + ownership gate as GET /logs/{task_id}, PLUS a linkage check — the child id must appear in a subagent_spawned entry of this task's persisted log (latest or any history attempt). The transcript file is host-local and best-effort: 404 when it is no longer present, while the parent log's linkage entry remains the durable record.
-         */
-        get: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path: {
-                    task_id: string;
-                    child_session_id: string;
-                };
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description OK */
-                200: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["LogSession"];
-                    };
-                };
-                400: components["responses"]["Error"];
-                403: components["responses"]["Error"];
-                404: components["responses"]["Error"];
-            };
-        };
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/mcp-accounts": {
         parameters: {
             query?: never;
@@ -2896,7 +2848,6 @@ export interface paths {
                             files?: string[];
                             /** @description Optional logical names paired 1:1 with files. Replacing files clears inherited names unless supplied here. */
                             file_names?: string[];
-                            allow_delegation?: boolean;
                             /** @description Negative clears to the global default; omitted inherits the source. */
                             thinking_budget_tokens?: number;
                             persona?: string;

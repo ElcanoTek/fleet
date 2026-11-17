@@ -373,36 +373,6 @@ func TestFailedCriticalCalls(t *testing.T) {
 	}
 }
 
-// A verifier outage fails open only where an audit actually ran in this policy
-// (#1602 follow-up). A delegated policy skips the self-audit ritual, so finish
-// enforcement clearing proves nothing: a sub-agent's outage keeps the
-// spend-a-check path and ends ErrCompletionUnverified. (Children do not run
-// this gate today — the driver skips the wrapper for them — so this pins the
-// premise at the policy seam, where a future change would reach it.)
-func TestVerifierOutageNeedsThisPolicysAuditToFailOpen(t *testing.T) {
-	withFastVerifierRetry(t)
-	verifier := &scriptedVerifier{replies: []string{"ERR"}}
-	a := newTestScheduledAgent(t, &itMockModel{})
-	a.verifierModel = verifier
-	p := &scheduledPolicy{
-		inner:  agentcore.NewDelegatedPolicy(a.logSession, 0, 0),
-		agent:  a,
-		task:   "delegated work",
-		runCtx: context.Background(),
-	}
-	for check := 1; check <= maxCompletionVerifications; check++ {
-		if ok, _ := p.CanFinish(check); ok {
-			t.Fatalf("check %d: a run that never audited failed open on a verifier outage", check)
-		}
-	}
-	if p.verifierWarning != "" || !errors.Is(p.TerminalError(), agentcore.ErrCompletionUnverified) {
-		t.Fatalf("want ErrCompletionUnverified and no warning, got err=%v warning=%q", p.TerminalError(), p.verifierWarning)
-	}
-	if verifier.calls != 2*maxCompletionVerifications {
-		t.Fatalf("verifier calls = %d, want %d (each check retried once, then spent)", verifier.calls, 2*maxCompletionVerifications)
-	}
-}
-
 // Malformed verdicts — an empty reply included — are content failures: even
 // after a clean audit whose critical publish landed they never fail open — a
 // degraded verifier model must not become auto-success.

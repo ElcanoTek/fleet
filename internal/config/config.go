@@ -55,24 +55,6 @@ const (
 // auxiliary jobs below with it (docs/MODEL-DEFAULTS.md).
 const DefaultTitleModel = agentcore.DefaultCoreModel
 
-// Sub-agent caps (#175, tightened for delegation #264): deliberately SMALL
-// defaults. Depth bounds recursion; fan-out bounds how many children one parent
-// may spawn; the budget fraction bounds each child's slice of the parent's
-// remaining budget. All are hard refusals / hard caps when exceeded — combined
-// with the budget split, they bound total sub-agent spend and prevent a spawn
-// fork-bomb.
-//
-// The depth default is 1 (#264, "parent → sub-agent only"): the root task may
-// delegate, but a child may NOT delegate further — the spawn tool is not even
-// registered in a child (see internal/agent/subagent.go buildChild). An operator
-// can raise FLEET_SUBAGENTS_MAX_DEPTH to allow deeper trees. The budget-fraction
-// default is 0.10 (#264, "≤10% of the parent's remaining budget per child").
-const (
-	defaultSubagentsMaxDepth       = 1
-	defaultSubagentsMaxChildren    = 20
-	defaultSubagentsBudgetFraction = 0.10
-)
-
 // allowedEnvVars is the union allowlist of keys that may be set from a .env
 // file. Anything else in the file is ignored. The process environment wins
 // over the file so operators can override individual values per invocation.
@@ -532,40 +514,6 @@ type Config struct {
 	// the CHAT tiers, not the scheduler's TaskModel above, which stays its own knob.
 	DefaultModel  string
 	AdvancedModel string
-
-	// ── sub-agents / delegation (#175, #264, #1043) ──
-	// SubagentsEnabled turns on the spawn_subagent native tool fleet-wide, which
-	// lets a governed run delegate a scoped piece of work to a CHILD run. The child
-	// is not a new or weaker loop: it is another agentcore.Run governed exactly like
-	// the parent (ADR-0001), inheriting the parent's sandbox network posture, MCP
-	// + credential allowlist (least-privilege: it may only SUBTRACT), and a SLICE
-	// of the parent's remaining cost/token budget — the parent ceiling is the hard
-	// wall across all descendants. ON by default (#1043): the tool being registered
-	// is the feature — the PARENT AGENT decides whether to actually spawn; a
-	// sequential run that never delegates is a successful use of it.
-	// FLEET_SUBAGENTS_ENABLED=false (or the Admin → Features override) is the
-	// fleet-wide KILL SWITCH, not an enable.
-	//
-	// Delegation is ALSO gated PER TASK via the task's allow_delegation flag
-	// (default true, #1043): the two compose as AND (see internal/scheduledrun) —
-	// the operator only ever opts OUT, per task or fleet-wide. When the composed
-	// gate is false the tool is not registered at all (structural, not a soft
-	// check). Interactive chat registers the tool too (#1043) whenever the
-	// fleet-wide flag is on; chat has no per-conversation opt-out column.
-	//
-	// SubagentsMaxDepth caps recursion; the default is 1 ("parent → sub-agent only",
-	// #264) — a child does not get the spawn tool. SubagentsMaxChildren caps per-parent
-	// fan-out (default 20). SubagentsBudgetFraction is each child's default/maximum
-	// slice of the parent's REMAINING budget (default 0.10; a call requesting more is
-	// refused). A spawn exceeding any cap is REFUSED with a tool-result error.
-	// SubagentsModel names the default child model slug (FLEET_SUBAGENTS_MODEL); empty
-	// inherits the parent's model. The child model is resolved HOST-SIDE (like the
-	// phone-a-friend reviewer) so credentials stay host-side.
-	SubagentsEnabled        bool
-	SubagentsMaxDepth       int
-	SubagentsMaxChildren    int
-	SubagentsBudgetFraction float64
-	SubagentsModel          string
 
 	// ── run-history retention (#252) ──
 	// RunLogRetentionDays prunes terminal task runs (and their logs) older than
@@ -1332,15 +1280,6 @@ func Load(envFile string) (*Config, error) {
 		DefaultModel:  getenvFleet("DEFAULT_MODEL"),
 		AdvancedModel: getenvFleet("ADVANCED_MODEL"),
 
-		// ── sub-agents / delegation (#175, #264, #1043) ──
-		// Default TRUE (#1043): the parent agent decides whether to delegate;
-		// FLEET_SUBAGENTS_ENABLED=false is the fleet-wide kill switch.
-		SubagentsEnabled:        lp.getenvFleetBool("SUBAGENTS_ENABLED", true),
-		SubagentsMaxDepth:       lp.getenvFleetInt("SUBAGENTS_MAX_DEPTH", defaultSubagentsMaxDepth),
-		SubagentsMaxChildren:    lp.getenvFleetInt("SUBAGENTS_MAX_CHILDREN", defaultSubagentsMaxChildren),
-		SubagentsBudgetFraction: normalizeBudgetFraction(lp.getenvFleetFloat("SUBAGENTS_BUDGET_FRACTION", defaultSubagentsBudgetFraction)),
-		SubagentsModel:          getenvFleet("SUBAGENTS_MODEL"),
-
 		// ── host reclamation + disk backpressure ──
 		WorktreePruneAge:   lp.getenvFleetDuration("WORKTREE_PRUNE_AGE", 24*time.Hour),
 		DiskMinFreePercent: lp.getenvFleetInt("DISK_MIN_FREE_PERCENT", 5),
@@ -2029,21 +1968,6 @@ func normalizePythonREPLMode(raw string) string {
 // The typed numeric/bool/duration readers live in knobs.go (#1119): Load
 // resolves them through loadParser + the envKnobs registry so a
 // set-but-malformed value refuses to boot instead of silently defaulting.
-
-// normalizeBudgetFraction clamps the sub-agent budget fraction (#264) into the
-// valid (0, 1] range, falling back to the package default on a nonsensical value
-// so a misconfiguration can never mean "unbounded" (0 or negative → default;
-// >1 → 1.0, the whole remaining budget). The fraction caps each child's slice of
-// the parent's remaining budget; the parent ceiling remains the hard wall.
-func normalizeBudgetFraction(f float64) float64 {
-	if f <= 0 {
-		return defaultSubagentsBudgetFraction
-	}
-	if f > 1 {
-		return 1.0
-	}
-	return f
-}
 
 // TaskDefaultMaxRetriesFromEnv resolves FLEET_TASK_DEFAULT_MAX_RETRIES
 // without a full Load, clamped to the per-task 0–10

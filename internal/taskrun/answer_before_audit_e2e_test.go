@@ -13,7 +13,7 @@ import (
 // message, which the runner stores as the task result and the Operations
 // Center shows as the answer, must carry the answer, not the pointer alone.
 func TestAnswerBeforeAuditIsStored_FakeLLM(t *testing.T) {
-	fake := startSubagentFakeLLM(t)
+	fake := startScenarioFakeLLM(t)
 	const table, pointer = "TABLE-1826: seed 1 = 42, seed 2 = 17", "Audit ok, the table is in my previous message."
 	fake.Scenario("answer-first", fakellm.Scenario{Steps: []fakellm.Step{
 		fakellm.TextStep(table),

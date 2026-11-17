@@ -45,10 +45,10 @@ const PII: Resolved = {
   default: "off",
 };
 
-const SUBAGENTS: Resolved = {
-  key: "subagents_enabled",
+const AUTOINDEX: Resolved = {
+  key: "memory_autoindex_enabled",
   kind: "bool",
-  env_var: "FLEET_SUBAGENTS_ENABLED",
+  env_var: "FLEET_MEMORY_AUTOINDEX_ENABLED",
   value: "false",
   source: "default",
   default: "false",
@@ -110,38 +110,38 @@ describe("FeaturesAdminPage", () => {
   it("renders settings grouped with provenance and env-var attribution", async () => {
     vi.stubGlobal(
       "fetch",
-      mockFetch([PII, { ...SUBAGENTS, value: "true", source: "admin", updated_by: "boss@x.com" }]),
+      mockFetch([PII, { ...AUTOINDEX, value: "true", source: "admin", updated_by: "boss@x.com" }]),
     );
     render(<FeaturesAdminPage />);
     expect(await screen.findByText("PII redaction")).toBeInTheDocument();
     expect(screen.getByText("Privacy & data protection")).toBeInTheDocument();
-    expect(screen.getByText("Sub-agent delegation")).toBeInTheDocument();
+    expect(screen.getByText("Memory auto-index")).toBeInTheDocument();
     // Provenance: one overridden row (with reset + attribution), one default.
     expect(screen.getByText("Overridden")).toBeInTheDocument();
     expect(screen.getByText("Server default")).toBeInTheDocument();
     expect(screen.getByText(/set by boss@x.com/)).toBeInTheDocument();
-    expect(screen.getByText("FLEET_SUBAGENTS_ENABLED")).toBeInTheDocument();
-    expect(screen.getByTestId("reset-subagents_enabled")).toBeInTheDocument();
+    expect(screen.getByText("FLEET_MEMORY_AUTOINDEX_ENABLED")).toBeInTheDocument();
+    expect(screen.getByTestId("reset-memory_autoindex_enabled")).toBeInTheDocument();
   });
 
   it("toggling a bool PUTs the flipped value and re-renders from the response", async () => {
-    const fetchMock = mockFetch([SUBAGENTS], (url, init) => {
-      if (init.method === "PUT" && url.includes("subagents_enabled")) {
+    const fetchMock = mockFetch([AUTOINDEX], (url, init) => {
+      if (init.method === "PUT" && url.includes("memory_autoindex_enabled")) {
         return {
           status: 200,
-          body: { ...SUBAGENTS, value: "true", source: "admin", updated_by: "boss@x.com" },
+          body: { ...AUTOINDEX, value: "true", source: "admin", updated_by: "boss@x.com" },
         };
       }
       return undefined;
     });
     vi.stubGlobal("fetch", fetchMock);
     render(<FeaturesAdminPage />);
-    const toggle = await screen.findByTestId("toggle-subagents_enabled");
+    const toggle = await screen.findByTestId("toggle-memory_autoindex_enabled");
     expect(toggle).toHaveAttribute("aria-checked", "false");
     fireEvent.click(toggle);
     await waitFor(() => expect(toggle).toHaveAttribute("aria-checked", "true"));
     const put = fetchMock.mock.calls.find(([, init]) => init?.method === "PUT");
-    expect(put?.[0]).toBe("/api/admin/settings/subagents_enabled");
+    expect(put?.[0]).toBe("/api/admin/settings/memory_autoindex_enabled");
     expect(JSON.parse(String(put?.[1]?.body))).toEqual({ value: "true" });
     expect(screen.getByText("Overridden")).toBeInTheDocument();
   });
@@ -477,13 +477,13 @@ describe("FeaturesAdminPage", () => {
   });
 
   it("filters settings live and hides groups with nothing visible", async () => {
-    vi.stubGlobal("fetch", mockFetch([PII, SUBAGENTS, THRESHOLD]));
+    vi.stubGlobal("fetch", mockFetch([PII, AUTOINDEX, THRESHOLD]));
     render(<FeaturesAdminPage />);
     await screen.findByText("PII redaction");
 
     const filter = screen.getByLabelText("Filter settings");
-    fireEvent.change(filter, { target: { value: "sub-agent" } });
-    expect(screen.getByText("Sub-agent delegation")).toBeInTheDocument();
+    fireEvent.change(filter, { target: { value: "auto-index" } });
+    expect(screen.getByText("Memory auto-index")).toBeInTheDocument();
     expect(screen.queryByText("PII redaction")).toBeNull();
     expect(screen.queryByText("Privacy & data protection")).toBeNull();
 
@@ -581,23 +581,23 @@ describe("FeaturesAdminPage", () => {
     });
     const fetchMock = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
       if (!init || init.method === undefined || init.method === "GET") {
-        return jsonResponse({ settings: [SUBAGENTS, PII] });
+        return jsonResponse({ settings: [AUTOINDEX, PII] });
       }
       // Hold the PUT open so the in-flight state is observable.
       await gate;
-      return jsonResponse({ ...SUBAGENTS, value: "true", source: "admin" });
+      return jsonResponse({ ...AUTOINDEX, value: "true", source: "admin" });
     });
     vi.stubGlobal("fetch", fetchMock);
     render(<FeaturesAdminPage />);
-    const toggle = await screen.findByTestId("toggle-subagents_enabled");
+    const toggle = await screen.findByTestId("toggle-memory_autoindex_enabled");
     fireEvent.click(toggle);
-    await waitFor(() => expect(screen.getByTestId("toggle-subagents_enabled")).toBeDisabled());
+    await waitFor(() => expect(screen.getByTestId("toggle-memory_autoindex_enabled")).toBeDisabled());
     // The sibling row is untouched by the pending write.
     const pii = screen.getByTestId("setting-pii_redaction_mode");
     for (const b of within(pii).getAllByRole("button")) expect(b).not.toBeDisabled();
     release?.();
     await waitFor(() =>
-      expect(screen.getByTestId("toggle-subagents_enabled")).not.toBeDisabled(),
+      expect(screen.getByTestId("toggle-memory_autoindex_enabled")).not.toBeDisabled(),
     );
   });
 
@@ -617,7 +617,7 @@ describe("FeaturesAdminPage reload", () => {
     const fetchMock = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
       if (!init || init.method === undefined || init.method === "GET") {
         if (fail) return textResponse("", 502);
-        return jsonResponse({ settings: [SUBAGENTS] });
+        return jsonResponse({ settings: [AUTOINDEX] });
       }
       return textResponse("{}");
     });
@@ -627,7 +627,7 @@ describe("FeaturesAdminPage reload", () => {
     fail = false;
     fireEvent.click(retry);
     // The refetched list is what renders — nothing local layered over it.
-    const toggle = await screen.findByTestId("toggle-subagents_enabled");
+    const toggle = await screen.findByTestId("toggle-memory_autoindex_enabled");
     expect(toggle).toHaveAttribute("aria-checked", "false");
     expect(screen.getByText("Server default")).toBeInTheDocument();
   });

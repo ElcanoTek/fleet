@@ -128,7 +128,7 @@ same buffer, around the recorded turn, and are not in the recordings; the
 replays give consumers the conversation id through the
 `X-Fleet-Conversation-Id` header, as production also does. Recording them
 needs a Postgres-backed `httpapi` harness. Turns
-with approvals, sub-agents or reasoning need fake-LLM scripting that does not
+with approvals or reasoning need fake-LLM scripting that does not
 exist yet. Until then those frames are still hand-written in the specs that
 need them. The orchestrator HTTP API has its own contract:
 `docs/openapi.yaml` is generated from the router and its route catalog

@@ -368,13 +368,7 @@ func resolveWorkspacePath(ctx context.Context, path string) (string, error) {
 	}
 	// A forced working dir takes precedence over the per-conversation workspace,
 	// matching resolveBashWorkingDir and fileOpRoot, so every tool surface agrees
-	// on the cwd. Before #1043 the two never coexisted (scheduled runs have no
-	// conversation id; chat set no forced dir); now an interactive turn's spawned
-	// sub-agent carries BOTH — the conversation id it inherited and its own
-	// isolated forced subdir — and the forced dir must win or its relative file
-	// writes would land in the shared conversation workspace and then fail
-	// fileOpRoot's forced-subtree containment check. Escapes via '..' are caught
-	// by that same fileOpRoot check (as they always were on the scheduled path).
+	// on the cwd. Escapes via '..' are caught by that same fileOpRoot check.
 	if forced := ForcedWorkingDirFromContext(ctx); forced != "" {
 		return filepath.Join(forced, path), nil
 	}

@@ -30,12 +30,10 @@ func (s *Store) LLMUsageSince(ctx context.Context, since int64) (calls int64, co
 	return calls, costUSD, nil
 }
 
-// AgentRuntimeCounts summarizes sub-agent delegations, tool executions, and
+// AgentRuntimeCounts summarizes tool executions and
 // recently active conversations from the chat database for the Server & Live
 // Agents admin view.
 type AgentRuntimeCounts struct {
-	SubagentsSpawnedTotal  int64
-	SubagentsSpawned24h    int64
 	ToolCalls24h           int64
 	ToolCallsTotal         int64
 	ActiveConversations24h int64
@@ -51,16 +49,12 @@ func (s *Store) AgentRuntimeCounts(ctx context.Context, sinceUnix int64) (AgentR
 	err := s.db.QueryRowContext(ctx, `
 		SELECT
 			COUNT(*),
-			COALESCE(SUM(CASE WHEN started_at >= $1 THEN 1 ELSE 0 END), 0),
-			COALESCE(SUM(CASE WHEN tool_name = 'spawn_subagent' THEN 1 ELSE 0 END), 0),
-			COALESCE(SUM(CASE WHEN tool_name = 'spawn_subagent' AND started_at >= $1 THEN 1 ELSE 0 END), 0)
+			COALESCE(SUM(CASE WHEN started_at >= $1 THEN 1 ELSE 0 END), 0)
 		FROM tool_call_log`,
 		sinceUnix,
 	).Scan(
 		&out.ToolCallsTotal,
 		&out.ToolCalls24h,
-		&out.SubagentsSpawnedTotal,
-		&out.SubagentsSpawned24h,
 	)
 	if err != nil {
 		return out, err

@@ -34,8 +34,7 @@ export function conversationApiUrl(id: string, suffix = ""): string | null {
 }
 
 // conversationApiPath returns `/api/conversations/<id>/<seg>/<seg>…` for a
-// path with further ids in it (an approval, a queued input, a turn, a
-// subagent child). Every segment — literal or id — must pass the same
+// path with further ids in it (an approval, a queued input, a turn). Every segment — literal or id — must pass the same
 // single-token gate and is encoded on its own, so no value can add a
 // segment, climb with `..`, or start a query. Returns null when any segment
 // fails. Callers append a query built with URLSearchParams/encodeURIComponent.

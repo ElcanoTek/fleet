@@ -23,9 +23,6 @@ const STATS = {
     queued_tasks: 4,
     completed_tasks_today: 18,
     failed_tasks_today: 0,
-    active_subagents: 3,
-    subagents_spawned_24h: 15,
-    subagents_spawned_total: 84,
     tool_calls_24h: 420,
     tool_calls_total: 3100,
     active_conversations_24h: 19,
@@ -262,14 +259,12 @@ describe("AdminServerPage", () => {
     expect(await screen.findByTestId("storage-error")).toHaveTextContent("storage stats unavailable on this server");
   });
 
-  it("renders bot & sub-agent activity and hides destructive cleanup button when allowCleanup=false", async () => {
+  it("renders bot activity and hides destructive cleanup button when allowCleanup=false", async () => {
     vi.stubGlobal("fetch", routedFetch());
     render(<ServerStatsView allowCleanup={false} />);
 
     const agentPanel = await screen.findByTestId("server-agent-stats-panel");
-    expect(agentPanel).toHaveTextContent("2 chat · 1 task bots · 3 sub-agents");
-    expect(agentPanel).toHaveTextContent("3 active · 15 (24h)");
-    expect(agentPanel).toHaveTextContent("84 total sub-agents spawned");
+    expect(agentPanel).toHaveTextContent("2 chat · 1 task bots");
     expect(agentPanel).toHaveTextContent("420");
     expect(agentPanel).toHaveTextContent("3,100 total tool calls logged");
 

@@ -181,8 +181,7 @@ The second step runs for every email dispatch in a chat turn, whether or not
 a card was shown: an approved card (httpapi `runStagedTool`), and a call that
 runs without one, through session pre-approval, conversation auto-approve or a
 self-addressed patrol email (`agentcore.Deps.PrepareEmailAttachments`, which
-the chat driver binds to the conversation). A sub-agent spawned from a chat
-turn carries the same step. A path outside the conversation's workspace and
+the chat driver binds to the conversation). A path outside the conversation's workspace and
 the shared library refuses the send.
 
 Scheduled task runs take the same step, anchored to the run's working
@@ -190,7 +189,7 @@ directory instead of a conversation (`SnapshotEmailAttachmentsInDir`, bound in
 `internal/scheduledrun`): the job's own directory (`tasks/<lineage>/`, the only
 part of the workspace root its sandbox mounts, ADR-0097) or the shared-file
 library, which that sandbox also mounts and reaches through the job
-directory's `shared` link. Sub-agents of a scheduled run carry it. Two
+directory's `shared` link. Two
 settings widen the working directory, and the attachment rule with it,
 exactly as they widen the sandbox: a worktree run anchors to its worktree,
 and under `FLEET_SCHEDULED_SHARED_WORKSPACE=1` (or when the job directory

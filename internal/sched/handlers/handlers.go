@@ -1998,7 +1998,6 @@ func (h *Handlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 		InstructionSelfImprove: tc.InstructionSelfImprove,
 		AllowNetwork:           tc.AllowNetwork,
 		CarryContext:           tc.CarryContext,
-		AllowDelegation:        tc.DelegationAllowed(),
 		ThinkingBudgetTokens:   tc.ThinkingBudgetTokens,
 		Persona:                tc.Persona,
 		ScheduledFor:           tc.ScheduledFor,
@@ -2233,15 +2232,14 @@ func (h *Handlers) UpdateTaskTags(w http.ResponseWriter, r *http.Request) {
 // taskRerunOverrides is the optional subset of fields a re-run / clone may change
 // vs the source task (#270). Pointer fields → nil means "inherit from source".
 type taskRerunOverrides struct {
-	Prompt          *string  `json:"prompt,omitempty"`
-	Model           *string  `json:"model,omitempty"`
-	FallbackModel   *string  `json:"fallback_model,omitempty"`
-	MaxIterations   *int     `json:"max_iterations,omitempty"`
-	MaxCostUSD      *float64 `json:"max_cost_usd,omitempty"`
-	MaxTotalTokens  *int     `json:"max_total_tokens,omitempty"`
-	Priority        *int     `json:"priority,omitempty"`
-	AllowNetwork    *bool    `json:"allow_network,omitempty"`
-	AllowDelegation *bool    `json:"allow_delegation,omitempty"`
+	Prompt         *string  `json:"prompt,omitempty"`
+	Model          *string  `json:"model,omitempty"`
+	FallbackModel  *string  `json:"fallback_model,omitempty"`
+	MaxIterations  *int     `json:"max_iterations,omitempty"`
+	MaxCostUSD     *float64 `json:"max_cost_usd,omitempty"`
+	MaxTotalTokens *int     `json:"max_total_tokens,omitempty"`
+	Priority       *int     `json:"priority,omitempty"`
+	AllowNetwork   *bool    `json:"allow_network,omitempty"`
 	// ThinkingBudgetTokens per-task thinking override (#220). Present sets it;
 	// a negative value clears back to inherit-global; absent leaves it.
 	ThinkingBudgetTokens *int     `json:"thinking_budget_tokens,omitempty"`

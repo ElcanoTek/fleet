@@ -163,10 +163,7 @@ interactive turn renders it as "budget reached" with the partial transcript; a
 — failure notification, no email reply-back, partial transcript preserved —
 non-retryable by default (a re-run would just burn the budget again) unless the
 task's retry policy opts `cost_ceiling` into `retry_on`. It previously fell
-through to *success*, skipping the finish gates entirely. A sub-agent child
-stopping at its **sliced** ceiling is the exception by design: the slice is the
-parent's leash, so the child returns its partial answer and spend to the parent
-rather than failing the run.
+through to *success*, skipping the finish gates entirely.
 
 **Budget wind-down (#990).** The hard stop gets a soft leading edge, borrowed
 from Prime Agent's goal budget wind-down: once a run's spend crosses
@@ -463,8 +460,6 @@ A few rules and caveats:
   `…_update_page_data` ride, and with the alias another server's
   `…_update_page_data_upload` rides too. The cross-server refusal above is a
   property of typed declarations.
-- **Sub-agents** run in-process under the same installed policy, so they
-  inherit the aliases.
 - **Alias vs substitute.** Use an alias only for names that are the same action
   with the same blast radius. A lower-level fallback that reaches the same
   result another way is a one-way `critical_tool_substitutes` entry.
@@ -624,7 +619,7 @@ of provider tokens per estimated token from the call that fired, against the
 history as it was sent, since dense output such as digits costs far more than
 the estimator's 4 characters a token. Results of 2 KiB or less, media, results
 the in-round guard already stubs on every call, and the results of
-`spawn_subagent` and `task_tracker` are left alone. The run then estimates the
+`task_tracker` are left alone. The run then estimates the
 resent size again (the measured prefix plus the elided history at that rate,
 which includes the paused step's own output), and buys the summary only if
 elision did not bring it at least 30% of the budget below the threshold. A
@@ -654,8 +649,7 @@ again, and the next summary dropped other results for it to fetch again. A
 judged against the configured budget. A repeat that was not about missing data
 (a file viewed again after an edit) raises the budget too.
 `FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY=0` turns it off. An interactive chat turn
-never elides; a subagent, including one a chat
-spawns, runs the scheduled loop and does. Details:
+never elides. Details:
 [SCHEDULED-COMPACTION-CHECKPOINTS.md](SCHEDULED-COMPACTION-CHECKPOINTS.md#stale-tool-results-before-the-summary-1742).
 
 **Scheduled runs summarize for real.** The scheduled driver now wires a
@@ -767,10 +761,6 @@ Consequences worth stating plainly:
   after `pages`). The catalog cannot tell an account seat from an independent
   server that shares a prefix, so no server inherits: a seat keeps only the
   tools `required_tools` names in the seat's own full form or by bare name.
-  - A sub-agent of a narrowed run inherits the exhaustive flag, and it gets an
-    explicit entry for every catalog server before the explore role's filter
-    runs: the parent's own entry, or a deny entry when the parent has none. So
-    no child sees a tool its parent cannot call.
   - `confirm_audit` refuses a critical action, typed or legacy, naming an MCP
     tool the run did not register and that no registered tool stands in for (a
     same-server alias twin or approved substitute; a `deal_ids` batch takes an
@@ -1387,8 +1377,7 @@ scheduled runner call `agent.AuditProtocolRef(protocolsDir)`, which returns
 (`SetAuditProtocolRef`). Without the file the texts still demand the audit and
 `confirm_audit(...)`, just without naming a file — a bundle that shipped none
 had a run's fallback model take the old wording literally, look for the file,
-find nothing, and abort a finished report as FAILED / INCOMPLETE. Sub-agents
-inherit the parent's reference. Embedders that never set it keep the default
+find nothing, and abort a finished report as FAILED / INCOMPLETE. Embedders that never set it keep the default
 wording.
 
 ## The scheduled end-of-run verifier
@@ -1473,7 +1462,7 @@ pause (#1602). If the retry fails too:
   ends the run `ErrCompletionUnverified`. That covers a malformed or empty verdict
   (the verifier answered, but not with a verdict), a failed critical call, a
   run in which no critical call landed, and a
-  policy in which no audit ran (a delegated sub-agent's). Partial work and completed critical actions remain recorded, and the
+  policy in which no audit was confirmed. Partial work and completed critical actions remain recorded, and the
 transcript identifies the verification failure without claiming external actions
 were rolled back. Tool evidence is read from complete
 redacted records, before UI preview truncation. So core
@@ -1591,114 +1580,11 @@ What it is and is **not**, stated plainly (honesty in docs):
   never runs and behaviour is identical to before. The reviewer model slug comes
   from `FLEET_PHONE_A_FRIEND_MODEL` and **falls back to the run's fallback model**
   when unset; an unresolvable slug also falls back rather than failing the run.
-- Sub-agents (the other half of #175) are a separate capability — see below.
 
 Because the critique re-enters through the verifier's existing enforcement-round
 channel (`scheduledPolicy.CanFinish`), no second governance path is created: the
 review is bounded by the same per-run audit, finish enforcement, cost/token
 ceilings, and round cap as everything else.
-
----
-
-## Governed sub-agents / agent delegation (#175, #264, finished by #1043)
-
-An **on-by-default** capability (#1043, amending ADR-0007): the `spawn_subagent`
-native tool lets a governed run delegate scoped subtasks to **child** runs — the
-agent delegation issue #264 asks for, realized as this one tool rather than a
-second `delegate_task` entrypoint (a second tool would be the forked, weaker path
-[ADR-0001](adr/0001-one-governed-run-loop.md)/[ADR-0007](adr/0007-governed-sub-agents.md)
-forbid). The child is **not** a new or weaker loop — it is another `agentcore.Run`,
-governed exactly like the parent. The tool body (`internal/agent/subagent.go`) only
-adapts I/O around a fresh `agent.Agent.Execute`.
-
-**Registering the tool is the feature; the parent agent decides** whether to
-spawn 0, 1, or N children — a sequential run that never delegates is a successful
-use of it. The operator only ever opts **out**, via two independent kill switches:
-
-- **Per task** — `allow_delegation: false` (the column defaults **true**; existing
-  rows were backfilled by migration 061). Tri-state on create: an omitted field
-  means the default, an explicit false sticks.
-- **Fleet-wide** — `FLEET_SUBAGENTS_ENABLED=false` or Admin → Features
-  `subagents_enabled` off.
-
-They compose as **AND** (`FLEET_SUBAGENTS_ENABLED && task.allow_delegation`).
-When the composed gate is off the tool is **not even registered** — structural,
-not a soft check. **Interactive chat registers the tool too** (#1043) whenever
-the fleet flag is on (chat has no per-conversation column): same walls, budget
-sliced from and charged back to the live turn's policy, so the chat cost chip
-includes child spend. When the tool is registered, a short delegation-policy
-section is appended to the system prompt (scheduled and interactive) teaching
-spawn / don't-spawn / prefer-explore / budget rules.
-
-**Typed children (#1043).** `role=explore` — the default, and the fallback for
-any invalid role — is a read-only research child: a single unit-tested denylist
-strips write-capable native tools (`write_file`, `edit_file`, `xlsx_workbook`,
-`generate_image`, `create_task`, `publish_artifact`, `remember`,
-`propose_note`, `propose_skill`) from its final composed roster, a best-effort
-**name** denylist narrows its MCP Gate-2 allowlist (mutation verbs like
-create/update/delete/send/upload as whole snake_case segments; every catalog
-server covered explicitly; the parent's own allowlist only ever narrowed), and
-its system prompt carries the read-only instruction for mutators neither list
-recognizes — that layering is the honest posture.
-`role=worker` keeps the full scheduled roster. Either role, the roster drops the
-interactive-only staging tools. **Every child gets an isolated working
-directory** `<workspace>/subagents/<child-session-id>/` forced as its bash/file
-default cwd — still inside the parent's sandbox and bind-mounted workspace, so
-privilege is unchanged; parallel children just never share a default write path.
-
-Each spawn obeys these non-negotiable properties:
-
-- **Governance is one core.** The child runs through `(*Agent).Execute → agentcore.Run`
-  — the same governed entrypoint, pinned by `TestEntrypointConformance`.
-- **Monotonic privilege.** The child inherits the parent's sandbox (so the same
-  network-seal posture — it has no namespace of its own to widen), the parent's
-  brokered MCP client, and the parent's MCP/credential allowlists, and may only
-  **subtract** (an `allow_servers` request is intersected with what the parent has
-  loaded; the credential allowlist is the parent's, copied). A per-child model is
-  resolved **host-side** like the phone-a-friend reviewer, so credentials never
-  enter the sandbox or model context.
-- **Hard budget split.** The child's cost/token ceiling is **capped at a fraction
-  of the parent's remaining budget** (`FLEET_SUBAGENTS_BUDGET_FRACTION`, default
-  `0.10` = the #264 "≤10% of remaining per child") and **sliced from what the
-  parent has left**, and the child's actual spend is **charged back** into the
-  parent. A request for `max_cost_usd`/`max_total_tokens` **above** the per-child
-  cap is **refused** (not silently clamped). The parent's configured
-  `MaxCostUSD`/`MaxTotalTokens` is the hard wall the collective spend of all
-  descendants can never breach.
-- **One-level delegation.** `FLEET_SUBAGENTS_MAX_DEPTH` (default `1`) means
-  **parent → sub-agent only**: a child does not get the `spawn_subagent` tool
-  registered at all, so it cannot delegate further. An operator can raise the depth
-  to allow deeper trees.
-- **Fan-out cap.** `FLEET_SUBAGENTS_MAX_CHILDREN` (default `20`) bounds per-parent
-  fan-out; the `(N+1)`-th spawn is **refused** with `"max concurrent sub-agents
-  reached"` as an error **result** rather than blocking.
-
-**Parallel fan-out (#264).** The tool is marked **parallel**, so when the model
-emits several `spawn_subagent` calls in one turn, fantasy dispatches them
-**concurrently** (bounded by its parallel-tool semaphore) and the parent collects
-all results before its next LLM call. The result is **machine-parseable JSON**
-`{result, cost_usd, tokens, success, role, child_session_id, workdir}` so the
-parent can branch deterministically even when several children return at once —
-and knows where a worker child's outputs live. The budget split combines an **atomic
-up-front reservation** of each child's granted ceiling (held against the parent's
-remaining budget under the parent mutex for as long as the child runs) with
-**charge-back** of the child's actual spend on return — so even N **concurrent**
-spawns can never collectively be granted more than the parent has left (a
-concurrency regression test pins this under `-race`; the wall-clock test pins that
-fan-out actually runs in parallel). An optional per-child `timeout_minutes` bounds
-a child's wall-clock (spend is still charged back on timeout, `success=false`), and
-`max_iterations` caps its agent steps (clamped at the parent's). A spawned child's
-run is linked back to its owning task via `parent_task_id` (on the child's session
-log and a `subagent_spawned` entry — child id, role, workdir, spend, success — in
-the parent's persisted log) for traceability; the task page and chat transcript
-render those as **child cards** (id, role, status, spend), never raw JSON, each
-with a Transcript disclosure that loads the child's own session log through
-`GET /logs/{task_id}/subagents/{child_session_id}` (orchestrator; task
-transcript gate + linkage check) or
-`GET /conversations/{id}/subagents/{child_session_id}` (chat; conversation
-ownership + history linkage). `FLEET_SUBAGENTS_MODEL` names a default child
-model slug; empty means the child inherits the parent's model. See
-[`docs/SUBAGENTS.md`](SUBAGENTS.md) for the #1043 design note.
 
 ---
 

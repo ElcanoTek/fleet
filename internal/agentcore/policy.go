@@ -116,18 +116,6 @@ func (p *InteractivePolicy) CanFinish(round int) (bool, []string) {
 	return p.orch.checkInteractiveFinishEnforcement(round)
 }
 
-// Budget exposes this turn's current cost/token ceilings and accumulated spend
-// — the same seam ScheduledPolicy offers (#175). Interactive chat registers
-// spawn_subagent too (#1043); the tool sizes a child's sliced ceiling against
-// THIS turn's remaining budget, so the parent ceiling stays the hard wall
-// across descendants in both modes.
-func (p *InteractivePolicy) Budget() BudgetState { return p.orch.budgetState() }
-
-// ChargeChildUsage folds a completed child run's usage into THIS turn's
-// accumulated cost/token counters (#1043), so the turn's own ceiling check,
-// later sibling spawns, AND the chat cost chip all account for child spend.
-func (p *InteractivePolicy) ChargeChildUsage(u RunUsage) { p.orch.chargeChildUsage(u) }
-
 // ScheduledPolicy is the run-to-completion policy bundle.
 type ScheduledPolicy struct {
 	orch *orchestrationState
@@ -145,21 +133,6 @@ func NewScheduledPolicy(logSession *LogSession, maxCostUSD float64, maxTotalToke
 	return &ScheduledPolicy{orch: o}
 }
 
-// NewDelegatedPolicy builds the run-to-completion bundle for a SPAWNED
-// SUB-AGENT (#1043 follow-up). It is the SAME ScheduledPolicy — same gate
-// chain, same ceilings, same critical-tool audit gating, same orchestration
-// state the confirm_audit tool and usage accounting bind to — with exactly one
-// difference: CanFinish does not demand the self-audit ritual (see
-// checkFinishEnforcement). This is configuration of the one governed core, not
-// a second policy path: a child that unlocks a critical action through
-// confirm_audit is still held to its commitments, and the PARENT still has to
-// pass its own audit over the delegated work.
-func NewDelegatedPolicy(logSession *LogSession, maxCostUSD float64, maxTotalTokens int) *ScheduledPolicy {
-	p := NewScheduledPolicy(logSession, maxCostUSD, maxTotalTokens)
-	p.orch.setDelegatedFinish(true)
-	return p
-}
-
 func (p *ScheduledPolicy) orchestration() *orchestrationState { return p.orch }
 
 // SetAuditProtocolRef names the bundle's self-audit protocol (workspace-relative,
@@ -174,6 +147,16 @@ func (p *ScheduledPolicy) SetNoteProposer(np NoteProposer) { p.orch.setNotePropo
 // SetSkillProposer wires the personal-skill proposer (propose_skill) for this
 // run (docs/SKILLS.md phase 3).
 func (p *ScheduledPolicy) SetSkillProposer(sp SkillProposer) { p.orch.setSkillProposer(sp) }
+
+// NewAuditedScheduledPolicyForTest builds a ScheduledPolicy whose self-audit is
+// already requested and confirmed, so a test in another package can exercise
+// what runs AFTER finish enforcement (the scheduled driver's verifier) without
+// scripting the audit ritual. Test-only: nothing in the runtime calls it.
+func NewAuditedScheduledPolicyForTest(logSession *LogSession) *ScheduledPolicy {
+	p := NewScheduledPolicy(logSession, 0, 0)
+	p.orch.selfAuditRequested, p.orch.selfAuditConfirmedOnce = true, true
+	return p
+}
 
 // AuditAborted reports an explicit terminal abort. Drivers must preserve this
 // failed result, not re-demand the mutations the abort deliberately abandoned.
@@ -198,9 +181,8 @@ func (p *ScheduledPolicy) FinishRefusedForAudit() bool {
 }
 
 // AuditConfirmed reports whether this run's own confirm_audit(success=true) was
-// accepted (and not later turned into a terminal abort). A delegated policy
-// skips the self-audit ritual, so for a sub-agent it is true only if the child
-// itself audited a critical action. The scheduled driver requires it before
+// accepted (and not later turned into a terminal abort). The scheduled driver
+// requires it before
 // letting a verifier outage fail open (#1602): "the audit passed" must mean an
 // audit actually ran, not merely that finish enforcement let the run end.
 func (p *ScheduledPolicy) AuditConfirmed() bool {
@@ -208,18 +190,6 @@ func (p *ScheduledPolicy) AuditConfirmed() bool {
 	defer p.orch.mu.Unlock()
 	return p.orch.selfAuditConfirmedOnce && !p.orch.auditTerminalFailure
 }
-
-// Budget exposes this run's current cost/token ceilings and accumulated spend
-// (#175). The spawn_subagent tool reads the PARENT policy's Budget to size a
-// child's sliced ceiling against the parent's REMAINING budget — the parent
-// ceiling is the hard wall across all descendants. See orchestrationState.
-func (p *ScheduledPolicy) Budget() BudgetState { return p.orch.budgetState() }
-
-// ChargeChildUsage folds a completed child run's usage into THIS run's
-// accumulated cost/token counters (#175), so the parent's own ceiling check and
-// every later sibling spawn account for the child's spend. This is what makes
-// the parent ceiling un-breachable by the collective spend of its sub-agents.
-func (p *ScheduledPolicy) ChargeChildUsage(u RunUsage) { p.orch.chargeChildUsage(u) }
 
 // BeforeToolCall runs the scheduled gate chain: cost/token ceiling → repeat-call
 // guard → critical-tool audit gating → memory-proposal backstop → note proposal.

@@ -26,7 +26,7 @@ type fakeSettingsService struct {
 func newFakeSettingsService() *fakeSettingsService {
 	return &fakeSettingsService{
 		values: map[string]string{},
-		dflt:   map[string]string{"pii_redaction_mode": "off", "subagents_enabled": "false"},
+		dflt:   map[string]string{"pii_redaction_mode": "off", "auto_title_enabled": "false"},
 	}
 }
 

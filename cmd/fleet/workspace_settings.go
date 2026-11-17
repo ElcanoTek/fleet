@@ -44,7 +44,6 @@ func workspaceSettingsDefaults(cfg *config.Config) map[string]string {
 		"approval_timeout_seconds":  strconv.Itoa(cfg.ApprovalTimeoutSeconds),
 		"max_cost_usd":              strconv.FormatFloat(cfg.MaxCostUSD, 'f', -1, 64),
 		"max_total_tokens":          strconv.Itoa(cfg.MaxTotalTokens),
-		"subagents_enabled":         strconv.FormatBool(cfg.SubagentsEnabled),
 		"default_model":             defaultModelTier(cfg.DefaultModel, agentcore.DefaultCoreModel),
 		"advanced_model":            defaultModelTier(cfg.AdvancedModel, agentcore.DefaultFallbackModel),
 		// Usually empty: an unset FLEET_TASK_MODEL means the task tier follows
@@ -109,7 +108,6 @@ func buildWorkspaceSettings(cfg *config.Config, st settings.Store) (*settings.Se
 		// (override=false) clears it and the env/reload value serves again.
 		"max_cost_usd":                      applyFloatOverride(cfg.SetMaxCostUSDOverride),
 		"max_total_tokens":                  applyIntOverride(cfg.SetMaxTotalTokensOverride),
-		"subagents_enabled":                 applyBoolSetting(cfg.SetSubagentsEnabled),
 		"memory_autoindex_enabled":          applyBoolSetting(cfg.SetMemoryAutoIndexEnabled),
 		"error_analysis_enabled":            applyBoolSetting(cfg.SetErrorAnalysisEnabled),
 		"auto_title_enabled":                applyBoolSetting(cfg.SetAutoTitle),

@@ -474,8 +474,8 @@ func TestFileOp_BoundRootIdentityRejectsDirectoryExchange(t *testing.T) {
 	}
 }
 
-// A sub-agent's file tools scope every request to <bound root>/subagents/<id>
-// (#1043) — a root BENEATH the one bound for the turn, not equal to it. Such a
+// The tool layer may scope a request to a root BENEATH the one bound for the
+// turn (git-worktree isolation hands out such a sub-tree), not equal to it. Such a
 // request must inherit the bound root's capability and identity guard: the
 // container backends refuse an unbound writable root outright, and the host
 // executor must not treat the sub-tree as an unguarded root either. Exchanging
@@ -488,15 +488,15 @@ func TestFileOp_SubTreeRootInheritsBoundRootIdentity(t *testing.T) {
 	bound := filepath.Join(base, "conv-parent")
 	victim := filepath.Join(base, "conv-victim")
 	for _, dir := range []string{bound, victim} {
-		if err := os.MkdirAll(filepath.Join(dir, "subagents", "child-1"), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Join(dir, "scoped", "tree-1"), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
-	childRoot := filepath.Join(bound, "subagents", "child-1")
+	childRoot := filepath.Join(bound, "scoped", "tree-1")
 	if err := os.WriteFile(filepath.Join(childRoot, "notes.txt"), []byte("parent"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(victim, "subagents", "child-1", "notes.txt"), []byte("victim"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(victim, "scoped", "tree-1", "notes.txt"), []byte("victim"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := sb.BindFileOpRoot(context.Background(), bound); err != nil {

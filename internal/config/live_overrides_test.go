@@ -28,7 +28,6 @@ func TestLiveOverrideSettersRoundTrip(t *testing.T) {
 	}
 
 	cfg.SetAutoTitle(false)
-	cfg.SetSubagentsEnabled(true)
 	cfg.SetMemoryAutoIndexEnabled(true)
 	cfg.SetErrorAnalysisEnabled(false)
 	cfg.SetConnectorRecommendationsEnabled(true)
@@ -45,7 +44,6 @@ func TestLiveOverrideSettersRoundTrip(t *testing.T) {
 		want bool
 	}{
 		{"auto_title", cfg.LiveAutoTitle(), false},
-		{"subagents", cfg.LiveSubagentsEnabled(), true},
 		{"memory_autoindex", cfg.LiveMemoryAutoIndexEnabled(), true},
 		{"error_analysis", cfg.LiveErrorAnalysisEnabled(), false},
 		{"connector_recs", cfg.LiveConnectorRecommendationsEnabled(), true},
@@ -62,8 +60,8 @@ func TestLiveOverrideSettersRoundTrip(t *testing.T) {
 	var wg sync.WaitGroup
 	for range 8 {
 		wg.Add(2)
-		go func() { defer wg.Done(); cfg.SetSubagentsEnabled(false) }()
-		go func() { defer wg.Done(); _ = cfg.LiveSubagentsEnabled() }()
+		go func() { defer wg.Done(); cfg.SetAutoTitle(true) }()
+		go func() { defer wg.Done(); _ = cfg.LiveAutoTitle() }()
 	}
 	wg.Wait()
 }

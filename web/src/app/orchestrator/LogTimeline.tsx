@@ -1,5 +1,4 @@
 import { messageRoleLabel } from "@/app/lib/i18n/ownedLabels";
-import { subagentRoleLabel } from "@/app/chat/ui/history";
 import { rich } from "@/app/lib/i18n/rich";
 import { t as tr } from "@/app/lib/i18n";
 import { getLanguage } from "@/app/lib/i18n";
@@ -327,13 +326,6 @@ export function ToolInput({ name, argsRaw }: { name: string; argsRaw: string }) 
           {oldText ? <pre className="lt-diff-del">{oldText}</pre> : null}
           {newText ? <pre className="lt-diff-add">{newText}</pre> : null}
         </div>
-      </Section>
-    );
-  }
-  if (name === "spawn_subagent" && typeof args.task === "string") {
-    return (
-      <Section label={tr("Delegated task")} aside={subagentRoleLabel(typeof args.role === "string" ? args.role : "explore")}>
-        <TextBlock text={args.task} maxLines={20} />
       </Section>
     );
   }
@@ -835,19 +827,14 @@ function Filters({
 
 /**
  * TranscriptTimeline renders a stored session: filters and search, the run
- * overview strip, then the timeline. `renderSubagent` lets the caller keep
- * owning the sub-agent child card (it fetches the child transcript).
+ * overview strip, then the timeline.
  */
 export function TranscriptTimeline({
   messages,
   taskId,
-  renderSubagent,
-  withFilters = true,
 }: {
   messages: LogMessage[];
   taskId: string;
-  renderSubagent?: (msg: LogMessage, key: string) => ReactNode;
-  withFilters?: boolean;
 }) {
   const items = useMemo(() => buildTimeline(messages), [messages]);
   const { tags, groups } = useMemo(() => buildFilterIndex(items), [items]);
@@ -888,31 +875,29 @@ export function TranscriptTimeline({
 
   return (
     <>
-      {withFilters ? (
-        <Filters
-          groups={groups}
-          selected={selected}
-          onToggle={(key) =>
-            setSelected((prev) => {
-              const next = new Set(prev);
-              if (next.has(key)) next.delete(key);
-              else next.add(key);
-              return next;
-            })
-          }
-          onClear={() => {
-            setSelected(new Set());
-            setQuery("");
-          }}
-          shown={shownMessages}
-          total={messages.length}
-          query={query}
-          onQuery={setQuery}
-          onExpandAll={() => setOpen(new Set(visible.filter((it) => it.kind === "tool").map((it) => it.key)))}
-          onCollapseAll={() => setOpen(new Set())}
-        />
-      ) : null}
-      {withFilters ? <StepStrip items={items} onJump={jump} /> : null}
+      <Filters
+        groups={groups}
+        selected={selected}
+        onToggle={(key) =>
+          setSelected((prev) => {
+            const next = new Set(prev);
+            if (next.has(key)) next.delete(key);
+            else next.add(key);
+            return next;
+          })
+        }
+        onClear={() => {
+          setSelected(new Set());
+          setQuery("");
+        }}
+        shown={shownMessages}
+        total={messages.length}
+        query={query}
+        onQuery={setQuery}
+        onExpandAll={() => setOpen(new Set(visible.filter((it) => it.kind === "tool").map((it) => it.key)))}
+        onCollapseAll={() => setOpen(new Set())}
+      />
+      <StepStrip items={items} onJump={jump} />
       <div className="log-session lt-timeline">
         {visible.length === 0 ? <div className="table-empty">{tr("Nothing in this run matches.")}</div> : null}
         {visible.map((it) => {
@@ -927,8 +912,6 @@ export function TranscriptTimeline({
               return <EventRow key={it.key} event={it.event} msg={it.msg} />;
             case "summary":
               return <SummaryCard key={it.key} msg={it.msg} taskId={taskId} />;
-            case "subagent":
-              return <div key={it.key}>{renderSubagent?.(it.msg, it.key) ?? <UserCard msg={it.msg} taskId={taskId} />}</div>;
             default:
               return <UserCard key={it.key} msg={it.msg} taskId={taskId} />;
           }

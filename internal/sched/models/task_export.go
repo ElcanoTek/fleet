@@ -24,45 +24,40 @@ type TaskExportRecord struct {
 	// Title is the operator-facing display label (non-unique, carried onto every
 	// occurrence/copy). Exported so a task definition keeps its title when it is
 	// moved between deployments. It maps to TaskCreate.Title.
-	Title                  string              `json:"title,omitempty"                      yaml:"title,omitempty"`
-	Prompt                 string              `json:"prompt"                               yaml:"prompt"`
-	Model                  *string             `json:"model,omitempty"                      yaml:"model,omitempty"`
-	FallbackModel          *string             `json:"fallback_model,omitempty"             yaml:"fallback_model,omitempty"`
-	MaxIterations          *int                `json:"max_iterations,omitempty"             yaml:"max_iterations,omitempty"`
-	MaxCostUSD             *float64            `json:"max_cost_usd,omitempty"               yaml:"max_cost_usd,omitempty"`
-	MaxTotalTokens         *int                `json:"max_total_tokens,omitempty"           yaml:"max_total_tokens,omitempty"`
-	MCPSelection           MCPSelection        `json:"mcp_selection,omitempty"              yaml:"mcp_selection,omitempty"`
-	CredentialAllowlist    CredentialAllowlist `json:"credential_allowlist,omitempty" yaml:"credential_allowlist,omitempty"`
-	LoopConfig             *LoopConfig         `json:"loop_config,omitempty"                yaml:"loop_config,omitempty"`
-	WorktreeConfig         *WorktreeConfig     `json:"worktree_config,omitempty"         yaml:"worktree_config,omitempty"`
-	SandboxLimits          *TaskSandboxLimits  `json:"sandbox_limits,omitempty"          yaml:"sandbox_limits,omitempty"`
-	OutputSchema           json.RawMessage     `json:"output_schema,omitempty"           yaml:"output_schema,omitempty"`
-	Priority               int                 `json:"priority,omitempty"                   yaml:"priority,omitempty"`
-	InstructionSelfImprove bool                `json:"instruction_self_improve,omitempty"  yaml:"instruction_self_improve,omitempty"`
-	AllowNetwork           bool                `json:"allow_network,omitempty"              yaml:"allow_network,omitempty"`
-	CarryContext           bool                `json:"carry_context,omitempty"              yaml:"carry_context,omitempty"`
-	AllowEventTriggers     bool                `json:"allow_event_triggers,omitempty"       yaml:"allow_event_triggers,omitempty"`
-	// AllowDelegation mirrors TaskCreate.AllowDelegation (tri-state, #1043): a
-	// pointer so exports written by this version always carry the explicit value
-	// (TaskToExportRecord sets it) while an older export that omits the key
-	// imports as nil → the default (true) rather than silently opting out.
-	AllowDelegation            *bool        `json:"allow_delegation,omitempty"           yaml:"allow_delegation,omitempty"`
-	ThinkingBudgetTokens       *int         `json:"thinking_budget_tokens,omitempty"     yaml:"thinking_budget_tokens,omitempty"`
-	Persona                    string       `json:"persona,omitempty"                    yaml:"persona,omitempty"`
-	Description                string       `json:"description,omitempty"                yaml:"description,omitempty"`
-	ScheduledFor               *time.Time   `json:"scheduled_for,omitempty"              yaml:"scheduled_for,omitempty"`
-	Recurrence                 string       `json:"recurrence,omitempty"                 yaml:"recurrence,omitempty"`
-	RecurrenceUntil            *time.Time   `json:"recurrence_until,omitempty"           yaml:"recurrence_until,omitempty"`
-	RecurrenceRemaining        *int         `json:"recurrence_remaining,omitempty"       yaml:"recurrence_remaining,omitempty"`
-	Timezone                   string       `json:"timezone,omitempty"                   yaml:"timezone,omitempty"`
-	Files                      []string     `json:"files,omitempty"                      yaml:"files,omitempty"`
-	FileNames                  []string     `json:"file_names,omitempty"                 yaml:"file_names,omitempty"`
-	Tags                       []string     `json:"tags,omitempty"                       yaml:"tags,omitempty"`
-	MaxRetries                 *int         `json:"max_retries,omitempty"                yaml:"max_retries,omitempty"`
-	RetryPolicy                *RetryPolicy `json:"retry_policy,omitempty"               yaml:"retry_policy,omitempty"`
-	TriggerType                TriggerType  `json:"trigger_type,omitempty"               yaml:"trigger_type,omitempty"`
-	AllowTaskCreation          bool         `json:"allow_task_creation,omitempty"        yaml:"allow_task_creation,omitempty"`
-	AllowRecurringTaskCreation bool         `json:"allow_recurring_task_creation,omitempty" yaml:"allow_recurring_task_creation,omitempty"`
+	Title                      string              `json:"title,omitempty"                      yaml:"title,omitempty"`
+	Prompt                     string              `json:"prompt"                               yaml:"prompt"`
+	Model                      *string             `json:"model,omitempty"                      yaml:"model,omitempty"`
+	FallbackModel              *string             `json:"fallback_model,omitempty"             yaml:"fallback_model,omitempty"`
+	MaxIterations              *int                `json:"max_iterations,omitempty"             yaml:"max_iterations,omitempty"`
+	MaxCostUSD                 *float64            `json:"max_cost_usd,omitempty"               yaml:"max_cost_usd,omitempty"`
+	MaxTotalTokens             *int                `json:"max_total_tokens,omitempty"           yaml:"max_total_tokens,omitempty"`
+	MCPSelection               MCPSelection        `json:"mcp_selection,omitempty"              yaml:"mcp_selection,omitempty"`
+	CredentialAllowlist        CredentialAllowlist `json:"credential_allowlist,omitempty" yaml:"credential_allowlist,omitempty"`
+	LoopConfig                 *LoopConfig         `json:"loop_config,omitempty"                yaml:"loop_config,omitempty"`
+	WorktreeConfig             *WorktreeConfig     `json:"worktree_config,omitempty"         yaml:"worktree_config,omitempty"`
+	SandboxLimits              *TaskSandboxLimits  `json:"sandbox_limits,omitempty"          yaml:"sandbox_limits,omitempty"`
+	OutputSchema               json.RawMessage     `json:"output_schema,omitempty"           yaml:"output_schema,omitempty"`
+	Priority                   int                 `json:"priority,omitempty"                   yaml:"priority,omitempty"`
+	InstructionSelfImprove     bool                `json:"instruction_self_improve,omitempty"  yaml:"instruction_self_improve,omitempty"`
+	AllowNetwork               bool                `json:"allow_network,omitempty"              yaml:"allow_network,omitempty"`
+	CarryContext               bool                `json:"carry_context,omitempty"              yaml:"carry_context,omitempty"`
+	AllowEventTriggers         bool                `json:"allow_event_triggers,omitempty"       yaml:"allow_event_triggers,omitempty"`
+	ThinkingBudgetTokens       *int                `json:"thinking_budget_tokens,omitempty"     yaml:"thinking_budget_tokens,omitempty"`
+	Persona                    string              `json:"persona,omitempty"                    yaml:"persona,omitempty"`
+	Description                string              `json:"description,omitempty"                yaml:"description,omitempty"`
+	ScheduledFor               *time.Time          `json:"scheduled_for,omitempty"              yaml:"scheduled_for,omitempty"`
+	Recurrence                 string              `json:"recurrence,omitempty"                 yaml:"recurrence,omitempty"`
+	RecurrenceUntil            *time.Time          `json:"recurrence_until,omitempty"           yaml:"recurrence_until,omitempty"`
+	RecurrenceRemaining        *int                `json:"recurrence_remaining,omitempty"       yaml:"recurrence_remaining,omitempty"`
+	Timezone                   string              `json:"timezone,omitempty"                   yaml:"timezone,omitempty"`
+	Files                      []string            `json:"files,omitempty"                      yaml:"files,omitempty"`
+	FileNames                  []string            `json:"file_names,omitempty"                 yaml:"file_names,omitempty"`
+	Tags                       []string            `json:"tags,omitempty"                       yaml:"tags,omitempty"`
+	MaxRetries                 *int                `json:"max_retries,omitempty"                yaml:"max_retries,omitempty"`
+	RetryPolicy                *RetryPolicy        `json:"retry_policy,omitempty"               yaml:"retry_policy,omitempty"`
+	TriggerType                TriggerType         `json:"trigger_type,omitempty"               yaml:"trigger_type,omitempty"`
+	AllowTaskCreation          bool                `json:"allow_task_creation,omitempty"        yaml:"allow_task_creation,omitempty"`
+	AllowRecurringTaskCreation bool                `json:"allow_recurring_task_creation,omitempty" yaml:"allow_recurring_task_creation,omitempty"`
 	// RunIf is the pre-run host-side gate (#269), part of the portable
 	// definition: dropping it on export turned every gated task unconditional
 	// on the target box, silently. Because the gate executes on the host as
@@ -175,7 +170,6 @@ func ExportRecordToTaskCreate(rec TaskExportRecord) TaskCreate {
 		AllowNetwork:               rec.AllowNetwork,
 		CarryContext:               rec.CarryContext,
 		AllowEventTriggers:         rec.AllowEventTriggers,
-		AllowDelegation:            rec.AllowDelegation,
 		ThinkingBudgetTokens:       rec.ThinkingBudgetTokens,
 		Persona:                    rec.Persona,
 		Description:                rec.Description,
@@ -242,7 +236,6 @@ func TaskToExportRecord(t *Task) TaskExportRecord {
 		AllowNetwork:               t.AllowNetwork,
 		CarryContext:               t.CarryContext,
 		AllowEventTriggers:         t.AllowEventTriggers,
-		AllowDelegation:            BoolPtr(t.AllowDelegation),
 		ThinkingBudgetTokens:       t.ThinkingBudgetTokens,
 		Persona:                    t.Persona,
 		Description:                t.Description,
@@ -328,7 +321,6 @@ func OverlayTaskDefinition(task *Task, tc TaskCreate) error {
 	task.AllowNetwork = tc.AllowNetwork
 	task.CarryContext = tc.CarryContext
 	task.AllowEventTriggers = tc.AllowEventTriggers
-	task.AllowDelegation = tc.DelegationAllowed()
 	task.ThinkingBudgetTokens = tc.ThinkingBudgetTokens
 	task.Persona = tc.Persona
 	task.Description = tc.Description

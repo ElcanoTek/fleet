@@ -191,9 +191,6 @@ func applyRerunOverrides(tc *models.TaskCreate, o taskRerunOverrides) error {
 	if o.AllowNetwork != nil {
 		tc.AllowNetwork = *o.AllowNetwork
 	}
-	if o.AllowDelegation != nil {
-		tc.AllowDelegation = o.AllowDelegation
-	}
 	if o.ThinkingBudgetTokens != nil {
 		if *o.ThinkingBudgetTokens < 0 {
 			tc.ThinkingBudgetTokens = nil // clear → inherit the global default

@@ -15,7 +15,7 @@ import (
 // stale results, and it gets back under the budget with zero summarizer
 // invocations, then finishes.
 func TestElision_LargeToolResultsNeedNoSummary_FakeLLM(t *testing.T) {
-	fake := startSubagentFakeLLM(t)
+	fake := startScenarioFakeLLM(t)
 	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "40000")
 	t.Setenv("FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY", "true")
 	t.Setenv("FLEET_SCHEDULED_AUTO_COMPACT", "")

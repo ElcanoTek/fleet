@@ -444,21 +444,6 @@ func (o *orchestrationState) checkCriticalTool(toolName, _ string, rawInput stri
 
 // checkFinishEnforcement checks whether the agent is allowed to stop
 // (scheduled). The interactive Policy bypasses this entirely via CanFinish.
-//
-// A DELEGATED run (a spawned sub-agent, #1043 follow-up) skips the two
-// self-audit blocks below and nothing else: the self-audit ritual is the
-// TOP-LEVEL run's deliverable gate — it re-reads protocols/self-audit.md and
-// re-checks the task's contract, neither of which a scoped child was given.
-// Forcing a child through it made every delegation cost several extra rounds
-// of "read protocols/self-audit.md" flailing (a child usually cannot even see
-// that file), polluted the answer the parent gets back with audit narration,
-// and — when the child ran out of iterations mid-ritual — returned no answer
-// at all. The child's real gate is its PARENT's audit: the parent still has to
-// confirm_audit over the delegated work before IT can finish. Every other
-// enforcement below (task tracker, pending critical actions, undischarged
-// commitments) still applies to a child unchanged, so a child that DID unlock
-// a critical action through confirm_audit is held to it exactly like a root
-// run.
 // auditVerdict reports what the run's own self-audit concluded, for the driver
 // to carry into the task record. Before #1151 this state died inside the run:
 // checkFinishEnforcement returned (true, nil) on a terminal audit failure — the
@@ -597,23 +582,21 @@ func (o *orchestrationState) checkFinishEnforcement() (bool, []string) {
 		return false, []string{o.taskTrackerPendingMessage()}
 	}
 
-	if !o.delegatedFinish {
-		if !o.selfAuditRequested {
-			o.selfAuditRequested = true
-			o.finishRefusedForAudit = true
-			o.log().Info("Enforcement: Self Audit not requested. Rejecting finish.")
-			// The audit wording (#990, borrowed from Prime Agent's goal
-			// completion audit) names the two rationalizations unattended runs
-			// actually fail on: declaring done on intent, and declaring done on
-			// a plausible-sounding final answer nothing verified.
-			return false, []string{"Before finishing: " + o.auditInstruction() + " — do not treat intent, partial progress, or a plausible final answer as proof of completion. Then call confirm_audit(...)."}
-		}
+	if !o.selfAuditRequested {
+		o.selfAuditRequested = true
+		o.finishRefusedForAudit = true
+		o.log().Info("Enforcement: Self Audit not requested. Rejecting finish.")
+		// The audit wording (#990, borrowed from Prime Agent's goal
+		// completion audit) names the two rationalizations unattended runs
+		// actually fail on: declaring done on intent, and declaring done on
+		// a plausible-sounding final answer nothing verified.
+		return false, []string{"Before finishing: " + o.auditInstruction() + " — do not treat intent, partial progress, or a plausible final answer as proof of completion. Then call confirm_audit(...)."}
+	}
 
-		if !o.selfAuditConfirmedOnce {
-			o.finishRefusedForAudit = true
-			o.log().Info("Enforcement: Self Audit not confirmed. Rejecting finish.")
-			return false, []string{"Audit not confirmed. Call confirm_audit(...) with evidence to proceed."}
-		}
+	if !o.selfAuditConfirmedOnce {
+		o.finishRefusedForAudit = true
+		o.log().Info("Enforcement: Self Audit not confirmed. Rejecting finish.")
+		return false, []string{"Audit not confirmed. Call confirm_audit(...) with evidence to proceed."}
 	}
 
 	if len(o.pendingCriticalActions) > 0 && o.auditConfirmed {

@@ -102,10 +102,8 @@ on the audit:
   `ErrCompletionUnverified`.
 - **The premise does not hold** (a failed critical call is on the record, no
   critical call landed — the audit alone is the model grading itself — or
-  no audit ran in this run's policy, as for a delegated sub-agent, whose
-  policy skips the self-audit ritual). Even an outage spends the check. Today
-  sub-agents do not run the verifier at all; the rule keeps it that way if
-  they ever do.
+  this run's own audit was not confirmed, `ScheduledPolicy.AuditConfirmed`).
+  Even an outage spends the check.
 
 Each check is therefore at most two metered verifier calls.
 Its transcript records `completion_unverified` and explains that completed

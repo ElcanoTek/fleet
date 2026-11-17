@@ -5,9 +5,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/ElcanoTek/fleet/internal/agentcore"
-	"github.com/ElcanoTek/fleet/internal/config"
 )
 
 // The chat turn's email attachment step is bound to its conversation: a path
@@ -44,28 +41,5 @@ func TestEmailAttachmentSnapshotter_BoundToConversation(t *testing.T) {
 	}
 	if data, err := os.ReadFile(got); err != nil || string(data) != "conv-a" {
 		t.Fatalf("copy content %q err %v", data, err)
-	}
-}
-
-// A sub-agent spawned from a chat turn sends email under the turn's
-// attachment step, at every depth; a scheduled task's agent has none.
-func TestEmailAttachments_SpawnHostAndChildrenInheritTheStep(t *testing.T) {
-	tc := TurnConfig{
-		SystemPrompt:            "sys",
-		Config:                  &config.Config{MaxIterations: 10},
-		Subagent:                SubagentOptions{Enabled: true, MaxDepth: 2, MaxChildren: 5},
-		PrepareEmailAttachments: emailAttachmentSnapshotter("conv-a", ""),
-	}
-	host := newInteractiveSpawnHost(tc, agentcore.NewInteractivePolicy(1.0, 0, nil, nil), nil)
-	child := host.buildChild(SubagentRoleWorker, nil, nil, nil, 0, 0, 0)
-	grandchild := child.buildChild(SubagentRoleExplore, nil, nil, nil, 0, 0, 0)
-	for name, a := range map[string]*Agent{"host": host, "child": child, "grandchild": grandchild} {
-		if a.prepareEmailAttachments == nil {
-			t.Fatalf("%s carries no email attachment step", name)
-		}
-	}
-	scheduled := NewAgent(Options{Config: &config.Config{}, SystemPrompt: "task"})
-	if scheduled.prepareEmailAttachments != nil {
-		t.Fatal("a scheduled task agent carries an email attachment step")
 	}
 }

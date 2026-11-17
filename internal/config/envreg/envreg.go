@@ -112,6 +112,23 @@ var removedSettings = map[string]string{
 	"FLEET_TASK_MEMORY_MAX_VALUE_BYTES":   taskMemoryFix,
 	"CHAT_TASK_MEMORY_MAX_VALUE_BYTES":    taskMemoryFix,
 	"CUTLASS_TASK_MEMORY_MAX_VALUE_BYTES": taskMemoryFix,
+
+	// Sub-agent delegation (ADR-0112).
+	"FLEET_SUBAGENTS_ENABLED":           subagentsFix,
+	"CHAT_SUBAGENTS_ENABLED":            subagentsFix,
+	"CUTLASS_SUBAGENTS_ENABLED":         subagentsFix,
+	"FLEET_SUBAGENTS_MAX_DEPTH":         subagentsFix,
+	"CHAT_SUBAGENTS_MAX_DEPTH":          subagentsFix,
+	"CUTLASS_SUBAGENTS_MAX_DEPTH":       subagentsFix,
+	"FLEET_SUBAGENTS_MAX_CHILDREN":      subagentsFix,
+	"CHAT_SUBAGENTS_MAX_CHILDREN":       subagentsFix,
+	"CUTLASS_SUBAGENTS_MAX_CHILDREN":    subagentsFix,
+	"FLEET_SUBAGENTS_BUDGET_FRACTION":   subagentsFix,
+	"CHAT_SUBAGENTS_BUDGET_FRACTION":    subagentsFix,
+	"CUTLASS_SUBAGENTS_BUDGET_FRACTION": subagentsFix,
+	"FLEET_SUBAGENTS_MODEL":             subagentsFix,
+	"CHAT_SUBAGENTS_MODEL":              subagentsFix,
+	"CUTLASS_SUBAGENTS_MODEL":           subagentsFix,
 }
 
 // serviceTokenFix is the advice for a leftover service-token setting.
@@ -128,6 +145,9 @@ const phoneAFriendFix = "the phone-a-friend super-LLM review was removed (ADR-01
 
 // taskMemoryFix is the advice for a leftover per-task KV memory setting.
 const taskMemoryFix = "per-task Captain's Log KV memory was removed (ADR-0111), so delete the line"
+
+// subagentsFix is the advice for a leftover sub-agent delegation setting.
+const subagentsFix = "sub-agent delegation (spawn_subagent) was removed (ADR-0112), so delete the line"
 
 // Type is the value type of a setting, as the docs describe it. The typed
 // knob kinds (Int … StrictBool) are the ones internal/config's knob parser

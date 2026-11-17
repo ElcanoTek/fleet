@@ -158,7 +158,7 @@ type Server struct {
 	hits map[string]int
 	// toolsSeen records, per scenario, the union of tool names advertised across
 	// that scenario's requests — so a spec can assert a tool WAS or WAS NOT in
-	// the roster the runtime offered (e.g. spawn_subagent registration, #1043).
+	// the roster the runtime offered.
 	toolsSeen map[string]map[string]bool
 }
 

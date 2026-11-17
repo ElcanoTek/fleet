@@ -43,45 +43,24 @@ func roundTripDefinition(
 	return rec, NewTask(ExportRecordToTaskCreate(rec))
 }
 
-// TestExportImport_AllowDelegationRoundTrip proves the per-task delegation gate
-// (#264, #1043) is part of the portable task definition: BOTH explicit values
-// survive an export→import round-trip in JSON and YAML (an export written by
-// this version always carries the field), and a record that omits the key —
-// an OLD export — imports as the default, which since #1043 is TRUE.
-func TestExportImport_AllowDelegationRoundTrip(t *testing.T) {
-	formats := []struct {
-		name      string
-		marshal   func(any) ([]byte, error)
+// TestImport_RetiredAllowDelegationKeyIsIgnored: sub-agent delegation was
+// removed (ADR-0112), but exports written before that carry allow_delegation.
+// Such a file must still import, in JSON and YAML, with the key ignored.
+func TestImport_RetiredAllowDelegationKeyIsIgnored(t *testing.T) {
+	for name, tc := range map[string]struct {
+		body      string
 		unmarshal func([]byte, any) error
 	}{
-		{"json", json.Marshal, json.Unmarshal},
-		{"yaml", yaml.Marshal, yaml.Unmarshal},
-	}
-	for _, f := range formats {
-		t.Run(f.name+"/on", func(t *testing.T) {
-			rec, got := roundTripDefinition(t, &Task{Prompt: "p", AllowDelegation: true}, f.marshal, f.unmarshal)
-			if rec.AllowDelegation == nil || !*rec.AllowDelegation {
-				t.Error("export record dropped allow_delegation=true")
+		"json": {`{"version":"1","tasks":[{"prompt":"p","allow_delegation":false}]}`, json.Unmarshal},
+		"yaml": {"version: \"1\"\ntasks:\n  - prompt: p\n    allow_delegation: false\n", yaml.Unmarshal},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var env TaskExportEnvelope
+			if err := tc.unmarshal([]byte(tc.body), &env); err != nil {
+				t.Fatalf("an old export must still decode: %v", err)
 			}
-			if !got.AllowDelegation {
-				t.Error("imported task lost allow_delegation=true")
-			}
-		})
-		t.Run(f.name+"/explicit-off", func(t *testing.T) {
-			rec, got := roundTripDefinition(t, &Task{Prompt: "p"}, f.marshal, f.unmarshal)
-			if rec.AllowDelegation == nil || *rec.AllowDelegation {
-				t.Error("export record must carry the explicit false (opt-out is non-default since #1043)")
-			}
-			if got.AllowDelegation {
-				t.Error("an explicit opt-out must survive the round-trip as false")
-			}
-		})
-		t.Run(f.name+"/omitted-defaults-on", func(t *testing.T) {
-			// An OLD export (pre-#1043) has no allow_delegation key at all: it
-			// imports as the new default (true), matching the DB backfill.
-			got := NewTask(ExportRecordToTaskCreate(TaskExportRecord{Prompt: "p"}))
-			if !got.AllowDelegation {
-				t.Error("a record omitting allow_delegation must import as true (the #1043 default)")
+			if len(env.Tasks) != 1 || env.Tasks[0].Prompt != "p" {
+				t.Fatalf("decoded %+v", env.Tasks)
 			}
 		})
 	}

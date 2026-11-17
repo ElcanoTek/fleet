@@ -85,7 +85,6 @@ const BUILTIN_CATEGORY: Record<string, ToolCategory> = {
   web_fetch: "web",
   web_search: "web",
   smart_search: "web",
-  spawn_subagent: "delegate",
   create_task: "delegate",
   send_email: "send",
 };
@@ -463,7 +462,6 @@ export type TimelineItem =
   | { kind: "tool"; key: string; members: number[]; tool: ToolStep }
   | { kind: "event"; key: string; members: number[]; msg: LogMessage; event: RuntimeEvent }
   | { kind: "summary"; key: string; members: number[]; msg: LogMessage }
-  | { kind: "subagent"; key: string; members: number[]; msg: LogMessage }
   | { kind: "user"; key: string; members: number[]; msg: LogMessage };
 
 /**
@@ -491,10 +489,6 @@ export function buildTimeline(messages: LogMessage[]): TimelineItem[] {
     if (consumed.has(i)) return;
     const key = m.id ? `${m.id}-${i}` : `m${i}`;
     const role = m.role ?? "";
-    if (m.message_type === "subagent_spawned") {
-      items.push({ kind: "subagent", key, members: [i], msg: m });
-      return;
-    }
     if (m.message_type === "compaction_summary") {
       items.push({ kind: "summary", key, members: [i], msg: m });
       return;

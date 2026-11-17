@@ -182,7 +182,6 @@ client bundle's manifest names them, and fleet admits them at startup ([MCP-BUND
 | `FLEET_ESCALATION_CLASSIFIER_MODEL` | string | `~typesafe/jev-latest` | server | Model the escalation classifier calls. |
 | `FLEET_ESCALATION_CLASSIFIER_THRESHOLD` | int | `80` | server | Classifier confidence, in percent, above which a card is staged. *Validated at boot* (50–99). |
 | `FLEET_ESCALATION_SIGNALS_ENABLED` | bool | `true` | server | Escalation signals. *Validated at boot*. |
-| `FLEET_SUBAGENTS_MODEL` | string | (the parent's model) | server | Model sub-agents run on. |
 | `FLEET_VERIFIER_MODEL` | string | (the run's own model) | server | Dedicated model for the scheduled end-of-run completeness verifier. The verifier runs when a fallback model (the task's or FLEET_TASK_FALLBACK_MODEL) or this variable is set; the fallback model only retries a verifier call that produced no verdict. A slug that does not resolve is logged and the run's own model verifies. |
 | `FLEET_A2A_MODEL` | string | — | server | Model inbound A2A tasks run on. |
 | `FLEET_IMAGE_MODEL` | string | — | server | Default model of the generate_image tool. *Process env only* (fleet's env-file loader does not admit it; export it). |
@@ -210,10 +209,6 @@ client bundle's manifest names them, and fleet admits them at startup ([MCP-BUND
 | `FLEET_AUTO_TITLE` | bool | `true` | server | Title conversations automatically. Also an admin setting. *Validated at boot*. |
 | `FLEET_ERROR_ANALYSIS_ENABLED` | bool | `true` | server | Analyse failed runs with FLEET_ERROR_ANALYSIS_MODEL. Also an admin setting. *Validated at boot*. |
 | `FLEET_MEMORY_AUTOINDEX_ENABLED` | bool | `true` | server | Index conversations into memory automatically. Also an admin setting. *Validated at boot*. |
-| `FLEET_SUBAGENTS_ENABLED` | bool | `true` | server | Sub-agent delegation; false is the fleet-wide kill switch. Also an admin setting. *Validated at boot*. |
-| `FLEET_SUBAGENTS_MAX_DEPTH` | int | `1` | server | Maximum delegation depth (1 = the root may delegate, children may not). *Validated at boot*. |
-| `FLEET_SUBAGENTS_MAX_CHILDREN` | int | `20` | server | Maximum children one parent may spawn. *Validated at boot*. |
-| `FLEET_SUBAGENTS_BUDGET_FRACTION` | float | `0.10` | server | Each child's share of the parent's remaining budget; out-of-range values are clamped. *Validated at boot*. |
 | `FLEET_CONTEXT_PRESSURE_WARN_THRESHOLD` | float | `0.75` | server | Context-window fraction at which the agent is warned; clamped to (0,1]. *Validated at boot*. |
 | `FLEET_CONTEXT_COMPACTION_THRESHOLD` | float | `0.90` | server | Context-window fraction at which the transcript is compacted; clamped to (0,1]. *Validated at boot*. |
 | `FLEET_CONTEXT_RESEND_BUDGET_TOKENS` | int | `80000` | server | Scheduled runs: resent-prompt budget per call before compaction; 0 disables. *Validated at boot* (≥ 0). |

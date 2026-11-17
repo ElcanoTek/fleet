@@ -61,10 +61,6 @@ export type Task = {
   mcp_selection?: MCPChoice[];
   allow_network?: boolean;
   carry_context?: boolean;
-  // Sub-agent delegation gate (#1043). Defaults TRUE server-side (opt-out);
-  // the server always serializes it, so absence only happens on old payloads —
-  // treat undefined as true.
-  allow_delegation?: boolean;
   persona?: string;
   tags?: string[];
   retry_policy?: RetryPolicy;
@@ -133,9 +129,6 @@ export type TaskCreate = {
   mcp_selection?: MCPChoice[];
   allow_network?: boolean;
   carry_context?: boolean;
-  // Sub-agent delegation gate (#1043): omit for the server default (TRUE);
-  // send false explicitly to opt the task out.
-  allow_delegation?: boolean;
   // Per-task extended-thinking override (#220): omit to inherit the deployment
   // default, 0 = off, >0 = this task's budget in tokens.
   thinking_budget_tokens?: number | null;
@@ -230,8 +223,6 @@ export type TaskTemplateTask = {
   timezone?: string;
   priority?: number;
   allow_network?: boolean;
-  // Omitted = the form default (true, #1043); an explicit false opts out.
-  allow_delegation?: boolean;
   carry_context?: boolean;
   persona?: string;
   description?: string;
@@ -392,7 +383,6 @@ export type TaskStreamFrame = {
     | "tool_call"
     | "tool_result"
     | "status"
-    | "subagent_progress"
     | string;
   role?: string;
   content?: string;
@@ -408,26 +398,6 @@ export type TaskStreamFrame = {
   task_id?: string;
   cost_usd?: number;
   stopped_by?: string;
-  // subagent_progress (#1043 follow-up): a spawned child's relabeled step,
-  // attached to its spawn entry via tool_call_id.
-  tool_call_id?: string;
-  child_session_id?: string;
-  phase?: string;
-  tool?: string;
-  detail?: string;
-  step?: number;
-  is_err?: boolean;
-  steps?: number;
-  // Terminal fields of the "finished" phase, plus the task preview the
-  // "started" phase carries. These are emitted by childProgress.finished /
-  // .started and forwarded verbatim by subagentProgressFrame
-  // (internal/runner/task_stream.go) — keep this list in step with that
-  // projection's key list.
-  success?: boolean;
-  tokens?: number;
-  duration_ms?: number;
-  note?: string;
-  task?: string;
   // SSE transport id, attached client-side (not part of the JSON payload).
   // Used to resume a dropped live-log connection without duplicate activity.
   _event_id?: string;
@@ -532,13 +502,6 @@ export const orchestratorApi = {
     request<Task>(`/tasks/${encodeURIComponent(taskId)}`, withSignal(signal)),
   taskLogs: (taskId: string, signal?: AbortSignal) =>
     request<LogSession>(`/logs/${encodeURIComponent(taskId)}`, withSignal(signal)),
-  // A spawned child's own transcript (#1043) — 404 when the transcript file is
-  // no longer on the host (the linkage entry on the parent log stays the
-  // durable record either way).
-  taskSubagentLog: (taskId: string, childSessionId: string) =>
-    request<LogSession>(
-      `/logs/${encodeURIComponent(taskId)}/subagents/${encodeURIComponent(childSessionId)}`,
-    ),
   // Per-attempt run log history: transcripts superseded by a retry or an
   // ask-pause/wake resume of the SAME task id. Metadata list + one entry.
   taskLogHistory: (taskId: string, signal?: AbortSignal) =>

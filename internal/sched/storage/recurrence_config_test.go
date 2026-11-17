@@ -50,7 +50,6 @@ func TestRecurringTaskCarriesFullConfigForward(t *testing.T) {
 		AllowNetwork:               true,
 		CarryContext:               true,
 		AllowEventTriggers:         true,
-		AllowDelegation:            true,
 		AllowTaskCreation:          true,
 		AllowRecurringTaskCreation: true,
 		InstructionSelfImprove:     true,
@@ -118,9 +117,6 @@ func TestRecurringTaskCarriesFullConfigForward(t *testing.T) {
 	}
 	if !next.AllowEventTriggers {
 		t.Error("allow_event_triggers was lost on the recurrence")
-	}
-	if !next.AllowDelegation {
-		t.Error("allow_delegation was lost on the recurrence")
 	}
 	if !next.AllowTaskCreation {
 		t.Error("allow_task_creation was lost on the recurrence")

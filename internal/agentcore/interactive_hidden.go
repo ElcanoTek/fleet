@@ -21,8 +21,7 @@ import (
 // mcp_<server>_<tool> name. It is a NARROWING, like the persona policy
 // (Gate-4): it can only subtract from what the earlier gates registered, never
 // add. The interactive driver hands it to Run as RunConfig.HiddenToolSuffixes
-// (driver data, not a Mode branch), and a sub-agent spawned from a chat turn
-// inherits it, so the child cannot reach what its parent could not. Scheduled
+// (driver data, not a Mode branch). Scheduled
 // and Operations Center runs never set it, so they are unchanged.
 //
 // Enforcement points, all reading the same suffix list:
