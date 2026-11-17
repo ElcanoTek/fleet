@@ -313,4 +313,33 @@ func TestRecoverUIAutoSubmitsAndAtomicInputCancel(t *testing.T) {
 	if activeAfterDown, err := s.ListActiveUIAutoSubmits(ctx, conv2.ID); err != nil || len(activeAfterDown) != 0 {
 		t.Fatalf("expected SetApprovalMode(auto) to atomically cancel active autosubmit, got (%+v, %v)", activeAfterDown, err)
 	}
+
+	// If boot recovery failed transiently at startup (RequireBootAutoSubmitRecovery
+	// still armed), SweepAndEnqueueDueUIAutoSubmits must run recovery first and
+	// pause pre-restart overdue rows rather than firing them!
+	if err := s.SetApprovalMode(ctx, "alice@example.com", conv2.ID, ConversationApprovalAutonomous); err != nil {
+		t.Fatalf("SetApprovalMode(autonomous 2): %v", err)
+	}
+	if _, err := s.CreateUIAutoSubmit(ctx, UIAutoSubmit{
+		ConversationID: conv2.ID,
+		UserEmail:      "alice@example.com",
+		CallID:         "call_boot_gated",
+		ActionID:       "submit",
+		ValuesJSON:     `{"deal":"gated"}`,
+		DeadlineMs:     nowMs - 2_000,
+		Status:         UIAutoSubmitStatusPending,
+		CreatedAtMs:    nowMs - 12_000,
+		UpdatedAtMs:    nowMs - 12_000,
+	}); err != nil {
+		t.Fatalf("CreateUIAutoSubmit(call_boot_gated): %v", err)
+	}
+	s.RequireBootAutoSubmitRecovery(nowMs)
+	sweptGated, err := s.SweepAndEnqueueDueUIAutoSubmits(ctx, nowMs+500, 10, 20)
+	if err != nil || len(sweptGated) != 0 {
+		t.Fatalf("expected gated SweepAndEnqueueDueUIAutoSubmits to pause pre-boot row instead of firing, got (%+v, %v)", sweptGated, err)
+	}
+	activeGated, err := s.ListActiveUIAutoSubmits(ctx, conv2.ID)
+	if err != nil || len(activeGated) != 1 || activeGated[0].Status != UIAutoSubmitStatusPaused {
+		t.Fatalf("expected call_boot_gated paused after deferred recovery, got (%+v, %v)", activeGated, err)
+	}
 }

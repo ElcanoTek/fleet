@@ -70,6 +70,11 @@ type Store struct {
 	// the token CRUD then fails closed via secretbox.ErrNoCipher rather than
 	// storing plaintext. Set via SetTokenCipher right after Open.
 	tokenCipher *secretbox.Cipher
+	// uiAutoSubmitBootGateMs holds the startup cutoff timestamp (unix ms) when
+	// cmd/fleet requires pre-restart show_ui countdown recovery before the
+	// sweeper may enqueue due rows. Cleared to 0 once RecoverUIAutoSubmits
+	// commits.
+	uiAutoSubmitBootGateMs atomic.Int64
 }
 
 // SetTokenCipher installs the AES-256-GCM cipher used to encrypt per-user

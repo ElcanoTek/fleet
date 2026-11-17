@@ -577,6 +577,17 @@ func (s *Store) setOwnedApprovalModeAndCancelAutoSubmits(ctx context.Context, us
 	return tx.Commit()
 }
 
+// RequireBootAutoSubmitRecovery marks bootMs as a mandatory recovery barrier:
+// SweepAndEnqueueDueUIAutoSubmits will run RecoverUIAutoSubmits (pausing any
+// pending rows created at or before bootMs) and refuse to sweep due rows until
+// that recovery commits.
+func (s *Store) RequireBootAutoSubmitRecovery(bootMs int64) {
+	if bootMs <= 0 {
+		bootMs = time.Now().UnixMilli()
+	}
+	s.uiAutoSubmitBootGateMs.Store(bootMs)
+}
+
 // RecoverUIAutoSubmits pauses any pending show_ui countdowns and cancels any
 // unlaunched autosubmit:* queue entries left over from a previous process so a
 // server restart never fires a countdown whose 10-second pause window elapsed
@@ -584,30 +595,54 @@ func (s *Store) setOwnedApprovalModeAndCancelAutoSubmits(ctx context.Context, us
 func (s *Store) RecoverUIAutoSubmits(ctx context.Context) (int, error) {
 	nowMs := time.Now().UnixMilli()
 	nowSec := nowMs / 1000
+	gateMs := s.uiAutoSubmitBootGateMs.Load()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	qRes, err := tx.ExecContext(ctx,
-		`UPDATE chat.chat_input_queue
-		    SET state = 'cancelled', updated_at = $1
-		  WHERE client_input_id LIKE $2
-		    AND (state = 'queued' OR (state = 'running' AND turn_id LIKE $3))`,
-		nowSec, UIAutoSubmitClientInputPrefix+"%", ClaimTurnPrefix+"%",
-	)
+	var qRes sql.Result
+	if gateMs > 0 {
+		qRes, err = tx.ExecContext(ctx,
+			`UPDATE chat.chat_input_queue
+			    SET state = 'cancelled', updated_at = $1
+			  WHERE client_input_id LIKE $2
+			    AND created_at <= $4
+			    AND (state = 'queued' OR (state = 'running' AND turn_id LIKE $3))`,
+			nowSec, UIAutoSubmitClientInputPrefix+"%", ClaimTurnPrefix+"%", gateMs/1000+1,
+		)
+	} else {
+		qRes, err = tx.ExecContext(ctx,
+			`UPDATE chat.chat_input_queue
+			    SET state = 'cancelled', updated_at = $1
+			  WHERE client_input_id LIKE $2
+			    AND (state = 'queued' OR (state = 'running' AND turn_id LIKE $3))`,
+			nowSec, UIAutoSubmitClientInputPrefix+"%", ClaimTurnPrefix+"%",
+		)
+	}
 	if err != nil {
 		return 0, err
 	}
 	qCancelled, _ := qRes.RowsAffected()
 
-	pRes, err := tx.ExecContext(ctx,
-		`UPDATE chat.ui_autosubmits
-		    SET status = 'paused', updated_at_ms = $1
-		  WHERE status = 'pending'`,
-		nowMs,
-	)
+	var pRes sql.Result
+	if gateMs > 0 {
+		pRes, err = tx.ExecContext(ctx,
+			`UPDATE chat.ui_autosubmits
+			    SET status = 'paused', updated_at_ms = $1
+			  WHERE status = 'pending'
+			    AND created_at_ms <= $2`,
+			nowMs, gateMs,
+		)
+	} else {
+		pRes, err = tx.ExecContext(ctx,
+			`UPDATE chat.ui_autosubmits
+			    SET status = 'paused', updated_at_ms = $1
+			  WHERE status = 'pending'`,
+			nowMs,
+		)
+	}
 	if err != nil {
 		return 0, err
 	}
@@ -615,6 +650,9 @@ func (s *Store) RecoverUIAutoSubmits(ctx context.Context) (int, error) {
 
 	if err := tx.Commit(); err != nil {
 		return 0, err
+	}
+	if gateMs > 0 {
+		s.uiAutoSubmitBootGateMs.CompareAndSwap(gateMs, 0)
 	}
 	return int(pausedCount + qCancelled), nil
 }
@@ -667,6 +705,11 @@ func cancelActiveUIAutoSubmitsInTx(ctx context.Context, tx *sql.Tx, convID strin
 // depth, and absence of newer user activity before inserting into
 // chat.chat_input_queue with client_input_id = "autosubmit:" + row.ID.
 func (s *Store) SweepAndEnqueueDueUIAutoSubmits(ctx context.Context, nowMs int64, limit, maxPending int) ([]SweptUIAutoSubmit, error) {
+	if s.uiAutoSubmitBootGateMs.Load() > 0 {
+		if _, err := s.RecoverUIAutoSubmits(ctx); err != nil {
+			return nil, err
+		}
+	}
 	if limit <= 0 {
 		limit = 64
 	}

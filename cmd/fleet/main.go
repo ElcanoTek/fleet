@@ -2199,6 +2199,7 @@ func (p scheduledSkillProposer) Propose(name, description, body, _ string) (stri
 // but does not abort boot: the DB may be degraded, and the affected turns stay
 // 'running' for the next boot to retry. See docs/TURN-JOURNAL.md + ADR-0039.
 func recoverStrandedTurns(chatStore *store.Store, inputQueueRetentionDays int) {
+	chatStore.RequireBootAutoSubmitRecovery(time.Now().UnixMilli())
 	recCtx, recCancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer recCancel()
 	recovered, err := chatStore.RecoverStrandedTurns(recCtx)
@@ -2291,7 +2292,7 @@ func recoverUIAutoSubmitsAtBoot(logCtx context.Context, chatStore *store.Store) 
 			return
 		}
 	}
-	logging.From(logCtx).Error("ui-autosubmit recovery: failed", "err", err)
+	logging.From(logCtx).Error("ui-autosubmit recovery: failed at boot (sweeper remains gated until recovery succeeds)", "err", err)
 }
 
 // warnUncategorizedConnectors logs the bundle connectors with no Tools-picker
