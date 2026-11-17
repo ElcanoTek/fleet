@@ -12,6 +12,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"time"
 )
 
@@ -245,6 +246,14 @@ func (s *Store) insertInputTx(ctx context.Context, tx *sql.Tx, r InputQueueRow) 
 	created := false
 	if n, _ := res.RowsAffected(); n == 1 {
 		created = true
+	}
+	if created &&
+		!strings.HasPrefix(r.ClientInputID, UIAutoSubmitClientInputPrefix) &&
+		r.Mode != InputModeResume &&
+		r.State != InputStateCancelled {
+		if err := cancelActiveUIAutoSubmitsInTx(ctx, tx, r.ConversationID, now); err != nil {
+			return InputQueueRow{}, false, err
+		}
 	}
 	// Read the stored row even on a fresh insert so the caller receives the
 	// database-assigned position rather than the input struct's zero value.

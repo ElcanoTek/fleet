@@ -464,8 +464,13 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 	// message is queued, claimed, persisted, or sent to the LLM.
 	req.Message = s.vaultUISubmissionSecrets(r.Context(), user, conv.ID, req.Message)
 	// Cancel any pending show_ui auto-submit countdown whenever a new user
-	// message or manual card submission arrives.
-	s.cancelConversationAutoSubmits(r.Context(), conv.ID)
+	// message or manual card submission arrives. Fail closed if cancellation
+	// fails so an obsolete auto-submit cannot race a manual submission.
+	if err := s.cancelConversationAutoSubmitsErr(r.Context(), conv.ID); err != nil {
+		logging.From(r.Context()).Error("postChat: cancel pending auto-submits failed", "conv_id", safe.LogSafe(conv.ID), "err", safe.LogSafe(err.Error()))
+		http.Error(w, "failed to cancel pending auto-submit", http.StatusInternalServerError)
+		return
+	}
 
 	// Busy path (#785): a running turn means this submission QUEUES — never an
 	// implicit cancel. The row is durable before the 202 acknowledgement;

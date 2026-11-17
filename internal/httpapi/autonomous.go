@@ -124,13 +124,18 @@ func (s *Server) emitUIAutoSubmit(buf *turnBuffer, convID string, row store.UIAu
 }
 
 func (s *Server) cancelConversationAutoSubmits(ctx context.Context, convID string) {
+	if err := s.cancelConversationAutoSubmitsErr(ctx, convID); err != nil {
+		logging.From(ctx).Warn("autosubmit cancel failed", "conv_id", safe.LogSafe(convID), "err", err)
+	}
+}
+
+func (s *Server) cancelConversationAutoSubmitsErr(ctx context.Context, convID string) error {
 	if s == nil || s.store == nil || strings.TrimSpace(convID) == "" {
-		return
+		return nil
 	}
 	rows, cancelledQueued, err := s.store.CancelActiveUIAutoSubmits(ctx, convID, "")
 	if err != nil {
-		logging.From(ctx).Warn("autosubmit cancel failed", "conv_id", safe.LogSafe(convID), "err", err)
-		return
+		return err
 	}
 	ownerEmail := ""
 	for _, r := range rows {
@@ -142,6 +147,7 @@ func (s *Server) cancelConversationAutoSubmits(ctx context.Context, convID strin
 	if cancelledQueued > 0 {
 		s.emitQueueUpdate(ctx, ownerEmail, convID)
 	}
+	return nil
 }
 
 func cloneConversationSnapshot(conv *store.Conversation) *store.Conversation {

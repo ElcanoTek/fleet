@@ -222,3 +222,67 @@ func verifyReusedCallIDAndNewerUserActivity(ctx context.Context, t *testing.T, s
 		t.Fatalf("sweeper after newer user msg = (%+v, %v), want cancelled without enqueue", sweptAfterUser, err)
 	}
 }
+
+func TestRecoverUIAutoSubmitsAndAtomicInputCancel(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	conv, err := s.CreateConversation(ctx, "alice@example.com", "Boot Recovery", "default", "m1", false)
+	if err != nil {
+		t.Fatalf("CreateConversation: %v", err)
+	}
+	if err := s.AcceptAutonomousPolicy(ctx, "alice@example.com", CurrentAutonomousPolicyVersion); err != nil {
+		t.Fatalf("AcceptAutonomousPolicy: %v", err)
+	}
+	if err := s.SetApprovalMode(ctx, "alice@example.com", conv.ID, ConversationApprovalAutonomous); err != nil {
+		t.Fatalf("SetApprovalMode: %v", err)
+	}
+
+	nowMs := time.Now().UnixMilli()
+	_, err = s.CreateUIAutoSubmit(ctx, UIAutoSubmit{
+		ConversationID: conv.ID,
+		UserEmail:      "alice@example.com",
+		CallID:         "call_boot_pending",
+		ActionID:       "submit",
+		ValuesJSON:     `{"deal":"boot"}`,
+		DeadlineMs:     nowMs - 5_000,
+		Status:         UIAutoSubmitStatusPending,
+		CreatedAtMs:    nowMs - 15_000,
+		UpdatedAtMs:    nowMs - 15_000,
+	})
+	if err != nil {
+		t.Fatalf("CreateUIAutoSubmit: %v", err)
+	}
+
+	recovered, err := s.RecoverUIAutoSubmits(ctx)
+	if err != nil || recovered != 1 {
+		t.Fatalf("RecoverUIAutoSubmits = (%d, %v), want (1, nil)", recovered, err)
+	}
+	active, err := s.ListActiveUIAutoSubmits(ctx, conv.ID)
+	if err != nil || len(active) != 1 || active[0].Status != UIAutoSubmitStatusPaused {
+		t.Fatalf("after RecoverUIAutoSubmits active = (%+v, %v), want 1 paused", active, err)
+	}
+	// Sweeper must NOT fire a recovered/paused row.
+	swept, err := s.SweepAndEnqueueDueUIAutoSubmits(ctx, nowMs+100, 10, 20)
+	if err != nil || len(swept) != 0 {
+		t.Fatalf("SweepAndEnqueueDueUIAutoSubmits after boot recovery = (%+v, %v), want empty", swept, err)
+	}
+
+	// Enqueueing a human input atomically cancels active ui_autosubmits in the same tx.
+	if _, _, err := s.EnqueueInput(ctx, InputQueueRow{
+		ID:             "q-atomic-cancel",
+		ConversationID: conv.ID,
+		UserEmail:      "alice@example.com",
+		ClientInputID:  "cli-atomic-1",
+		Message:        "Manual follow-up",
+		Attachments:    "[]",
+		Mode:           InputModeQueued,
+	}); err != nil {
+		t.Fatalf("EnqueueInput: %v", err)
+	}
+	activeAfterInput, err := s.ListActiveUIAutoSubmits(ctx, conv.ID)
+	if err != nil || len(activeAfterInput) != 0 {
+		t.Fatalf("expected EnqueueInput to atomically cancel paused autosubmit, got (%+v, %v)", activeAfterInput, err)
+	}
+}

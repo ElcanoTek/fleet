@@ -2247,6 +2247,7 @@ func recoverStrandedTurns(chatStore *store.Store, inputQueueRetentionDays int) {
 	} else if noted > 0 {
 		logging.From(recCtx).Info("approval-resume recovery: dropped pending automatic resumes, with a note in each conversation", "conversations", noted)
 	}
+	recoverUIAutoSubmitsAtBoot(recCtx, chatStore)
 	// Reclaim terminal idempotency rows at boot as well as after turns. Recovery
 	// runs first so a stranded non-terminal row is resolved before retention is
 	// considered; non-terminal rows are never eligible for deletion.
@@ -2272,6 +2273,25 @@ func dropApprovalResumesAtBoot(chatStore *store.Store) (int, error) {
 		}
 	}
 	return 0, err
+}
+
+// recoverUIAutoSubmitsAtBoot pauses any pre-restart pending show_ui countdowns
+// and cancels stale autosubmit:* queue rows before startApprovalSweepers starts.
+func recoverUIAutoSubmitsAtBoot(logCtx context.Context, chatStore *store.Store) {
+	var err error
+	for attempt := 0; attempt < 2; attempt++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		var recovered int
+		recovered, err = chatStore.RecoverUIAutoSubmits(ctx)
+		cancel()
+		if err == nil {
+			if recovered > 0 {
+				logging.From(logCtx).Info("ui-autosubmit recovery: paused pre-restart countdowns", "recovered", recovered)
+			}
+			return
+		}
+	}
+	logging.From(logCtx).Error("ui-autosubmit recovery: failed", "err", err)
 }
 
 // warnUncategorizedConnectors logs the bundle connectors with no Tools-picker

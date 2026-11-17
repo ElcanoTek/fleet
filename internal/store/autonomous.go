@@ -541,6 +541,89 @@ func (s *Store) CancelActiveUIAutoSubmits(ctx context.Context, convID, callID st
 	return cancelledRows, qCount, nil
 }
 
+// RecoverUIAutoSubmits pauses any pending show_ui countdowns and cancels any
+// unlaunched autosubmit:* queue entries left over from a previous process so a
+// server restart never fires a countdown whose 10-second pause window elapsed
+// while the UI was unavailable.
+func (s *Store) RecoverUIAutoSubmits(ctx context.Context) (int, error) {
+	nowMs := time.Now().UnixMilli()
+	nowSec := nowMs / 1000
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	qRes, err := tx.ExecContext(ctx,
+		`UPDATE chat.chat_input_queue
+		    SET state = 'cancelled', updated_at = $1
+		  WHERE client_input_id LIKE $2
+		    AND (state = 'queued' OR (state = 'running' AND turn_id LIKE $3))`,
+		nowSec, UIAutoSubmitClientInputPrefix+"%", ClaimTurnPrefix+"%",
+	)
+	if err != nil {
+		return 0, err
+	}
+	qCancelled, _ := qRes.RowsAffected()
+
+	pRes, err := tx.ExecContext(ctx,
+		`UPDATE chat.ui_autosubmits
+		    SET status = 'paused', updated_at_ms = $1
+		  WHERE status = 'pending'`,
+		nowMs,
+	)
+	if err != nil {
+		return 0, err
+	}
+	pausedCount, _ := pRes.RowsAffected()
+
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return int(pausedCount + qCancelled), nil
+}
+
+func cancelActiveUIAutoSubmitsInTx(ctx context.Context, tx *sql.Tx, convID string, nowSec int64) error {
+	nowMs := nowSec * 1000
+	qRows, err := tx.QueryContext(ctx,
+		`UPDATE chat.chat_input_queue
+		    SET state = 'cancelled', updated_at = $2
+		  WHERE conversation_id = $1
+		    AND client_input_id LIKE $3
+		    AND (state = 'queued' OR (state = 'running' AND turn_id LIKE $4))
+		 RETURNING client_input_id`,
+		convID, nowSec, UIAutoSubmitClientInputPrefix+"%", ClaimTurnPrefix+"%",
+	)
+	if err != nil {
+		return err
+	}
+	cancelledAutoIDs := []string{}
+	for qRows.Next() {
+		var cid string
+		if serr := qRows.Scan(&cid); serr != nil {
+			_ = qRows.Close()
+			return serr
+		}
+		if id := strings.TrimPrefix(cid, UIAutoSubmitClientInputPrefix); id != "" && id != cid {
+			cancelledAutoIDs = append(cancelledAutoIDs, id)
+		}
+	}
+	if rerr := qRows.Err(); rerr != nil {
+		_ = qRows.Close()
+		return rerr
+	}
+	_ = qRows.Close()
+
+	_, err = tx.ExecContext(ctx,
+		`UPDATE chat.ui_autosubmits
+		    SET status = 'cancelled', updated_at_ms = $1
+		  WHERE conversation_id = $2
+		    AND (status IN ('pending', 'paused') OR (status = 'fired' AND id = ANY($3::text[])))`,
+		nowMs, convID, cancelledAutoIDs,
+	)
+	return err
+}
+
 // SweepAndEnqueueDueUIAutoSubmits claims due pending rows (deadline_ms <=
 // nowMs) and, inside the SAME per-row database transaction (locking
 // chat.conversations FOR UPDATE then chat.ui_autosubmits FOR UPDATE SKIP
