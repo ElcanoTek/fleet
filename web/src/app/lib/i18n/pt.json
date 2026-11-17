@@ -5878,5 +5878,7 @@
   "Not shared with the team": "Não partilhado com a equipa",
   "Loading your sidebar…": "A carregar a sua barra lateral…",
   "Your sidebar couldn't be loaded, so it can't be changed right now.": "Não foi possível carregar a sua barra lateral, por isso não pode ser alterada agora.",
-  "Archived": "Arquivado"
+  "Archived": "Arquivado",
+  "bad json: body too large or unreadable": "JSON inválido: corpo demasiado grande ou ilegível",
+  "bad json: rev must be a non-negative integer": "JSON inválido: rev tem de ser um número inteiro não negativo"
 }
