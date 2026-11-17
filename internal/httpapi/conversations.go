@@ -127,9 +127,14 @@ func (s *Server) handleListConversations(w http.ResponseWriter, r *http.Request,
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	autonomousAccepted := s.hasAcceptedAutonomous(r.Context(), user)
 	for i := range list {
 		if len(list[i].OptionalMCPServersEnabled) > 0 {
 			list[i].OptionalMCPServersEnabled = s.effectiveOptionalMCPServersForCaller(r.Context(), user, &list[i])
+		}
+		if !autonomousAccepted && list[i].EffectiveApprovalMode() == store.ConversationApprovalAutonomous {
+			list[i].ApprovalMode = store.ConversationApprovalAuto
+			list[i].AutoApprove = true
 		}
 	}
 	writeJSON(w, r, map[string]any{"conversations": list})

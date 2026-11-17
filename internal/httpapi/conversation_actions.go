@@ -30,8 +30,53 @@ import (
 // memory proposals — everything a reload needs to re-hydrate the transcript.
 // ?omit_history=1 skips LoadHistory so a terminal approval review does not
 // have to download an unbounded transcript before POSTing a decision.
-func isAutonomousConversation(conv *store.Conversation) bool {
-	return conv != nil && conv.EffectiveApprovalMode() == store.ConversationApprovalAutonomous
+func (s *Server) isAcceptedAutonomousConversation(ctx context.Context, conv *store.Conversation) bool {
+	if conv == nil || conv.EffectiveApprovalMode() != store.ConversationApprovalAutonomous {
+		return false
+	}
+	return s.hasAcceptedAutonomous(ctx, conv.UserEmail)
+}
+
+func (s *Server) sanitizeConversationForViewer(
+	ctx context.Context,
+	user string,
+	isOwner, autonomousAccepted bool,
+	conv *store.Conversation,
+) *store.Conversation {
+	if conv == nil {
+		return nil
+	}
+	if !isOwner {
+		sanitized := *conv
+		sanitized.OptionalMCPServersEnabled = nil
+		sanitized.Labels = nil
+		sanitized.ShareToken = ""
+		sanitized.ParentConversationID = ""
+		sanitized.AutoApprove = false
+		sanitized.ApprovalMode = ""
+		return &sanitized
+	}
+	clampMode := !autonomousAccepted && conv.EffectiveApprovalMode() == store.ConversationApprovalAutonomous
+	if len(conv.OptionalMCPServersEnabled) == 0 && !clampMode {
+		return conv
+	}
+	sanitized := *conv
+	if len(sanitized.OptionalMCPServersEnabled) > 0 {
+		sanitized.OptionalMCPServersEnabled = s.effectiveOptionalMCPServersForCaller(ctx, user, conv)
+	}
+	if clampMode {
+		sanitized.ApprovalMode = store.ConversationApprovalAuto
+		sanitized.AutoApprove = true
+	}
+	return &sanitized
+}
+
+func (s *Server) cancelAutoSubmitsOrFail(ctx context.Context, w http.ResponseWriter, convID string) bool {
+	if err := s.cancelConversationAutoSubmitsErr(ctx, convID); err != nil {
+		http.Error(w, "failed to cancel pending auto-submit", http.StatusInternalServerError)
+		return false
+	}
+	return true
 }
 
 func applyCallNoSessionFlag(card map[string]any, toolName, rawInput string, isAutonomousConv bool) {
@@ -41,7 +86,7 @@ func applyCallNoSessionFlag(card map[string]any, toolName, rawInput string, isAu
 }
 
 func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, user, id string, conv *store.Conversation) {
-	isAutonomousConv := isAutonomousConversation(conv)
+	isAutonomousConv := s.isAcceptedAutonomousConversation(r.Context(), conv)
 	if approvalID := r.URL.Query().Get("approval_id"); approvalID != "" {
 		s.handleConversationApprovalGetWithMode(w, r, user, id, approvalID, isAutonomousConv)
 		return
@@ -219,29 +264,20 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, u
 		schedules = []store.ChatSchedule{}
 	}
 	historyPayload := historyForParticipant(history, user, conv.UserEmail)
-	if !isOwner {
-		sanitized := *conv
-		sanitized.OptionalMCPServersEnabled = nil
-		sanitized.Labels = nil
-		sanitized.ShareToken = ""
-		sanitized.ParentConversationID = ""
-		sanitized.AutoApprove = false
-		sanitized.ApprovalMode = ""
-		conv = &sanitized
-	} else if len(conv.OptionalMCPServersEnabled) > 0 {
-		sanitized := *conv
-		sanitized.OptionalMCPServersEnabled = s.effectiveOptionalMCPServersForCaller(r.Context(), user, conv)
-		conv = &sanitized
-	}
-	uiAutoSubmits, err := s.store.ListActiveUIAutoSubmits(r.Context(), id)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+	autonomousAccepted := s.hasAcceptedAutonomous(r.Context(), user)
+	conv = s.sanitizeConversationForViewer(r.Context(), user, isOwner, autonomousAccepted, conv)
+	var uiAutoSubmits []store.UIAutoSubmit
+	if isAutonomousConv {
+		var err error
+		uiAutoSubmits, err = s.store.ListActiveUIAutoSubmits(r.Context(), id)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 	if uiAutoSubmits == nil {
 		uiAutoSubmits = []store.UIAutoSubmit{}
 	}
-	autonomousAccepted := s.hasAcceptedAutonomous(r.Context(), user)
 	writeJSON(w, r, map[string]any{
 		"conversation":  conv,
 		"branch_origin": origin,
@@ -343,6 +379,9 @@ func (s *Server) handleConversationTruncate(w http.ResponseWriter, r *http.Reque
 	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if !s.cancelAutoSubmitsOrFail(r.Context(), w, id) {
 		return
 	}
 	if err := s.store.TruncateAfter(r.Context(), user, id, pivot); err != nil {
@@ -768,54 +807,40 @@ func writeStopResult(w http.ResponseWriter, res inputStop, finishedMsg string) {
 // handleConversationCancel serves POST /conversations/{id}/cancel.
 //
 // Explicit Stop button. Owner-scoped by default (scope=all / scope=turn), while
+func decodeConversationCancelBody(r *http.Request) (scope, turnID, inputID string) {
+	scope = "all"
+	if r.Body == nil {
+		return scope, "", ""
+	}
+	var body struct {
+		Scope   string `json:"scope"`
+		TurnID  string `json:"turn_id"`
+		InputID string `json:"input_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err == nil {
+		if strings.EqualFold(body.Scope, "turn") {
+			scope = "turn"
+		}
+		turnID = strings.TrimSpace(body.TurnID)
+		inputID = strings.TrimSpace(body.InputID)
+	}
+	return scope, turnID, inputID
+}
+
 // a non-owner multiplayer participant may stop their own input by `input_id`
 // (or cancel the active turn via `turn_id` / `scope=turn` without sweeping
 // other participants' queued inputs).
 func (s *Server) handleConversationCancel(w http.ResponseWriter, r *http.Request, user, id string, conv *store.Conversation) {
 	isOwner := conv == nil || conv.UserEmail == "" || strings.EqualFold(conv.UserEmail, user)
-	// Stop semantics (#785): default scope "all" covers the active turn
-	// AND every still-queued follow-up — Stop means "stop working", not
-	// "stop this one and surprise me with the next". scope=turn cancels
-	// only the active turn and lets the queue drain.
-	//
-	// turn_id targets ONE turn: it is cancelled only while it is the running
-	// turn (204); once it has ended the request stops nothing and answers
-	// 409, so the caller reads the turn's own outcome rather than taking the
-	// Stop for a cancellation. A client that watched a specific turn
-	// (`fleet acp`) therefore cannot cancel a successor that started between
-	// its decision to stop and this request landing. A targeted Stop is turn-scoped: it never sweeps the
-	// queue.
-	//
-	// input_id targets ONE input by its idempotency key, wherever it is: a
-	// still-queued row is withdrawn, a running turn for it is cancelled, and
-	// a turn not registered yet (a direct claim still being prepared, a row
-	// the drain just claimed, or a submission still in transit) is refused
-	// when it tries to register. A key no row holds yet is taken with a
-	// cancelled row, so a submission still in transit is answered
-	// "cancelled" even after the in-memory mark is gone. A client whose answer was lost (`fleet acp`)
-	// can stop its own input without knowing which of those states it is in.
-	scope := "all"
-	turnID, inputID := "", ""
-	if r.Body != nil {
-		var body struct {
-			Scope   string `json:"scope"`
-			TurnID  string `json:"turn_id"`
-			InputID string `json:"input_id"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err == nil {
-			if strings.EqualFold(body.Scope, "turn") {
-				scope = "turn"
-			}
-			turnID = strings.TrimSpace(body.TurnID)
-			inputID = strings.TrimSpace(body.InputID)
-		}
-	}
+	scope, turnID, inputID := decodeConversationCancelBody(r)
 	if len(inputID) > maxInputIDLen {
 		http.Error(w, fmt.Sprintf("input_id is limited to %d bytes", maxInputIDLen), http.StatusBadRequest)
 		return
 	}
-	// Cancel any pending show_ui auto-submit countdown on Stop.
-	s.cancelConversationAutoSubmits(r.Context(), id)
+	// Cancel any pending show_ui auto-submit countdown before acknowledging Stop.
+	if !s.cancelAutoSubmitsOrFail(r.Context(), w, id) {
+		return
+	}
 	if inputID != "" {
 		if !isOwner {
 			mpInputID := effectiveMultiplayerInputID(user, inputID)

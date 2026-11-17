@@ -923,13 +923,14 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	// `user.message` event is replay-only — reattach reconstructs the
 	// user bubble from it so the chat doesn't appear as just a stranded
 	// "Thinking…" indicator with no question above it.
+	effectiveMode := s.effectiveOwnerApprovalMode(turnCtx, convOwnerEmail(conv, user), conv)
 	buf.Emit("conversation", map[string]any{
 		"id":            conv.ID,
 		"title":         conv.Title,
 		"persona":       conv.Persona,
 		"model":         conv.Model,
-		"auto_approve":  conv.AutoApprove,
-		"approval_mode": conv.EffectiveApprovalMode(),
+		"auto_approve":  effectiveMode != store.ConversationApprovalManual,
+		"approval_mode": effectiveMode,
 	})
 	turnStarted := map[string]any{
 		"turn_id": turnID,

@@ -455,10 +455,11 @@ func (s *Server) handleScheduleList(w http.ResponseWriter, r *http.Request, user
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	effectiveMode := s.effectiveOwnerApprovalMode(r.Context(), convOwnerEmail(conv, user), conv)
 	writeJSON(w, r, map[string]any{
 		"schedules":     items,
-		"auto_approve":  conv.AutoApprove,
-		"approval_mode": conv.EffectiveApprovalMode(),
+		"auto_approve":  effectiveMode != store.ConversationApprovalManual,
+		"approval_mode": effectiveMode,
 	})
 }
 
@@ -706,11 +707,12 @@ func (s *Server) handleScheduleRunNow(w http.ResponseWriter, r *http.Request, us
 			}
 		}
 	}
+	effectiveMode := s.effectiveOwnerApprovalMode(r.Context(), convOwnerEmail(conv, user), conv)
 	writeJSON(w, r, map[string]any{
 		"schedule":      *target,
 		"input_id":      delivery.InputID,
 		"schedules":     items,
-		"auto_approve":  conv.AutoApprove,
-		"approval_mode": conv.EffectiveApprovalMode(),
+		"auto_approve":  effectiveMode != store.ConversationApprovalManual,
+		"approval_mode": effectiveMode,
 	})
 }

@@ -754,6 +754,15 @@ func TestNewTurnStager_ClampsAutonomousWithoutPolicyAcceptance(t *testing.T) {
 	}
 }
 
+type cancelAutoSubmitErrStore struct {
+	*scheduleFakeStore
+	err error
+}
+
+func (s *cancelAutoSubmitErrStore) CancelActiveUIAutoSubmits(context.Context, string, string) ([]store.UIAutoSubmit, int, error) {
+	return nil, 0, s.err
+}
+
 func TestConversationGet_ExposesUIAutoSubmitsAndAcceptance(t *testing.T) {
 	t.Parallel()
 
@@ -764,6 +773,7 @@ func TestConversationGet_ExposesUIAutoSubmitsAndAcceptance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	_ = st.SetApprovalMode(ctx, "alice@example.com", conv.ID, store.ConversationApprovalAutonomous)
 	nowMs := time.Now().UnixMilli()
 	_, _ = st.CreateUIAutoSubmit(ctx, store.UIAutoSubmit{
 		ConversationID: conv.ID,
@@ -788,6 +798,7 @@ func TestConversationGet_ExposesUIAutoSubmitsAndAcceptance(t *testing.T) {
 		t.Fatalf("GET /conversations/%s = %d %s", conv.ID, rec.Code, rec.Body.String())
 	}
 	var payload struct {
+		Conversation            store.Conversation   `json:"conversation"`
 		AutonomousAccepted      bool                 `json:"autonomous_accepted"`
 		AutonomousPolicyVersion int                  `json:"autonomous_policy_version"`
 		UIAutoSubmits           []store.UIAutoSubmit `json:"ui_autosubmits"`
@@ -795,10 +806,65 @@ func TestConversationGet_ExposesUIAutoSubmitsAndAcceptance(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
 		t.Fatal(err)
 	}
-	if !payload.AutonomousAccepted || payload.AutonomousPolicyVersion != store.CurrentAutonomousPolicyVersion {
-		t.Fatalf("unexpected acceptance fields: %+v", payload)
+	if !payload.AutonomousAccepted || payload.AutonomousPolicyVersion != store.CurrentAutonomousPolicyVersion || payload.Conversation.ApprovalMode != store.ConversationApprovalAutonomous {
+		t.Fatalf("unexpected acceptance/mode fields: %+v", payload)
 	}
 	if len(payload.UIAutoSubmits) != 1 || payload.UIAutoSubmits[0].CallID != "call_hydrate" {
-		t.Fatalf("unexpected ui_autosubmits: %+v", payload.UIAutoSubmits)
+		t.Fatalf("unexpected ui_autosubmits: %+v", payload)
+	}
+
+	// Unaccepted owner (simulating CurrentAutonomousPolicyVersion bump): both
+	// GET /conversations/{id} and GET /conversations clamp approval_mode to "auto".
+	unacceptedConv, err := st.CreateConversation(ctx, "bob@example.com", "Stale Policy", "default", "m", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = st.SetApprovalMode(ctx, "bob@example.com", unacceptedConv.ID, store.ConversationApprovalAutonomous)
+
+	bobGetReq := httptest.NewRequest(http.MethodGet, "/conversations/"+unacceptedConv.ID, nil)
+	bobGetReq = bobGetReq.WithContext(asUser(bobGetReq.Context(), "bob@example.com"))
+	bobGetRec := httptest.NewRecorder()
+	srv.Routes().ServeHTTP(bobGetRec, bobGetReq)
+	var bobPayload struct {
+		Conversation       store.Conversation   `json:"conversation"`
+		AutonomousAccepted bool                 `json:"autonomous_accepted"`
+		UIAutoSubmits      []store.UIAutoSubmit `json:"ui_autosubmits"`
+	}
+	if err := json.Unmarshal(bobGetRec.Body.Bytes(), &bobPayload); err != nil {
+		t.Fatal(err)
+	}
+	if bobPayload.AutonomousAccepted || bobPayload.Conversation.ApprovalMode != store.ConversationApprovalAuto || !bobPayload.Conversation.AutoApprove {
+		t.Fatalf("expected unaccepted owner GET /conversations/{id} clamped to auto, got %+v", bobPayload)
+	}
+
+	bobListReq := httptest.NewRequest(http.MethodGet, "/conversations", nil)
+	bobListReq = bobListReq.WithContext(asUser(bobListReq.Context(), "bob@example.com"))
+	bobListRec := httptest.NewRecorder()
+	srv.Routes().ServeHTTP(bobListRec, bobListReq)
+	var bobList struct {
+		Conversations []store.Conversation `json:"conversations"`
+	}
+	if err := json.Unmarshal(bobListRec.Body.Bytes(), &bobList); err != nil {
+		t.Fatal(err)
+	}
+	if len(bobList.Conversations) != 1 || bobList.Conversations[0].ApprovalMode != store.ConversationApprovalAuto {
+		t.Fatalf("expected unaccepted owner GET /conversations clamped to auto, got %+v", bobList.Conversations)
+	}
+
+	// Stop (POST /conversations/{id}/cancel) fails closed with 500 if
+	// CancelActiveUIAutoSubmits returns a transient database error.
+	errSrv := newDefaultChatServer(t, &fakeEngine{}, &cancelAutoSubmitErrStore{
+		scheduleFakeStore: st,
+		err:               os.ErrClosed,
+	})
+	errSrv.cfg = &config.Config{}
+	defer errSrv.StopBackground()
+	stopReq := httptest.NewRequest(http.MethodPost, "/conversations/"+conv.ID+"/cancel", bytes.NewBufferString(`{"scope":"all"}`))
+	stopReq.Header.Set("Content-Type", "application/json")
+	stopReq = stopReq.WithContext(asUser(stopReq.Context(), "alice@example.com"))
+	stopRec := httptest.NewRecorder()
+	errSrv.Routes().ServeHTTP(stopRec, stopReq)
+	if stopRec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected Stop to fail closed on auto-submit cancel error, got %d %s", stopRec.Code, stopRec.Body.String())
 	}
 }

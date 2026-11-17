@@ -767,6 +767,17 @@ func (s *fakeChatStore) ListSharedAndMultiplayerConversations(_ context.Context,
 	}
 	return out, nil
 }
+func (s *fakeChatStore) ListFiltered(_ context.Context, userEmail string, _ store.ListFilter) ([]store.Conversation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []store.Conversation
+	for _, c := range s.convs {
+		if strings.EqualFold(c.UserEmail, userEmail) {
+			out = append(out, *c)
+		}
+	}
+	return out, nil
+}
 func (s *fakeChatStore) MarkProjectSharedChat(context.Context, string, string) error { return nil }
 
 // Bulk conversation operations (#279) — default no-ops; the /chat turn path
