@@ -503,6 +503,15 @@ func skipTimeoutWrapper(tokens []string, i int) int {
 }
 
 func gitTokensHavePushSubcommand(args []string) bool {
+	return gitTokensHavePushSubcommandDepth(args, 0)
+}
+
+func gitTokensHavePushSubcommandDepth(args []string, depth int) bool {
+	if depth > 4 {
+		return true
+	}
+	var aliases map[string]string
+	hasConfigEnvAlias := false
 	i := 0
 	for i < len(args) {
 		arg := args[i]
@@ -511,10 +520,18 @@ func gitTokensHavePushSubcommand(args []string) bool {
 			break
 		}
 		if !strings.HasPrefix(arg, "-") || arg == "-" {
-			return strings.EqualFold(arg, "push")
+			return gitSubcommandIsPush(arg, aliases, hasConfigEnvAlias, depth)
 		}
 		if arg == "-h" || arg == "--help" || arg == "-v" || arg == "--version" {
 			return false
+		}
+		if name, val, ok := parseGitInlineAliasFlag(args, i); ok {
+			if aliases == nil {
+				aliases = make(map[string]string)
+			}
+			aliases[name] = val
+		} else if gitConfigEnvDefinesAlias(args, i) {
+			hasConfigEnvAlias = true
 		}
 		if gitFlagsTakingArg[arg] {
 			i += 2
@@ -522,7 +539,64 @@ func gitTokensHavePushSubcommand(args []string) bool {
 		}
 		i++
 	}
-	return i < len(args) && strings.EqualFold(args[i], "push")
+	if i >= len(args) {
+		return false
+	}
+	return gitSubcommandIsPush(args[i], aliases, hasConfigEnvAlias, depth)
+}
+
+func parseGitInlineAliasFlag(args []string, i int) (string, string, bool) {
+	arg := args[i]
+	var spec string
+	switch {
+	case arg == "-c" && i+1 < len(args):
+		spec = args[i+1]
+	case strings.HasPrefix(arg, "-c") && len(arg) > 2:
+		spec = arg[2:]
+	default:
+		return "", "", false
+	}
+	key, val, hasEq := strings.Cut(strings.TrimSpace(spec), "=")
+	if !hasEq {
+		return "", "", false
+	}
+	keyLower := strings.ToLower(strings.TrimSpace(key))
+	if !strings.HasPrefix(keyLower, "alias.") || len(keyLower) <= len("alias.") {
+		return "", "", false
+	}
+	return keyLower[len("alias."):], strings.TrimSpace(val), true
+}
+
+func gitConfigEnvDefinesAlias(args []string, i int) bool {
+	arg := args[i]
+	var spec string
+	switch {
+	case arg == "--config-env" && i+1 < len(args):
+		spec = args[i+1]
+	case strings.HasPrefix(arg, "--config-env="):
+		spec = strings.TrimPrefix(arg, "--config-env=")
+	default:
+		return false
+	}
+	key, _, _ := strings.Cut(strings.ToLower(strings.TrimSpace(spec)), "=")
+	return strings.HasPrefix(key, "alias.")
+}
+
+func gitSubcommandIsPush(sub string, aliases map[string]string, hasConfigEnvAlias bool, depth int) bool {
+	if strings.EqualFold(sub, "push") {
+		return true
+	}
+	if hasConfigEnvAlias {
+		return true
+	}
+	target, ok := aliases[strings.ToLower(strings.TrimSpace(sub))]
+	if !ok {
+		return false
+	}
+	if strings.HasPrefix(target, "!") {
+		return bashCommandRunsGitPushDepth(strings.TrimPrefix(target, "!"), depth+1)
+	}
+	return gitTokensHavePushSubcommandDepth(strings.Fields(target), depth+1)
 }
 
 func isEnvAssignmentToken(tok string) bool {

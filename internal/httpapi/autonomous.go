@@ -162,7 +162,11 @@ func isSyntheticFleetContinuationMessage(text string) bool {
 	return strings.HasPrefix(trimmed, "[fleet]")
 }
 
-func (s *Server) consecutiveAutoSubmitChainDepth(ctx context.Context, convID, currentUserInput string) int {
+func (s *Server) consecutiveAutoSubmitChainDepth(
+	ctx context.Context,
+	convID, currentUserInput string,
+	userCommitted func() bool,
+) int {
 	var userTexts []string
 	if s != nil && s.store != nil && strings.TrimSpace(convID) != "" {
 		if hist, err := s.store.LoadHistory(ctx, convID); err == nil {
@@ -177,7 +181,8 @@ func (s *Server) consecutiveAutoSubmitChainDepth(ctx context.Context, convID, cu
 			}
 		}
 	}
-	if strings.TrimSpace(currentUserInput) != "" {
+	alreadyPersisted := userCommitted != nil && userCommitted()
+	if !alreadyPersisted && strings.TrimSpace(currentUserInput) != "" {
 		userTexts = append(userTexts, currentUserInput)
 	}
 
@@ -221,28 +226,33 @@ func cardHasInteractiveAction(specJSON []byte) bool {
 // newShowUIDisplayedHandler returns the per-turn hook called when show_ui
 // validates and displays a card. Display-only cards (no submit/message actions
 // and replaces == "") leave any earlier interactive card's countdown intact;
-// replacement or interactive cards supersede earlier pending countdowns, and
-// eligible prefilled cards in owner-initiated non-patrol Autonomous turns arm a
-// 10-second server-owned countdown row (up to maxAutoSubmitChain consecutive
-// auto=1 turns).
+// replacement or interactive cards supersede earlier active/queued countdowns,
+// and eligible prefilled cards in owner-initiated non-patrol Autonomous turns
+// arm a 10-second server-owned countdown row (up to maxAutoSubmitChain
+// consecutive auto=1 turns).
 func (s *Server) newShowUIDisplayedHandler(
 	conv *store.Conversation,
 	user, inputKind, currentUserInput string,
 	buf *turnBuffer,
 	turnStager *approvalStager,
+	userCommitted func() bool,
 ) tools.ShowUIDisplayedHandler {
 	return func(ctx context.Context, callID string, specJSON []byte) {
 		if s.store == nil || conv == nil || strings.TrimSpace(conv.ID) == "" {
 			return
 		}
+		ownerEmail := convOwnerEmail(conv, user)
 		var meta struct {
 			Replaces string `json:"replaces"`
 		}
 		_ = json.Unmarshal(specJSON, &meta)
 		if rep := strings.TrimSpace(meta.Replaces); rep != "" {
-			if cancelled, cerr := s.store.CancelPendingUIAutoSubmits(ctx, conv.ID, rep); cerr == nil {
+			if cancelled, cancelledQueued, cerr := s.store.CancelActiveUIAutoSubmits(ctx, conv.ID, rep); cerr == nil {
 				for _, r := range cancelled {
 					s.emitUIAutoSubmit(buf, conv.ID, r)
+				}
+				if cancelledQueued > 0 {
+					s.emitQueueUpdate(ctx, ownerEmail, conv.ID)
 				}
 			}
 		}
@@ -250,15 +260,19 @@ func (s *Server) newShowUIDisplayedHandler(
 		interactive := cardHasInteractiveAction(specJSON)
 		actionID, valuesJSON, eligible := genui.CollectInitialSubmit(specJSON)
 		if interactive || eligible {
-			// Supersede any earlier pending countdown in this conversation when a
-			// new interactive card is shown. Display-only cards (e.g. a metrics
-			// summary without submit actions and replaces == "") leave an earlier
-			// interactive card's pending countdown untouched.
-			if cancelled, cerr := s.store.CancelPendingUIAutoSubmits(ctx, conv.ID, ""); cerr == nil {
+			// Supersede any earlier active or still-queued auto-submit in this
+			// conversation when a new interactive card is shown. Display-only
+			// cards (e.g. a metrics summary without submit actions and
+			// replaces == "") leave an earlier interactive card's pending
+			// countdown untouched.
+			if cancelled, cancelledQueued, cerr := s.store.CancelActiveUIAutoSubmits(ctx, conv.ID, ""); cerr == nil {
 				for _, r := range cancelled {
 					if r.CallID != callID {
 						s.emitUIAutoSubmit(buf, conv.ID, r)
 					}
+				}
+				if cancelledQueued > 0 {
+					s.emitQueueUpdate(ctx, ownerEmail, conv.ID)
 				}
 			}
 		}
@@ -266,7 +280,6 @@ func (s *Server) newShowUIDisplayedHandler(
 		if inputKind == agent.InputKindChatPatrol {
 			return
 		}
-		ownerEmail := convOwnerEmail(conv, user)
 		if !strings.EqualFold(ownerEmail, user) {
 			return
 		}
@@ -276,7 +289,7 @@ func (s *Server) newShowUIDisplayedHandler(
 		if strings.TrimSpace(callID) == "" || !eligible {
 			return
 		}
-		if s.consecutiveAutoSubmitChainDepth(ctx, conv.ID, currentUserInput) >= maxAutoSubmitChain {
+		if s.consecutiveAutoSubmitChainDepth(ctx, conv.ID, currentUserInput, userCommitted) >= maxAutoSubmitChain {
 			return
 		}
 

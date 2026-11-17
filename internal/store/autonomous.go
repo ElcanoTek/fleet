@@ -437,6 +437,52 @@ func (s *Store) CancelActiveUIAutoSubmits(ctx context.Context, convID, callID st
 		return nil, 0, err
 	}
 
+	var qRows *sql.Rows
+	if callID != "" {
+		msgPrefix := "[UI submission] card=" + escapeLikeLiteral(callID) + " %"
+		qRows, err = tx.QueryContext(ctx,
+			`UPDATE chat.chat_input_queue
+			    SET state = 'cancelled', updated_at = $2
+			  WHERE conversation_id = $1
+			    AND client_input_id LIKE $3
+			    AND message LIKE $4 ESCAPE '\'
+			    AND (state = 'queued' OR (state = 'running' AND turn_id LIKE $5))
+			 RETURNING client_input_id`,
+			convID, nowSec, UIAutoSubmitClientInputPrefix+"%", msgPrefix, ClaimTurnPrefix+"%",
+		)
+	} else {
+		qRows, err = tx.QueryContext(ctx,
+			`UPDATE chat.chat_input_queue
+			    SET state = 'cancelled', updated_at = $2
+			  WHERE conversation_id = $1
+			    AND client_input_id LIKE $3
+			    AND (state = 'queued' OR (state = 'running' AND turn_id LIKE $4))
+			 RETURNING client_input_id`,
+			convID, nowSec, UIAutoSubmitClientInputPrefix+"%", ClaimTurnPrefix+"%",
+		)
+	}
+	if err != nil {
+		return nil, 0, err
+	}
+	var cancelledAutoIDs []string
+	qCount := 0
+	for qRows.Next() {
+		var cid string
+		if serr := qRows.Scan(&cid); serr != nil {
+			_ = qRows.Close()
+			return nil, 0, serr
+		}
+		qCount++
+		if id := strings.TrimPrefix(cid, UIAutoSubmitClientInputPrefix); id != "" && id != cid {
+			cancelledAutoIDs = append(cancelledAutoIDs, id)
+		}
+	}
+	if rerr := qRows.Err(); rerr != nil {
+		_ = qRows.Close()
+		return nil, 0, rerr
+	}
+	_ = qRows.Close()
+
 	var rows *sql.Rows
 	if callID != "" {
 		rows, err = tx.QueryContext(ctx,
@@ -444,18 +490,18 @@ func (s *Store) CancelActiveUIAutoSubmits(ctx context.Context, convID, callID st
 			    SET status = 'cancelled', updated_at_ms = $1
 			  WHERE conversation_id = $2
 			    AND call_id = $3
-			    AND status IN ('pending', 'paused')
+			    AND (status IN ('pending', 'paused') OR (status = 'fired' AND id = ANY($4)))
 			 RETURNING `+uiAutoSubmitSelectCols,
-			nowMs, convID, callID,
+			nowMs, convID, callID, textArray{&cancelledAutoIDs},
 		)
 	} else {
 		rows, err = tx.QueryContext(ctx,
 			`UPDATE chat.ui_autosubmits
 			    SET status = 'cancelled', updated_at_ms = $1
 			  WHERE conversation_id = $2
-			    AND status IN ('pending', 'paused')
+			    AND (status IN ('pending', 'paused') OR (status = 'fired' AND id = ANY($3)))
 			 RETURNING `+uiAutoSubmitSelectCols,
-			nowMs, convID,
+			nowMs, convID, textArray{&cancelledAutoIDs},
 		)
 	}
 	if err != nil {
@@ -466,40 +512,13 @@ func (s *Store) CancelActiveUIAutoSubmits(ctx context.Context, convID, callID st
 		return nil, 0, err
 	}
 
-	var qRes sql.Result
-	if callID != "" {
-		msgPrefix := "[UI submission] card=" + escapeLikeLiteral(callID) + " %"
-		qRes, err = tx.ExecContext(ctx,
-			`UPDATE chat.chat_input_queue
-			    SET state = 'cancelled', updated_at = $2
-			  WHERE conversation_id = $1
-			    AND client_input_id LIKE $3
-			    AND message LIKE $4 ESCAPE '\'
-			    AND (state = 'queued' OR (state = 'running' AND turn_id LIKE $5))`,
-			convID, nowSec, UIAutoSubmitClientInputPrefix+"%", msgPrefix, ClaimTurnPrefix+"%",
-		)
-	} else {
-		qRes, err = tx.ExecContext(ctx,
-			`UPDATE chat.chat_input_queue
-			    SET state = 'cancelled', updated_at = $2
-			  WHERE conversation_id = $1
-			    AND client_input_id LIKE $3
-			    AND (state = 'queued' OR (state = 'running' AND turn_id LIKE $4))`,
-			convID, nowSec, UIAutoSubmitClientInputPrefix+"%", ClaimTurnPrefix+"%",
-		)
-	}
-	if err != nil {
-		return nil, 0, err
-	}
-	qCount, _ := qRes.RowsAffected()
-
 	if err := tx.Commit(); err != nil {
 		return nil, 0, err
 	}
 	for i := range cancelledRows {
 		cancelledRows[i] = cancelledRows[i].WithRemainingMs(nowMs)
 	}
-	return cancelledRows, int(qCount), nil
+	return cancelledRows, qCount, nil
 }
 
 // SweepAndEnqueueDueUIAutoSubmits claims due pending rows (deadline_ms <=

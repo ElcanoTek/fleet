@@ -264,6 +264,10 @@ func testAutonomousFloorBashGitPush(t *testing.T) {
 		`{"command":"GIT_SSH_COMMAND=ssh env -u HOME git -C repo push"}`,
 		`{"command":"git status && git -C sub push --force"}`,
 		`{"command":"bash -lc 'git -C repo push origin feat'"}`,
+		`{"command":"git -c alias.p=push p origin main"}`,
+		`{"command":"git -calias.p='push --force' p origin main"}`,
+		`{"command":"git -c alias.ship='!git push origin HEAD' ship"}`,
+		`{"command":"git --config-env=alias.p=MY_PUSH_ALIAS p origin main"}`,
 	} {
 		if !IsAutonomousHardBlocked("bash", cmd) {
 			t.Errorf("bash %s must be hard-blocked as git push", cmd)

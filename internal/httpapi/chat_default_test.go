@@ -929,20 +929,8 @@ func (s *fakeChatStore) CancelActiveUIAutoSubmits(_ context.Context, convID, cal
 	defer s.mu.Unlock()
 	nowMs := time.Now().UnixMilli()
 	nowSec := nowMs / 1000
-	var out []store.UIAutoSubmit
-	for i := range s.uiAutoSubmits {
-		r := &s.uiAutoSubmits[i]
-		if r.ConversationID != convID || (r.Status != store.UIAutoSubmitStatusPending && r.Status != store.UIAutoSubmitStatusPaused) {
-			continue
-		}
-		if callID != "" && r.CallID != callID {
-			continue
-		}
-		r.Status = store.UIAutoSubmitStatusCancelled
-		r.UpdatedAtMs = nowMs
-		out = append(out, r.WithRemainingMs(nowMs))
-	}
 	cancelledQueued := 0
+	cancelledAutoIDs := make(map[string]bool)
 	for i := range s.queue {
 		q := &s.queue[i]
 		if q.ConversationID != convID || !strings.HasPrefix(q.ClientInputID, store.UIAutoSubmitClientInputPrefix) {
@@ -955,7 +943,27 @@ func (s *fakeChatStore) CancelActiveUIAutoSubmits(_ context.Context, convID, cal
 			q.State = store.InputStateCancelled
 			q.UpdatedAt = nowSec
 			cancelledQueued++
+			if id := strings.TrimPrefix(q.ClientInputID, store.UIAutoSubmitClientInputPrefix); id != "" && id != q.ClientInputID {
+				cancelledAutoIDs[id] = true
+			}
 		}
+	}
+	var out []store.UIAutoSubmit
+	for i := range s.uiAutoSubmits {
+		r := &s.uiAutoSubmits[i]
+		if r.ConversationID != convID {
+			continue
+		}
+		if callID != "" && r.CallID != callID {
+			continue
+		}
+		canCancelFired := r.Status == store.UIAutoSubmitStatusFired && cancelledAutoIDs[r.ID]
+		if r.Status != store.UIAutoSubmitStatusPending && r.Status != store.UIAutoSubmitStatusPaused && !canCancelFired {
+			continue
+		}
+		r.Status = store.UIAutoSubmitStatusCancelled
+		r.UpdatedAtMs = nowMs
+		out = append(out, r.WithRemainingMs(nowMs))
 	}
 	return out, cancelledQueued, nil
 }

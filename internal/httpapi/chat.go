@@ -1302,7 +1302,7 @@ func (s *Server) runTurnAsync(
 	journal := newTurnJournalWriter(s.store, buf.turnID)
 	commits := &turnCommits{store: s.turnStore(buf), convID: conv.ID, turnID: buf.turnID, journal: journal}
 	turnCtx, turnPersona, personaLayer, turnStager, availableOptional, senderEmail, injectedContext := s.prepareTurnExecutionContext(
-		turnCtx, conv, user, inputKind, userInput, injectedContext, buf,
+		turnCtx, conv, user, inputKind, userInput, injectedContext, buf, commits.hasCommittedUser,
 	)
 	res, err := s.agent.RunTurn(turnCtx, TurnInput{
 		UserMessage:                 userInput,
@@ -1513,6 +1513,7 @@ func (s *Server) prepareTurnExecutionContext(
 	conv *store.Conversation,
 	user, inputKind, userInput, injectedContext string,
 	buf *turnBuffer,
+	userCommitted func() bool,
 ) (
 	context.Context,
 	string,
@@ -1544,7 +1545,7 @@ func (s *Server) prepareTurnExecutionContext(
 	if inputKind != agent.InputKindChatPatrol {
 		availableOptional = s.availableOptionalConnectorsForUser(turnCtx, user, conv.MCPAccounts)
 		turnCtx = tools.WithEnableMCPConnectorsHandler(turnCtx, s.newEnableMCPConnectorsHandler(conv, user, buf, turnStager, availableOptional))
-		turnCtx = tools.WithShowUIDisplayedHandler(turnCtx, s.newShowUIDisplayedHandler(conv, user, inputKind, userInput, buf, turnStager))
+		turnCtx = tools.WithShowUIDisplayedHandler(turnCtx, s.newShowUIDisplayedHandler(conv, user, inputKind, userInput, buf, turnStager, userCommitted))
 	}
 	senderEmail := ""
 	if conv.Multiplayer || (conv.UserEmail != "" && !strings.EqualFold(conv.UserEmail, user)) {

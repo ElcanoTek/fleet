@@ -307,79 +307,69 @@ func ConfigureAgentPolicy(p AgentPolicy) {
 	policyMu.Lock()
 	defer policyMu.Unlock()
 
-	parallel := make(map[string]bool, len(p.ParallelSafeTools))
-	for _, t := range p.ParallelSafeTools {
-		if t != "" {
-			parallel[t] = true
-		}
-	}
+	parallel := buildNonEmptyBoolSet(p.ParallelSafeTools)
 	activeParallelSafe = parallel
 
-	seen := make(map[string]bool, len(baseCriticalToolSuffixes)+len(p.CriticalToolSuffixes))
-	critical := make([]string, 0, len(baseCriticalToolSuffixes)+len(p.CriticalToolSuffixes))
-	for _, s := range baseCriticalToolSuffixes {
-		if s != "" && !seen[s] {
-			seen[s] = true
-			critical = append(critical, s)
-		}
-	}
-	for _, s := range p.CriticalToolSuffixes {
-		if s != "" && !seen[s] {
-			seen[s] = true
-			critical = append(critical, s)
-		}
-	}
+	critical, seen := mergeCriticalSuffixes(p.CriticalToolSuffixes)
 	activeCriticalSuffixes = critical
-	classes, aliasProblems := buildCriticalAliasClasses(p.CriticalToolAliases, seen)
-	warnPolicyProblems(aliasProblems)
-	activeCriticalAliasClass = classes
-	emailLast, settleable, emailLastProblems := buildEmailLastSets(p, seen)
-	warnPolicyProblems(emailLastProblems)
 
-	subs := make(map[string][]string, len(p.CriticalToolSubstitutes))
-	for k, v := range p.CriticalToolSubstitutes {
-		subs[k] = append([]string(nil), v...)
-	}
+	classes, aliasProblems := buildCriticalAliasClasses(p.CriticalToolAliases, seen)
+	activeCriticalAliasClass = classes
+
+	emailLast, settleable, emailLastProblems := buildEmailLastSets(p, seen)
+
+	subs := cloneStringSliceMap(p.CriticalToolSubstitutes)
 	activeCriticalSubstitutes = subs
 
 	closeEmailLastOverEquivalents(emailLast, classes, subs, seen)
 	activeEmailLastSuffixes, activeSettleableCreateSuffixes = emailLast, settleable
 
-	timeouts := make(map[string]int, len(p.CriticalToolTimeouts))
-	for k, v := range p.CriticalToolTimeouts {
-		if k != "" && v > 0 {
-			timeouts[k] = v
+	activeCriticalTimeouts = buildPositiveIntMap(p.CriticalToolTimeouts)
+	modes, modeWarns := buildCriticalModesMap(p.CriticalToolModes)
+	for _, mw := range modeWarns {
+		if mw.refusedNotify {
+			slog.Warn("agent_policy: refusing approval mode: a sent message cannot be undone, so its approval card is the review step", "mode", ApprovalModeNotify, "tool", mw.tool, "pinned_to", ApprovalModeApprove)
+		} else {
+			slog.Warn("agent_policy: ignoring unknown approval mode", "mode", mw.mode, "tool", mw.tool, "want", ApprovalModeApprove+" or "+ApprovalModeNotify)
 		}
 	}
-	activeCriticalTimeouts = timeouts
-	activeCriticalModes = buildCriticalModesMap(p.CriticalToolModes)
+	activeCriticalModes = modes
 	activeCriticalUndoHints = buildTrimmedStringMap(p.CriticalToolUndoHints)
 	activeBatchPerDeal = buildSecondsDurationMap(p.BatchSecondsPerDeal)
 	activeApprovedCallTimeout = buildSecondsDurationMap(p.ApprovedCallTimeoutSeconds)
 
 	noSession, noSessionProblems := buildNoSessionApprovalSet(p.CriticalToolNoSessionApproval, seen)
-	warnPolicyProblems(noSessionProblems)
 	activeNoSessionApproval = noSession
 	activeAutonomousApproval = installAutonomousSet(p.CriticalToolAutonomous, seen)
 	autonomousBlocked, autonomousBlockedProblems := buildAutonomousBlockedSet(p.CriticalToolAutonomousBlocked, seen)
-	warnPolicyProblems(autonomousBlockedProblems)
 	activeAutonomousBlocked = autonomousBlocked
 
 	describers, describerProblems := buildCardDescribers(p.CriticalToolCardDescribers, critical, parallel)
-	warnPolicyProblems(describerProblems)
 	activeCardDescribers = describers
 
 	resume, resumeMax, resumeProblems := buildResumeSet(p, seen)
-	warnPolicyProblems(resumeProblems)
 	activeResume, activeResumeMaxPerHour = resume, resumeMax
 
 	group, groupProblems := buildStagedCardSuffixSet("critical_tool_group_approval", p.CriticalToolGroupApproval, p.CriticalToolModes, seen)
-	warnPolicyProblems(groupProblems)
 	activeGroupApproval = group
 
 	progress, progressProblems := buildStagedCardSuffixSet("critical_tool_progress", p.CriticalToolProgress, p.CriticalToolModes, seen)
-	warnPolicyProblems(progressProblems)
 	activeProgress = progress
+
+	for _, group := range [][]string{
+		aliasProblems,
+		emailLastProblems,
+		noSessionProblems,
+		autonomousBlockedProblems,
+		describerProblems,
+		resumeProblems,
+		groupProblems,
+		progressProblems,
+	} {
+		for _, problem := range group {
+			slog.Warn("agent_policy: config problem", "problem", problem)
+		}
+	}
 
 	activeResultCards = installResultCardSet(p.CriticalToolResultCards, seen)
 
@@ -389,14 +379,61 @@ func ConfigureAgentPolicy(p AgentPolicy) {
 	activeUnattendedDisabled = installUnattendedDisabledSet(p.UnattendedDisabledTools)
 }
 
-func warnPolicyProblems(problems []string) {
-	for _, problem := range problems {
-		slog.Warn("agent_policy: config problem", "problem", problem)
+func buildNonEmptyBoolSet(items []string) map[string]bool {
+	out := make(map[string]bool, len(items))
+	for _, s := range items {
+		if s != "" {
+			out[s] = true
+		}
 	}
+	return out
 }
 
-func buildCriticalModesMap(raw map[string]string) map[string]string {
+func mergeCriticalSuffixes(extra []string) ([]string, map[string]bool) {
+	seen := make(map[string]bool, len(baseCriticalToolSuffixes)+len(extra))
+	critical := make([]string, 0, len(baseCriticalToolSuffixes)+len(extra))
+	for _, s := range baseCriticalToolSuffixes {
+		if s != "" && !seen[s] {
+			seen[s] = true
+			critical = append(critical, s)
+		}
+	}
+	for _, s := range extra {
+		if s != "" && !seen[s] {
+			seen[s] = true
+			critical = append(critical, s)
+		}
+	}
+	return critical, seen
+}
+
+func cloneStringSliceMap(in map[string][]string) map[string][]string {
+	out := make(map[string][]string, len(in))
+	for k, v := range in {
+		out[k] = append([]string(nil), v...)
+	}
+	return out
+}
+
+func buildPositiveIntMap(in map[string]int) map[string]int {
+	out := make(map[string]int, len(in))
+	for k, v := range in {
+		if k != "" && v > 0 {
+			out[k] = v
+		}
+	}
+	return out
+}
+
+type criticalModeWarn struct {
+	tool          string
+	mode          string
+	refusedNotify bool
+}
+
+func buildCriticalModesMap(raw map[string]string) (map[string]string, []criticalModeWarn) {
 	modes := make(map[string]string, len(raw))
+	var warns []criticalModeWarn
 	for k, v := range raw {
 		k = strings.TrimSpace(k)
 		v = strings.ToLower(strings.TrimSpace(v))
@@ -404,16 +441,16 @@ func buildCriticalModesMap(raw map[string]string) map[string]string {
 			continue
 		}
 		if v != ApprovalModeNotify && v != ApprovalModeApprove {
-			slog.Warn("agent_policy: ignoring unknown approval mode", "mode", v, "tool", k, "want", ApprovalModeApprove+" or "+ApprovalModeNotify)
+			warns = append(warns, criticalModeWarn{tool: k, mode: v})
 			continue
 		}
 		if v == ApprovalModeNotify && nonReversibleSuffixes[k] {
-			slog.Warn("agent_policy: refusing approval mode: a sent message cannot be undone, so its approval card is the review step", "mode", ApprovalModeNotify, "tool", k, "pinned_to", ApprovalModeApprove)
+			warns = append(warns, criticalModeWarn{tool: k, mode: v, refusedNotify: true})
 			continue
 		}
 		modes[k] = v
 	}
-	return modes
+	return modes, warns
 }
 
 func buildTrimmedStringMap(raw map[string]string) map[string]string {

@@ -406,14 +406,14 @@ func TestUIAutoSubmit_ArmPauseCancelAndSweeper(t *testing.T) {
 	}`)
 
 	// 1. InputKindChatPatrol NEVER arms a ui_autosubmits row.
-	patrolHook := srv.newShowUIDisplayedHandler(updatedConv, "alice@example.com", agent.InputKindChatPatrol, "", buf, stager)
+	patrolHook := srv.newShowUIDisplayedHandler(updatedConv, "alice@example.com", agent.InputKindChatPatrol, "", buf, stager, nil)
 	patrolHook(ctx, "call_patrol_ui", eligibleSpec)
 	if active, _ := st.ListActiveUIAutoSubmits(ctx, conv.ID); len(active) != 0 {
 		t.Fatalf("expected 0 active autosubmits on patrol turn, got %v", active)
 	}
 
 	// 2. Owner interactive Autonomous turn arms a pending 10s row.
-	ownerHook := srv.newShowUIDisplayedHandler(updatedConv, "alice@example.com", "", "Plan deal for Acme", buf, stager)
+	ownerHook := srv.newShowUIDisplayedHandler(updatedConv, "alice@example.com", "", "Plan deal for Acme", buf, stager, nil)
 	ownerHook(ctx, "call_ui_1", eligibleSpec)
 	active, _ := st.ListActiveUIAutoSubmits(ctx, conv.ID)
 	if len(active) != 1 || active[0].CallID != "call_ui_1" || active[0].Status != store.UIAutoSubmitStatusPending {
@@ -582,25 +582,62 @@ func verifyUIAutoSubmitChainCap(
 		}})
 	}
 	appendUserMsg("Build deal plan")
-	// Auto=1 step 1 (currentUserInput is auto=1 #1 -> depth=1 < 2 -> arms!).
-	hookStep1 := srv.newShowUIDisplayedHandler(updatedConv, "alice@example.com", "", "[UI submission] card=c1 action=go auto=1\n```json\n{}\n```", buf, stager)
+	// Simulate real RunTurn order: CommitUser ALREADY persisted auto=1 #1 before show_ui runs!
+	auto1Msg1 := "[UI submission] card=c1 action=go auto=1\n```json\n{}\n```"
+	appendUserMsg(auto1Msg1)
+	committedTrue := func() bool { return true }
+	hookStep1 := srv.newShowUIDisplayedHandler(updatedConv, "alice@example.com", "", auto1Msg1, buf, stager, committedTrue)
 	hookStep1(ctx, "call_chain_2", eligibleSpec)
 	if activeChain1, _ := st.ListActiveUIAutoSubmits(ctx, convID); len(activeChain1) != 1 {
-		t.Fatalf("expected step 1 auto=1 turn to arm step 2 card, got %v", activeChain1)
+		t.Fatalf("expected step 1 auto=1 turn (with CommitUser persisted) to arm step 2 card, got %v", activeChain1)
 	}
-	srv.cancelConversationAutoSubmits(ctx, convID)
-	appendUserMsg("[UI submission] card=c1 action=go auto=1\n```json\n{}\n```")
 
-	// Auto=1 step 2 (history has 1 auto=1 + currentUserInput is auto=1 #2 -> depth=2 >= maxAutoSubmitChain -> REFUSED!).
-	hookStep2 := srv.newShowUIDisplayedHandler(updatedConv, "alice@example.com", "", "[UI submission] card=c2 action=go auto=1\n```json\n{}\n```", buf, stager)
+	// Verify replaces also cancels an already-swept/fired queued autosubmit:* row!
+	st.mu.Lock()
+	for i := range st.uiAutoSubmits {
+		if st.uiAutoSubmits[i].CallID == "call_chain_2" {
+			st.uiAutoSubmits[i].DeadlineMs = time.Now().UnixMilli() - 10
+		}
+	}
+	st.mu.Unlock()
+	srv.SweepDueUIAutoSubmits(ctx)
+	hasQueuedChain2 := func() bool {
+		qItems, _ := st.ListQueuedInputs(ctx, "alice@example.com", convID)
+		for _, qi := range qItems {
+			if strings.Contains(qi.Message, "card=call_chain_2 ") {
+				return true
+			}
+		}
+		return false
+	}
+	if !hasQueuedChain2() {
+		t.Fatalf("expected queued autosubmit input for call_chain_2 before replaces")
+	}
+	replaceQueuedSpec := []byte(`{
+		"title": "Replaced Card",
+		"replaces": "call_chain_2",
+		"auto_submit": false,
+		"components": [{"type": "text_input", "id": "deal_name", "label": "Name", "required": true, "value": "Updated"}],
+		"actions": [{"id": "clone", "label": "Clone deal"}]
+	}`)
+	hookStep1(ctx, "call_chain_2_replaced", replaceQueuedSpec)
+	if hasQueuedChain2() {
+		t.Fatalf("expected replaces card to cancel queued autosubmit input for call_chain_2")
+	}
+
+	// Auto=1 step 2 (CommitUser persists auto=1 #2 -> depth=2 >= maxAutoSubmitChain -> REFUSED!).
+	auto1Msg2 := "[UI submission] card=c2 action=go auto=1\n```json\n{}\n```"
+	appendUserMsg(auto1Msg2)
+	hookStep2 := srv.newShowUIDisplayedHandler(updatedConv, "alice@example.com", "", auto1Msg2, buf, stager, committedTrue)
 	hookStep2(ctx, "call_chain_3_blocked", eligibleSpec)
 	if activeChain2, _ := st.ListActiveUIAutoSubmits(ctx, convID); len(activeChain2) != 0 {
 		t.Fatalf("expected 3rd consecutive auto=1 card to be blocked by maxAutoSubmitChain=2, got %v", activeChain2)
 	}
-	appendUserMsg("[UI submission] card=c2 action=go auto=1\n```json\n{}\n```")
 
 	// Human message resets chain depth -> arms again!
-	hookAfterHuman := srv.newShowUIDisplayedHandler(updatedConv, "alice@example.com", "", "Looks good, clone for Q1 too", buf, stager)
+	humanFollowup := "Looks good, clone for Q1 too"
+	appendUserMsg(humanFollowup)
+	hookAfterHuman := srv.newShowUIDisplayedHandler(updatedConv, "alice@example.com", "", humanFollowup, buf, stager, committedTrue)
 	hookAfterHuman(ctx, "call_chain_reset", eligibleSpec)
 	if activeReset, _ := st.ListActiveUIAutoSubmits(ctx, convID); len(activeReset) != 1 || activeReset[0].CallID != "call_chain_reset" {
 		t.Fatalf("expected human message to reset chain cap, got %v", activeReset)
