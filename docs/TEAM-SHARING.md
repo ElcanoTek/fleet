@@ -470,7 +470,7 @@ deleted, unshared; carries the chat's project only when the caller can see that
 project anyway). Signed-out visitors are routed through sign-in by the
 gateway's request gate (`internal/webui/gateway.go`), which parks the link in
 a short-lived cookie and sends them on to it after sign-in — the whole link,
-other parameters included (`internal/webui/returnto.go`).
+other parameters included ([DEEP-LINK-SIGN-IN.md](DEEP-LINK-SIGN-IN.md)).
 
 **Per-person project state.** `project_user_state` stores, per user per
 project, "Keep personal" (the getting-started card dismissed for good), whether

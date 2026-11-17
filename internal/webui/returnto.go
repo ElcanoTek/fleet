@@ -12,8 +12,8 @@ import (
 	"github.com/ElcanoTek/fleet/internal/logging"
 )
 
-// Deep links survive sign-in. A signed-out visit to a page —
-// `/chat?persona=<ref>&draft=<text>` (docs/USER-PERSONAS.md), `/chat?c=<id>`,
+// Deep links survive sign-in (docs/DEEP-LINK-SIGN-IN.md). A signed-out visit
+// to a page — `/chat?persona=<ref>&draft=<text>` (docs/USER-PERSONAS.md), `/chat?c=<id>`,
 // a task notification's `/orchestrator/tasks/<id>` — parks that page's path
 // and query in a short-lived cookie on its way to /login, and the first
 // signed-in landing sends the visitor on to it. Every sign-in leg ends on `/`
