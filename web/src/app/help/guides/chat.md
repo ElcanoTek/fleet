@@ -412,6 +412,7 @@ menu (or hover the line under Chat, Patrols and Background tasks and press
 **Customize**). A panel slides in from the right and leaves the rail in view,
 so every change shows in it as you make it. Changes are saved to your account
 a moment later, so your sidebar is the same in every browser you sign in to.
+A read-only **Viewer** account can open the panel but not change anything.
 
 - **Start from** offers five arrangements for the ways people use fleet:
   **Classic** (the rail as it comes), **Just chat**, **Dashboards first**,
@@ -423,10 +424,10 @@ a moment later, so your sidebar is the same in every browser you sign in to.
   chat, a project, a recent background task, or a page (Guides, Settings, and
   Analytics for administrators). Drag a row, or use its arrows, to move it;
   type over its name to rename it; press its icon to pick another icon or any
-  emoji; press the eye to hide it; press **×** to unpin it. A chat can open
+  emoji; switch it off to hide it; press **×** to unpin it. A chat can open
   as a **Chat** or as a **Dashboard**, straight into
   [Dashboard view](#dashboard-view).
-- **Home** (the house on a row) is where fleet opens. When you open fleet
+- **Home** (the map pin on a row) is where fleet opens. When you open fleet
   without a link to something else, it takes you to your Home instead of your
   most recent chat: a dashboard, a patrol, a project, Background tasks or a
   page. Moving around inside fleet never sends you back there, and a link to

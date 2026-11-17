@@ -48,6 +48,11 @@ function SidebarAdmin() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  // The read failed: what is saved is unknown, so nothing may be saved over
+  // it (a transient failure must not let an admin overwrite a layout they
+  // never saw) until a reload succeeds. `saved` stays undefined meanwhile.
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [loadNonce, setLoadNonce] = useState(0);
 
   const apply = (data: WorkspaceSidebar) => {
     const layout = data.layout ? normalizeLayout(data.layout) : null;
@@ -60,18 +65,22 @@ function SidebarAdmin() {
     let live = true;
     getGatedJson<WorkspaceSidebar>("/api/admin/sidebar", { label: tr("Workspace sidebar") })
       .then((data) => {
-        if (live && data) apply(data);
+        if (live && data) {
+          apply(data);
+          setLoadFailed(false);
+          setError(null);
+        }
       })
       .catch((e: unknown) => {
         if (live) {
-          setSaved(null);
+          setLoadFailed(true);
           setError(e instanceof Error ? e.message : tr("Couldn't load the workspace sidebar."));
         }
       });
     return () => {
       live = false;
     };
-  }, []);
+  }, [loadNonce]);
 
   const write = async (method: "PUT" | "DELETE") => {
     setBusy(true);
@@ -102,7 +111,8 @@ function SidebarAdmin() {
     setDraft(cloneLayout(getSidebarState().layout));
   };
 
-  const dirty = saved === undefined ? false : !sameLayout(draft, saved ?? BUILTIN_LAYOUT);
+  const loaded = saved !== undefined && !loadFailed;
+  const dirty = loaded ? !sameLayout(draft, saved ?? BUILTIN_LAYOUT) : false;
 
   return (
     <SetSection
@@ -125,20 +135,27 @@ function SidebarAdmin() {
         >
           {tr("Discard changes")}
         </Button>
-        <Button size="sm" variant="ghost" disabled={busy} onClick={() => void copyMine()} data-testid="admin-sidebar-copy-mine">
+        {loadFailed ? (
+          <Button size="sm" variant="outline" onClick={() => setLoadNonce((n) => n + 1)} data-testid="admin-sidebar-retry">
+            {tr("Try again")}
+          </Button>
+        ) : null}
+        <Button size="sm" variant="ghost" disabled={busy || !loaded} onClick={() => void copyMine()} data-testid="admin-sidebar-copy-mine">
           {tr("Start from my sidebar")}
         </Button>
         <Button
           size="sm"
           variant="ghost"
-          disabled={busy || saved === null || saved === undefined}
+          disabled={busy || !loaded || saved === null}
           onClick={() => void write("DELETE")}
           data-testid="admin-sidebar-reset"
         >
           {tr("Reset to fleet's default")}
         </Button>
         <span className="ml-auto text-[0.75rem] text-[var(--color-text-muted)]" data-testid="admin-sidebar-provenance">
-          {saved === undefined
+          {loadFailed
+            ? tr("Couldn't load the workspace sidebar.")
+            : saved === undefined
             ? tr("Loading…")
             : saved === null || isBuiltinLayout(saved)
               ? tr("Using fleet's default")
@@ -148,7 +165,11 @@ function SidebarAdmin() {
         </span>
       </div>
       <div className="max-w-[34rem] rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4">
-        <SidebarEditor layout={draft} onChange={setDraft} mode="workspace" isAdmin />
+        {/* Disabled until the saved default has loaded: an admin edits what is
+            actually there, never a stand-in. */}
+        <fieldset disabled={!loaded} className="m-0 min-w-0 border-0 p-0" data-testid="admin-sidebar-editor">
+          <SidebarEditor layout={draft} onChange={loaded ? setDraft : () => {}} mode="workspace" isAdmin />
+        </fieldset>
       </div>
     </SetSection>
   );

@@ -5810,9 +5810,7 @@
   "Emoji icon": "Ícone emoji",
   "Find a chat, dashboard, project, task…": "Procure um chat, painel, projeto, tarefa…",
   "Go back to {0}": "Voltar para {0}",
-  "Hidden — click to show": "Oculto: clique para mostrar",
   "Hidden": "Oculto",
-  "Hide {0}": "Ocultar {0}",
   "Home — fleet opens here": "Início: o fleet abre aqui",
   "Home: {0}. Opening fleet takes you there.": "Início: {0}. Ao abrir o fleet, vai para lá.",
   "Icon for {0}": "Ícone de {0}",
@@ -5870,5 +5868,10 @@
   "{0} — chats that check in on a schedule": "{0}: chats que verificam segundo um horário",
   "{0} — not available to you": "{0}: indisponível para si",
   "{0} — talk it through": "{0}: converse",
-  "Add {0} to the sidebar": "Adicionar {0} à barra lateral"
+  "Add {0} to the sidebar": "Adicionar {0} à barra lateral",
+  "Your account is read-only, so your sidebar can't be changed.": "A sua conta é só de leitura, por isso a sua barra lateral não pode ser alterada.",
+  "Show {0} in the sidebar": "Mostrar {0} na barra lateral",
+  "Show {0} on the Chat page": "Mostrar {0} na página de Chat",
+  "Hidden — switch on to show": "Oculto: ative para mostrar",
+  "Shown — switch off to hide": "Visível: desative para ocultar"
 }

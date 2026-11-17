@@ -33,9 +33,10 @@ sidebar"), which `/help` renders.
   return to a `/chat` that would bounce again. The layout read is awaited for
   at most 900 ms; a slower read opens the most recent chat as before.
 - **The chat page's sections.** Projects, Chats and Team chats can be
-  reordered, renamed, hidden, and set to start folded. Team chats ordered
-  above Chats get their own block above the Chats heading. Hiding Chats keeps
-  the **+** (and the sealed-chat lock) so a new chat is always one click away.
+  reordered, renamed, hidden, and set to start folded. Team chats are a
+  section of their own in every order (never inside the Chats list), so
+  folding Chats does not hide them. Hiding Chats keeps the **+** (and the
+  sealed-chat lock) so a new chat is always one click away.
 - **Compact** hides the one-line subtitles.
 - **The Customize panel** (`SidebarCustomizer.tsx`, `SidebarEditor.tsx`) is a
   *non-modal* sheet: the rail stays visible and usable beside it, so every edit
@@ -46,16 +47,27 @@ sidebar"), which `/help` renders.
   drawn as a miniature of the person's own rail; a preset rearranges the
   destinations and sections and keeps every shortcut.
 - **Quick pins.** **Add to sidebar** / **Remove from sidebar** in a chat's menu
-  and a project's menu. A chat last read as a dashboard is added as one.
+  and a project's menu, and a pin on each Team chats row (so one of a team's
+  many shared or multiplayer chats can be pinned on its own). A chat last
+  read as a dashboard is added as one. A shortcut to the chat already open
+  applies the view it names (dashboard or chat) rather than toggling.
+- **Read-only accounts.** The API refuses a Viewer's writes, so the editor,
+  **Reset** and the quick pins are offered only once `GET /api/me` has
+  confirmed another role (the rule chat reordering uses). A Viewer can open the
+  panel and see their sidebar, with every control disabled.
 - **Dashboard view keeps the rail in reach.** Dashboard view hides the rail;
   its header now has a sidebar button (in place of the decorative mark) that
   slides the rail in over the board with a scrim, so a person whose Home is a
-  dashboard can move between boards without leaving the view.
+  dashboard can move between boards without leaving the view. The rail is a
+  modal drawer there: focus moves into it, Tab stays inside, Escape closes it
+  (and only it, not the view), and focus returns to the button.
 - **The workspace default** is edited in **Settings → Admin → Sidebar** with
   the same editor, on a draft, saved with **Save for everyone**. It is stored
   on the server, not in the client-config bundle, so it changes without a
   deploy. **Start from my sidebar** copies the admin's own layout as a
-  starting point.
+  starting point. Until the saved default has loaded the editor and every
+  write are disabled; a failed read offers **Try again** and never lets an
+  admin save over a default they have not seen.
 
 ## Storage and API
 
@@ -85,9 +97,12 @@ sidebar"), which `/help` renders.
   capped at 64 KiB.
 - **Nothing in a layout is an authority.** A shortcut is a link: opening it
   goes through the same API calls and access checks as opening the target any
-  other way. A chat pinned in the workspace default that a person cannot open
-  is not shown to them; one in their own layout is shown faded, labelled "not
-  available to you", so they can unpin it.
+  other way. A chat or project pinned in the workspace default is shown only
+  once it is known that this person can open it, on every page: Chat checks
+  the lists it holds, and the other pages read the same lists once
+  (`useFallbackTargets`). One in the person's own layout that they can no
+  longer open is shown faded, labelled "not available to you", so they can
+  unpin it.
 
 ## The client store (`store.ts`)
 
@@ -95,13 +110,17 @@ sidebar"), which `/help` renders.
   tasks, settings, guides, analytics) and the panel through
   `useSyncExternalStore`.
 - The last effective layout is cached in `localStorage`
-  (`fleet.sidebar.layout.v1`) so a page load paints the person's own rail at
-  once instead of flashing the default; the server answer replaces it. If the
+  (`fleet.sidebar.layout.v2`), tagged with the signed-in account's email from
+  the page bootstrap, so a page load paints the person's own rail at once
+  instead of flashing the default; the server answer replaces it. Another
+  account on the same browser never reads it (nor is sent to its Home). If the
   server cannot be reached (or predates this feature), the rail renders the
   built-in layout, not the cached one, and the panel says changes cannot be
   saved.
 - Edits apply at once and are saved 450 ms after the last one (one PUT per
-  burst). A read that started before an edit never overwrites it. A failed
+  burst). An edit still waiting when the page is hidden for good (a reload, a
+  closed tab, a shortcut that loads another page) is sent on `pagehide` with
+  `keepalive`. A read that started before an edit never overwrites it. A failed
   save keeps the edit on screen and offers **Try again**.
 - On the chat page, `ConversationSidebar` provides `SidebarTargetsContext`:
   live titles, which chat or project is open, whether a target is still
@@ -120,6 +139,8 @@ sidebar"), which `/help` renders.
   in the rail lasts for the page; "starts folded" is set in the panel. Saving
   every click would turn people who follow the workspace default into people
   with their own layout without their deciding to.
+- **No custom icons.** Home is Flag's map pin and hiding is a switch: the
+  sprite has no house or eye, and product icons come from Flag only.
 - **The top bar is not customizable.** It carries a page title and the page's
   own actions; nothing in it was asked to move.
 - **A 400 from `PUT /api/sidebar` is shown as a generic "Couldn't save"**

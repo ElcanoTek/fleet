@@ -13,9 +13,10 @@ import {
   pageHref,
   type SidebarItem,
 } from "./layout";
-import { HomeGlyph, ItemIcon } from "./glyphs";
+import { HomeIcon, ItemIcon } from "./glyphs";
+import { Icon } from "@/app/shared/ui/Icon";
 import { openSidebarCustomizer, useSidebar } from "./store";
-import { usePatrolIds, useSidebarTargets } from "./targets";
+import { useFallbackTargets, usePatrolIds, useSidebarTargets } from "./targets";
 import type { RailView } from "@/app/shared/ui/NavRail";
 
 // RailNav — the rail's destinations, in the person's own order
@@ -64,7 +65,10 @@ export function RailNav({
   onNavigate: () => void;
 }) {
   const { layout, source } = useSidebar();
-  const targets = useSidebarTargets();
+  const pageTargets = useSidebarTargets();
+  const needsLists = !pageTargets && layout.items.some((i) => !i.hidden && (i.kind === "chat" || i.kind === "project"));
+  const fallbackTargets = useFallbackTargets(needsLists);
+  const targets = pageTargets ?? fallbackTargets;
   const hasChatShortcuts = layout.items.some((i) => i.kind === "chat" && !i.hidden && !i.icon);
   const patrolIds = usePatrolIds(hasChatShortcuts);
   const compact = Boolean(layout.compact);
@@ -84,11 +88,14 @@ export function RailNav({
 
   const visible = layout.items.filter((item) => {
     if (item.hidden) return false;
-    if (item.kind === "builtin" || !targets) return true;
+    if (item.kind !== "chat" && item.kind !== "project") return true;
     // A shortcut to something this account cannot open: the person's own is
     // kept (dimmed, so they can see and remove it); one that came from the
-    // workspace default is simply not shown to them.
-    return !(targets.availability(item) === "no" && source !== "user");
+    // workspace default is not shown to them — and is not shown until it is
+    // known to be openable, on every page, so a pin an admin made to their
+    // own chat never leaks its name to everyone.
+    if (source === "user") return true;
+    return targets?.availability(item) === "yes";
   });
   const shortcutActive = visible.some((i) => i.kind !== "builtin" && isActive(i));
 
@@ -98,7 +105,7 @@ export function RailNav({
         className={["inline-flex shrink-0 text-[var(--color-accent)]", collapsed ? "sm:hidden" : ""].join(" ")}
         title={tr("Home — fleet opens here")}
       >
-        <HomeGlyph className="size-3" />
+        <HomeIcon className="size-3" />
         <span className="sr-only">{tr("(Home)")}</span>
       </span>
     ) : null;
@@ -261,11 +268,7 @@ export function CustomizeRailButton({ collapsed }: { collapsed: boolean }) {
           onClick={openSidebarCustomizer}
           className="absolute left-1/2 top-1/2 inline-flex -translate-x-1/2 -translate-y-1/2 items-center gap-1 rounded-full border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-0.5 text-[0.66rem] font-medium text-[var(--color-text-muted)] opacity-0 shadow-[var(--shadow-sm)] transition hover:border-[var(--color-accent)] hover:text-[var(--color-text-primary)] focus-visible:opacity-100 focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] group-hover/rail:opacity-100 any-pointer-coarse:hidden"
         >
-          <svg aria-hidden="true" viewBox="0 0 24 24" className="size-3" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round">
-            <path d="M4 7h10M18 7h2M4 17h4M12 17h8" />
-            <circle cx="16" cy="7" r="2" />
-            <circle cx="10" cy="17" r="2" />
-          </svg>
+          <Icon name="edit" className="size-3" />
           {tr("Customize")}
         </button>
       )}

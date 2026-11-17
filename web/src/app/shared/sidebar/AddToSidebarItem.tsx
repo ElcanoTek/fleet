@@ -4,6 +4,7 @@ import { Icon } from "@/app/shared/ui/Icon";
 import { readDashboardView } from "@/app/chat/ui/dashboard/prefs";
 import { addShortcut, findShortcut, removeItem, type ShortcutTarget } from "./layout";
 import { updateSidebarLayout, useSidebar } from "./store";
+import { useCanCustomize } from "./useCanCustomize";
 
 // AddToSidebarItem — "Add to sidebar" / "Remove from sidebar" in a chat's or
 // a project's menu: the quick way to pin one thing without opening the
@@ -11,8 +12,10 @@ import { updateSidebarLayout, useSidebar } from "./store";
 // dashboard shortcut (it opens the way they use it).
 export function AddToSidebarItem({ target, onDone }: { target: ShortcutTarget; onDone: () => void }) {
   const { layout } = useSidebar();
+  const canCustomize = useCanCustomize();
   const existing = findShortcut(layout, target.kind, target.ref);
   const inRail = Boolean(existing && !existing.hidden);
+  if (!canCustomize) return null;
   return (
     <MenuItem
       icon={<Icon name="panel-left" className="size-4" />}
@@ -37,9 +40,11 @@ export function AddToSidebarItem({ target, onDone }: { target: ShortcutTarget; o
 // in, and can then rename it in the Customize panel. Pressed again, it unpins.
 export function TeamChatPinButton({ target, title }: { target: ShortcutTarget; title: string }) {
   const { layout } = useSidebar();
+  const canCustomize = useCanCustomize();
   const existing = findShortcut(layout, target.kind, target.ref);
   const inRail = Boolean(existing && !existing.hidden);
   const label = inRail ? tr("Remove {0} from the sidebar", [title]) : tr("Add {0} to the sidebar", [title]);
+  if (!canCustomize) return null;
   return (
     <button
       type="button"

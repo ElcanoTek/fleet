@@ -41,7 +41,7 @@ import {
   type SidebarItem,
   type SidebarLayout,
 } from "./layout";
-import { EyeGlyph, GripGlyph, HomeGlyph, ItemIcon } from "./glyphs";
+import { HomeIcon, ItemIcon } from "./glyphs";
 import { loadPickerEntries, type PickerEntry } from "./pickerData";
 
 // SidebarEditor — the body of the Customize panel (SidebarCustomizer, for a
@@ -189,7 +189,7 @@ function MiniRail({ layout, liveTitle }: { layout: SidebarLayout; liveTitle: (i:
           <span className="min-w-0 flex-1 truncate text-[0.58rem] leading-none text-[var(--color-text-secondary)]">
             {itemName(i, liveTitle(i))}
           </span>
-          {layout.home === i.id ? <HomeGlyph className="size-2 shrink-0 text-[var(--color-accent)]" /> : null}
+          {layout.home === i.id ? <HomeIcon className="size-2 shrink-0 text-[var(--color-accent)]" /> : null}
         </span>
       ))}
       <span className="my-[2px] h-px bg-[var(--color-border)]" />
@@ -331,7 +331,7 @@ function ItemsSection({
         </li>
       </ol>
       <p className="flex items-center gap-1.5 text-[0.72rem] text-[var(--color-text-muted)]" data-testid="sidebar-home-summary">
-        <HomeGlyph className="size-3.5 shrink-0 text-[var(--color-accent)]" />
+        <HomeIcon className="size-3.5 shrink-0 text-[var(--color-accent)]" />
         {homeItem
           ? tr("Home: {0}. Opening fleet takes you there.", [itemName(homeItem, liveTitle(homeItem))])
           : tr("No Home set: fleet opens your most recent chat.")}
@@ -385,7 +385,7 @@ function ItemRow({
           title={tr("Drag to reorder")}
           className="flex h-7 w-4 shrink-0 cursor-grab items-center justify-center text-[var(--color-text-muted)] active:cursor-grabbing any-pointer-coarse:hidden"
         >
-          <GripGlyph className="size-3.5" />
+          <Icon name="selector" className="size-3.5" />
         </span>
         <IconPicker item={item} isPatrol={isPatrol} name={name} onPick={(icon) => onPatch({ icon })} />
         <NameInput
@@ -407,19 +407,16 @@ function ItemRow({
           data-testid="sidebar-item-home"
           onClick={onHome}
         >
-          <HomeGlyph className="size-3.5" />
+          <HomeIcon className="size-3.5" />
         </button>
-        <button
-          type="button"
-          className={ICON_BUTTON}
-          aria-pressed={Boolean(item.hidden)}
-          aria-label={tr("Hide {0}", [name])}
-          title={item.hidden ? tr("Hidden — click to show") : tr("Hide")}
+        <Switch
+          checked={!item.hidden}
+          onCheckedChange={(on) => onPatch({ hidden: !on })}
+          aria-label={tr("Show {0} in the sidebar", [name])}
+          title={item.hidden ? tr("Hidden — switch on to show") : tr("Shown — switch off to hide")}
           data-testid="sidebar-item-hide"
-          onClick={() => onPatch({ hidden: !item.hidden })}
-        >
-          <EyeGlyph off={Boolean(item.hidden)} className="size-3.5" />
-        </button>
+          className="shrink-0 scale-90"
+        />
         <span className="flex shrink-0 flex-col">
           <button
             type="button"
@@ -732,16 +729,13 @@ function SectionsSection({ layout, onChange }: { layout: SidebarLayout; onChange
               >
                 <Icon name={s.collapsed ? "chevron-right" : "chevron-down"} className="size-3.5" />
               </button>
-              <button
-                type="button"
-                className={ICON_BUTTON}
-                aria-pressed={Boolean(s.hidden)}
-                aria-label={tr("Hide {0}", [name])}
-                title={s.hidden ? tr("Hidden — click to show") : tr("Hide")}
-                onClick={() => onChange(updateSection(layout, s.id, { hidden: !s.hidden }))}
-              >
-                <EyeGlyph off={Boolean(s.hidden)} className="size-3.5" />
-              </button>
+              <Switch
+                checked={!s.hidden}
+                onCheckedChange={(on) => onChange(updateSection(layout, s.id, { hidden: !on }))}
+                aria-label={tr("Show {0} on the Chat page", [name])}
+                title={s.hidden ? tr("Hidden — switch on to show") : tr("Shown — switch off to hide")}
+                className="shrink-0 scale-90"
+              />
               <span className="flex shrink-0 flex-col">
                 <button
                   type="button"

@@ -1103,7 +1103,7 @@ export function ConversationSidebar({
   onSelectTeamSharedConversation,
   onMoveToProject,
   activeProjectId = null,
-  onShowDashboard,
+  onSetDashboardView,
 }: {
   sidebarOpen: boolean;
   setSidebarOpen: Dispatch<SetStateAction<boolean>>;
@@ -1231,9 +1231,10 @@ export function ConversationSidebar({
   // The project whose home is open in the main pane, for the sidebar's
   // project shortcuts (docs/SIDEBAR.md).
   activeProjectId?: string | null;
-  // Switches the open chat to dashboard view: a dashboard shortcut clicked
-  // while its chat is already open as a chat.
-  onShowDashboard?: () => void;
+  // Puts the open chat in dashboard view (true) or chat view (false): a
+  // shortcut clicked while its chat is already open applies the view it
+  // names, whichever view the chat is in.
+  onSetDashboardView?: (dashboard: boolean) => void;
 }) {
   const [editingId, setEditingId] = useState<string | null>(null);
   // The person's sidebar layout (docs/SIDEBAR.md): the order, names and
@@ -1873,8 +1874,8 @@ export function ConversationSidebar({
     open: (item) => {
       const ref = item.ref ?? "";
       if (item.kind === "chat") {
-        if (activeConversationId === ref && item.view === "dashboard") {
-          onShowDashboard?.();
+        if (activeConversationId === ref && onSetDashboardView) {
+          onSetDashboardView(item.view === "dashboard");
           return true;
         }
         const team = teamSharedConversations.find((c) => c.id === ref);
@@ -2023,8 +2024,10 @@ export function ConversationSidebar({
                 </div>
     ) : null;
 
-  // Team chats ordered above the person's own chats get a block of their
-  // own above the Chats heading, scrolling on its own like Projects.
+  // Team chats are a section of their own, placed where the person's layout
+  // orders it (above or below the Chats heading, and around Projects), and
+  // scrolling on its own like Projects — never inside the Chats list, so
+  // folding Chats does not hide them.
   const teamAboveProjects = sectionIndex("team") < sectionIndex("projects");
   const teamTop = teamBlock ? (
     <div
@@ -2375,7 +2378,6 @@ export function ConversationSidebar({
               </div>
               </>
               )}
-              {teamFirst ? null : teamBlock}
             </>
           )}
 
@@ -2463,7 +2465,9 @@ export function ConversationSidebar({
           ) : null}
         </div>
       </div>
+      {!teamFirst && (projectsFirst || teamAboveProjects) ? teamTop : null}
       {projectsFirst ? null : projectsBlock}
+      {!teamFirst && !projectsFirst && !teamAboveProjects ? teamTop : null}
       {/* Multi-select bulk bar (#279, the design's .bulk-bar): pinned to the
           rail's foot below the conversation list — count + 1.9rem icon actions with data-tip-top tooltips. Add-label
           reuses the kebab's panel (including its inline create input) in a

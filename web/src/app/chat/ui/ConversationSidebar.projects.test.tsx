@@ -1,9 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { ConversationSidebar } from "./ConversationSidebar";
 import { DEFAULT_BRANDING } from "@/app/lib/useClientConfig";
 import type { ConversationSummary, ServerConfig } from "./chat-experience";
 import type { Project } from "./ProjectsModal";
+
+// The sidebar's quick pin is offered only once /api/me confirms a role that
+// may save a layout (docs/SIDEBAR.md); these rows are a member's.
+vi.mock("@/app/shared/lib/account", () => ({
+  fetchMe: () => Promise.resolve({ email: "me@example.com", role: "member", team_id: "", admin: false }),
+}));
 
 // The rail's Projects section, from a teammate's chair.
 //
@@ -272,13 +278,15 @@ describe("ConversationSidebar — project rows (decision #23)", () => {
     expect(onOpenProjectHome).toHaveBeenLastCalledWith("p-mine");
   });
 
-  it("gives a member Open, New chat and Add to sidebar only — settings and sharing are the owner's", () => {
+  it("gives a member Open, New chat and Add to sidebar only — settings and sharing are the owner's", async () => {
     renderSidebar();
     fireEvent.click(
       screen.getByRole("button", { name: "Project options for Quant" }),
     );
-    expect(
-      screen.getAllByRole("menuitem").map((el) => el.textContent?.trim()),
-    ).toEqual(["Open project", "New chat", "Add to sidebar"]);
+    await waitFor(() =>
+      expect(
+        screen.getAllByRole("menuitem").map((el) => el.textContent?.trim()),
+      ).toEqual(["Open project", "New chat", "Add to sidebar"]),
+    );
   });
 });

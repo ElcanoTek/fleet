@@ -64,3 +64,79 @@ export function usePatrolIds(enabled: boolean): Set<string> {
 export function resetPatrolCacheForTests() {
   patrolRead = null;
 }
+
+// ── Pages other than Chat ─────────────────────────────────────────────────
+// Chat provides SidebarTargetsContext from the lists it already holds. On
+// every other page (Background tasks, Settings, Guides, Analytics) the rail
+// reads the same lists itself — once per page, and only when it has a chat or
+// project shortcut — so it can show live names and, above all, never show a
+// workspace-default shortcut this account cannot open. Opening still
+// navigates to Chat (open returns false).
+
+type Named = { id: string; title?: string; name?: string };
+type Lists = { chats: Map<string, string>; projects: Map<string, string> };
+let listsRead: Promise<Lists | null> | null = null;
+
+async function readList(url: string, key: "conversations" | "projects"): Promise<Named[] | null> {
+  try {
+    const res = await fetch(url, { cache: "no-store" });
+    if (!res.ok) return null;
+    const data = (await res.json()) as Record<string, Named[] | null | undefined>;
+    return data[key] ?? [];
+  } catch {
+    return null;
+  }
+}
+
+function readLists(): Promise<Lists | null> {
+  if (!listsRead) {
+    listsRead = Promise.all([
+      readList("/api/conversations", "conversations"),
+      readList("/api/conversations?archived=true", "conversations"),
+      readList("/api/conversations?scope=shared", "conversations"),
+      readList("/api/projects", "projects"),
+    ]).then(([own, archived, shared, projects]) => {
+      // Any list that failed leaves availability unknown rather than "no".
+      if (!own || !archived || !shared || !projects) return null;
+      return {
+        chats: new Map([...own, ...archived, ...shared].map((c) => [c.id, c.title ?? ""])),
+        projects: new Map(projects.map((p) => [p.id, p.name ?? ""])),
+      };
+    });
+  }
+  return listsRead;
+}
+
+/** useFallbackTargets: targets for a page that is not Chat (null until read, or when not needed). */
+export function useFallbackTargets(enabled: boolean): SidebarTargets | null {
+  const [lists, setLists] = useState<Lists | null>(null);
+  useEffect(() => {
+    if (!enabled) return;
+    let live = true;
+    void readLists().then((l) => {
+      if (live) setLists(l);
+    });
+    return () => {
+      live = false;
+    };
+  }, [enabled]);
+  if (!enabled || !lists) return null;
+  return {
+    activeConversationId: null,
+    activeProjectId: null,
+    titleFor: (item) =>
+      (item.kind === "chat" ? lists.chats.get(item.ref ?? "") : item.kind === "project" ? lists.projects.get(item.ref ?? "") : undefined) ||
+      undefined,
+    availability: (item) => {
+      if (item.kind === "chat") return lists.chats.has(item.ref ?? "") ? "yes" : "no";
+      if (item.kind === "project") return lists.projects.has(item.ref ?? "") ? "yes" : "no";
+      return "unknown";
+    },
+    open: () => false,
+  };
+}
+
+/** Test hook. */
+export function resetFallbackTargetsForTests() {
+  listsRead = null;
+}

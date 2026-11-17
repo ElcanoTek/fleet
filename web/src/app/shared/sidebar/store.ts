@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from "react";
 import { readPref, writePref } from "@/app/shared/lib/storage";
+import { getBootstrap } from "@/app/lib/bootstrap";
 import { BUILTIN_LAYOUT, normalizeLayout, sameLayout, type SidebarLayout } from "./layout";
 
 // The sidebar layout store (docs/SIDEBAR.md): one module-level copy shared by
@@ -11,13 +12,25 @@ import { BUILTIN_LAYOUT, normalizeLayout, sameLayout, type SidebarLayout } from 
 //     BUILTIN_LAYOUT.
 //   - The last effective layout is also kept in browser storage, so a page
 //     load paints the person's rail at once instead of flashing the default
-//     until the read lands. The server stays the source of truth.
+//     until the read lands. The copy is tagged with the account that saved
+//     it and used only by that account: on a shared browser the next person
+//     never sees (or is sent Home by) the previous one's sidebar. The server
+//     stays the source of truth.
 //   - Edits apply at once and are saved with a short debounce (PUT); a run of
 //     edits is one save. A failed save keeps the edit on screen and says so.
 //   - When the server cannot be reached (or is older than this feature) the
 //     rail renders the default and the panel says changes cannot be saved.
 
-const CACHE_KEY = "fleet.sidebar.layout.v1";
+const CACHE_KEY = "fleet.sidebar.layout.v2";
+
+/** The signed-in account, as the page was served; "" when unknown. */
+function sessionEmail(): string {
+  try {
+    return (getBootstrap().session?.email ?? "").trim().toLowerCase();
+  } catch {
+    return "";
+  }
+}
 const SAVE_DELAY_MS = 450;
 
 export type SidebarSource = "user" | "workspace" | "builtin";
@@ -37,13 +50,22 @@ export type SidebarState = {
 };
 
 function readCache(): SidebarLayout | null {
+  const email = sessionEmail();
   const raw = readPref(CACHE_KEY);
-  if (!raw) return null;
+  if (!raw || !email) return null;
   try {
-    return normalizeLayout(JSON.parse(raw));
+    const cached = JSON.parse(raw) as { email?: unknown; layout?: unknown };
+    if (cached.email !== email) return null;
+    return normalizeLayout(cached.layout);
   } catch {
     return null;
   }
+}
+
+function writeCache(layout: SidebarLayout) {
+  const email = sessionEmail();
+  if (!email) return;
+  writePref(CACHE_KEY, JSON.stringify({ email, layout }));
 }
 
 function initialState(): SidebarState {
@@ -69,7 +91,7 @@ let editGen = 0;
 
 function emit(next: Partial<SidebarState>) {
   state = { ...state, ...next };
-  if (next.layout) writePref(CACHE_KEY, JSON.stringify(state.layout));
+  if (next.layout) writeCache(state.layout);
   for (const l of listeners) l();
 }
 
@@ -117,16 +139,22 @@ export function sidebarSettled(timeoutMs: number): Promise<SidebarState> {
   ]);
 }
 
+function sendSave(keepalive: boolean): Promise<Response> {
+  const own = state.own;
+  return own
+    ? fetch("/api/sidebar", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(own),
+        keepalive,
+      })
+    : fetch("/api/sidebar", { method: "DELETE", keepalive });
+}
+
 async function flushSave(gen: number) {
   const own = state.own;
   try {
-    const res = own
-      ? await fetch("/api/sidebar", {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(own),
-        })
-      : await fetch("/api/sidebar", { method: "DELETE" });
+    const res = await sendSave(false);
     if (!res.ok) throw new Error(String(res.status));
     if (gen !== editGen) return; // a newer edit has its own save queued
     const data = (await res.json().catch(() => ({}))) as { layout?: unknown };
@@ -174,6 +202,22 @@ export function resetSidebarLayout() {
 export function retrySidebarSave() {
   emit({ saveError: false });
   scheduleSave();
+}
+
+// An edit still waiting out the debounce when the page goes away (a reload,
+// a closed tab, a shortcut that loads another page) is sent at once, with
+// keepalive so the browser finishes the request after the page is gone.
+function flushOnHide() {
+  if (!saveTimer) return;
+  clearTimeout(saveTimer);
+  saveTimer = null;
+  void sendSave(true).catch(() => {});
+}
+if (typeof window !== "undefined") window.addEventListener("pagehide", flushOnHide);
+
+/** Test hook: what the page does when it is hidden for good. */
+export function flushSidebarSaveForTests() {
+  flushOnHide();
 }
 
 function subscribe(listener: () => void) {

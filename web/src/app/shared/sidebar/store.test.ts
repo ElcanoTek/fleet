@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { addShortcut, BUILTIN_LAYOUT, normalizeLayout } from "./layout";
+import { setBootstrapForTest } from "@/app/lib/bootstrap";
 import {
+  flushSidebarSaveForTests,
   getSidebarState,
   loadSidebar,
   resetSidebarLayout,
@@ -29,10 +31,12 @@ function mockFetch(answers: { get?: unknown; status?: number }) {
 }
 
 beforeEach(() => {
+  setBootstrapForTest({ session: { email: "ana@example.com" } });
   resetSidebarStoreForTests();
   window.localStorage.clear();
 });
 afterEach(() => {
+  setBootstrapForTest(null);
   vi.unstubAllGlobals();
   vi.useRealTimers();
 });
@@ -45,8 +49,33 @@ describe("sidebar store", () => {
     expect(getSidebarState().layout.items[0].id).toBe("tasks");
   });
 
+  it("the cached layout belongs to the account that saved it", () => {
+    window.localStorage.setItem("fleet.sidebar.layout.v2", JSON.stringify({ email: "ana@example.com", layout: OWN }));
+    resetSidebarStoreForTests();
+    expect(getSidebarState().layout.items).toHaveLength(4);
+    // The next person on this browser never paints (or is sent Home by) it.
+    setBootstrapForTest({ session: { email: "bo@example.com" } });
+    resetSidebarStoreForTests();
+    expect(getSidebarState().layout.items).toHaveLength(3);
+  });
+
+  it("an edit still waiting when the page is hidden is sent with keepalive", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) =>
+      Response.json({ layout: null, workspace_default: null }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    await loadSidebar();
+    setSidebarLayout(OWN);
+    flushSidebarSaveForTests();
+    const put = fetchMock.mock.calls.find((c) => c[1]?.method === "PUT");
+    expect(put?.[1]?.keepalive).toBe(true);
+    await vi.advanceTimersByTimeAsync(600);
+    expect(fetchMock.mock.calls.filter((c) => c[1]?.method === "PUT")).toHaveLength(1);
+  });
+
   it("an unreachable server renders the built-in layout and says it cannot save", async () => {
-    window.localStorage.setItem("fleet.sidebar.layout.v1", JSON.stringify(OWN));
+    window.localStorage.setItem("fleet.sidebar.layout.v2", JSON.stringify({ email: "ana@example.com", layout: OWN }));
     resetSidebarStoreForTests();
     expect(getSidebarState().layout.items).toHaveLength(4); // painted from the cache first
     mockFetch({ status: 502 });

@@ -34,7 +34,7 @@ type Layout = Record<string, unknown>;
 
 async function setup(
   page: Page,
-  opts: { own?: Layout | null; workspace?: Layout | null; admin?: boolean } = {},
+  opts: { own?: Layout | null; workspace?: Layout | null; admin?: boolean; role?: string } = {},
 ) {
   const puts: Layout[] = [];
   await mockChatBoot(page, { conversations: CONVERSATIONS });
@@ -42,7 +42,7 @@ async function setup(
     await page.route("**/api/admin/settings", (r: Route) => r.fulfill({ json: { settings: [] } }));
   }
   await page.route("**/api/me", (r: Route) =>
-    r.fulfill({ json: { email: "e2e@example.com", role: "member" } }),
+    r.fulfill({ json: { email: "e2e@example.com", role: opts.role ?? "member" } }),
   );
   await page.route("**/api/projects", (r: Route) =>
     r.fulfill({
@@ -363,4 +363,85 @@ test("pinning is per item: one of many multiplayer chats, two of many dashboards
   await panel.getByTestId("sidebar-done").click();
   await shot(page, "09-granular-result");
   await expect.poll(() => (puts[puts.length - 1]?.items as unknown[] | undefined)?.length).toBe(6);
+});
+
+test("a workspace pin this account cannot open is hidden on every page", async ({ page }) => {
+  await setup(page, {
+    workspace: {
+      version: 1,
+      items: [
+        { id: "s-war", kind: "chat", ref: "c9", title: "All-hands war room" },
+        { id: "s-secret", kind: "chat", ref: "admins-private", title: "Admin's private chat" },
+        { id: "s-gone", kind: "project", ref: "p-gone", title: "Someone else's project" },
+      ],
+      sections: [],
+    },
+  });
+  for (const path of ["/chat", "/settings"]) {
+    await page.goto(path);
+    const rail = page.getByTestId("rail-nav");
+    await expect(rail.getByText("All-hands war room")).toBeVisible();
+    await expect(rail.getByText("Admin's private chat")).toHaveCount(0);
+    await expect(rail.getByText("Someone else's project")).toHaveCount(0);
+  }
+});
+
+test("Team chats stay visible when Chats starts folded", async ({ page }) => {
+  await setup(page, {
+    own: { version: 1, items: [], sections: [{ id: "projects" }, { id: "chats", collapsed: true }, { id: "team" }] },
+  });
+  await page.goto("/chat");
+  await expect(page.getByRole("button", { name: "Chats", exact: true })).toHaveAttribute("aria-expanded", "false");
+  await expect(page.getByTestId("team-chats-section")).toBeVisible();
+  await expect(page.getByTestId("team-shared-conv-row")).toContainText("All-hands war room");
+});
+
+test("a read-only Viewer can look at the panel but not change the sidebar", async ({ page }) => {
+  const { puts } = await setup(page, { role: "viewer" });
+  await page.goto("/chat");
+  await page.getByRole("button", { name: "Options for Vendor comparison" }).click();
+  await expect(page.getByTestId("add-to-sidebar")).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await page.getByTestId("account-menu-button").click();
+  await page.getByTestId("customize-sidebar").click();
+  const panel = page.getByTestId("sidebar-customizer");
+  await expect(panel.getByTestId("sidebar-read-only")).toBeVisible();
+  await expect(panel.getByTestId("sidebar-add-shortcut")).toBeDisabled();
+  await expect(panel.getByTestId("sidebar-preset-chat")).toBeDisabled();
+  expect(puts).toEqual([]);
+});
+
+test("the sidebar over a dashboard is a modal drawer: Escape closes it, not the view", async ({ page }) => {
+  await setup(page);
+  await page.goto("/chat?c=c2");
+  await page.getByTestId("dashboard-enter").click();
+  await expect(page.getByTestId("dashboard-hud")).toBeVisible();
+  const opener = page.getByTestId("dashboard-sidebar-button");
+  await opener.click();
+  const rail = page.getByTestId("rail-nav");
+  await expect(rail).toBeVisible();
+  await expect.poll(() => page.evaluate(() => document.activeElement?.closest("[data-dashboard-rail-wrapper]") !== null)).toBe(true);
+  await page.keyboard.press("Escape");
+  await expect(rail).toBeHidden();
+  await expect(page.getByTestId("dashboard-hud")).toBeVisible();
+  await expect(opener).toBeFocused();
+});
+
+test("the admin page never saves over a workspace sidebar it could not load", async ({ page }) => {
+  await setup(page, { admin: true });
+  let fail = true;
+  await page.route("**/api/admin/sidebar", (r: Route) =>
+    fail
+      ? r.fulfill({ status: 503, body: "unavailable" })
+      : r.fulfill({ json: { layout: null, updated_by: "", updated_at: 0 } }),
+  );
+  await page.goto("/settings/admin/sidebar");
+  await expect(page.getByTestId("admin-sidebar-retry")).toBeVisible();
+  await expect(page.getByTestId("sidebar-preset-team")).toBeDisabled();
+  await expect(page.getByTestId("admin-sidebar-save")).toBeDisabled();
+  fail = false;
+  await page.getByTestId("admin-sidebar-retry").click();
+  await expect(page.getByTestId("sidebar-preset-team")).toBeEnabled();
+  await page.getByTestId("sidebar-preset-team").click();
+  await expect(page.getByTestId("admin-sidebar-save")).toBeEnabled();
 });

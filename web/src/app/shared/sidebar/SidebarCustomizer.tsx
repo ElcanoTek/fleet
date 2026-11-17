@@ -3,6 +3,7 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "
 import { useIsAdmin } from "@/app/settings/useIsAdmin";
 import { Button } from "@/components/ui/button";
 import { SidebarEditor } from "./SidebarEditor";
+import { useCanCustomize } from "./useCanCustomize";
 import { isBuiltinLayout } from "./layout";
 import {
   resetSidebarLayout,
@@ -23,6 +24,7 @@ export function SidebarCustomizer() {
   const open = useSidebarCustomizerOpen();
   const { layout, source, status, saving, saveError, workspace } = useSidebar();
   const isAdmin = useIsAdmin() === "admin";
+  const canCustomize = useCanCustomize();
   const following = source !== "user";
   const resetTarget = workspace ? tr("your workspace's default") : tr("fleet's default");
   const atDefault = following || (workspace ? false : isBuiltinLayout(layout));
@@ -44,7 +46,11 @@ export function SidebarCustomizer() {
               {tr("Pin what you use, hide what you don't, and make fleet open where you work. Changes show in your sidebar as you make them.")}
             </SheetDescription>
             <p className="mt-1 flex flex-wrap items-center gap-2 text-[0.72rem] text-[var(--color-text-muted)]" data-testid="sidebar-save-state">
-              {status === "unavailable" ? (
+              {!canCustomize ? (
+                <span data-testid="sidebar-read-only">
+                  {tr("Your account is read-only, so your sidebar can't be changed.")}
+                </span>
+              ) : status === "unavailable" ? (
                 <span className="text-[var(--color-status-warning-fg)]">
                   {tr("Your sidebar can't be saved right now — changes last until you reload.")}
                 </span>
@@ -78,7 +84,11 @@ export function SidebarCustomizer() {
             </p>
           </SheetHeader>
           <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
-            <SidebarEditor layout={layout} onChange={setSidebarLayout} mode="user" isAdmin={isAdmin} />
+            {/* A disabled fieldset turns off every control in the editor at
+                once for a read-only account (it can still look). */}
+            <fieldset disabled={!canCustomize} className="m-0 min-w-0 border-0 p-0">
+              <SidebarEditor layout={layout} onChange={canCustomize ? setSidebarLayout : () => {}} mode="user" isAdmin={isAdmin} />
+            </fieldset>
           </div>
           <div className="flex items-center gap-2 border-t border-[var(--color-border)] px-5 py-3">
             <Button
@@ -86,7 +96,7 @@ export function SidebarCustomizer() {
               variant="ghost"
               size="sm"
               data-testid="sidebar-reset"
-              disabled={atDefault}
+              disabled={atDefault || !canCustomize}
               onClick={resetSidebarLayout}
               title={tr("Go back to {0}", [resetTarget])}
             >

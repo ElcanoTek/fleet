@@ -3956,6 +3956,70 @@ export function ChatExperience({
     setSidebarOpen,
   });
 
+  // The sidebar slid in over a dashboard (docs/SIDEBAR.md) is a modal
+  // drawer: focus moves into it, Tab stays inside it, Escape closes it (and
+  // only it — captured before dashboard view's own Escape, which would leave
+  // the view), and closing hands focus back to what opened it.
+  const dashboardRailRef = useRef<HTMLDivElement | null>(null);
+  const dashboardRailOpen = dashboardActive && sidebarOpen;
+  useEffect(() => {
+    if (!dashboardRailOpen) return;
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const railEl = dashboardRailRef.current;
+    const focusables = () =>
+      Array.from(
+        dashboardRailRef.current?.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), input:not([disabled]), select:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])',
+        ) ?? [],
+      ).filter((el) => el.offsetParent !== null);
+    const frame = requestAnimationFrame(() => focusables()[0]?.focus());
+    const onKey = (e: KeyboardEvent) => {
+      const rail = dashboardRailRef.current;
+      if (!rail) return;
+      // A menu or dialog opened from the rail is portaled out of it and owns
+      // its own keys.
+      const active = document.activeElement;
+      if (
+        active instanceof Element &&
+        !rail.contains(active) &&
+        active.closest('[role="menu"], [role="dialog"], [role="alertdialog"], [role="listbox"]')
+      )
+        return;
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        setSidebarOpen(false);
+        return;
+      }
+      if (e.key !== "Tab") return;
+      const items = focusables();
+      if (items.length === 0) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (!(active instanceof Element) || !rail.contains(active)) {
+        e.preventDefault();
+        (e.shiftKey ? last : first).focus();
+      } else if (e.shiftKey && active === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && active === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", onKey, true);
+    return () => {
+      cancelAnimationFrame(frame);
+      document.removeEventListener("keydown", onKey, true);
+      // Hand focus back when it was in the drawer (or fell to <body> as the
+      // drawer hid); a choice that left the view took it somewhere else.
+      const now = document.activeElement;
+      if (opener?.isConnected && (now === document.body || (railEl?.contains(now) ?? false))) {
+        opener.focus();
+      }
+    };
+  }, [dashboardRailOpen, setSidebarOpen]);
+
   // A teammate's branch (B20): the banner, and the outputs its transcript
   // names that were NOT shared at branch time — those render as locked names,
   // because the branch's workspace does not have them.
@@ -7023,6 +7087,7 @@ export function ChatExperience({
           />
         ) : null}
         <div
+          ref={dashboardRailRef}
           data-dashboard-rail-wrapper=""
           className={
             dashboardActive
@@ -7122,7 +7187,10 @@ export function ChatExperience({
             void moveConversationToProject(conversationId, projectID)
           }
           activeProjectId={projectHome?.id ?? null}
-          onShowDashboard={toggleDashboardView}
+          onSetDashboardView={(dashboard) => {
+            if (dashboard !== dashboardActive) toggleDashboardView();
+            setSidebarOpen(false);
+          }}
         />
         </div>
 
