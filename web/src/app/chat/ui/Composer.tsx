@@ -1815,6 +1815,7 @@ export function Composer({
                               </span>
                               <button
                                 type="button"
+                                role="menuitem"
                                 title={tr("More info")}
                                 aria-label={tr("More info")}
                                 data-testid="composer-approval-mode-info"

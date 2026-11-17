@@ -54,10 +54,7 @@ import { fetchMe, invalidateMe } from "@/app/shared/lib/account";
 import { conversationApiUrl } from "@/app/lib/conversationApiUrl";
 import { createSchedule, PatrolApiError, runScheduleNow, setScheduleAction } from "@/app/shared/lib/patrolApi";
 import { plural } from "@/app/shared/lib/format";
-import {
-  AUTONOMOUS_ACCEPTED_EVENT,
-  AutonomousRiskModal,
-} from "@/app/chat/ui/AutonomousRiskModal";
+import { AutonomousRiskModal } from "@/app/chat/ui/AutonomousRiskModal";
 
 export const LAUNCHPAD_PROGRESS_ITEM = "fleet.launchpad.v1";
 
@@ -237,11 +234,13 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
   // create a patrol (every write is refused for the viewer role), so the
   // flow stops there with an explanation instead of failing at Launch.
   const [readOnly, setReadOnly] = useState(false);
-  const [autonomousAccepted, setAutonomousAccepted] = useState(
-    () => getBootstrap().session?.autonomous_accepted === true,
-  );
-  const acceptedLocallyRef = useRef(false);
   const [pendingRiskAction, setPendingRiskAction] = useState<(() => void) | null>(null);
+  // Autonomous was confirmed on the risk prompt in this visit. Entering
+  // Autonomous always asks, as it does in the chat: an earlier acceptance
+  // makes the account eligible, it is not consent to this patrol
+  // (docs/CONVERSATION-AUTO-APPROVE.md). Picking the mode asks; a mode
+  // restored from saved progress was never confirmed, so Launch asks then.
+  const autonomousConfirmedRef = useRef(false);
 
   // Each read takes a generation; only the latest one's answer lands, so a
   // slow earlier read (mount, then a focus refresh) cannot overwrite a newer.
@@ -298,9 +297,6 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
     // Unknown role (an unreadable record): the server still refuses what a
     // viewer cannot do.
     void fetchMe().then((me) => {
-      if (!acceptedLocallyRef.current && typeof me?.autonomous_accepted === "boolean") {
-        setAutonomousAccepted(me.autonomous_accepted);
-      }
       if (me?.role === "viewer") {
         setReadOnly(true);
         // A viewer sees only the preamble, even with progress saved on a
@@ -345,16 +341,8 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
   // Connecting a tool happens in a new tab; coming back refreshes the list.
   useEffect(() => {
     const onFocus = () => void loadConnectors();
-    const onAccepted = () => {
-      acceptedLocallyRef.current = true;
-      setAutonomousAccepted(true);
-    };
     window.addEventListener("focus", onFocus);
-    window.addEventListener(AUTONOMOUS_ACCEPTED_EVENT, onAccepted);
-    return () => {
-      window.removeEventListener("focus", onFocus);
-      window.removeEventListener(AUTONOMOUS_ACCEPTED_EVENT, onAccepted);
-    };
+    return () => window.removeEventListener("focus", onFocus);
   }, [loadConnectors]);
 
   // Persist progress (not while launching or after launch: those clear it).
@@ -492,7 +480,7 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
     // Never launch over a draft in flight: it would save the template and
     // then show the assistant's text as if it had been launched.
     if (drafting) return;
-    if (state.mode === "autonomous" && !autonomousAccepted && !acceptedOverride) {
+    if (state.mode === "autonomous" && !autonomousConfirmedRef.current && !acceptedOverride) {
       setPendingRiskAction(() => () => void doLaunch(true));
       return;
     }
@@ -579,7 +567,6 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
         );
       } catch (e: unknown) {
         if (state.mode === "autonomous" && e instanceof PatrolApiError && e.status === 409) {
-          setAutonomousAccepted(false);
           invalidateMe();
           const cleaned = await backToPlan();
           if (cleaned) {
@@ -775,6 +762,7 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
                     setPendingRiskAction(() => () => patch({ mode: "autonomous" }));
                     return;
                   }
+                  if (mode !== "autonomous") autonomousConfirmedRef.current = false;
                   patch({ mode });
                 }}
               />
@@ -903,8 +891,7 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
         onAccepted={() => {
           const nextAction = pendingRiskAction;
           setPendingRiskAction(null);
-          acceptedLocallyRef.current = true;
-          setAutonomousAccepted(true);
+          autonomousConfirmedRef.current = true;
           invalidateMe();
           nextAction?.();
         }}

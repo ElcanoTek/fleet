@@ -713,6 +713,24 @@ describe("PatrolLaunchpad", () => {
     expect((create?.body as { title?: string } | undefined)?.title).toBe("My patrol");
   });
 
+  it("asks again before launching an Autonomous patrol restored from saved progress, even after an earlier acceptance", async () => {
+    window.sessionStorage.setItem(
+      progressItem(),
+      JSON.stringify({ step: "launch", mode: "autonomous", goals: ["deals"], cron: "0 * * * *" }),
+    );
+    const calls = mockApi({ autonomousAccepted: true });
+    render(<PatrolLaunchpad onClose={() => {}} />);
+    await screen.findByTestId("launchpad-step-launch");
+    fireEvent.click(screen.getByTestId("launchpad-launch"));
+    expect(await screen.findByTestId("autonomous-risk-modal")).toBeTruthy();
+    // Nothing is created until the person confirms.
+    expect(calls.some((c) => c.url === "/api/conversations" && c.method === "POST")).toBe(false);
+    fireEvent.click(screen.getByTestId("autonomous-risk-accept"));
+    await screen.findByTestId("launchpad-done");
+    const sched = calls.find((c) => c.url === "/api/conversations/conv-9/schedules" && c.method === "POST");
+    expect(sched?.body).toMatchObject({ approval_mode: "autonomous" });
+  });
+
   it("gates Autonomous mode behind risk acceptance and launches with approval_mode autonomous", async () => {
     const calls = mockApi({ autonomousAccepted: false });
     const onClose = vi.fn();

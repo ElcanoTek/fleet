@@ -532,6 +532,11 @@ describe("Composer — per-chat Auto-approve toggle", () => {
 
     const infoBtn = within(menu).getByTestId("composer-approval-mode-info");
     expect(infoBtn).toHaveAttribute("title", "More info");
+    // It is one of the menu's items, so the arrow keys reach it.
+    expect(infoBtn).toHaveAttribute("role", "menuitem");
+    within(menu).getByTestId("composer-approval-mode-manual").focus();
+    fireEvent.keyDown(menu, { key: "ArrowUp" });
+    expect(infoBtn).toHaveFocus();
     fireEvent.click(infoBtn);
     const infoModal = screen.getByTestId("approval-modes-info-modal");
     expect(infoModal).toHaveTextContent("Approval modes");
