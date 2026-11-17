@@ -75,6 +75,9 @@ export type DialogShellProps = {
   className?: string;
   // Where focus lands on open. Defaults to the panel itself.
   initialFocusRef?: RefObject<HTMLElement | null>;
+  // Optional explicit element to restore focus to on close when the trigger
+  // unmounted on activation (e.g. an overflow menu item).
+  returnFocusRef?: RefObject<HTMLElement | null>;
   // data-testid on the PANEL (the thing tests assert about).
   testId?: string;
   // Below sm, fill the viewport edge to edge as a full-height sheet — the
@@ -94,6 +97,7 @@ export function DialogShell({
   align = "center",
   className,
   initialFocusRef,
+  returnFocusRef,
   testId,
   sheetOnPhone = false,
   children,
@@ -161,9 +165,10 @@ export function DialogShell({
     const opener = (
       typeof document !== "undefined" ? document.activeElement : null
     ) as HTMLElement | null;
+    const returnFocus = returnFocusRef?.current ?? null;
     (initialFocusRef?.current ?? panelRef.current)?.focus();
-    return () => opener?.focus?.();
-  }, [initialFocusRef]);
+    return () => (returnFocus ?? opener)?.focus?.();
+  }, [initialFocusRef, returnFocusRef]);
 
   return (
     <div

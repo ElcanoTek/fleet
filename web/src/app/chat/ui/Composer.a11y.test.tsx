@@ -540,6 +540,7 @@ describe("Composer — per-chat Auto-approve toggle", () => {
     expect(infoModal).toHaveTextContent("Autonomous");
     fireEvent.click(screen.getByTestId("approval-modes-info-close"));
     expect(screen.queryByTestId("approval-modes-info-modal")).toBeNull();
+    expect(document.activeElement).toBe(screen.getByTestId("composer-more-button"));
   });
 });
 

@@ -1,5 +1,5 @@
 import { t as tr } from "@/app/lib/i18n";
-import { useId, useRef } from "react";
+import { useId, useRef, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { CloseButton } from "@/app/shared/ui/CloseButton";
 import { DialogShell } from "@/app/shared/ui/DialogShell";
@@ -9,11 +9,13 @@ import { Button } from "@/components/ui/button";
 export type ApprovalModesInfoModalProps = {
   open: boolean;
   onClose: () => void;
+  returnFocusRef?: RefObject<HTMLElement | null>;
 };
 
 export function ApprovalModesInfoModal({
   open,
   onClose,
+  returnFocusRef,
 }: ApprovalModesInfoModalProps) {
   const titleId = useId();
   const descId = useId();
@@ -29,6 +31,7 @@ export function ApprovalModesInfoModal({
       onDismiss={onClose}
       layer="topmost"
       initialFocusRef={closeBtnRef}
+      returnFocusRef={returnFocusRef}
       testId="approval-modes-info-modal"
       className="flex max-w-[30rem] flex-col overflow-hidden"
     >

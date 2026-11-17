@@ -2479,10 +2479,8 @@ export function Composer({
       </p>
       <ApprovalModesInfoModal
         open={approvalInfoOpen}
-        onClose={() => {
-          setApprovalInfoOpen(false);
-          moreButtonRef.current?.focus();
-        }}
+        returnFocusRef={moreButtonRef}
+        onClose={() => setApprovalInfoOpen(false)}
       />
     </>
   );
