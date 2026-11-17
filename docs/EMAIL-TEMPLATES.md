@@ -91,7 +91,8 @@ theme is; the table is the bundle's, and a table holding anything but #RRGGBB
 values is reported and not served, since its values are written into the
 preview.
 
-Before the form is open the example shows the palette field's `default` look,
+Before the form is open the example shows the look the form will preselect
+(the palette field's `default`, or its first option),
 and custom colors are swapped in on top of that default look. A bundle whose
 default email theme is a brand therefore renders its examples in a plain
 palette, lists the brand as the default option with its table, and the example

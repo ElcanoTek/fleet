@@ -24,8 +24,9 @@ const HEX_ONLY = /^#[0-9A-Fa-f]{6}$/;
 /** {preview color: new color} for the form's current palette value; empty
  *  when the template has no palette field or the table does not cover it.
  *
- *  Before the form is open (`values` null) the look is the field's default,
- *  so the example starts as the email a person gets by changing nothing. A
+ *  Before the form is open (`values` null) the look is the one the form
+ *  will preselect (the field's default, or its first option), so the example
+ *  starts as the email a person gets by changing nothing. A
  *  bundle whose default theme is a brand renders its examples in a plain
  *  palette and lists the brand as the default option. Custom colors go on
  *  top of that default look, which is what the renderer does: custom colors
@@ -37,7 +38,8 @@ export function previewRecolorTable(
 ): Record<string, string> {
   const table: Record<string, string> = {};
   const field = fields?.find((f) => f.type === "palette");
-  const fallback = typeof field?.default === "string" ? field.default : undefined;
+  // What the form preselects (formInitialValues): the default, else the first option.
+  const fallback = typeof field?.default === "string" ? field.default : field?.options?.[0];
   const picked = field && values ? values[field.key] : undefined;
   const value = values ? picked : fallback;
   if (!styles || !field || typeof value !== "string") return table;

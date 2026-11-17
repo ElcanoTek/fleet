@@ -53,7 +53,9 @@ describe("the example email's style", () => {
     );
     // Once the form is open its value decides, the plain look included.
     expect(recolorPreview(page, previewRecolorTable(brandedStyles, [branded], { style: "plain" }))).toBe(page);
-    // No default: nothing to show until a look is picked.
+    // Without a default the form preselects the first option, so the example shows that one.
+    const { default: _unset, ...firstIsBrand } = branded;
+    expect(previewRecolorTable(brandedStyles, [firstIsBrand], null)).toEqual(brandedStyles.options?.acme);
     expect(recolorPreview(page, previewRecolorTable(styles, [style], null))).toBe(page);
   });
 
