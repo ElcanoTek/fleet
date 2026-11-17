@@ -5,6 +5,7 @@ import {
   PatrolApiError,
   runScheduleNow,
   setScheduleAction,
+  updateSchedule,
 } from "./patrolApi";
 
 const CONV = "11111111-1111-1111-1111-111111111111";
@@ -40,6 +41,15 @@ describe("patrolApi", () => {
       [`/api/conversations/${CONV}/schedules/s1`, "PATCH", JSON.stringify({ action: "pause" })],
       [`/api/conversations/${CONV}/schedules/s1`, "DELETE", undefined],
     ]);
+  });
+
+  it("sends an edit as a PATCH carrying only the given fields", async () => {
+    const fetchMock = stub(new Response("{}", { status: 200 }));
+    await updateSchedule(CONV, "s1", { title: "Renamed", prompt: "Check margin." });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe(`/api/conversations/${CONV}/schedules/s1`);
+    expect(init?.method).toBe("PATCH");
+    expect(JSON.parse(String(init?.body))).toEqual({ title: "Renamed", prompt: "Check margin." });
   });
 
   it("throws a PatrolApiError with the server's reason and status", async () => {

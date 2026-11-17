@@ -34,7 +34,9 @@ import {
   PatrolApiError,
   runScheduleNow,
   setScheduleAction,
+  updateSchedule,
   type PatrolResponse,
+  type UpdateScheduleBody,
 } from "@/app/shared/lib/patrolApi";
 import { decideSpreadsheetNudge } from "@/app/lib/spreadsheetNudge";
 import {
@@ -97,8 +99,11 @@ import { QueuedInputs } from "./QueuedInputs";
 import {
   PatrolBanner,
   formatScheduleCadence,
-  type CreatePatrolInput,
+  formatCountdown,
+  liveSchedules,
 } from "./PatrolBanner";
+import { PatrolsDialog, type CreatePatrolInput } from "./PatrolsDialog";
+import { readPatrolBarHidden, writePatrolBarHidden } from "./patrolBarPrefs";
 import { ProjectsModal, type Project } from "./ProjectsModal";
 import { ProjectHome } from "./ProjectHome";
 import {
@@ -5852,6 +5857,92 @@ export function ChatExperience({
     () => activeSchedules.filter((s) => s.status === "active").length,
     [activeSchedules],
   );
+  // Armed or paused: what the Patrol bar, the clock's badge and the Patrols
+  // dialog list.
+  const livePatrols = useMemo(() => liveSchedules(activeSchedules), [activeSchedules]);
+
+  // Approval cards still waiting in the open conversation. A waiting card
+  // brings a hidden Patrol bar back and turns the clock amber, since a patrol
+  // run may be stopped on it.
+  const pendingApprovalCount = useMemo(() => {
+    let n = 0;
+    for (const m of messages) {
+      for (const a of m.approvals ?? []) if (a.status === "pending") n += 1;
+    }
+    return n;
+  }, [messages]);
+
+  // The Patrols & timers dialog, and this browser's per-conversation choice
+  // to hide the Patrol bar (patrolBarPrefs). patrolBarHiddenOverride holds
+  // the choices made on this page; the stored value covers the rest.
+  const [patrolsOpen, setPatrolsOpen] = useState(false);
+  const [patrolBarHiddenOverride, setPatrolBarHiddenOverride] = useState<
+    Record<string, boolean>
+  >({});
+  const [patrolHideHintConv, setPatrolHideHintConv] = useState<string | null>(null);
+  const patrolHideHintTimerRef = useRef<number | null>(null);
+  const patrolBarHidden = useMemo(() => {
+    const id = activeConversationId;
+    if (!id || isPendingKey(id)) return false;
+    return patrolBarHiddenOverride[id] ?? readPatrolBarHidden(id);
+  }, [activeConversationId, patrolBarHiddenOverride]);
+  const setPatrolBarHidden = useCallback((convId: string, hidden: boolean) => {
+    writePatrolBarHidden(convId, hidden);
+    setPatrolBarHiddenOverride((prev) => ({ ...prev, [convId]: hidden }));
+  }, []);
+  const clearPatrolHideHint = useCallback(() => {
+    if (patrolHideHintTimerRef.current !== null) {
+      window.clearTimeout(patrolHideHintTimerRef.current);
+      patrolHideHintTimerRef.current = null;
+    }
+    setPatrolHideHintConv(null);
+  }, []);
+  useEffect(() => clearPatrolHideHint, [clearPatrolHideHint]);
+  const hidePatrolBar = useCallback(() => {
+    const id = activeConversationId;
+    if (!id || isPendingKey(id)) return;
+    setPatrolBarHidden(id, true);
+    clearPatrolHideHint();
+    setPatrolHideHintConv(id);
+    patrolHideHintTimerRef.current = window.setTimeout(() => {
+      patrolHideHintTimerRef.current = null;
+      setPatrolHideHintConv(null);
+    }, 6000);
+  }, [activeConversationId, clearPatrolHideHint, setPatrolBarHidden]);
+  const undoHidePatrolBar = useCallback(() => {
+    const id = activeConversationId;
+    clearPatrolHideHint();
+    if (id && !isPendingKey(id)) setPatrolBarHidden(id, false);
+  }, [activeConversationId, clearPatrolHideHint, setPatrolBarHidden]);
+  // "Review": bring the first waiting approval card into view (the
+  // transcript is virtualised, so fall back to the latest message, where a
+  // patrol run's card lands).
+  const reviewPendingApproval = () => {
+    setPatrolsOpen(false);
+    const first = messages
+      .flatMap((m) => m.approvals ?? [])
+      .find((a) => a.status === "pending");
+    const el = first
+      ? document.querySelector(`[data-approval-id="${CSS.escape(first.id)}"]`)
+      : null;
+    if (el) el.scrollIntoView({ block: "center", behavior: prefersReducedMotion() ? "auto" : "smooth" });
+    else jumpToLatest();
+  };
+  const patrolChipLabel = useMemo(() => {
+    if (livePatrols.length === 0) return undefined;
+    if (pendingApprovalCount > 0) {
+      return tr("Patrols and timers: {0} in this chat, an approval is waiting", [livePatrols.length]);
+    }
+    if (livePatrols.length === 1) {
+      const sc = livePatrols[0];
+      const when =
+        sc.status === "paused"
+          ? tr("paused")
+          : formatCountdown(sc.next_run_at, Math.floor(Date.now() / 1000));
+      return when ? tr("{0} · {1} · Click to manage", [sc.title, when]) : tr("{0} · Click to manage", [sc.title]);
+    }
+    return tr("Patrols and timers: {0} in this chat", [livePatrols.length]);
+  }, [livePatrols, pendingApprovalCount]);
   const activeUIAutoSubmits = useMemo(
     () => uiAutoSubmitsByConv.get(currentConvKey),
     [currentConvKey, uiAutoSubmitsByConv],
@@ -6135,26 +6226,29 @@ export function ChatExperience({
   // mutatePatrol runs one Patrol-bar action against the open conversation's
   // schedule and applies the reply; a refusal shows the server's reason, an
   // unreachable server says so. A pending (not yet created) chat has no
-  // schedules to act on.
+  // schedules to act on. Resolves true when the server took the change.
   const mutatePatrol = async (
-    verb: "trigger" | "resume" | "pause" | "cancel",
+    verb: "trigger" | "resume" | "pause" | "cancel" | "save",
     call: (convId: string) => Promise<PatrolResponse>,
     after?: (convId: string) => void,
-  ) => {
+  ): Promise<boolean> => {
     const convId = activeConversationId;
-    if (!convId || isPendingKey(convId)) return;
+    if (!convId || isPendingKey(convId)) return false;
     try {
       applyScheduleResponse(convId, await call(convId));
       after?.(convId);
+      return true;
     } catch (e) {
       showRailError(
         e instanceof PatrolApiError ? e.message : tr(
           verb === "trigger" ? "Couldn't reach the server to trigger patrol."
             : verb === "resume" ? "Couldn't reach the server to resume patrol."
               : verb === "pause" ? "Couldn't reach the server to pause patrol."
-                : "Couldn't reach the server to cancel patrol.",
+                : verb === "save" ? "Couldn't reach the server to save patrol."
+                  : "Couldn't reach the server to cancel patrol.",
         ),
       );
+      return false;
     }
   };
 
@@ -6177,9 +6271,25 @@ export function ChatExperience({
   };
 
   // Chat cancels with DELETE (the Launchpad's rollback uses PATCH
-  // {action:"cancel"}); both end the schedule server-side.
+  // {action:"cancel"}); both end the schedule server-side. Only the Patrols
+  // dialog's two-click Remove reaches this: the bar has no stop control.
   const handleCancelPatrol = (scheduleId: string) =>
     mutatePatrol("cancel", (convId) => deleteSchedule(convId, scheduleId));
+
+  // An edit from the Patrols dialog: the changed schedule fields, then the
+  // conversation's approval mode when the form changed it.
+  const handleSavePatrol = async (
+    scheduleId: string,
+    body: UpdateScheduleBody,
+    mode: ConversationApprovalMode,
+  ): Promise<boolean> => {
+    if (Object.keys(body).length > 0) {
+      const ok = await mutatePatrol("save", (convId) => updateSchedule(convId, scheduleId, body));
+      if (!ok) return false;
+    }
+    if (mode !== approvalMode && isActiveConversationOwner) requestApprovalModeChange(mode);
+    return true;
+  };
 
   // When the open conversation has an active patrol and is currently idle,
   // poll /inflight via reattachToConv every 15s while the tab is visible so
@@ -7957,19 +8067,59 @@ export function ChatExperience({
                   </button>
                 </div>
               ) : null}
-              {activeConversationId && activeSchedules.length > 0 ? (
+              {activeConversationId &&
+              livePatrols.length > 0 &&
+              (!patrolBarHidden || pendingApprovalCount > 0) ? (
                 <PatrolBanner
-                  schedules={activeSchedules}
+                  schedules={livePatrols}
                   isAutoApprove={isAutoApprove}
                   approvalMode={approvalMode}
                   isStreaming={isStreaming}
-                  onToggleAutoApprove={isActiveConversationOwner ? toggleAutoApprove : undefined}
+                  pendingApprovals={pendingApprovalCount}
                   onChangeApprovalMode={isActiveConversationOwner ? requestApprovalModeChange : undefined}
                   onRunNow={(id) => void handleRunPatrolNow(id)}
                   onTogglePause={(id, status) =>
                     void handleTogglePausePatrol(id, status)
                   }
-                  onCancel={(id) => void handleCancelPatrol(id)}
+                  onHide={hidePatrolBar}
+                  onReview={reviewPendingApproval}
+                />
+              ) : null}
+              {patrolsOpen && !isLockdown ? (
+                <PatrolsDialog
+                  schedules={livePatrols}
+                  approvalMode={approvalMode}
+                  canChangeApprovalMode={isActiveConversationOwner}
+                  autonomousAccepted={autonomousAccepted}
+                  onRequireAutonomousAccept={requireAutonomousAccept}
+                  onChangeApprovalMode={requestApprovalModeChange}
+                  barShown={!patrolBarHidden}
+                  onSetBarShown={(shown) => {
+                    const id = activeConversationId;
+                    clearPatrolHideHint();
+                    if (id && !isPendingKey(id)) setPatrolBarHidden(id, !shown);
+                  }}
+                  pendingApprovals={pendingApprovalCount}
+                  onReview={reviewPendingApproval}
+                  isStreaming={isStreaming}
+                  initialPrompt={prompt}
+                  onRunNow={handleRunPatrolNow}
+                  onTogglePause={handleTogglePausePatrol}
+                  onRemove={handleCancelPatrol}
+                  onSave={handleSavePatrol}
+                  onStart={async (input) => {
+                    const ok = await handleStartPatrol(input);
+                    if (ok !== false && prompt.trim() && input.prompt === prompt.trim()) {
+                      setPrompt("");
+                    }
+                    // A chat not yet created asks the assistant to set the
+                    // patrol up in its first turn, so there is no schedule to
+                    // list yet: close the dialog and let that turn show.
+                    const convId = activeConversationId;
+                    if (ok !== false && (!convId || isPendingKey(convId))) setPatrolsOpen(false);
+                    return ok;
+                  }}
+                  onClose={() => setPatrolsOpen(false)}
                 />
               ) : null}
               {activeConversationId ? (
@@ -7987,8 +8137,19 @@ export function ChatExperience({
                 dashboardView={dashboardActive}
                 onToggleDashboardView={fullPageOverlay ? undefined : toggleDashboardView}
                 cancelRecovery={cancelRecovery}
-                onStartPatrol={handleStartPatrol}
-                activePatrolCount={activePatrolCount}
+                onOpenPatrols={() => {
+                  clearPatrolHideHint();
+                  setPatrolsOpen(true);
+                }}
+                activePatrolCount={livePatrols.length}
+                patrolsOpen={patrolsOpen}
+                patrolBarHidden={patrolBarHidden && livePatrols.length > 0}
+                patrolAttention={pendingApprovalCount > 0 && livePatrols.length > 0}
+                patrolChipLabel={patrolChipLabel}
+                patrolHiddenHint={
+                  patrolHideHintConv !== null && patrolHideHintConv === activeConversationId
+                }
+                onUndoHidePatrolBar={undoHidePatrolBar}
                 prompt={prompt}
                 setPrompt={(next) => {
                   if (creatingShareForCurrentView) return;
@@ -8011,7 +8172,6 @@ export function ChatExperience({
                 approvalMode={approvalMode}
                 onChangeApprovalMode={isActiveConversationOwner ? requestApprovalModeChange : undefined}
                 autonomousAccepted={autonomousAccepted}
-                onRequireAutonomousAccept={requireAutonomousAccept}
                 isConversationOwner={isActiveConversationOwner}
                 isStreaming={isStreaming}
                 isUploadingAttachments={isUploadingAttachments}

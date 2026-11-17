@@ -688,7 +688,7 @@ describe("Composer — share button and overflow options menu", () => {
         overrides={{
           isAutoApprove: false,
           toggleAutoApprove,
-          onStartPatrol: vi.fn(),
+          onOpenPatrols: vi.fn(),
           onOpenMemories,
           showDetails: false,
           onToggleShowDetails,

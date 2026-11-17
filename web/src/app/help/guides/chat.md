@@ -168,8 +168,9 @@ Launching creates a new chat with your chosen persona and tools, attaches the
 patrol, and runs the first check straight away; **Watch it work** opens that
 chat; unless you chose **Act for me**, the success screen also suggests
 turning on **⚡ Auto-approve** once its calls keep being right. From then on it
-is an ordinary in-chat patrol (below): pause or stop it
-from the Patrol bar, or ask in the chat to change it. Nothing is created until
+is an ordinary in-chat patrol (below): pause it from the Patrol bar, change
+or stop it in **Patrols & timers** (the clock on the composer toolbar), or ask
+in the chat to change it. Nothing is created until
 you press **Launch patrol** — except the non-negotiables you saved, which are
 memories as soon as you press **Save**. Close the Launchpad with **Maybe later**
 or `Esc` at any point, except while **Draft it with AI** is writing (up to
@@ -193,20 +194,38 @@ Start a patrol or timer in either of two ways:
   *"check back in 30 minutes and verify the backfill"*). The assistant uses the
   `chat_patrol` tool (`create`, `list`, `update`, `pause`, `resume`, `cancel`) to
   attach or adjust the schedule on the current conversation.
-- **Use Patrol in the composer:** open **More options** (`•••`) in the composer
-  toolbar and click **Patrol & schedule** (or click the active **Patrol** status
-  pill on the toolbar), choose a preset (**Every 1h**, **Every 2h**, **Every
-  4h**, **Every 6h**, **Weekdays 9am**, **Daily 9am**, **In 30m (once)**, **In
-  2h (once)**, or **Custom** to build a recurring schedule by hours, minutes,
+- **Use Patrols & timers in the composer:** open **More options** (`•••`) in
+  the composer toolbar and click **Patrol & schedule** (or, once the chat has a
+  patrol, click the **clock** on the toolbar). In a chat with no patrol yet,
+  **Patrols & timers** opens straight on the **New patrol or timer** form;
+  otherwise press **New patrol or timer** under the list. Describe what to check
+  and do each run, pick a schedule under **Repeats** (**Every 1h**, **Every
+  2h**, **Every 4h**, **Every 6h**, **Weekdays 9am**, **Daily 9am**, or
+  **Custom** to build a recurring schedule by hours, minutes,
   daily/weekday/specific days of the week and time zone — with an **Advanced
-  cron** option — or a custom one-time timer in minutes or hours), enter the
-  patrol instructions, and press **Start patrol** (or **Start timer**).
+  cron** option) or under **Once (timer)** (**In 30m**, **In 2h**, or **Custom**
+  in minutes or hours), choose the approval mode, optionally give it a label,
+  and press **Start patrol** (or **Set timer**).
 
 When a conversation has an active or paused patrol or timer, the **Patrol bar**
-appears at the top of the thread showing the schedule's status (**Patrol
-active**, **Timer armed**, or **Paused**), cadence, run count, and countdown to
-the next run, along with **Run now**, **Pause / Resume**, and **Stop** buttons.
-Choosing **⚡ Auto-approve** (in the Patrol popover, Patrol bar, or **Approval
+appears above the composer showing each one's name, cadence, countdown to the
+next run (or **Paused**), and run count, with an **Approval mode** dropdown,
+**Run now**, **Pause / Resume**, and a **Hide** button (the down arrow at the
+right). **Hide** only folds the bar away; the patrol keeps running. The clock on
+the composer toolbar gets a ring, and a **Patrol bar hidden** note with **Undo**
+shows for a few seconds. This browser remembers the choice for that chat. A
+hidden bar comes back on its own while an approval card is waiting, with a
+**Review** button that takes you to the card (the clock turns amber too).
+
+Click the clock to open **Patrols & timers**, which lists every patrol and timer
+in the chat with **Run now** and **Pause / Resume**. Expand one to change the
+approval mode, read what it does each run, **Edit schedule & task**, or
+**Remove patrol** (**Cancel timer** for a timer); removing takes a second click
+to confirm, so a patrol is never stopped by one click. **Show bar above
+composer** brings a hidden bar back. The approval mode belongs to the chat, so
+it applies to every patrol in it, and switching a running patrol to
+**Autonomous** from the bar asks you to confirm first.
+Choosing **⚡ Auto-approve** (in Patrols & timers, the Patrol bar, or **Approval
 mode** under **More options** in the composer) lets session-approvable tool
 calls run hands-free while you are away, while **Autonomous** (after you accept
 the one-time risk notice) runs bundle-configured live platform actions, optional
