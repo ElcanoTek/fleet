@@ -413,8 +413,9 @@ func TestLoginReturnToParam(t *testing.T) {
 	if res.StatusCode != http.StatusTemporaryRedirect || res.Header.Get("Location") != testOrigin+manifestLink {
 		t.Fatalf("%d %q", res.StatusCode, res.Header.Get("Location"))
 	}
-	// An unusable return_to is ignored, signed in or out.
-	for _, bad := range []string{"//evil.example/chat", "https://evil.example/chat", "/api/conversations", "/%2F%2Fevil.example"} {
+	// An unusable return_to is never followed or parked, signed in or out.
+	bads := []string{"//evil.example/chat", "https://evil.example/chat", "/api/conversations", "/%2F%2Fevil.example", "/chat?draft=" + strings.Repeat("x", maxReturnToLen)}
+	for _, bad := range bads {
 		q := "/login?" + returnToParam + "=" + url.QueryEscape(bad)
 		res := e.do(req("GET", q, ""))
 		if res.StatusCode != http.StatusOK || strings.Contains(setCookies(res), returnToCookie) {
@@ -424,6 +425,36 @@ func TestLoginReturnToParam(t *testing.T) {
 		if res.Header.Get("Location") != testOrigin+"/chat" {
 			t.Errorf("%s signed in: %q", bad, res.Header.Get("Location"))
 		}
+	}
+	// It is still the newest link, so it drops the ones parked earlier
+	// (return and team alike) and sign-in lands on the start page, never on
+	// an older link.
+	older := func(r *http.Request) *http.Request {
+		return withCookie(withParked(r, "/chat?c=older"), teamLinkCookie, testTeamLinkID)
+	}
+	for _, bad := range bads {
+		q := "/login?" + returnToParam + "=" + url.QueryEscape(bad)
+		res := e.do(older(req("GET", q, "")))
+		if c := setCookies(res); res.StatusCode != http.StatusOK || !returnCleared.MatchString(c) || !regexp.MustCompile(`(?m)^fleet_team_link=;.*Max-Age=0`).MatchString(c) {
+			t.Errorf("%s signed out: %d %q", bad, res.StatusCode, c)
+		}
+		res = e.do(older(signedIn(t, req("GET", q, ""))))
+		if c := setCookies(res); res.Header.Get("Location") != testOrigin+"/chat" || !returnCleared.MatchString(c) || !regexp.MustCompile(`(?m)^fleet_team_link=;.*Max-Age=0`).MatchString(c) {
+			t.Errorf("%s signed in: %q %q", bad, res.Header.Get("Location"), c)
+		}
+		if n := len(res.Header.Values("Set-Cookie")); n != 2 {
+			t.Errorf("%s signed in: %d Set-Cookie headers, want one per cookie", bad, n)
+		}
+	}
+	// Without the parameter, signed-in /login still prefers the parked link
+	// and then the team link.
+	res = e.do(older(signedIn(t, req("GET", "/login", ""))))
+	if res.Header.Get("Location") != testOrigin+"/chat?c=older" {
+		t.Fatalf("%q", res.Header.Get("Location"))
+	}
+	res = e.do(withCookie(signedIn(t, req("GET", "/login", "")), teamLinkCookie, testTeamLinkID))
+	if res.Header.Get("Location") != testOrigin+"/chat?team="+testTeamLinkID {
+		t.Fatalf("%q", res.Header.Get("Location"))
 	}
 }
 

@@ -142,8 +142,8 @@ func (g *Gateway) parkBouncedPage(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet || (p != "/" && !returnRoute(p)) {
 		return
 	}
-	if _, err := r.Cookie(teamLinkCookie); err == nil && !teamLinkRequest(r) {
-		clearTeamLink(w, g.secureRequest(r))
+	if !teamLinkRequest(r) {
+		g.dropParkedTeamLink(w, r)
 	}
 	target := requestReturnPath(r)
 	startPage := p == "/" || (p == "/chat" && r.URL.RawQuery == "")
@@ -161,29 +161,64 @@ func (g *Gateway) parkBouncedPage(w http.ResponseWriter, r *http.Request) {
 }
 
 // parkLoginReturnParam parks /login?return_to=<link> for a signed-out visitor
-// (see returnToParam). An unusable value is ignored: the login page renders
-// as it always has.
+// (see returnToParam). The parameter names the newest link, so an unusable
+// one (over-long, or unsafe) still drops the links parked earlier, return and
+// team alike: sign-in then lands on the start page, as for any over-long
+// link. Without the parameter the login page renders as it always has.
 func (g *Gateway) parkLoginReturnParam(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
+	q := r.URL.Query()
+	if r.Method != http.MethodGet || !q.Has(returnToParam) {
 		return
 	}
-	if target := r.URL.Query().Get(returnToParam); safeReturnPath(target) {
+	if target := q.Get(returnToParam); safeReturnPath(target) {
 		g.parkReturnPath(w, r, target)
+		return
 	}
+	g.dropParkedLinks(w, r)
 }
 
-// signedInLoginTarget is where a signed-in visit to /login goes when a link is
-// waiting: /login's own ?return_to=, else the parked link. A parked cookie is
-// cleared either way. "" means no usable link.
-func (g *Gateway) signedInLoginTarget(w http.ResponseWriter, r *http.Request) string {
-	parked, present := parkedReturnPath(r)
+// signedInLogin answers a signed-in visit to /login: on to the link that is
+// waiting — /login's own ?return_to=, else the parked link, else the parked
+// team link — or to /chat. A ?return_to= is the newest link even when it is
+// unusable, so it is never passed over for an older parked one. A parked
+// return cookie is cleared either way.
+func (g *Gateway) signedInLogin(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	target, present := parkedReturnPath(r)
 	if present {
 		g.clearReturnPath(w, r)
 	}
-	if target := r.URL.Query().Get(returnToParam); safeReturnPath(target) {
-		return target
+	explicit := q.Has(returnToParam)
+	if explicit {
+		target = q.Get(returnToParam)
+		if !safeReturnPath(target) {
+			target = ""
+			g.dropParkedTeamLink(w, r)
+		}
 	}
-	return parked
+	switch team := parkedTeamLink(r); {
+	case target != "":
+		g.redirectToReturnPath(w, r, target)
+	case team != "" && !explicit:
+		g.redirectToParkedTeamLink(w, r, team)
+	default:
+		temporaryRedirect(w, g.redirectURL(r, requestLanguagePath(r, "/chat")))
+	}
+}
+
+// dropParkedLinks clears whichever of the return and team cookies r carries.
+func (g *Gateway) dropParkedLinks(w http.ResponseWriter, r *http.Request) {
+	if _, present := parkedReturnPath(r); present {
+		g.clearReturnPath(w, r)
+	}
+	g.dropParkedTeamLink(w, r)
+}
+
+// dropParkedTeamLink clears the team cookie when r carries one.
+func (g *Gateway) dropParkedTeamLink(w http.ResponseWriter, r *http.Request) {
+	if _, err := r.Cookie(teamLinkCookie); err == nil {
+		clearTeamLink(w, g.secureRequest(r))
+	}
 }
 
 // redeemReturnPath handles the parked links on a signed-in page visit. A
@@ -202,8 +237,8 @@ func (g *Gateway) redeemReturnPath(w http.ResponseWriter, r *http.Request) bool 
 	if r.Method != http.MethodGet || (p != "/" && !returnRoute(p)) {
 		return false
 	}
-	if _, err := r.Cookie(teamLinkCookie); err == nil && p != "/" && p != "/chat" {
-		clearTeamLink(w, g.secureRequest(r))
+	if p != "/" && p != "/chat" {
+		g.dropParkedTeamLink(w, r)
 	}
 	target, present := parkedReturnPath(r)
 	if !present {
@@ -223,9 +258,7 @@ func (g *Gateway) redeemReturnPath(w http.ResponseWriter, r *http.Request) bool 
 // query), and a team cookie left in place would redirect the visitor's next
 // /chat away from it.
 func (g *Gateway) redirectToReturnPath(w http.ResponseWriter, r *http.Request, target string) {
-	if _, err := r.Cookie(teamLinkCookie); err == nil {
-		clearTeamLink(w, g.secureRequest(r))
-	}
+	g.dropParkedTeamLink(w, r)
 	temporaryRedirect(w, g.redirectURL(r, withReturnLanguage(target, requestLanguage(r))))
 }
 

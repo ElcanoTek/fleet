@@ -209,15 +209,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if path == "/login" {
 		g.decorate(w, path)
 		if sess != nil {
-			if target := g.signedInLoginTarget(w, r); target != "" {
-				g.redirectToReturnPath(w, r, target)
-				return
-			}
-			if parked := parkedTeamLink(r); parked != "" {
-				g.redirectToParkedTeamLink(w, r, parked)
-				return
-			}
-			temporaryRedirect(w, g.redirectURL(r, requestLanguagePath(r, "/chat")))
+			g.signedInLogin(w, r)
 			return
 		}
 		g.parkLoginReturnParam(w, r)
