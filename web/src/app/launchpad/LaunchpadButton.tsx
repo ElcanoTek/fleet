@@ -103,6 +103,8 @@ export type LaunchpadButtonProps = {
   collapsed?: boolean;
   // Lets the rail close its phone drawer when the wizard or a chat opens.
   onOpen?: () => void;
+  // The tile's glyph, when the person chose their own (docs/SIDEBAR.md).
+  icon?: ReactNode;
 };
 
 export function LaunchpadButton({
@@ -112,6 +114,7 @@ export function LaunchpadButton({
   dataTip,
   collapsed = false,
   onOpen,
+  icon,
 }: LaunchpadButtonProps = {}) {
   const [wizardOpen, setWizardOpen] = useState(readDeepLink);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -215,7 +218,7 @@ export function LaunchpadButton({
         className={className}
       >
         <span className={`relative ${tileClassName ?? ""}`} aria-hidden="true">
-          <Icon name="sparkles" className="size-[1rem]" />
+          {icon ?? <Icon name="sparkles" className="size-[1rem]" />}
           {!seen ? (
             <span className="absolute -right-1 -top-1 flex size-2.5" data-testid="launchpad-new-dot">
               <span className="absolute inline-flex size-full rounded-full bg-[var(--color-primary-fill)] opacity-70 motion-safe:animate-ping" />

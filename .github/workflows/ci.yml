@@ -1229,8 +1229,10 @@ jobs:
         # severity. Like govulncheck, the verdict is a function of the clock as
         # well as the commit — a new advisory can redden an unchanged tree, and
         # that is the point. Needs no node_modules (lockfile-only), so it runs
-        # before the expensive install and fails fast.
-        run: npm audit --audit-level=low
+        # before the expensive install and fails fast. The one exception is
+        # the reviewed, expiring register web/npm-audit-accepted.json, which
+        # can only accept an advisory on a dev-only package (ADR-0113).
+        run: node tools/npm-audit-gate.cjs
 
       - name: Install dependencies
         run: npm ci --fetch-retries=5 --fetch-retry-mintimeout=5000

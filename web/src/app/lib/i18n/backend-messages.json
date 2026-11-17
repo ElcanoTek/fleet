@@ -125,6 +125,8 @@
     "attachment name is unusable as a staged filename",
     "authorization session expired or already used — start the connection again",
     "bad json",
+    "bad json: body too large or unreadable",
+    "bad json: rev must be a non-negative integer",
     "bad json: trailing data",
     "both 'name' (connector name) and 'tool_name' are required",
     "branch copy budget exhausted",

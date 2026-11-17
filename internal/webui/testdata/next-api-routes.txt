@@ -22,6 +22,9 @@ GET /api/admin/server-stats
 PUT /api/admin/settings/{key}
 DELETE /api/admin/settings/{key}
 GET /api/admin/settings
+GET /api/admin/sidebar
+PUT /api/admin/sidebar
+DELETE /api/admin/sidebar
 GET /api/admin/stats
 POST /api/admin/storage/cleanup
 GET /api/admin/storage
@@ -100,6 +103,9 @@ GET /api/conversations/{conversationId}/workspace/{path...}
 PATCH /api/conversations/bulk
 GET /api/conversations/order
 PUT /api/conversations/order
+GET /api/sidebar
+PUT /api/sidebar
+DELETE /api/sidebar
 GET /api/conversations
 POST /api/conversations
 DELETE /api/conversations

@@ -52,6 +52,10 @@ import type { Project } from "./ProjectsModal";
 import { previewNodes, type SearchResult } from "./SearchBar";
 import { ShareGlyph, TeamGlyph } from "./ShareGlyphs";
 import { ChatReorderList } from "./ChatReorderList";
+import { AddToSidebarItem, TeamChatPinButton } from "@/app/shared/sidebar/AddToSidebarItem";
+import { sectionOf, type SectionId } from "@/app/shared/sidebar/layout";
+import { useSidebar } from "@/app/shared/sidebar/store";
+import { SidebarTargetsContext, type SidebarTargets } from "@/app/shared/sidebar/targets";
 
 // ── Sealed-chat button + explainer tooltip ───────────────────────────────────
 // The icon-only "new sealed chat" lock lives in the Temporary section's
@@ -328,6 +332,11 @@ function ProjectKebab({
     close();
     fn();
   };
+  // Pinning to the sidebar is the viewer's own (docs/SIDEBAR.md), so every
+  // member gets it, beside the owner's list-keeping items.
+  const sidebarItem = (
+    <AddToSidebarItem target={{ kind: "project", ref: projectId, title: projectName }} onDone={close} />
+  );
   return (
     <>
       <button
@@ -412,6 +421,7 @@ function ProjectKebab({
             >
               {pinned ? tr("Unpin") : tr("Pin")}
             </MenuItem>
+            {sidebarItem}
             <MenuItem
               icon={<Icon name="edit" className="size-4" />}
               onClick={item(onRename)}
@@ -426,7 +436,12 @@ function ProjectKebab({
               {tr("Delete project")}
             </MenuItem>
           </>
-        ) : null}
+        ) : (
+          <>
+            <MenuSeparator />
+            {sidebarItem}
+          </>
+        )}
       </Menu>
     </>
   );
@@ -688,6 +703,10 @@ function ConversationKebab({
         >
           {tr("Labels")}
         </MenuItem>
+        <AddToSidebarItem
+          target={{ kind: "chat", ref: conversation.id, title: conversation.title }}
+          onDone={close}
+        />
         <MenuSeparator />
         {/* Was "Download as JSON" — a label that named a file format instead
             of an outcome, and offered the one format a non-technical reader
@@ -1083,6 +1102,11 @@ export function ConversationSidebar({
   teamSharedConversations = [],
   onSelectTeamSharedConversation,
   onMoveToProject,
+  activeProjectId = null,
+  projectsLoaded = false,
+  teamSharedLoaded = false,
+  archivedLoaded = false,
+  onSetDashboardView,
 }: {
   sidebarOpen: boolean;
   setSidebarOpen: Dispatch<SetStateAction<boolean>>;
@@ -1207,15 +1231,39 @@ export function ConversationSidebar({
   // the kebab's "Move to project" both land here; the parent owns the
   // optimistic state + POST.
   onMoveToProject: (conversationId: string, projectID: string) => void;
+  // The project whose home is open in the main pane, for the sidebar's
+  // project shortcuts (docs/SIDEBAR.md).
+  activeProjectId?: string | null;
+  // The projects list has loaded once (an empty list is then a real "none").
+  projectsLoaded?: boolean;
+  // The shared/multiplayer conversation list has loaded once.
+  teamSharedLoaded?: boolean;
+  // The archived conversation list has loaded once.
+  archivedLoaded?: boolean;
+  // Puts the open chat in dashboard view (true) or chat view (false): a
+  // shortcut clicked while its chat is already open applies the view it
+  // names, whichever view the chat is in.
+  onSetDashboardView?: (dashboard: boolean) => void;
 }) {
   const [editingId, setEditingId] = useState<string | null>(null);
+  // The person's sidebar layout (docs/SIDEBAR.md): the order, names and
+  // visibility of the Projects, Chats and Team chats sections, and which
+  // start folded. The default layout is the rail as it always was.
+  const { layout: railLayout } = useSidebar();
+  const projectsSec = sectionOf(railLayout, "projects");
+  const chatsSec = sectionOf(railLayout, "chats");
+  const teamSec = sectionOf(railLayout, "team");
+  const sectionIndex = (id: SectionId) => railLayout.sections.findIndex((x) => x.id === id);
+  const projectsFirst = sectionIndex("projects") < sectionIndex("chats");
+  const teamFirst = sectionIndex("team") < sectionIndex("chats");
   // Projects section (#509 follow-up): the section itself starts open (its
-  // presence is the affordance); each project starts collapsed and remembers
-  // its expansion for the session only, like the Labels section.
-  const [projectsSectionOpen, setProjectsSectionOpen] = useState(true);
+  // presence is the affordance) unless the layout folds it; each project
+  // starts collapsed and remembers its expansion for the session only, like
+  // the Labels section.
+  const [projectsSectionOpen, setProjectsSectionOpen] = useState(!projectsSec.collapsed);
   // Chats section (mirrors Projects): one heading over everything from the
   // New-chat row down to the conversation list, collapsible, default open.
-  const [chatsSectionOpen, setChatsSectionOpen] = useState(true);
+  const [chatsSectionOpen, setChatsSectionOpen] = useState(!chatsSec.collapsed);
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(
     new Set(),
   );
@@ -1282,7 +1330,18 @@ export function ConversationSidebar({
   // drop-target highlight.
   const [dragOverProject, setDragOverProject] = useState<string | null>(null);
   const [labelsOpen, setLabelsOpen] = useState(true);
-  const [teamChatsOpen, setTeamChatsOpen] = useState(true);
+  const [teamChatsOpen, setTeamChatsOpen] = useState(!teamSec.collapsed);
+  // When the layout's "starts folded" choices change (the read landed, or
+  // the person changed them in the Customize panel), the sections follow.
+  // Compared during render, React's "reset state when a prop changes".
+  const foldKey = `${Boolean(projectsSec.collapsed)}|${Boolean(chatsSec.collapsed)}|${Boolean(teamSec.collapsed)}`;
+  const [seenFoldKey, setSeenFoldKey] = useState(foldKey);
+  if (foldKey !== seenFoldKey) {
+    setSeenFoldKey(foldKey);
+    setProjectsSectionOpen(!projectsSec.collapsed);
+    setChatsSectionOpen(!chatsSec.collapsed);
+    setTeamChatsOpen(!teamSec.collapsed);
+  }
   const [bulkPanel, setBulkPanel] = useState<"none" | "labels">("none");
   const bulkLabelsRef = useRef<HTMLButtonElement | null>(null);
   // The transient per-row "copied ✓" flash is gone with the kebab's copy
@@ -1462,7 +1521,7 @@ export function ConversationSidebar({
         <div className="min-w-0 flex-1">
           <SectionToggle
             icon="briefcase"
-            label={tr("Projects")}
+            label={projectsSec.label || tr("Projects")}
             open={projectsSectionOpen}
             onToggle={() => setProjectsSectionOpen((o) => !o)}
           />
@@ -1788,7 +1847,215 @@ export function ConversationSidebar({
       </div>
     ) : null;
 
+  // What the sidebar's shortcuts need from this page (sidebar/targets.tsx):
+  // live names, the open chat or project, whether a target can still be
+  // opened by this account, and opening it in place.
+  // "Not available" needs every list a chat could be in to have answered:
+  // own (the history load), archived and shared — each read on its own.
+  const listsKnown = !isLoadingHistory && teamSharedLoaded && archivedLoaded;
+  const sidebarTargets: SidebarTargets = {
+    activeConversationId,
+    activeProjectId,
+    titleFor: (item) => {
+      if (item.kind === "chat") {
+        return (
+          conversations.find((c) => c.id === item.ref) ??
+          teamSharedConversations.find((c) => c.id === item.ref) ??
+          archivedConversations.find((c) => c.id === item.ref)
+        )?.title;
+      }
+      if (item.kind === "project") return projects.find((p) => p.id === item.ref)?.name;
+      return undefined;
+    },
+    availability: (item) => {
+      if (item.kind === "chat") {
+        // Found in any list already loaded: openable, whatever the others
+        // are still doing (a failed team read must not hide a chat that is
+        // plainly here). "No" only once every list has answered.
+        const found =
+          conversations.some((c) => c.id === item.ref) ||
+          archivedConversations.some((c) => c.id === item.ref) ||
+          teamSharedConversations.some((c) => c.id === item.ref);
+        if (found) return "yes";
+        return listsKnown ? "no" : "unknown";
+      }
+      if (item.kind === "project") {
+        if (projects.some((p) => p.id === item.ref)) return "yes";
+        return projectsLoaded ? "no" : "unknown";
+      }
+      return "unknown";
+    },
+    open: (item) => {
+      const ref = item.ref ?? "";
+      if (item.kind === "chat") {
+        if (activeConversationId === ref && onSetDashboardView) {
+          onSetDashboardView(item.view === "dashboard");
+          return true;
+        }
+        const team = teamSharedConversations.find((c) => c.id === ref);
+        if (team && onSelectTeamSharedConversation) onSelectTeamSharedConversation(team);
+        else void loadConversation(ref);
+        return true;
+      }
+      if (item.kind === "project") {
+        onOpenProjectHome(ref);
+        return true;
+      }
+      return false;
+    },
+  };
+
+  // The Projects section with its divider, placed above or below the chats
+  // as the person's layout orders the sections (hidden when they hid it).
+  const projectsBlock = projectsSec.hidden ? null : projectsFirst ? (
+    <>
+      {/* Projects section — ABOVE the New-chat row (the rail's primary nav
+          block). Wide-collapsed (≥sm) it hides with the rest of the wide-only
+          content; the max-height guard keeps a long or deeply expanded
+          tree from pushing New chat and the list off-screen — past it the
+          section scrolls on its own, like the Chats list below. */}
+      <div
+        className={[
+          "max-h-[30vh] overflow-y-auto overflow-x-hidden",
+          railCollapsed ? "sm:hidden" : "",
+        ].join(" ")}
+      >
+        {projectsSection}
+      </div>
+
+      {/* Divider between the Projects and Chats sections. */}
+      <div
+        className={[
+          "my-1.5 border-t border-[var(--color-border)]",
+          railCollapsed ? "sm:hidden" : "",
+        ].join(" ")}
+      />
+    </>
+  ) : (
+    <>
+      {/* Divider between the Projects and Chats sections. */}
+      <div
+        className={[
+          "my-1.5 border-t border-[var(--color-border)]",
+          railCollapsed ? "sm:hidden" : "",
+        ].join(" ")}
+      />
+      {/* Projects section — ABOVE the New-chat row (the rail's primary nav
+          block). Wide-collapsed (≥sm) it hides with the rest of the wide-only
+          content; the max-height guard keeps a long or deeply expanded
+          tree from pushing New chat and the list off-screen — past it the
+          section scrolls on its own, like the Chats list below. */}
+      <div
+        className={[
+          "max-h-[30vh] overflow-y-auto overflow-x-hidden",
+          railCollapsed ? "sm:hidden" : "",
+        ].join(" ")}
+      >
+        {projectsSection}
+      </div>
+
+    </>
+  );
+
+  // Teammates' shared and multiplayer chats, above or below the person's own
+  // chats as their layout orders the sections.
+  const teamBlock =
+    !teamSec.hidden && teamSharedConversations.length > 0 ? (
+                <div
+                  data-testid="team-chats-section"
+                  className={
+                    teamFirst
+                      ? "mb-1.5 border-b border-[var(--color-border)] pb-1.5"
+                      : "mb-1 mt-2 border-t border-[var(--color-border)] pt-2"
+                  }
+                >
+                  <SectionToggle
+                    icon="message"
+                    label={
+                      teamSec.label
+                        ? `${teamSec.label} (${teamSharedConversations.length})`
+                        : tr("Team chats ({0})", [teamSharedConversations.length])
+                    }
+                    open={teamChatsOpen}
+                    onToggle={() => setTeamChatsOpen((o) => !o)}
+                  />
+                  {teamChatsOpen
+                    ? teamSharedConversations.map((c) => {
+                        const active = activeConversationId === c.id;
+                        const ownerShort = c.user_email
+                          ? c.user_email.split("@")[0]
+                          : "";
+                        return (
+                          <div key={c.id} className="group/team relative">
+                          <button
+                            type="button"
+                            data-testid="team-shared-conv-row"
+                            className={[
+                              "flex w-full min-w-0 items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-[0.84rem] transition",
+                              active
+                                ? "bg-[var(--rail-active)] text-[var(--color-text-primary)]"
+                                : "text-[var(--color-text-secondary)] hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)]",
+                            ].join(" ")}
+                            onClick={() => {
+                              setSidebarOpen(false);
+                              if (onSelectTeamSharedConversation) {
+                                onSelectTeamSharedConversation(c);
+                              } else {
+                                void loadConversation(c.id);
+                              }
+                            }}
+                            title={
+                              c.user_email
+                                ? `${c.title} (${c.user_email})`
+                                : c.title
+                            }
+                          >
+                            <TeamGlyph className="size-3 shrink-0 text-[var(--color-accent)]" />
+                            <span className="min-w-0 flex-1 truncate">
+                              {c.title}
+                            </span>
+                            {c.multiplayer ? (
+                              <span className="shrink-0 rounded-full bg-[color-mix(in_srgb,var(--color-accent)_16%,transparent)] px-1.5 py-px text-[0.62rem] font-medium text-[var(--color-accent)]">
+                                {tr("Live")}
+                              </span>
+                            ) : null}
+                            {ownerShort ? (
+                              // Shortens, never pushes: a long mailbox name
+                              // ran out of the row and over the sidebar edge.
+                              <span className="max-w-[45%] min-w-0 shrink truncate font-[family-name:var(--font-code)] text-[0.66rem] text-[var(--color-text-muted)]">
+                                {ownerShort}
+                              </span>
+                            ) : null}
+                          </button>
+                          <TeamChatPinButton
+                            target={{ kind: "chat", ref: c.id, title: c.title }}
+                            title={c.title}
+                          />
+                          </div>
+                        );
+                      })
+                    : null}
+                </div>
+    ) : null;
+
+  // Team chats are a section of their own, placed where the person's layout
+  // orders it (above or below the Chats heading, and around Projects), and
+  // scrolling on its own like Projects — never inside the Chats list, so
+  // folding Chats does not hide them.
+  const teamAboveProjects = sectionIndex("team") < sectionIndex("projects");
+  const teamTop = teamBlock ? (
+    <div
+      className={[
+        "max-h-[30vh] shrink-0 overflow-y-auto overflow-x-hidden",
+        railCollapsed ? "sm:hidden" : "",
+      ].join(" ")}
+    >
+      {teamBlock}
+    </div>
+  ) : null;
+
   return (
+    <SidebarTargetsContext.Provider value={sidebarTargets}>
     <NavRail
       activeView="chat"
       brandName={branding.app_name}
@@ -1855,27 +2122,13 @@ export function ConversationSidebar({
         ) : null}
       </div>
 
-      {/* Projects section — ABOVE the New-chat row (the rail's primary nav
-          block). Wide-collapsed (≥sm) it hides with the rest of the wide-only
-          content; the max-height guard keeps a long or deeply expanded
-          tree from pushing New chat and the list off-screen — past it the
-          section scrolls on its own, like the Chats list below. */}
-      <div
-        className={[
-          "max-h-[30vh] overflow-y-auto overflow-x-hidden",
-          railCollapsed ? "sm:hidden" : "",
-        ].join(" ")}
-      >
-        {projectsSection}
-      </div>
+      {teamFirst && teamAboveProjects ? teamTop : null}
+      {projectsFirst ? projectsBlock : null}
 
-      {/* Divider between the Projects and Chats sections. */}
-      <div
-        className={[
-          "my-1.5 border-t border-[var(--color-border)]",
-          railCollapsed ? "sm:hidden" : "",
-        ].join(" ")}
-      />
+
+      {/* Team chats ordered above the person's own chats: their own block,
+          above the Chats heading, scrolling on its own like Projects. */}
+      {teamFirst && !teamAboveProjects ? teamTop : null}
 
       {/* Chats section header (mirrors the Projects header): a collapsible
           heading over the conversation list. + is THE new-chat affordance
@@ -1889,12 +2142,14 @@ export function ConversationSidebar({
         ].join(" ")}
       >
         <div className="min-w-0 flex-1">
-          <SectionToggle
-            icon="message"
-            label={tr("Chats")}
-            open={chatsSectionOpen}
-            onToggle={() => setChatsSectionOpen((o) => !o)}
-          />
+          {chatsSec.hidden ? null : (
+            <SectionToggle
+              icon="message"
+              label={chatsSec.label || tr("Chats")}
+              open={chatsSectionOpen}
+              onToggle={() => setChatsSectionOpen((o) => !o)}
+            />
+          )}
         </div>
         {serverConfig.lockdownAvailable && !serverConfig.lockdownOnly ? (
           <SealedNewChatButton
@@ -1920,7 +2175,7 @@ export function ConversationSidebar({
       <div
         className={[
           "flex min-h-0 flex-1 flex-col",
-          chatsSectionOpen ? "" : railCollapsed ? "hidden sm:flex" : "hidden",
+          chatsSectionOpen || chatsSec.hidden ? "" : railCollapsed ? "hidden sm:flex" : "hidden",
         ].join(" ")}
       >
         {/* The full-size New-chat row is gone (the Chats heading's + owns it);
@@ -2050,6 +2305,8 @@ export function ConversationSidebar({
             </>
           ) : (
             <>
+              {chatsSec.hidden ? null : (
+              <>
               {pinned.length > 0 ? (
                 <div className="mb-1" data-testid="pinned-section">
                   <div className="flex items-center gap-1.5 px-2 pb-1 pt-2 text-[0.68rem] font-semibold uppercase tracking-[0.08em] text-[var(--color-text-muted)]">
@@ -2133,72 +2390,13 @@ export function ConversationSidebar({
                   recent.map(renderRow)
                 )}
               </div>
-              {teamSharedConversations.length > 0 ? (
-                <div className="mb-1 mt-2 border-t border-[var(--color-border)] pt-2">
-                  <SectionToggle
-                    icon="message"
-                    label={tr("Team chats ({0})", [teamSharedConversations.length])}
-                    open={teamChatsOpen}
-                    onToggle={() => setTeamChatsOpen((o) => !o)}
-                  />
-                  {teamChatsOpen
-                    ? teamSharedConversations.map((c) => {
-                        const active = activeConversationId === c.id;
-                        const ownerShort = c.user_email
-                          ? c.user_email.split("@")[0]
-                          : "";
-                        return (
-                          <button
-                            key={c.id}
-                            type="button"
-                            data-testid="team-shared-conv-row"
-                            className={[
-                              "flex w-full min-w-0 items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-[0.84rem] transition",
-                              active
-                                ? "bg-[var(--rail-active)] text-[var(--color-text-primary)]"
-                                : "text-[var(--color-text-secondary)] hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)]",
-                            ].join(" ")}
-                            onClick={() => {
-                              setSidebarOpen(false);
-                              if (onSelectTeamSharedConversation) {
-                                onSelectTeamSharedConversation(c);
-                              } else {
-                                void loadConversation(c.id);
-                              }
-                            }}
-                            title={
-                              c.user_email
-                                ? `${c.title} (${c.user_email})`
-                                : c.title
-                            }
-                          >
-                            <TeamGlyph className="size-3 shrink-0 text-[var(--color-accent)]" />
-                            <span className="min-w-0 flex-1 truncate">
-                              {c.title}
-                            </span>
-                            {c.multiplayer ? (
-                              <span className="shrink-0 rounded-full bg-[color-mix(in_srgb,var(--color-accent)_16%,transparent)] px-1.5 py-px text-[0.62rem] font-medium text-[var(--color-accent)]">
-                                {tr("Live")}
-                              </span>
-                            ) : null}
-                            {ownerShort ? (
-                              // Shortens, never pushes: a long mailbox name
-                              // ran out of the row and over the sidebar edge.
-                              <span className="max-w-[45%] min-w-0 shrink truncate font-[family-name:var(--font-code)] text-[0.66rem] text-[var(--color-text-muted)]">
-                                {ownerShort}
-                              </span>
-                            ) : null}
-                          </button>
-                        );
-                      })
-                    : null}
-                </div>
-              ) : null}
+              </>
+              )}
             </>
           )}
 
           {/* Archived (collapsible) */}
-          {archivedConversations.length > 0 ? (
+          {!chatsSec.hidden && archivedConversations.length > 0 ? (
             <div className="mt-3 border-t border-[var(--color-border)] pt-2">
               <button
                 type="button"
@@ -2281,6 +2479,9 @@ export function ConversationSidebar({
           ) : null}
         </div>
       </div>
+      {!teamFirst && (projectsFirst || teamAboveProjects) ? teamTop : null}
+      {projectsFirst ? null : projectsBlock}
+      {!teamFirst && !projectsFirst && !teamAboveProjects ? teamTop : null}
       {/* Multi-select bulk bar (#279, the design's .bulk-bar): pinned to the
           rail's foot below the conversation list — count + 1.9rem icon actions with data-tip-top tooltips. Add-label
           reuses the kebab's panel (including its inline create input) in a
@@ -2375,5 +2576,6 @@ export function ConversationSidebar({
         </>
       ) : null}
     </NavRail>
+    </SidebarTargetsContext.Provider>
   );
 }
