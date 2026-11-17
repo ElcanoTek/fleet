@@ -257,7 +257,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	g.decorate(w, path)
 	// A parked deep link (returnto.go) is redeemed first: it carries the
 	// whole query, a team link's ?team= included.
-	if sess != nil && landing && g.redeemReturnPath(w, r) {
+	if sess != nil && g.redeemReturnPath(w, r) {
 		return
 	}
 	if sess != nil && landing && hasParked {

@@ -1,3 +1,4 @@
+import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { ChatExperience, type ConversationSummary } from "./chat-experience";
@@ -105,6 +106,34 @@ describe("persona new-chat link", () => {
     );
     // The params were still consumed from the address bar as usual.
     expect(window.location.search).toBe("");
+  });
+
+  // `make dev` renders under <StrictMode>, which runs the boot effect twice:
+  // the second pass sees the URL the first pass already stripped. Both passes
+  // must still send sign-in on to the original link.
+  it("keeps the original link through StrictMode's effect replay", async () => {
+    const link = "/chat?persona=user%3Amy-twin&draft=Replay%20me";
+    window.history.replaceState(null, "", link);
+    const fetchMock = mockBackend();
+    const base = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) =>
+      String(input) === "/api/conversations"
+        ? new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401 })
+        : base(input, init),
+    );
+    const destination = vi.mocked(bootstrapFailureDestination);
+    destination.mockClear();
+    render(
+      <StrictMode>
+        <ChatExperience initialUserEmail="user@example.com" />
+      </StrictMode>,
+    );
+
+    await waitFor(() => expect(destination).toHaveBeenCalledTimes(2));
+    expect(destination.mock.calls).toEqual([
+      [401, link],
+      [401, link],
+    ]);
   });
 
   it("sends a plain /chat with a revoked session to plain sign-in", async () => {

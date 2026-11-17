@@ -186,17 +186,24 @@ func (g *Gateway) signedInLoginTarget(w http.ResponseWriter, r *http.Request) st
 	return parked
 }
 
-// redeemReturnPath is a signed-in landing on `/` or `/chat` that carries the
-// return cookie: any such landing clears it, and a sign-in leg's bare landing
-// (startPageLanding) is sent on to the parked link. It reports whether it
-// answered the request.
+// redeemReturnPath handles the parked links on a signed-in page visit. A
+// sign-in leg's bare landing (startPageLanding) is sent on to the parked
+// return link; any other page visit is the visitor's own newer choice, so it
+// only clears the return cookie, and — away from `/` and `/chat`, whose
+// team-link rules follow in ServeHTTP — a parked team link too, so a later
+// bare /chat does not jump back to an older link. Requests that are not page
+// visits leave both alone. It reports whether it answered the request.
 //
 // Redeeming also drops a parked team link (redirectToReturnPath): the return
 // cookie is never older than the team cookie, since every page visit the gate
 // bounces re-parks or drops both.
 func (g *Gateway) redeemReturnPath(w http.ResponseWriter, r *http.Request) bool {
-	if r.Method != http.MethodGet {
+	p := r.URL.Path
+	if r.Method != http.MethodGet || (p != "/" && !returnRoute(p)) {
 		return false
+	}
+	if _, err := r.Cookie(teamLinkCookie); err == nil && p != "/" && p != "/chat" {
+		clearTeamLink(w, g.secureRequest(r))
 	}
 	target, present := parkedReturnPath(r)
 	if !present {

@@ -284,8 +284,13 @@ func TestNewerLinkSupersedesParkedTeamLink(t *testing.T) {
 	if c := setCookies(res); teamCleared.MatchString(c) || !strings.Contains(c, "fleet_team_link="+testTeamLinkID) {
 		t.Fatalf("team link re-park: %q", c)
 	}
-	// Requests that are not page visits leave it alone.
-	for _, r := range []*http.Request{req("GET", "/apple-touch-icon.png", ""), req("GET", "/api/conversations", ""), req("POST", "/chat", "")} {
+	// A page opened signed in drops it too; requests that are not page visits
+	// leave it alone, signed in or out.
+	res = e.do(withTeam(signedIn(t, req("GET", "/settings/personas", ""))))
+	if !teamCleared.MatchString(setCookies(res)) {
+		t.Fatalf("signed-in page visit kept the team link: %q", setCookies(res))
+	}
+	for _, r := range []*http.Request{req("GET", "/apple-touch-icon.png", ""), req("GET", "/api/conversations", ""), req("POST", "/chat", ""), signedIn(t, req("GET", "/api/session", ""))} {
 		if c := setCookies(e.do(withTeam(r))); strings.Contains(c, teamLinkCookie) {
 			t.Errorf("%s %s touched the team link: %q", r.Method, r.URL, c)
 		}
@@ -348,10 +353,28 @@ func TestDeepLinkRedeemedOnlyOnASignInLanding(t *testing.T) {
 			t.Errorf("%s: %q %q", p, res.Header.Get("Location"), setCookies(res))
 		}
 	}
-	// Any other page leaves it for the landing.
-	res := e.do(withParked(signedIn(t, req("GET", "/orchestrator", "")), manifestLink))
-	if res.StatusCode != http.StatusOK || strings.Contains(setCookies(res), returnToCookie) {
-		t.Fatalf("%d %q", res.StatusCode, setCookies(res))
+	// Any other signed-in page visit is the visitor's newer choice too: it
+	// opens as usual and drops the parked link, so a later bare /chat does
+	// not jump back to it.
+	for _, p := range []string{"/orchestrator?task=t1", "/settings/personas", "/help/chat"} {
+		res := e.do(withParked(signedIn(t, req("GET", p, "")), manifestLink))
+		if res.StatusCode != http.StatusOK || !returnCleared.MatchString(setCookies(res)) {
+			t.Errorf("%s: %d %q", p, res.StatusCode, setCookies(res))
+		}
+	}
+	// Requests that are not page visits leave it alone.
+	for _, r := range []*http.Request{
+		signedIn(t, req("GET", "/api/session", "")),
+		signedIn(t, req("GET", "/apple-touch-icon.png", "")),
+		signedIn(t, req("HEAD", "/orchestrator", "")),
+	} {
+		if c := setCookies(e.do(withParked(r, manifestLink))); strings.Contains(c, returnToCookie) {
+			t.Errorf("%s %s touched the parked link: %q", r.Method, r.URL, c)
+		}
+	}
+	res := e.do(signedIn(t, req("GET", "/orchestrator", "")))
+	if strings.Contains(setCookies(res), returnToCookie) {
+		t.Fatalf("no parked link, yet %q", setCookies(res))
 	}
 	// The landing's language choice replaces the link's own.
 	landAndFollow(t, e, signedIn(t, req("GET", "/?lang=pt", "")), "/chat?lang=en&draft=x%20y", "/chat?draft=x%20y&lang=pt")

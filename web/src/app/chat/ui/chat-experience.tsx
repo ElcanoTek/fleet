@@ -6441,6 +6441,11 @@ export function ChatExperience({
   // fire concurrently and never gate `isLoadingHistory`, so returning to /chat
   // from /settings paints the conversation as soon as its history arrives
   // instead of after six serial round-trips.
+  //
+  // bootLinkRef holds the link this page was opened with (see bootLink
+  // below). A ref, so React's development StrictMode replay of this effect —
+  // whose second pass sees the URL the first pass already stripped — keeps it.
+  const bootLinkRef = useRef<{ link: string | null } | null>(null);
   useEffect(() => {
     let cancelled = false;
     // The personas fetch races the critical path. loadConversation sets the
@@ -6459,12 +6464,15 @@ export function ChatExperience({
     // consume and strip its parameters: if the boot fetches then find the
     // session gone (revoked after the gateway let the page load), sign-in is
     // sent on to it, so the link survives (bootstrapFailure.ts). null for a
-    // plain /chat.
-    const bootLink = ["c", "persona", "draft", "team"].some((k) =>
-      new URLSearchParams(window.location.search).has(k),
-    )
-      ? window.location.pathname + window.location.search
-      : null;
+    // plain /chat. Read once per mount (bootLinkRef).
+    bootLinkRef.current ??= {
+      link: ["c", "persona", "draft", "team"].some((k) =>
+        new URLSearchParams(window.location.search).has(k),
+      )
+        ? window.location.pathname + window.location.search
+        : null,
+    };
+    const bootLink = bootLinkRef.current.link;
 
     // Deep-link (?c=<conversation id>): open a specific conversation on boot.
     // Used by the orchestrator's "Discuss this run" bridge, which creates a
