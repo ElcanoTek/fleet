@@ -321,6 +321,23 @@ describe("PatrolsDialog", () => {
   });
 });
 
+describe("PatrolsDialog in a sealed (lockdown) chat", () => {
+  it("manages existing patrols but offers no way to start one", () => {
+    renderDialog({ canCreate: false });
+    expect(screen.getAllByTestId("patrols-card")).toHaveLength(2);
+    expect(screen.queryByTestId("patrols-add")).toBeNull();
+    expect(screen.queryByTestId("patrol-form-new")).toBeNull();
+    fireEvent.click(cardToggle(0));
+    expect(screen.getByTestId("patrols-remove")).toBeInTheDocument();
+  });
+
+  it("says so instead of showing the form once none are left", () => {
+    renderDialog({ canCreate: false, schedules: [] });
+    expect(screen.queryByTestId("patrol-form-new")).toBeNull();
+    expect(screen.getByText("No patrols or timers in this chat.")).toBeInTheDocument();
+  });
+});
+
 describe("PatrolsDialog with no patrols (first patrol)", () => {
   it("opens straight on the new-patrol form, with no Cancel", () => {
     renderDialog({ schedules: [] });

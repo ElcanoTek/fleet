@@ -480,6 +480,7 @@ export function PatrolsDialog({
   onChangeApprovalMode,
   barShown,
   onSetBarShown,
+  canCreate = true,
   pendingApprovals = 0,
   onReview,
   isStreaming,
@@ -500,6 +501,9 @@ export function PatrolsDialog({
   onChangeApprovalMode?: (mode: ConversationApprovalMode) => void;
   barShown: boolean;
   onSetBarShown: (shown: boolean) => void;
+  /** False in a sealed (lockdown) chat: existing patrols can be managed,
+   *  new ones cannot be started from here. */
+  canCreate?: boolean;
   pendingApprovals?: number;
   onReview?: () => void;
   isStreaming?: boolean;
@@ -526,7 +530,7 @@ export function PatrolsDialog({
   const knownIdsRef = useRef<Set<string> | null>(null);
   const panelRef = useRef<HTMLDivElement | null>(null);
   const firstFieldRef = useRef<HTMLButtonElement | null>(null);
-  const showForm = !hasPatrols || adding;
+  const showForm = canCreate && (!hasPatrols || adding);
 
   useDialogA11y(true, panelRef, onClose, {
     initialFocusRef: openedByTouch() || !hasPatrols ? panelRef : firstFieldRef,
@@ -824,7 +828,13 @@ export function PatrolsDialog({
             </section>
           ) : null}
 
-          {hasPatrols && !adding ? (
+          {!hasPatrols && !canCreate ? (
+            <p className="m-0 text-[0.84rem] text-[var(--color-text-muted)]">
+              {tr("No patrols or timers in this chat.")}
+            </p>
+          ) : null}
+
+          {canCreate && hasPatrols && !adding ? (
             <button
               type="button"
               data-testid="patrols-add"

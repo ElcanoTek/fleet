@@ -8095,7 +8095,7 @@ export function ChatExperience({
                   onReview={reviewPendingApproval}
                 />
               ) : null}
-              {patrolsOpen && !isLockdown ? (
+              {patrolsOpen ? (
                 <PatrolsDialog
                   schedules={livePatrols}
                   approvalMode={approvalMode}
@@ -8103,6 +8103,7 @@ export function ChatExperience({
                   autonomousAccepted={autonomousAccepted}
                   onRequireAutonomousAccept={requireAutonomousAccept}
                   onChangeApprovalMode={requestApprovalModeChange}
+                  canCreate={!isLockdown}
                   barShown={!patrolBarHidden}
                   onSetBarShown={(shown) => {
                     const id = activeConversationId;

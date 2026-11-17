@@ -5833,5 +5833,6 @@
   "Times in {0}": "Horas en {0}",
   "Undo": "Deshacer",
   "Wake this conversation on your cadence with full history, workspace files, and enabled connectors.": "Despierta esta conversación con tu cadencia, con todo el historial, los archivos del espacio de trabajo y los conectores habilitados.",
-  "1 patrol or timer in this chat": "1 patrulla o temporizador en este chat"
+  "1 patrol or timer in this chat": "1 patrulla o temporizador en este chat",
+  "No patrols or timers in this chat.": "No hay patrullas ni temporizadores en este chat."
 }

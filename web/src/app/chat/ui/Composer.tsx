@@ -1464,6 +1464,10 @@ export function Composer({
                 approvalMode,
                 isAutoApprove,
               );
+              // A sealed (lockdown) chat cannot start a patrol here, but one the
+              // assistant armed must stay manageable — above all once its bar
+              // is hidden — so the clock and the menu row still open the dialog.
+              const canOpenPatrols = Boolean(onOpenPatrols) && (!sealed || activePatrolCount > 0);
               const hasActiveSecondary =
                 effectiveApprovalMode !== "manual" ||
                 activePatrolCount > 0 ||
@@ -1700,7 +1704,7 @@ export function Composer({
                           </button>
                         ) : null}
 
-                        {onOpenShare || (onOpenPatrols && !sealed) || onChangeApprovalMode || toggleAutoApprove || canCompact ? (
+                        {onOpenShare || canOpenPatrols || onChangeApprovalMode || toggleAutoApprove || canCompact ? (
                           <div aria-hidden="true" className="my-0.5 h-px bg-[var(--color-border)]" />
                         ) : null}
 
@@ -1766,7 +1770,7 @@ export function Composer({
                           </button>
                         ) : null}
 
-                        {onOpenPatrols && !sealed ? (
+                        {canOpenPatrols && onOpenPatrols ? (
                           <button
                             type="button"
                             role="menuitem"
@@ -2219,7 +2223,7 @@ export function Composer({
                       (and while the dialog is open); it opens Patrols & timers. On
                       phones it shows only once the Patrol bar is hidden, since the
                       clock is then the patrol's one visible handle. */}
-                  {onOpenPatrols && !sealed && (activePatrolCount > 0 || patrolsOpen) ? (
+                  {canOpenPatrols && (activePatrolCount > 0 || patrolsOpen) ? (
                     <div
                       role="presentation"
                       className={`relative ${
