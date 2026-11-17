@@ -139,6 +139,8 @@ keyboard. Actions:
   for any page link (`/chat?c=…`, a team link with its other parameters, a
   task link) and, for the chat's links, for a session the server revokes after
   the page loaded: the chat then signs in through `/login?return_to=<link>`.
+  A link opened later replaces one parked earlier, a parked team link
+  included.
   Already signed in through central Auth's shared cookie, the link simply
   opens. Only a relative link to a Fleet page is kept — never a scheme, host,
   `//`, backslash or an encoded form of one, never `/api/…` or `/login` — and

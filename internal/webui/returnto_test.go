@@ -262,6 +262,69 @@ func TestDeepLinkKeepsTeamLinkQuery(t *testing.T) {
 	}
 }
 
+var teamCleared = regexp.MustCompile(`(?m)^fleet_team_link=;.*Max-Age=0`)
+
+// A newer link supersedes a team link parked by an earlier visit: the team
+// cookie is redeemed on its own at a landing, so a stale one would take the
+// visitor away from the link they opened last.
+func TestNewerLinkSupersedesParkedTeamLink(t *testing.T) {
+	e := newTestEnv(t, withOrigin(testOrigin))
+	team := "/chat?team=" + testTeamLinkID
+	withTeam := func(r *http.Request) *http.Request { return withCookie(r, teamLinkCookie, testTeamLinkID) }
+
+	// A newer deep link, or the bare start page, drops the parked team link.
+	for _, link := range []string{manifestLink, "/chat", "/", "/settings/personas"} {
+		res := e.do(withTeam(withParked(req("GET", link, ""), team)))
+		if !teamCleared.MatchString(setCookies(res)) {
+			t.Errorf("%s: team link not dropped: %q", link, setCookies(res))
+		}
+	}
+	// The team link itself parks it again, and nothing drops it first.
+	res := e.do(withTeam(req("GET", team+"&draft=x", "")))
+	if c := setCookies(res); teamCleared.MatchString(c) || !strings.Contains(c, "fleet_team_link="+testTeamLinkID) {
+		t.Fatalf("team link re-park: %q", c)
+	}
+	// Requests that are not page visits leave it alone.
+	for _, r := range []*http.Request{req("GET", "/apple-touch-icon.png", ""), req("GET", "/api/conversations", ""), req("POST", "/chat", "")} {
+		if c := setCookies(e.do(withTeam(r))); strings.Contains(c, teamLinkCookie) {
+			t.Errorf("%s %s touched the team link: %q", r.Method, r.URL, c)
+		}
+	}
+
+	// Redeeming a parked link drops a team cookie that is still there, so the
+	// redeemed link is not redirected away on its next request.
+	landing := withTeam(signedIn(t, req("GET", "/", "")))
+	landAndFollow(t, e, landing, manifestLink, manifestLink)
+	if c := setCookies(e.do(withTeam(withParked(signedIn(t, req("GET", "/", "")), manifestLink)))); !teamCleared.MatchString(c) {
+		t.Fatalf("redeem left the team link parked: %q", c)
+	}
+	res = e.do(signedIn(t, req("GET", manifestLink, "")))
+	if res.StatusCode != http.StatusOK || res.Header.Get("Location") != "" {
+		t.Fatalf("%d %q", res.StatusCode, res.Header.Get("Location"))
+	}
+	// An unusable parked link is not redeemed, so the team link still is.
+	res = e.do(withTeam(withCookie(signedIn(t, req("GET", "/", "")), returnToCookie, "garbage!")))
+	if res.Header.Get("Location") != testOrigin+team {
+		t.Fatalf("%q", res.Header.Get("Location"))
+	}
+}
+
+// The bookmark aliases servePage redirects (/admin, the retired
+// notifications page) survive sign-in too and then take their own redirect.
+func TestDeepLinkKeepsAdminAliases(t *testing.T) {
+	e := newTestEnv(t, withOrigin(testOrigin))
+	for _, link := range []string{"/admin", "/settings/admin/notifications"} {
+		if parked := bounce(t, e, link); parked != link {
+			t.Fatalf("%s: parked %q", link, parked)
+		}
+		landAndFollow(t, e, signedIn(t, req("GET", "/", "")), link, link)
+		res := e.do(signedIn(t, req("GET", link, "")))
+		if res.StatusCode != http.StatusPermanentRedirect || res.Header.Get("Location") != testOrigin+"/settings/admin" {
+			t.Fatalf("%s: %d %q", link, res.StatusCode, res.Header.Get("Location"))
+		}
+	}
+}
+
 func TestDeepLinkRedeemedOnlyOnASignInLanding(t *testing.T) {
 	e := newTestEnv(t, withOrigin(testOrigin))
 	for _, p := range []string{"/", "/chat", "/login", "/?lang=", "/login?e=invalid"} {
@@ -364,6 +427,8 @@ func TestReturnPathRefusals(t *testing.T) {
 		"/chat",
 		"/orchestrator/tasks/task-9",
 		"/settings/admin/users",
+		"/admin",
+		"/settings/admin/notifications",
 		"/help",
 		"/help/operations-center",
 		"/chat?draft=" + strings.Repeat("a", maxReturnToLen-len("/chat?draft=")),

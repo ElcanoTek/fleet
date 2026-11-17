@@ -44,13 +44,14 @@ const (
 )
 
 // returnRoute reports whether p, a decoded path, is a page a parked link may
-// lead to: one the SPA renders behind sign-in. /login and /no-access are
-// sign-in's own pages and would loop; / is the start page itself.
+// lead to: one the SPA renders behind sign-in, or a bookmark alias servePage
+// redirects to one. /login and /no-access are sign-in's own pages and would
+// loop; / is the start page itself.
 func returnRoute(p string) bool {
 	switch {
 	case p == "/login" || p == "/no-access":
 		return false
-	case pagePaths[p]:
+	case pagePaths[p] || adminAlias(p):
 		return true
 	case strings.HasPrefix(p, "/help/"):
 		_, ok := helpGuides[strings.TrimPrefix(p, "/help/")]
@@ -131,10 +132,18 @@ func parkedReturnPath(r *http.Request) (target string, present bool) {
 // sign-in never lands on an older link than the one just opened. Anything
 // that is not a page (a missing icon a browser asks for on its own, an API
 // call) leaves the parked link alone.
+//
+// A team link parked by an earlier visit is dropped the same way, unless this
+// visit is a team link itself (the gate parks that one again right after): the
+// team cookie is redeemed on its own at a landing, so a stale one would
+// otherwise take the visitor away from the newer link.
 func (g *Gateway) parkBouncedPage(w http.ResponseWriter, r *http.Request) {
 	p := r.URL.Path
 	if r.Method != http.MethodGet || (p != "/" && !returnRoute(p)) {
 		return
+	}
+	if _, err := r.Cookie(teamLinkCookie); err == nil && !teamLinkRequest(r) {
+		clearTeamLink(w, g.secureRequest(r))
 	}
 	target := requestReturnPath(r)
 	startPage := p == "/" || (p == "/chat" && r.URL.RawQuery == "")
@@ -181,6 +190,12 @@ func (g *Gateway) signedInLoginTarget(w http.ResponseWriter, r *http.Request) st
 // return cookie: any such landing clears it, and a sign-in leg's bare landing
 // (startPageLanding) is sent on to the parked link. It reports whether it
 // answered the request.
+//
+// Redeeming also drops a parked team link. The return cookie is never older
+// than the team cookie (every page visit the gate bounces re-parks or drops
+// both), and a team link's own ?team= rides in the parked query; left in
+// place, the team cookie would redirect the visitor's next /chat away from
+// the link just redeemed.
 func (g *Gateway) redeemReturnPath(w http.ResponseWriter, r *http.Request) bool {
 	if r.Method != http.MethodGet {
 		return false
@@ -192,6 +207,9 @@ func (g *Gateway) redeemReturnPath(w http.ResponseWriter, r *http.Request) bool 
 	g.clearReturnPath(w, r)
 	if target == "" || !startPageLanding(r) {
 		return false
+	}
+	if _, err := r.Cookie(teamLinkCookie); err == nil {
+		clearTeamLink(w, g.secureRequest(r))
 	}
 	g.redirectToReturnPath(w, r, target)
 	return true

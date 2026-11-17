@@ -267,7 +267,7 @@ func (g *Gateway) servePage(w http.ResponseWriter, r *http.Request, sess *webses
 	case p == "/":
 		temporaryRedirect(w, g.redirectURL(r, requestLanguagePath(r, "/chat")))
 		return
-	case p == "/admin" || p == "/settings/admin/notifications":
+	case adminAlias(p):
 		// /admin moved under the settings area, and /settings/admin/notifications
 		// was retired in favor of Settings → General → Browser notifications and
 		// env/API configuration; the alias keeps bookmarks working.
@@ -456,6 +456,13 @@ func (g *Gateway) renderIndex(w http.ResponseWriter, r *http.Request, status int
 
 // adminAliasURL keeps the local alias relative without a configured origin:
 // Host and forwarded headers must not choose a permanent redirect destination.
+// adminAlias reports the bookmark paths servePage redirects to
+// /settings/admin: /admin moved under the settings area, and
+// /settings/admin/notifications was retired.
+func adminAlias(p string) bool {
+	return p == "/admin" || p == "/settings/admin/notifications"
+}
+
 func (g *Gateway) adminAliasURL(r *http.Request) string {
 	location := &url.URL{Path: "/settings/admin"}
 	if language := requestLanguage(r); language != "" {

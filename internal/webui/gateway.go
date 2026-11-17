@@ -238,12 +238,10 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		g.parkBouncedPage(w, r)
-		if path == "/chat" {
-			if id := r.URL.Query().Get("team"); teamLinkID.MatchString(id) {
-				setCookie(w, teamLinkCookie, id, teamLinkMaxAgeSeconds, g.secureRequest(r), "")
-				temporaryRedirect(w, g.redirectURL(r, requestLanguagePath(r, "/login?team_link=1")))
-				return
-			}
+		if teamLinkRequest(r) {
+			setCookie(w, teamLinkCookie, r.URL.Query().Get("team"), teamLinkMaxAgeSeconds, g.secureRequest(r), "")
+			temporaryRedirect(w, g.redirectURL(r, requestLanguagePath(r, "/login?team_link=1")))
+			return
 		}
 		temporaryRedirect(w, g.redirectURL(r, requestLanguagePath(r, "/login")))
 		return
@@ -282,6 +280,11 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	g.servePage(w, r, sess)
+}
+
+// teamLinkRequest reports whether r opens a team link: /chat?team=<valid id>.
+func teamLinkRequest(r *http.Request) bool {
+	return r.URL.Path == "/chat" && teamLinkID.MatchString(r.URL.Query().Get("team"))
 }
 
 func parkedTeamLink(r *http.Request) string {
