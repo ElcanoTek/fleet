@@ -284,6 +284,22 @@ func TestNewerLinkSupersedesParkedTeamLink(t *testing.T) {
 	if c := setCookies(res); teamCleared.MatchString(c) || !strings.Contains(c, "fleet_team_link="+testTeamLinkID) {
 		t.Fatalf("team link re-park: %q", c)
 	}
+	// A newer chat link opened signed in (a session gained elsewhere) opens
+	// as itself and drops the parked team link, rather than being redirected
+	// to the older team chat.
+	for _, link := range []string{"/chat?c=conv-1", manifestLink, "/?x=1"} {
+		res := e.do(withTeam(signedIn(t, req("GET", link, ""))))
+		if strings.HasSuffix(res.Header.Get("Location"), team) || !teamCleared.MatchString(setCookies(res)) {
+			t.Errorf("%s: %d %q %q", link, res.StatusCode, res.Header.Get("Location"), setCookies(res))
+		}
+	}
+	// A bare landing still redeems it, with or without the lang hint.
+	for _, p := range []string{"/", "/chat", "/chat?lang=es"} {
+		res := e.do(withTeam(signedIn(t, req("GET", p, ""))))
+		if loc := res.Header.Get("Location"); !strings.HasPrefix(loc, testOrigin+"/chat?") || !strings.Contains(loc, "team="+testTeamLinkID) {
+			t.Errorf("%s: %q", p, res.Header.Get("Location"))
+		}
+	}
 	// A page opened signed in drops it too; requests that are not page visits
 	// leave it alone, signed in or out.
 	res = e.do(withTeam(signedIn(t, req("GET", "/settings/personas", ""))))

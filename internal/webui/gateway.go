@@ -249,7 +249,9 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Signed in and landing home with a team link parked: every sign-in path
 	// ends at / (or /chat), so this is where the visitor is sent on to the chat
-	// they opened. A request naming its own team link wins and just clears the
+	// they opened — on a bare landing (startPageLanding: nothing but the
+	// optional lang hint). A request naming its own page (its own team link,
+	// a ?c= or ?draft= link) is the visitor's newer choice and just clears the
 	// parked one; so does a parked value that is not a valid id.
 	landing := path == "/" || path == "/chat"
 	_, cookieErr := r.Cookie(teamLinkCookie)
@@ -261,7 +263,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if sess != nil && landing && hasParked {
-		if parked := parkedTeamLink(r); parked != "" && !r.URL.Query().Has("team") {
+		if parked := parkedTeamLink(r); parked != "" && startPageLanding(r) {
 			g.redirectToParkedTeamLink(w, r, parked)
 			return
 		}
