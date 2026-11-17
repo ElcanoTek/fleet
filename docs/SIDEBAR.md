@@ -67,7 +67,8 @@ sidebar"), which `/help` renders.
   deploy. **Start from my sidebar** copies the admin's own layout as a
   starting point. Until the saved default has loaded the editor and every
   write are disabled; a failed read offers **Try again** and never lets an
-  admin save over a default they have not seen.
+  admin save over a default they have not seen. The editor is also locked
+  while a save is in flight, so no edit is lost to the save's answer.
 
 ## Storage and API
 
@@ -103,6 +104,22 @@ sidebar"), which `/help` renders.
   (`useFallbackTargets`). One in the person's own layout that they can no
   longer open is shown faded, labelled "not available to you", so they can
   unpin it.
+- **The workspace default carries no private names.** `GET /api/sidebar`
+  serves it to members with every item's captured `title` dropped
+  (`sidebar.Layout.ForMembers`); `/api/admin/sidebar` keeps them for the
+  editor. A title is a snapshot of the target's own name taken in the admin's
+  browser, so an admin's pin to their own chat never names it to anyone who
+  cannot open it; the rail names a workspace pin from the member's own lists.
+  An admin's `label` is kept: it is text written for everyone.
+- **No background tasks in the workspace default.** Task visibility is
+  owner-scoped for everyone but admins, so `PUT /api/admin/sidebar` refuses a
+  `task` item (`sidebar.CheckWorkspace`), the workspace editor's picker does
+  not offer tasks, and "Start from my sidebar" leaves them out. A person may
+  still pin their own tasks in their own layout.
+- **Home goes only where this account can go.** A chat or project Home from
+  the workspace default is followed only once the member's own lists confirm
+  they can open it (within the same short wait); a person's own Home is
+  skipped when it is known to be gone. A task is never a workspace Home.
 
 ## The client store (`store.ts`)
 

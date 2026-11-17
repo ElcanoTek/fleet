@@ -106,9 +106,12 @@ function SidebarAdmin() {
     }
   };
 
+  // A workspace sidebar cannot pin a background task (only its owner and
+  // admins can open one; the server refuses it), so a copy leaves them out.
   const copyMine = async () => {
     await loadSidebar();
-    setDraft(cloneLayout(getSidebarState().layout));
+    const mine = cloneLayout(getSidebarState().layout);
+    setDraft(normalizeLayout({ ...mine, items: mine.items.filter((i) => i.kind !== "task") }));
   };
 
   const loaded = saved !== undefined && !loadFailed;
@@ -167,8 +170,8 @@ function SidebarAdmin() {
       <div className="max-w-[34rem] rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4">
         {/* Disabled until the saved default has loaded: an admin edits what is
             actually there, never a stand-in. */}
-        <fieldset disabled={!loaded} className="m-0 min-w-0 border-0 p-0" data-testid="admin-sidebar-editor">
-          <SidebarEditor layout={draft} onChange={loaded ? setDraft : () => {}} mode="workspace" isAdmin />
+        <fieldset disabled={!loaded || busy} className="m-0 min-w-0 border-0 p-0" data-testid="admin-sidebar-editor">
+          <SidebarEditor layout={draft} onChange={loaded && !busy ? setDraft : () => {}} mode="workspace" isAdmin />
         </fieldset>
       </div>
     </SetSection>

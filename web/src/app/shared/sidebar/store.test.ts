@@ -9,6 +9,7 @@ import {
   resetSidebarStoreForTests,
   setSidebarLayout,
 } from "./store";
+import { resetFallbackTargetsForTests } from "./targets";
 import { entryHomeEligible, captureEntryAddress, markEntryHomeUsed, resetEntryHomeForTests, resolveEntryHome } from "./home";
 
 const WORKSPACE = normalizeLayout({ items: [{ id: "tasks", kind: "builtin" }], home: "tasks" });
@@ -155,5 +156,61 @@ describe("Home on entry", () => {
   it("resolves the Home item from the layout", async () => {
     mockFetch({ get: { layout: null, workspace_default: WORKSPACE } });
     expect((await resolveEntryHome(1000))?.id).toBe("tasks");
+  });
+
+  describe("only somewhere this account can open", () => {
+    const chatHome = (ref: string) =>
+      normalizeLayout({ items: [{ id: "s-1", kind: "chat", ref, title: "Board" }], home: "s-1" });
+    function stubLists(own: string[], opts: { failLists?: boolean } = {}) {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string) => {
+          if (url === "/api/sidebar") return Response.json(listsAnswer.current);
+          if (opts.failLists) return new Response("down", { status: 502 });
+          if (url.startsWith("/api/projects")) return Response.json({ projects: [] });
+          if (url.includes("archived") || url.includes("scope=shared")) return Response.json({ conversations: [] });
+          return Response.json({ conversations: own.map((id) => ({ id, title: id })) });
+        }),
+      );
+    }
+    const listsAnswer: { current: unknown } = { current: null };
+    beforeEach(() => resetFallbackTargetsForTests());
+
+    it("skips a workspace Home this account cannot open", async () => {
+      listsAnswer.current = { layout: null, workspace_default: chatHome("admins-own") };
+      stubLists(["c1"]);
+      expect(await resolveEntryHome(1000)).toBeNull();
+    });
+
+    it("skips a workspace Home it cannot confirm, but keeps the person's own", async () => {
+      listsAnswer.current = { layout: null, workspace_default: chatHome("c1") };
+      stubLists(["c1"], { failLists: true });
+      expect(await resolveEntryHome(1000)).toBeNull();
+      resetSidebarStoreForTests();
+      resetFallbackTargetsForTests();
+      listsAnswer.current = { layout: chatHome("c1"), workspace_default: null };
+      stubLists(["c1"], { failLists: true });
+      expect((await resolveEntryHome(1000))?.ref).toBe("c1");
+    });
+
+    it("skips the person's own Home once it is gone, and opens it while it is there", async () => {
+      listsAnswer.current = { layout: chatHome("deleted"), workspace_default: null };
+      stubLists(["c1"]);
+      expect(await resolveEntryHome(1000)).toBeNull();
+      resetSidebarStoreForTests();
+      resetFallbackTargetsForTests();
+      listsAnswer.current = { layout: chatHome("c1"), workspace_default: null };
+      stubLists(["c1"]);
+      expect((await resolveEntryHome(1000))?.ref).toBe("c1");
+    });
+
+    it("never takes a task as a workspace Home", async () => {
+      listsAnswer.current = {
+        layout: null,
+        workspace_default: normalizeLayout({ items: [{ id: "s-t", kind: "task", ref: "t1" }], home: "s-t" }),
+      };
+      stubLists([]);
+      expect(await resolveEntryHome(1000)).toBeNull();
+    });
   });
 });

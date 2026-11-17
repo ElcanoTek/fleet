@@ -107,6 +107,19 @@ function readLists(): Promise<Lists | null> {
   return listsRead;
 }
 
+/**
+ * canOpen: whether this account can open a chat or project shortcut's
+ * target, from the same lists the rail reads (null when they could not be
+ * read). Other kinds are not checked here.
+ */
+export async function canOpen(item: SidebarItem): Promise<boolean | null> {
+  const lists = await readLists();
+  if (!lists) return null;
+  if (item.kind === "chat") return lists.chats.has(item.ref ?? "");
+  if (item.kind === "project") return lists.projects.has(item.ref ?? "");
+  return null;
+}
+
 /** useFallbackTargets: targets for a page that is not Chat (null until read, or when not needed). */
 export function useFallbackTargets(enabled: boolean): SidebarTargets | null {
   const [lists, setLists] = useState<Lists | null>(null);

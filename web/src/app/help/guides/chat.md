@@ -449,7 +449,9 @@ Administrators set the sidebar everyone starts with under **Settings → Admin
 have not customized their own sidebar get it the next time they load a page,
 and **Reset to default** brings anyone back to it. A chat pinned there shows
 only to people who can open it, which makes a shared or multiplayer chat (a
-team-wide patrol, say) a good Home for everyone. **Start from my sidebar**
+team-wide patrol, say) a good Home for everyone; a Home someone cannot open is
+skipped for them. Background tasks cannot be pinned there, because only their
+owner and administrators can open one. **Start from my sidebar**
 copies your own arrangement as a starting point, and **Reset to fleet's
 default** removes the workspace sidebar.
 

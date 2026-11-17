@@ -88,6 +88,9 @@ export function RailNav({
 
   const visible = layout.items.filter((item) => {
     if (item.hidden) return false;
+    // The server refuses a task pin in a workspace default (only its owner
+    // and admins can open a task); one arriving anyway is never shown.
+    if (item.kind === "task") return source === "user";
     if (item.kind !== "chat" && item.kind !== "project") return true;
     // A shortcut to something this account cannot open: the person's own is
     // kept (dimmed, so they can see and remove it); one that came from the

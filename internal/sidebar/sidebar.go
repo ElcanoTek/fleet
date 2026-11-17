@@ -299,3 +299,34 @@ func validIcon(s string) bool {
 	}
 	return true
 }
+
+// CheckWorkspace holds a workspace default to the rules an ordinary layout
+// does not need: it is served to every member, so it may not pin a
+// background task. Task visibility is owner-scoped for everyone but admins,
+// so such a pin would be a dead link (and its title another person's
+// metadata) for nearly every member.
+func CheckWorkspace(l Layout) error {
+	for _, it := range l.Items {
+		if it.Kind == KindTask {
+			return invalid("item %q: a workspace sidebar cannot pin a background task; only its owner and admins can open one", it.ID)
+		}
+	}
+	return nil
+}
+
+// ForMembers is the workspace default as it is served to members (GET
+// /sidebar): every item's captured Title is dropped. A title is a snapshot of
+// the target's own name taken in the admin's browser, and a member who cannot
+// open that chat or project must not learn it. The client shows a
+// workspace shortcut only once it knows the member can open the target, and
+// then names it from the member's own lists. An admin's Label is kept: it is
+// text the admin wrote for everyone.
+func (l Layout) ForMembers() Layout {
+	out := l
+	out.Items = make([]Item, len(l.Items))
+	for i, it := range l.Items {
+		it.Title = ""
+		out.Items[i] = it
+	}
+	return out
+}

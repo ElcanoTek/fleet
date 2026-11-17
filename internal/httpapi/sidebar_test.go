@@ -192,3 +192,45 @@ func TestSidebar_StaleRowReadsAsAbsent(t *testing.T) {
 		t.Errorf("admin GET with a stale row = %+v; want null", ws)
 	}
 }
+
+// TestSidebar_WorkspaceDefaultIsRedactedForMembers: an admin's pin to one of
+// their own chats keeps its captured title on the admin read, but a member's
+// GET /sidebar never carries it (the rail names a workspace pin only from the
+// member's own lists, once they can open it), and a background task cannot
+// be pinned in the workspace default at all.
+func TestSidebar_WorkspaceDefaultIsRedactedForMembers(t *testing.T) {
+	t.Parallel()
+
+	s := memberFixture(t, "boss@x.com", "peon@x.com")
+	setRole(t, s, "boss@x.com", "admin", "")
+	h := s.Routes()
+
+	put := `{"version":1,"items":[{"id":"s-1","kind":"chat","ref":"c1","title":"Board comp review","label":"Everyone's board"}],"sections":[]}`
+	if w := doRaw(t, h, http.MethodPut, "/admin/sidebar", put, "boss@x.com"); w.Code != http.StatusOK {
+		t.Fatalf("admin PUT = %d %s", w.Code, w.Body.String())
+	}
+	admin := decodeSidebar[adminSidebarGet](t, do(t, h, http.MethodGet, "/admin/sidebar", nil, "boss@x.com"))
+	if !strings.Contains(string(admin.Layout), `"title":"Board comp review"`) {
+		t.Errorf("admin read lost the title: %s", admin.Layout)
+	}
+	w := do(t, h, http.MethodGet, "/sidebar", nil, "peon@x.com")
+	if w.Code != http.StatusOK {
+		t.Fatalf("member GET = %d", w.Code)
+	}
+	body := w.Body.String()
+	if strings.Contains(body, "Board comp review") {
+		t.Errorf("member GET leaked the captured title: %s", body)
+	}
+	if !strings.Contains(body, `"ref":"c1"`) || !strings.Contains(body, `"label":"Everyone's board"`) {
+		t.Errorf("member GET lost the pin or the admin's label: %s", body)
+	}
+
+	task := `{"version":1,"items":[{"id":"s-2","kind":"task","ref":"t1","title":"Payroll export"}],"sections":[]}`
+	if w := doRaw(t, h, http.MethodPut, "/admin/sidebar", task, "boss@x.com"); w.Code != http.StatusBadRequest {
+		t.Errorf("workspace task pin = %d; want 400", w.Code)
+	}
+	// A person may still pin their own task in their own layout.
+	if w := doRaw(t, h, http.MethodPut, "/sidebar", task, "peon@x.com"); w.Code != http.StatusOK {
+		t.Errorf("own task pin = %d %s", w.Code, w.Body.String())
+	}
+}

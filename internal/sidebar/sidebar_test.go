@@ -256,3 +256,29 @@ func TestParseBadJSON(t *testing.T) {
 		}
 	}
 }
+
+func TestWorkspaceRulesAndRedaction(t *testing.T) {
+	l, err := Normalize(Layout{Version: 1, Items: []Item{
+		{ID: "s-1", Kind: KindChat, Ref: "c1", Title: "Secret", Label: "Ours"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckWorkspace(l); err != nil {
+		t.Errorf("CheckWorkspace(chat) = %v", err)
+	}
+	m := l.ForMembers()
+	if m.Items[0].Title != "" || m.Items[0].Label != "Ours" || m.Items[0].Ref != "c1" {
+		t.Errorf("ForMembers = %+v", m.Items[0])
+	}
+	if l.Items[0].Title != "Secret" {
+		t.Errorf("ForMembers changed the original: %+v", l.Items[0])
+	}
+	task, err := Normalize(Layout{Version: 1, Items: []Item{{ID: "s-2", Kind: KindTask, Ref: "t1"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckWorkspace(task); !errors.Is(err, ErrInvalid) {
+		t.Errorf("CheckWorkspace(task) = %v; want ErrInvalid", err)
+	}
+}

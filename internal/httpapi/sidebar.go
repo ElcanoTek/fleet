@@ -90,6 +90,13 @@ func (s *Server) handleSidebar(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
+		// Members get the default without the captured target titles
+		// (sidebar.Layout.ForMembers): an admin's pin to their own chat must
+		// not name that chat to everyone.
+		if ws != nil {
+			redacted := ws.ForMembers()
+			ws = &redacted
+		}
 		writeJSON(w, r, map[string]any{"layout": mine, "workspace_default": ws})
 	case http.MethodPut:
 		l, ok := decodeSidebarBody(w, r)
@@ -148,6 +155,10 @@ func (s *Server) handleAdminSidebar(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPut:
 		l, ok := decodeSidebarBody(w, r)
 		if !ok {
+			return
+		}
+		if err := sidebar.CheckWorkspace(l); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		raw, err := json.Marshal(l)

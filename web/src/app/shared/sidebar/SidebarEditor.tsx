@@ -606,8 +606,15 @@ function AddShortcut({
 }) {
   const [open, setOpen] = useState(false);
   const shown = useMemo(
-    () => (entries ?? []).filter((e) => !(e.kind === "page" && e.ref === "analytics" && !isAdmin)),
-    [entries, isAdmin],
+    () =>
+      (entries ?? []).filter(
+        (e) =>
+          !(e.kind === "page" && e.ref === "analytics" && !isAdmin) &&
+          // Only its owner and admins can open a task, so a workspace sidebar
+          // cannot pin one (the server refuses it too).
+          !(e.kind === "task" && mode === "workspace"),
+      ),
+    [entries, isAdmin, mode],
   );
   return (
     <Popover open={open} onOpenChange={setOpen}>
