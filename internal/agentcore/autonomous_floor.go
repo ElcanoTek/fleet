@@ -402,10 +402,54 @@ func segmentIsGitPush(tokens []string, depth int) bool {
 	if strings.Contains(tokens[i], "$") && tokensContainWordFold(tokens[i+1:], "push") {
 		return true
 	}
-	if executableBaseName(tokens[i]) != "git" {
+	cmdBase := executableBaseName(tokens[i])
+	if cmdBase == "git" {
+		return gitTokensHavePushSubcommandDepth(tokens[i+1:], depth)
+	}
+	if cmdBase == "echo" || cmdBase == "printf" {
 		return false
 	}
-	return gitTokensHavePushSubcommand(tokens[i+1:])
+	return nonGitCommandEmbedsGitPush(tokens[i+1:], depth)
+}
+
+func nonGitCommandEmbedsGitPush(args []string, depth int) bool {
+	for j, tok := range args {
+		if executableBaseName(tok) == "git" && gitTokensHavePushSubcommandDepth(args[j+1:], depth+1) {
+			return true
+		}
+		if tokenContainsEmbeddedGitAndPush(tok) {
+			return true
+		}
+	}
+	return false
+}
+
+func tokenContainsEmbeddedGitAndPush(s string) bool {
+	return containsASCIIWordFold(s, "git") && containsASCIIWordFold(s, "push")
+}
+
+func containsASCIIWordFold(s, word string) bool {
+	lower := strings.ToLower(s)
+	w := strings.ToLower(word)
+	for offset := 0; offset < len(lower); {
+		idx := strings.Index(lower[offset:], w)
+		if idx < 0 {
+			return false
+		}
+		pos := offset + idx
+		end := pos + len(w)
+		leftOK := pos == 0 || !isASCIIIdentChar(lower[pos-1])
+		rightOK := end == len(lower) || !isASCIIIdentChar(lower[end])
+		if leftOK && rightOK {
+			return true
+		}
+		offset = pos + 1
+	}
+	return false
+}
+
+func isASCIIIdentChar(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= '0' && b <= '9') || b == '_' || b == '-'
 }
 
 func tokensContainWordFold(tokens []string, want string) bool {
@@ -528,10 +572,6 @@ func skipTimeoutWrapper(tokens []string, i int) int {
 	return i
 }
 
-func gitTokensHavePushSubcommand(args []string) bool {
-	return gitTokensHavePushSubcommandDepth(args, 0)
-}
-
 func gitTokensHavePushSubcommandDepth(args []string, depth int) bool {
 	if depth > 4 {
 		return true
@@ -546,7 +586,7 @@ func gitTokensHavePushSubcommandDepth(args []string, depth int) bool {
 			break
 		}
 		if !strings.HasPrefix(arg, "-") || arg == "-" {
-			return gitSubcommandIsPush(arg, aliases, hasConfigEnvAlias, depth)
+			return gitSubcommandIsPush(arg, args[i+1:], aliases, hasConfigEnvAlias, depth)
 		}
 		if arg == "-h" || arg == "--help" || arg == "-v" || arg == "--version" {
 			return false
@@ -568,7 +608,7 @@ func gitTokensHavePushSubcommandDepth(args []string, depth int) bool {
 	if i >= len(args) {
 		return false
 	}
-	return gitSubcommandIsPush(args[i], aliases, hasConfigEnvAlias, depth)
+	return gitSubcommandIsPush(args[i], args[i+1:], aliases, hasConfigEnvAlias, depth)
 }
 
 func parseGitInlineAliasFlag(args []string, i int) (string, string, bool) {
@@ -608,8 +648,11 @@ func gitConfigEnvDefinesAlias(args []string, i int) bool {
 	return strings.HasPrefix(key, "alias.")
 }
 
-func gitSubcommandIsPush(sub string, aliases map[string]string, hasConfigEnvAlias bool, depth int) bool {
+func gitSubcommandIsPush(sub string, rest []string, aliases map[string]string, hasConfigEnvAlias bool, depth int) bool {
 	if strings.EqualFold(sub, "push") || strings.Contains(sub, "$") {
+		return true
+	}
+	if strings.EqualFold(sub, "submodule") && nonGitCommandEmbedsGitPush(rest, depth) {
 		return true
 	}
 	if hasConfigEnvAlias {

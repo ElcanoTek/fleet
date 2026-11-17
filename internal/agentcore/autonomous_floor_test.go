@@ -262,6 +262,10 @@ func testAutonomousFloorBashGitPush(t *testing.T) {
 		`{"command":"echo main | xargs -n 1 git push origin"}`,
 		`{"command":"g=git; $g push origin main"}`,
 		`{"command":"op=push; git $op origin main"}`,
+		`{"command":"find . -maxdepth 1 -exec git push origin main \\;"}`,
+		`{"command":"flock /tmp/repo.lock git -C /workspace/repo push origin main"}`,
+		`{"command":"python3 -c 'import subprocess; subprocess.run([\"git\", \"push\"])'"}`,
+		`{"command":"git submodule foreach 'git push origin HEAD'"}`,
 	} {
 		if !IsAutonomousHardBlocked("bash", cmd) {
 			t.Errorf("bash %s must be hard-blocked as git push", cmd)
