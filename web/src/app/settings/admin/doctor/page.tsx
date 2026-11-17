@@ -194,7 +194,7 @@ export default function AdminDoctorPage() {
                     <Icon name={meta.icon} className={`mt-0.5 size-[0.95rem] shrink-0 ${meta.className}`} />
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-baseline gap-x-2">
-                        <span className="text-sm font-medium text-[var(--color-text-primary)]">{localizeServerMessage(c.name)}</span>
+                        <span className="min-w-0 text-sm font-medium text-[var(--color-text-primary)] [overflow-wrap:anywhere]">{localizeServerMessage(c.name)}</span>
                         <span className={`text-[0.68rem] font-semibold uppercase tracking-[0.05em] ${meta.className}`}>{meta.label}</span>
                       </div>
                       <p className="m-0 mt-0.5 break-words text-[0.8rem] text-[var(--color-text-secondary)]">{localizeServerMessage(c.detail)}</p>

@@ -123,7 +123,8 @@ import { TeamLinkNotice, type TeamLinkNoticeState } from "./TeamLinkNotice";
 import { BranchOriginBanner } from "./TeamBranchBanners";
 import { WithheldFilesContext } from "./LockedFiles";
 import { DownloadChatDialog, type DownloadOptions } from "./DownloadChatDialog";
-import { useRailCollapse } from "@/app/shared/ui/NavRail";
+import { useRailCollapse, keepFocusForDrawerShortcut } from "@/app/shared/ui/NavRail";
+import { isInteractiveTarget } from "@/app/shared/ui/interactiveTarget";
 import { loadWorkspaceModelCatalog } from "@/app/shared/lib/workspaceModels";
 import {
   catalogModelSlug,
@@ -173,6 +174,7 @@ import { errorMessage } from "@/app/shared/lib/errorMessage";
 import { filenameFrom, saveBlob } from "@/app/shared/lib/downloadFile";
 import { startVisibleInterval } from "@/app/shared/lib/visibleInterval";
 import { fetchMe } from "@/app/shared/lib/account";
+import { prefersReducedMotion, requestFollowBottom } from "./stickToBottom";
 import { useChatMemories } from "./useChatMemories";
 import { MemoryManagerDialog, MemoryPromoteDialog } from "./MemoryManagerDialog";
 import { isAbortError } from "@/app/shared/hooks/useCancellableFetch";
@@ -483,31 +485,6 @@ const shortcutHelpGroups: ShortcutHelpGroup[] = [
     ],
   },
 ];
-
-// isInteractiveTarget reports whether an element owns Enter itself (a button,
-// link, or ARIA widget), so the global Enter-to-open shortcut can decline to
-// claim the key — and thus never preventDefault — when one of these is focused.
-function isInteractiveTarget(el: Element | null): boolean {
-  if (!(el instanceof HTMLElement)) return false;
-  const tag = el.tagName;
-  if (
-    tag === "BUTTON" ||
-    tag === "A" ||
-    tag === "INPUT" ||
-    tag === "TEXTAREA" ||
-    tag === "SELECT"
-  ) {
-    return true;
-  }
-  const role = el.getAttribute("role");
-  return (
-    role === "button" ||
-    role === "link" ||
-    role === "menuitem" ||
-    role === "option" ||
-    role === "tab"
-  );
-}
 
 // ── component ────────────────────────────────────────────────────────────
 
@@ -5218,6 +5195,7 @@ export function ChatExperience({
   const moveFocus = useCallback(
     (delta: number) => {
       if (visibleOrder.length === 0) return;
+      if (!sidebarOpen) keepFocusForDrawerShortcut();
       setSidebarOpen(true);
       const idx = focusedConversationId
         ? visibleOrder.findIndex((c) => c.id === focusedConversationId)
@@ -5230,7 +5208,7 @@ export function ChatExperience({
           : Math.min(visibleOrder.length - 1, Math.max(0, idx + delta));
       setFocusedConversationId(visibleOrder[next]?.id ?? null);
     },
-    [visibleOrder, focusedConversationId],
+    [visibleOrder, focusedConversationId, sidebarOpen],
   );
 
   // Keep the focused row in view as the cursor moves (the drawer/rail may be
@@ -6434,8 +6412,21 @@ export function ChatExperience({
     writePref("chat-show-stats", next ? "1" : "0");
   };
 
+  // To the scroller's true end, and the reader counts as at the end from
+  // now. Scrolling the end marker into view stopped the transcript's bottom
+  // padding short of it, which the follow rule reads as "still reading
+  // further up": the next long message was then left below the screen.
   const jumpToLatest = () => {
-    streamEndRef.current?.scrollIntoView({ block: "end", behavior: "smooth" });
+    requestFollowBottom();
+    const scroller = conversationRef.current;
+    if (scroller && typeof scroller.scrollTo === "function") {
+      scroller.scrollTo({
+        top: scroller.scrollHeight,
+        behavior: prefersReducedMotion() ? "auto" : "smooth",
+      });
+    } else {
+      streamEndRef.current?.scrollIntoView({ block: "end", behavior: "smooth" });
+    }
   };
 
   const addAttachmentFiles = (files: FileList | null) => {
@@ -7106,6 +7097,7 @@ export function ChatExperience({
                   aria-label={tr("Keyboard shortcuts")}
                   className="group/tbtn hidden size-11 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-accent)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:inline-flex sm:size-8"
                   data-tip-bottom="Keyboard shortcuts"
+                  data-tip-align="end"
                   data-testid="shortcuts-button"
                   type="button"
                   onClick={() => setShortcutsOpen(true)}

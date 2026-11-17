@@ -120,10 +120,10 @@ grants apply these selected roles to Fleet automatically.
 
 ### Anatomy of a task row
 
-Each row in **Recent Tasks** shows the task's short **ID**, its **title** in bold
-with the opening of its prompt in muted text beneath, a **status badge**, its
-**schedule**, **who created it**, and **when**. Clicking the row opens the task's
-full record.
+Each row in **Recent Tasks** shows the task's **title** in bold with the opening
+of its prompt in muted text and its short **ID** beneath, a **status badge**, its
+**schedule**, and **when** it was created with **who created it** underneath.
+Clicking the row opens the task's full record.
 
 On the right of every row sit four actions:
 

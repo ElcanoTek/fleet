@@ -503,7 +503,10 @@ function UploadPanel({
             aria-label={tr("Files to upload")}
             data-testid="upload-files-input"
             onChange={(e) => onPick(Array.from(e.target.files ?? []))}
-            className="text-[0.82rem] text-[var(--color-text-secondary)] file:mr-3 file:cursor-pointer file:rounded-[var(--radius-md)] file:border file:border-[var(--color-border)] file:bg-[var(--color-overlay-soft)] file:px-[0.7rem] file:py-[0.35rem] file:text-[0.78rem] file:font-medium file:text-[var(--color-text-primary)]"
+            // w-full min-w-0: a file input has a fixed natural width that it
+            // otherwise refuses to go under, which made this whole page 13px
+            // wider than a phone.
+            className="w-full min-w-0 text-[0.82rem] text-[var(--color-text-secondary)] file:mr-3 file:cursor-pointer file:rounded-[var(--radius-md)] file:border file:border-[var(--color-border)] file:bg-[var(--color-overlay-soft)] file:px-[0.7rem] file:py-[0.35rem] file:text-[0.78rem] file:font-medium file:text-[var(--color-text-primary)]"
           />
         </ConnField>
         <ConnField label={tr("Folder (optional)")}>

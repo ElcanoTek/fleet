@@ -331,3 +331,96 @@ export function ClampText({
     </div>
   );
 }
+
+/* ── Form helpers ── */
+
+// MissingFieldsHint says why a form's submit button is greyed out: which
+// required fields are still empty. Without it the button simply did not
+// respond and nothing on the form said what it was waiting for. Give the
+// button aria-describedby={id} so a screen reader hears it with the button.
+// Beside a footer's buttons, render it through FormActions' `hint`, never as
+// a plain sibling of the buttons. `block` is for a form with no footer of its
+// own (the fields and the button share one wrapping row): the hint is then a
+// full line under the button, so it cannot move the button at any width.
+// `align` puts it under the button it explains: "left" where the button
+// follows the fields at the start of the row, "right" under a right-hand
+// footer.
+export function MissingFieldsHint({
+  id,
+  missing,
+  block = false,
+  align = "right",
+}: {
+  id: string;
+  missing: string[];
+  block?: boolean;
+  align?: "left" | "right";
+}) {
+  if (missing.length === 0) return null;
+  if (block) {
+    return (
+      <p
+        id={id}
+        className={`m-0 w-full basis-full text-[0.72rem] text-[var(--color-text-muted)] ${align === "left" ? "text-left" : "text-right"}`}
+      >
+        {tr("To continue, fill in: {0}", [missing.join(", ")])}
+      </p>
+    );
+  }
+  return (
+    <span id={id} className="min-w-0 flex-[1_1_auto] text-right text-[0.72rem] text-[var(--color-text-muted)]">
+      {tr("To continue, fill in: {0}", [missing.join(", ")])}
+    </span>
+  );
+}
+
+// FormActions is a form's footer: an optional hint, then the buttons. The
+// buttons are one group, so they stay on one line together whatever the hint
+// does. The hint sits beside them when the whole footer fits on a line and
+// takes the line above them when it does not; it wraps its own words only
+// when it is wider than the form.
+//
+// The rule is structural on purpose. With the hint as a plain sibling of the
+// buttons in one wrapping row, the row broke wherever the words happened to
+// run out: Cancel stayed up beside the hint and the submit button dropped to
+// a line of its own. That depended on the form's width, the language and how
+// many fields were missing, so each width-specific fix moved the break to
+// another combination (it was wrong in 31 of 156 form x width x language
+// cases when measured).
+export function FormActions({
+  hint,
+  children,
+  className = "",
+}: {
+  hint?: ReactNode;
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <div className={`flex flex-wrap items-center justify-end gap-x-3 gap-y-1.5 ${className}`}>
+      {hint}
+      <span className="flex flex-nowrap items-center justify-end gap-2">{children}</span>
+    </div>
+  );
+}
+
+// useFocusOnOpen puts the cursor in a form's first field when the form opens.
+// These forms open from a toggle button that stays where it is (and becomes
+// Cancel), so focus stayed on that button and the first field was a Tab away.
+// Attach the returned ref to the first field; `open` is whether the form is
+// showing. A form that is already open when the page loads is left alone.
+//
+// `item` says what the open form is editing (a row's id; "" or null for a new
+// one). Pressing Edit on another row while the form is open swaps its
+// contents without closing it; passing the id moves the cursor to the first
+// field then too, which also brings a form at the top of a long list back
+// into view.
+export function useFocusOnOpen<T extends HTMLElement>(open: boolean, item: string | null = null) {
+  const ref = useRef<T | null>(null);
+  const was = useRef({ open, item });
+  useEffect(() => {
+    if (open && (!was.current.open || was.current.item !== item)) ref.current?.focus();
+    was.current = { open, item };
+  }, [open, item]);
+  return ref;
+}

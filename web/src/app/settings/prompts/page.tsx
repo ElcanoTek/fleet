@@ -18,6 +18,9 @@ import {
   RevealButton,
   Segmented,
   SETTINGS_INPUT,
+  FormActions,
+  MissingFieldsHint,
+  useFocusOnOpen,
 } from "../ui/atoms";
 import {
   ConnEmpty,
@@ -60,6 +63,7 @@ export default function PromptsPage() {
   const [scope, setScope] = useState<"all" | "yours" | "workspace" | "deployment">("all");
   const [openId, setOpenId] = useState<string | null>(null);
   const [draft, setDraft] = useState<DraftState | null>(null);
+  const firstFieldRef = useFocusOnOpen<HTMLInputElement>(draft !== null, draft?.id ?? null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -140,6 +144,9 @@ export default function PromptsPage() {
     setError(null);
     setNotice(null);
     if (scope === "deployment") setScope("all");
+    // A copy is a new item whichever one it came from, so the form's id does
+    // not change when one is already open: move the cursor here.
+    firstFieldRef.current?.focus();
     setDraft({
       id: "",
       name:
@@ -279,6 +286,7 @@ export default function PromptsPage() {
               <div className="mb-4 grid gap-3 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] p-3.5">
                 <ConnField label={tr("Name")}>
                   <input
+                    ref={firstFieldRef}
                     aria-label={tr("Prompt name")}
                     placeholder={tr("e.g. Morning deal pacing check")}
                     value={draft.name}
@@ -325,7 +333,21 @@ export default function PromptsPage() {
                     />
                     <span>{tr("Share with this workspace")}</span>
                   </label>
-                  <div className="flex items-center gap-2">
+                  {/* ml-auto: when it does not fit beside "Share with this
+                      workspace" it drops to its own line and stays at the
+                      right edge, where the buttons are once the hint goes. */}
+                  <FormActions
+                    className="ml-auto min-w-0 max-sm:w-full"
+                    hint={
+                        <MissingFieldsHint
+                          id="promptMissing"
+                          missing={[
+                            ...(draft.name.trim() ? [] : [tr("Name")]),
+                            ...(draft.content.trim() ? [] : [tr("Prompt text")]),
+                          ]}
+                        />
+                    }
+                  >
                     <button
                       type="button"
                       className={btnClass({ sm: true, reveal: true })}
@@ -337,6 +359,7 @@ export default function PromptsPage() {
                       disabled={
                         !draft.name.trim() || !draft.content.trim() || busy
                       }
+                      aria-describedby={draft.name.trim() && draft.content.trim() ? undefined : "promptMissing"}
                       onClick={() => void handleSave()}
                       className={btnClass({ variant: "primary", sm: true })}
                     >
@@ -346,7 +369,7 @@ export default function PromptsPage() {
                           ? tr("Save changes")
                           : tr("Create prompt")}
                     </button>
-                  </div>
+                  </FormActions>
                 </div>
               </div>
             ) : null}
@@ -370,8 +393,8 @@ export default function PromptsPage() {
                       className={ROW}
                     >
                       <div className={ROW_HEAD}>
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="text-[0.86rem] font-semibold text-[var(--color-text-primary)]">
+                        <div className="flex min-w-0 flex-wrap items-center gap-2">
+                          <span className="min-w-0 text-[0.86rem] font-semibold text-[var(--color-text-primary)] [overflow-wrap:anywhere]">
                             {p.name}
                           </span>
                           <ConnBadge
@@ -510,8 +533,8 @@ export default function PromptsPage() {
                     className={ROW}
                   >
                     <div className={ROW_HEAD}>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="text-[0.86rem] font-semibold text-[var(--color-text-primary)]">
+                      <div className="flex min-w-0 flex-wrap items-center gap-2">
+                        <span className="min-w-0 text-[0.86rem] font-semibold text-[var(--color-text-primary)] [overflow-wrap:anywhere]">
                           {p.name}
                         </span>
                         <ConnBadge variant="neutral">Git</ConnBadge>

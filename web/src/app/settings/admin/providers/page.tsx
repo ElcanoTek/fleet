@@ -24,6 +24,9 @@ import {
   InlineConfirmButton,
   RevealButton,
   SETTINGS_INPUT,
+  FormActions,
+  MissingFieldsHint,
+  useFocusOnOpen,
 } from "../../ui/atoms";
 import {
   ConnEmpty,
@@ -407,6 +410,9 @@ function ProvidersAdmin() {
   const [providers, setProviders] = useState<LLMProvider[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
+  // The first field a person can type in: Name on a new provider, Type on an
+  // existing one (its name is fixed, and a disabled field cannot take focus).
+  const firstFieldRef = useFocusOnOpen<HTMLElement>(draft !== null, draft?.id ?? null);
   const [busy, setBusy] = useState(false);
   // Catch-all confirmation: an enabled provider with no models listed can
   // hijack every unmatched slug, so Save arms on the first click and fires on
@@ -641,6 +647,9 @@ function ProvidersAdmin() {
               >
                 <input
                   id="providerName"
+                  ref={(el) => {
+                    if (draft.id === "") firstFieldRef.current = el;
+                  }}
                   value={draft.name}
                   onChange={(e) => setDraft({ ...draft, name: e.target.value })}
                   placeholder="my-provider"
@@ -654,6 +663,9 @@ function ProvidersAdmin() {
                 <span className="select-wrap block">
                   <select
                     id="providerType"
+                    ref={(el) => {
+                      if (draft.id !== "") firstFieldRef.current = el;
+                    }}
                     value={draft.type}
                     // A new row's window belongs to the type it was typed for
                     // (Ollama's is the server's num_ctx), so a type change
@@ -805,7 +817,13 @@ function ProvidersAdmin() {
                 />
                 {tr("Enabled")}
               </label>
-              <span className="inline-flex items-center gap-2">
+              {/* Beside "Enabled" when the whole footer fits there; under it,
+                  whole and still at the right edge, when it does not. On a
+                  phone it takes the full row. */}
+              <FormActions
+                className="ml-auto min-w-0 max-sm:basis-full"
+                hint={<MissingFieldsHint id="providerMissing" missing={draft.name.trim() ? [] : [tr("Name")]} />}
+              >
                 <button
                   type="button"
                   onClick={() => {
@@ -825,6 +843,7 @@ function ProvidersAdmin() {
                     if (e.key === "Escape") setCatchAllArmed(false);
                   }}
                   disabled={busy || !draft.name.trim()}
+                  aria-describedby={draft.name.trim() ? undefined : "providerMissing"}
                   data-testid="provider-save"
                   className={btnClass({ variant: "primary" })}
                 >
@@ -836,7 +855,7 @@ function ProvidersAdmin() {
                         ? tr("Create provider")
                         : tr("Save changes")}
                 </button>
-              </span>
+              </FormActions>
             </div>
             {catchAllArmed ? (
               <p

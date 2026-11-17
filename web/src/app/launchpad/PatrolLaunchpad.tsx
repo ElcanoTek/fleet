@@ -787,7 +787,12 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
               />
             ) : null}
           </div>
-          <footer className="flex shrink-0 items-center justify-between gap-3 border-t border-[var(--color-border)] bg-[var(--color-surface-2)] px-5 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 sm:px-7 sm:pb-3 [&_button]:any-pointer-coarse:min-h-11">
+          {/* max-[360px]: on the smallest phones the two buttons and their
+              padding were wider than the screen, cutting the primary
+              button's edge off. They get tighter padding and lose the
+              decorative icon there; flex-wrap is the backstop for a longer
+              translation. */}
+          <footer className="flex shrink-0 flex-wrap items-center justify-between gap-x-3 gap-y-2 border-t border-[var(--color-border)] bg-[var(--color-surface-2)] px-5 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 max-[360px]:gap-x-2 max-[360px]:px-3 max-[360px]:[&_button]:px-2.5 max-[360px]:[&_button_svg]:hidden sm:px-7 sm:pb-3 [&_button]:any-pointer-coarse:min-h-11">
             {stepIndex > 0 ? (
               <Button
                 type="button"

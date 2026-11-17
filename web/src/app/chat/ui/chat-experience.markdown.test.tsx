@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 // Imported from AssistantContent directly: chat-experience no longer re-exports
 // the markdown API — a static re-export would drag the lazy-loaded markdown
@@ -134,6 +134,189 @@ describe("renderAssistantContent — link rewriting", () => {
 // ReactMarkdown silently drops the HTML and the user sees a gap with
 // no preview. These guard the regression reported when Victoria's
 // inventory-recommendation mockups rendered as nothing in chat.
+describe("renderAssistantContent — blocks", () => {
+  it("gives lists, quotes and deep headings the classes their styles hang on", () => {
+    const { container } = renderMarkdown(
+      "- one\n- two\n\n1. first\n2. second\n\n> quoted\n\n#### Fourth level",
+    );
+    expect(container.querySelector("ul")).toHaveClass("assistant-markdown-ul");
+    expect(container.querySelector("ol")).toHaveClass("assistant-markdown-ol");
+    expect(container.querySelector("blockquote")).toHaveClass("assistant-markdown-quote");
+    expect(container.querySelector("h4")).toHaveClass("assistant-markdown-h3");
+  });
+
+  // Steps separated by code blocks are separate lists; each keeps the number
+  // it was written with instead of starting again at 1.
+  it("keeps the number a list starts at", () => {
+    const { container } = renderMarkdown(
+      "1. Install\n\n```\nnpm i\n```\n\n2. Configure\n\n```\ninit\n```\n\n3. Run",
+    );
+    const lists = [...container.querySelectorAll("ol")];
+    expect(lists.map((ol) => ol.start)).toEqual([1, 2, 3]);
+    expect(lists[0]).not.toHaveAttribute("start");
+  });
+
+  it("widens the number gutter for a list that reaches three digits", () => {
+    const { container } = renderMarkdown("98. a\n99. b\n100. c");
+    expect(container.querySelector("ol")).toHaveAttribute("data-digits", "3");
+    expect(renderMarkdown("1. a\n2. b").container.querySelector("ol")).not.toHaveAttribute("data-digits");
+  });
+
+  // A literal <br> is how models break a line inside a table cell.
+  it("turns a <br> tag into a line break and leaves other tags as text", () => {
+    const { container } = renderMarkdown(
+      "| Plan | Includes |\n|---|---|\n| Team | 25 seats<br>Priority support<br/>SSO |\n\nPress <kbd>K</kbd> now.",
+    );
+    const cell = container.querySelectorAll("td")[1];
+    expect(cell.querySelectorAll("br")).toHaveLength(2);
+    expect(cell.textContent?.replace(/\n/g, "")).toBe("25 seatsPriority supportSSO");
+    expect(container.querySelector("kbd")).toBeNull();
+    expect(container.textContent).toContain("<kbd>K</kbd>");
+  });
+
+  // The whole rule for a literal <br>: a line break inside a table cell when
+  // it has content on both sides, text everywhere else. Every row below is a case that an
+  // earlier, cleverer rule got wrong in one direction or the other; a change
+  // to the rule has to say what happens to each of them.
+  describe("a literal <br>", () => {
+    const shown = (md: string) => {
+      const view = renderMarkdown(md);
+      const text = view.container.textContent ?? "";
+      const breaks = view.container.querySelectorAll("br").length;
+      view.unmount();
+      return { text, breaks };
+    };
+
+    it.each([
+      // naming the tag
+      "How do I use the <br> tag in an email?",
+      "The tag for a line break is <br>",
+      "The tag is:<br>",
+      "Use <br>, not two spaces, and (<br>) too.",
+      'He typed "<br>" and it vanished.',
+      "Self-closing form: <br/>. Old form: <br>.",
+      "the sequence <br><br> makes a blank line",
+      "<br>s are everywhere",
+      // HTML and code written without backticks
+      "Fix this for me: <p>Hello<br>World</p>",
+      "Why does <div><br></div> add a gap?",
+      "Common void tags: <img>,<br>,<hr> and <input>.",
+      "In HTML a<br>b puts b on a new line.",
+      'echo "Hello<br>World";',
+      "return <div>a<br/>b</div>;",
+      "Here is my template:\n<span>Name<br>Title</span>",
+      "In HTML you break a line with <br>\nand a paragraph with <p>.",
+      // used as formatting outside a table: still shown, never guessed at
+      "Acme Corp<br>\n123 Main St<br>\nSpringfield",
+      "Thanks,<br>\nJohn<br>",
+      "First<br><br>\nSecond",
+      "Acme Corp<br>",
+      "Name<br>Title<br>Company",
+      "Name<br> Title",
+      "Best regards,<br>\n<br>John Smith",
+      "Options:<br>\n\n- one",
+      "- Alpha<br>\n- Beta",
+      "> Line one<br>\n> Line two",
+      "## Title<br>Subtitle",
+      // on a line of its own, and whole messages made of it
+      "The tag you want is:\n\n<br>\n\nPut it at the end of the line.",
+      "Before\n\n<br>\nAfter",
+      "<br>",
+      "<br>\n\n<br>",
+      "<br><br>",
+    ])("is shown as typed outside a table: %j", (md) => {
+      const { text, breaks } = shown(md);
+      const typed = (md.match(/<br\s*\/?>/gi) ?? []).length;
+      expect((text.match(/<br\s*\/?>/gi) ?? []).length).toBe(typed);
+      // Markdown's own hard breaks are the only <br> elements there can be.
+      expect(breaks).toBe(0);
+    });
+
+    // Inside a table cell: [the cell as typed, line breaks, tags left showing].
+    // A tag is a break only with content on both sides of it in the cell.
+    const CELLS = [
+      // Between two things: formatting.
+      ["25 seats<br>Priority support<br/>SSO", 2, 0],
+      ["a<BR>b", 1, 0],
+      ["a <br> b", 1, 0],
+      ["x<br><br>y", 2, 0],
+      ["**x<br>y**", 1, 0],
+      ["*a*<br>`code`", 1, 0],
+      ["[link](https://example.com)<br>after", 1, 0],
+      // Nothing on one side: the tag is what the cell is about.
+      ["<br>", 0, 1],
+      ["<br><br>", 0, 2],
+      ["<br> or <br/>", 0, 2],
+      ["<br> tag", 0, 1],
+      ["Use <br>", 0, 1],
+      ["text<br>", 0, 1],
+      ["<br>a<br>b<br>", 1, 2],
+      // In code it is never a tag at all.
+      ["`<br>`", 0, 1],
+      ["a `<br>` b", 0, 1],
+      ["a `x<br>y` b", 0, 1],
+      // Accepted: HTML pasted into a cell without backticks loses the tag it
+      // has content around. Backticks keep it.
+      ["<p>Hello<br>World</p>", 1, 0],
+    ] as const;
+    it.each(CELLS)("in a table cell: %j -> %i break(s), %i shown", (cell, breaks, shownTags) => {
+      for (const md of [`| Plan |\n|---|\n| ${cell} |`, `| ${cell} | B |\n|---|---|\n| 1 | 2 |`]) {
+        const view = renderMarkdown(md);
+        const el = view.container.querySelector(md.startsWith("| Plan") ? "td" : "th");
+        expect(el?.querySelectorAll("br")).toHaveLength(breaks);
+        expect((el?.textContent?.match(/<br\s*\/?>/gi) ?? []).length).toBe(shownTags);
+        view.unmount();
+      }
+    });
+
+    it("decides each cell by itself", () => {
+      const view = renderMarkdown("| Tag | Meaning |\n|---|---|\n| <br> | first<br>second |");
+      const cells = [...view.container.querySelectorAll("td")];
+      expect(cells[0].textContent).toBe("<br>");
+      expect(cells[1].querySelectorAll("br")).toHaveLength(1);
+    });
+
+    it("leaves Markdown's own hard break alone", () => {
+      const { text, breaks } = shown("Line one  \nLine two");
+      expect(breaks).toBe(1);
+      expect(text).toBe("Line one\nLine two");
+    });
+  });
+
+  it("names a task-list checkbox and keeps it read-only", () => {
+    renderMarkdown("- [x] shipped\n- [ ] pending");
+    const boxes = screen.getAllByRole("checkbox", { name: "Task" });
+    expect(boxes).toHaveLength(2);
+    expect(boxes[0]).toBeChecked();
+    expect(boxes[1]).not.toBeChecked();
+    expect(boxes[0]).toBeDisabled();
+  });
+
+  // jsdom lays nothing out, so widths are stubbed: a block wider than its box
+  // becomes a named keyboard stop; one that fits stays out of the Tab order.
+  it("makes a code block or table a keyboard stop only while it scrolls sideways", () => {
+    const client = vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(300);
+    const scroll = vi.spyOn(HTMLElement.prototype, "scrollWidth", "get").mockReturnValue(900);
+    try {
+      const { container, unmount } = renderMarkdown("```\nlong line\n```\n\n| A | B |\n|---|---|\n| 1 | 2 |");
+      expect(container.querySelector("pre")).toHaveAttribute("tabindex", "0");
+      expect(screen.getByRole("group", { name: "Code, scrolls sideways" })).toBeInTheDocument();
+      expect(screen.getByRole("group", { name: "Table, scrolls sideways" })).toBeInTheDocument();
+      unmount();
+
+      scroll.mockReturnValue(300);
+      const fits = renderMarkdown("```\nshort\n```");
+      expect(fits.container.querySelector("pre")).not.toHaveAttribute("tabindex");
+      expect(screen.queryByRole("group")).toBeNull();
+      // Never a landmark: several wide blocks would add several of one name.
+      expect(screen.queryByRole("region")).toBeNull();
+    } finally {
+      client.mockRestore();
+      scroll.mockRestore();
+    }
+  });
+});
+
 describe("autoFenceRawHtmlDocument", () => {
   it("wraps an unfenced <!DOCTYPE html> document so InlineHtmlPreview can mount", () => {
     const raw = [

@@ -509,7 +509,7 @@ default:
 - the **memory approval card** ("Save this memory?") gains a **Save to: My
   memory | Team learnings** control. Inside a team-shared project, Team
   learnings is preselected; the user can flip it;
-- a **Save** action in the message action row (beside Copy · Regenerate ·
+- a **Save to memory** action in the message action row (beside Copy · Regenerate ·
   Branch) opens the same picker, for capturing something the agent said without
   composing a "remember this" turn.
 

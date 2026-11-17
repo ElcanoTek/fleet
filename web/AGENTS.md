@@ -88,6 +88,16 @@ Code highlighting is in-housed (`src/app/chat/ui/highlight/`, see the root
   `z-[1300]` floating popovers/menus/selects/tooltips) aligned to fleet's modal
   stack. Build a base component by hand only when the registry lacks it, then
   upstream it to Flag.
+- **Layout and behaviour rules** that came out of the UI audit are in
+  [`../docs/WEB-UI-RULES.md`](../docs/WEB-UI-RULES.md); read it before
+  touching Markdown rendering, a settings form footer, the phone sidebar's
+  focus, or the chat's follow-the-end rule. In short: a `display: grid` rule
+  in `globals.css` declares its columns (`minmax(0, 1fr)` for a plain stack);
+  a value from data in a flex row gets `min-w-0`; a form footer is
+  `FormActions` with a `MissingFieldsHint`; labels made of words never get
+  `overflow-wrap: anywhere`; and a layout fix is checked across widths and
+  en/es/pt, not on the reported screenshot (`layoutDefaults.test.ts` and
+  `e2e/mocked/layout-long-values.spec.ts` guard the defaults).
 - Design rules (tokens, contrast, typefaces): [`src/app/DESIGN.md`](src/app/DESIGN.md).
   `src/app/globals.css` imports `tw-animate-css` and the vendored
   `src/flag/shadcn/theme.css` bridge while keeping `fonts/fonts.css` imported

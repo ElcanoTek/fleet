@@ -89,7 +89,9 @@ export function CopyButton({
 }: {
   text: string;
   title?: string;
-  variant?: "default" | "compact";
+  // "action" is the reply footer's button (.reply-action), shared with the
+  // Regenerate / Branch / Save actions beside it.
+  variant?: "default" | "compact" | "action";
 }) {
   const [state, setState] = useState<"idle" | "ok" | "err">("idle");
   const resetRef = useRef<number | null>(null);
@@ -112,7 +114,9 @@ export function CopyButton({
       className={
         variant === "compact"
           ? "assistant-markdown-pre-copy"
-          : "touch-target text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
+          : variant === "action"
+            ? "reply-action"
+            : "touch-target text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
       }
       title={title}
     >

@@ -6,7 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { navigate } from "@/app/lib/navigation";
 import { currentDefaultModel } from "@/app/lib/modelAliases";
 import { PatrolSchedulePicker } from "@/app/shared/ui/PatrolSchedulePicker";
-import { btnClass, ConnBadge, InlineConfirmButton, RevealButton, SETTINGS_INPUT } from "../ui/atoms";
+import { btnClass, ConnBadge, InlineConfirmButton, RevealButton, SETTINGS_INPUT, FormActions, MissingFieldsHint, useFocusOnOpen } from "../ui/atoms";
 import {
   ConnEmpty,
   ConnField,
@@ -107,6 +107,7 @@ export default function PersonasPage() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [draft, setDraft] = useState<PersonaDraft | null>(null);
+  const firstFieldRef = useFocusOnOpen<HTMLInputElement>(draft !== null, draft?.id ?? null);
   // The slug follows the display name until the user edits it by hand.
   const [slugTouched, setSlugTouched] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -295,7 +296,7 @@ export default function PersonasPage() {
             />
           </ConnField>
           <label className="flex cursor-pointer items-center gap-2 text-[0.78rem] text-[var(--color-text-secondary)]">
-            <input type="checkbox" checked={useHistory} onChange={(e) => setUseHistory(e.target.checked)} />
+            <input type="checkbox" className="size-4 shrink-0" checked={useHistory} onChange={(e) => setUseHistory(e.target.checked)} />
             <span>
               {tr("Learn from my recent chats — the assistant reads only the messages you typed (not its replies, and never lockdown chats)")}
             </span>
@@ -381,6 +382,7 @@ export default function PersonasPage() {
             <div className="flex flex-wrap gap-[0.75rem]">
               <ConnField label={tr("Display name")} grow>
                 <input
+                  ref={firstFieldRef}
                   id="personaDisplayName"
                   className={SETTINGS_INPUT}
                   placeholder={tr("My Twin")}
@@ -569,7 +571,20 @@ export default function PersonasPage() {
               ) : null}
             </fieldset>
 
-            <div className="mt-[0.1rem] flex justify-end gap-2">
+            <FormActions
+              className="mt-[0.1rem]"
+              hint={
+                  <MissingFieldsHint
+                    id="personaMissing"
+                    // `name` is the short name (the second field); the display
+                    // name is not required.
+                    missing={[
+                      ...(draft.name.trim() ? [] : [tr("Short name")]),
+                      ...(draft.instructions.trim() ? [] : [tr("Instructions")]),
+                    ]}
+                  />
+              }
+            >
               <button
                 type="button"
                 className={btnClass({ sm: true, reveal: true })}
@@ -581,11 +596,12 @@ export default function PersonasPage() {
                 type="button"
                 className={btnClass({ variant: "primary" })}
                 disabled={busy || !draft.name.trim() || !draft.instructions.trim()}
+                aria-describedby={draft.name.trim() && draft.instructions.trim() ? undefined : "personaMissing"}
                 onClick={() => void save()}
               >
                 {draft.id === "" ? tr("Create persona") : tr("Save changes")}
               </button>
-            </div>
+            </FormActions>
           </div>
         ) : null}
 
@@ -613,7 +629,9 @@ export default function PersonasPage() {
                   className={`${ROW} ${p.id === reviewId ? "rounded-[var(--radius-md)] bg-[color-mix(in_srgb,var(--color-accent)_8%,transparent)]" : ""}`}
                 >
                   <div className={ROW_HEAD}>
-                    <span className="text-[0.88rem] font-semibold text-[var(--color-text-primary)]">
+                    {/* A name is a value: it may shrink and break, so one long
+                        word cannot widen the row (and the page with it). */}
+                    <span className="min-w-0 text-[0.88rem] font-semibold text-[var(--color-text-primary)] [overflow-wrap:anywhere]">
                       {p.display_name}
                     </span>
                     <ConnBadge variant={p.kind === "twin" ? "overridden" : "neutral"}>
@@ -622,7 +640,9 @@ export default function PersonasPage() {
                     <ConnBadge variant="neutral">{p.autonomy === "act" ? tr("Acts for you") : tr("Suggests actions")}</ConnBadge>
                     {proposed ? (
                       <ConnBadge variant="warn">
-                        {p.replaces_name ? tr("Proposed edit to {0}", [p.replaces_name]) : tr("Proposed — review it")}
+                        <span className="truncate">
+                          {p.replaces_name ? tr("Proposed edit to {0}", [p.replaces_name]) : tr("Proposed — review it")}
+                        </span>
                       </ConnBadge>
                     ) : null}
                     <span className="ml-auto inline-flex flex-wrap gap-[0.35rem]">
@@ -690,7 +710,7 @@ export default function PersonasPage() {
                           key={i}
                           className="flex flex-wrap items-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] px-[0.65rem] py-[0.45rem] text-[0.76rem]"
                         >
-                          <span className="font-medium text-[var(--color-text-primary)]">{pt.title}</span>
+                          <span className="min-w-0 font-medium text-[var(--color-text-primary)] [overflow-wrap:anywhere]">{pt.title}</span>
                           <span className="text-[var(--color-text-muted)]">
                             {cadenceLabel(pt.cron)}
                             {pt.timezone && pt.timezone !== "UTC" ? ` · ${pt.timezone}` : pt.timezone === "UTC" ? " · UTC" : ""}

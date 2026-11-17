@@ -25,7 +25,7 @@ import {
   type ReactNode,
 } from "react";
 import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { MODEL_MARKDOWN_PLUGINS } from "@/app/shared/lib/markdownPlugins";
 import { evaluateSafe, renderActionTemplate, renderTemplate, toText, truthy, type Scope } from "./expr";
 import {
   buildReplyMessage,
@@ -1665,7 +1665,7 @@ function Markdown({ text }: { text: string }) {
   return (
     <div className="genui-md min-w-0 break-words [&_a]:underline [&_code]:font-mono [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:my-1 [&_table]:text-[0.78rem] [&_td]:border [&_td]:border-[var(--color-border)] [&_td]:px-1.5 [&_th]:border [&_th]:border-[var(--color-border)] [&_th]:px-1.5 [&_ul]:list-disc [&_ul]:pl-5">
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={MODEL_MARKDOWN_PLUGINS}
         // No raw HTML (react-markdown's default), and no images: a card must
         // never make the browser fetch a model-chosen URL on render.
         disallowedElements={["img"]}

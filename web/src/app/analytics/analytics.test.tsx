@@ -3,8 +3,9 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import type { ReactNode } from "react";
 import { AnalyticsPage } from "./page";
 
-let mockRole = "admin";
+let mockRole: string | undefined = "admin";
 let mockSignedIn = true;
+let mockUnreachable = false;
 
 vi.mock("@/app/shared/hooks/useOrchestratorSession", () => ({
   useOrchestratorSession: () => ({
@@ -13,7 +14,7 @@ vi.mock("@/app/shared/hooks/useOrchestratorSession", () => ({
     username: "admin@example.com",
     role: mockRole,
     noAccess: false,
-    unreachable: false,
+    unreachable: mockUnreachable,
     logout: async () => {},
   }),
 }));
@@ -401,5 +402,23 @@ describe("AnalyticsPage", () => {
     render(<AnalyticsPage />);
 
     expect(await screen.findByTestId("analytics-admin-required")).toBeTruthy();
+  });
+
+  // The session probe failed without an auth verdict: the role is unknown,
+  // which is not the same as "not an admin". An administrator used to be
+  // told they lacked access while the server was only restarting.
+  it("says the server is unreachable, not that admin access is required, when the session cannot load", async () => {
+    mockRole = undefined;
+    mockSignedIn = false;
+    mockUnreachable = true;
+    try {
+      render(<AnalyticsPage />);
+      const card = await screen.findByTestId("analytics-unreachable");
+      expect(within(card).getByRole("heading", { name: "Can't reach the server" })).toBeTruthy();
+      expect(within(card).getByRole("button", { name: "Retry" })).toBeTruthy();
+      expect(screen.queryByTestId("analytics-admin-required")).toBeNull();
+    } finally {
+      mockUnreachable = false;
+    }
   });
 });

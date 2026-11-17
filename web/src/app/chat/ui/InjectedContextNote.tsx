@@ -45,10 +45,10 @@ export function InjectedContextNote({ text }: { text: string | undefined }) {
   if (!text || !text.trim()) return null;
 
   return (
-    <div className="mt-1.5 w-full rounded-[var(--radius-lg)] border border-dashed border-[var(--color-border)] bg-[color-mix(in_srgb,var(--color-overlay-soft)_68%,transparent)] px-3 py-2 text-left text-[0.78rem] leading-[1.55] text-[var(--color-text-secondary)] sm:text-[0.82rem]">
+    <div className="mt-1.5 w-full rounded-[var(--radius-lg)] border border-dashed border-[var(--color-border)] bg-[color-mix(in_srgb,var(--color-overlay-soft)_68%,transparent)] px-3 py-1.5 text-left text-[0.78rem] leading-[1.55] text-[var(--color-text-secondary)] sm:text-[0.82rem]">
       <button
         type="button"
-        className="flex w-full items-center justify-between gap-3 text-left"
+        className="flex min-h-6 w-full items-center justify-between gap-3 text-left"
         onClick={() => setExpanded((v) => !v)}
         aria-expanded={expanded}
         aria-controls={panelId}

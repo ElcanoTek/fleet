@@ -342,10 +342,14 @@ export function CopyChip({ name }: { name: string }) {
         size="xs"
         aria-label={tr("Copy /{0} to clipboard", [name])}
         onClick={() => void copy()}
-        className="h-auto gap-[0.4rem] rounded-[0.45rem] border-border bg-(--color-overlay-soft) px-[0.6rem] py-[0.26rem] font-[family-name:var(--font-code)] text-[0.78rem] font-medium whitespace-normal text-foreground [overflow-wrap:anywhere]"
+        // max-w-full + shrink + min-w-0: the chip may be as wide as its row
+        // and no wider, so a long name (a skill name can be 64 characters)
+        // wraps inside the chip instead of running off a phone's screen. The
+        // base button is shrink-0, which kept it at its full one-line width.
+        className="h-auto max-w-full min-w-0 shrink gap-[0.4rem] rounded-[0.45rem] border-border bg-(--color-overlay-soft) px-[0.6rem] py-[0.26rem] text-left font-[family-name:var(--font-code)] text-[0.78rem] font-medium whitespace-normal text-foreground [overflow-wrap:anywhere]"
       >
         <span className="text-[var(--color-accent)]">/</span>
-        {name}
+        <span className="min-w-0">{name}</span>
         <Icon
           name={copied ? "check" : "copy"}
           className={cn(
@@ -369,7 +373,20 @@ export type AdminStat = { title: string; value: string; sub?: string };
 export function AdminStats({ items, testId }: { items: AdminStat[]; testId?: string }) {
   return (
     <div
-      className="grid grid-cols-4 gap-[0.7rem] max-[860px]:grid-cols-2 max-[520px]:grid-cols-1"
+      // Columns by the room this grid actually has, not by the window: at
+      // 1024px with both sidebars open it is 440px wide, and four columns
+      // there broke "0 running" in the middle of the word. Never more than
+      // four across, never a card under 8.5rem — and a card is 10.3rem wide
+      // where that still leaves two across (a 768px tablet gets three roomy
+      // cards rather than four whose values wrap; a phone keeps its two).
+      // A row of exactly four goes four across or two by two, never three
+      // and one: the last term is a switch — huge when a quarter of the row is
+      // under 10.3rem (so the half-width wins), nothing when it is not.
+      className={`grid gap-[0.7rem] ${
+        items.length === 4
+          ? "grid-cols-[repeat(auto-fit,minmax(max(8.5rem,min(calc((100%-0.7rem)/2-1px),max(calc((100%-2.1rem)/4),calc((10.3rem-(100%-2.1rem)/4)*9999)))),1fr))]"
+          : "grid-cols-[repeat(auto-fit,minmax(max(8.5rem,min(10.3rem,calc((100%-0.7rem)/2-1px)),calc((100%-2.1rem)/4)),1fr))]"
+      }`}
       data-testid={testId}
     >
       {items.map((s) => (

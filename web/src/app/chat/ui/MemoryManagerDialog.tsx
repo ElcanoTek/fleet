@@ -13,6 +13,7 @@ import { Icon } from "@/app/shared/ui/Icon";
 import { Segmented } from "@/app/shared/ui/Segmented";
 import { StatusChip } from "@/app/shared/ui/StatusChip";
 import { useDialogA11y } from "@/app/shared/ui/useDialogA11y";
+import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { MEMORY_KINDS } from "@/app/shared/lib/memoriesApi";
 import { memoryModalSubtitle } from "./memoryModalCopy";
 import { TeamLearningsPanel } from "./ProjectHome";
@@ -232,20 +233,21 @@ export function MemoryManagerDialog({
                   >
                     {tr("Kind")}
                   </label>
-                  <select
+                  <NativeSelect
                     id="memory-kind"
-                    className="h-7 rounded-[var(--radius-sm)] border border-[var(--color-border-strong)] bg-[var(--color-surface-1)] px-2 text-[0.75rem] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
+                    size="sm"
+                    className="w-auto"
                     value={memoryKindDraft}
                     onChange={(event) =>
                       setMemoryKindDraft(event.target.value)
                     }
                   >
                     {MEMORY_KINDS.map((k) => (
-                      <option key={k} value={k}>
+                      <NativeSelectOption key={k} value={k}>
                         {memoryKindLabel(k)}
-                      </option>
+                      </NativeSelectOption>
                     ))}
-                  </select>
+                  </NativeSelect>
                 </div>
                 <div className="flex items-center gap-2">
                   {editingMemoryId ? (

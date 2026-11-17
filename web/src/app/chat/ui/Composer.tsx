@@ -20,6 +20,7 @@ import type { Dispatch, ReactNode, RefObject, SetStateAction } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { PENDING_CONV_KEY } from "./workspaceHref";
 import { conversationApiUrl } from "@/app/lib/conversationApiUrl";
+import { menuPeekHeight, menuShiftLeft } from "./menuPeek";
 import { Icon } from "./Icon";
 import { ShareGlyph, TeamGlyph } from "./ShareGlyphs";
 import {
@@ -130,6 +131,24 @@ const TOOL_BTN_ACTIVE =
 const COMPOSER_POP_BASE =
   "fixed inset-x-2 bottom-[calc(env(safe-area-inset-bottom,0px)+5rem)] z-30 grid grid-cols-[minmax(0,1fr)] gap-[0.1rem] rounded-[0.75rem] border border-[var(--color-border-strong)] bg-[var(--color-surface-2)] p-[0.3rem] shadow-[var(--shadow-md)] motion-safe:animate-pop-up sm:absolute sm:inset-x-auto sm:bottom-[calc(100%+0.55rem)] sm:left-0";
 const COMPOSER_POP_WIDE = `${COMPOSER_POP_BASE} sm:w-[19rem]`;
+
+// keepMenuInWindow slides a composer menu left when it would cross the
+// window's right edge (menuShiftLeft). Only where the menu hangs from its
+// button (sm and up); on a phone it is a fixed sheet with its own insets. It
+// reads layout offsets, which the pop-up animation's transform does not move,
+// and doubles as a ref callback for the menus that need nothing else.
+function keepMenuInWindow(menu: HTMLElement | null) {
+  if (!menu) return;
+  menu.style.left = "";
+  const anchor = menu.offsetParent;
+  if (!anchor || getComputedStyle(menu).position !== "absolute") return;
+  const shift = menuShiftLeft(
+    anchor.getBoundingClientRect().left + menu.offsetLeft,
+    menu.offsetWidth,
+    document.documentElement.clientWidth,
+  );
+  if (shift > 0) menu.style.left = `${menu.offsetLeft - shift}px`;
+}
 
 // The design's .pop-row / .pop-title type ramp, for the composer's simple
 // menus (the tools popover has its own denser rows, ToolsPopover).
@@ -497,8 +516,53 @@ export function Composer({
     (selectedOption ?? personaButtonRef.current)?.focus();
   }, [personaPickerOpen, personaPickerRef]);
 
+  // Whether the More options menu has rows below its visible edge; drives the
+  // bottom fade that says "scroll for more" on a screen too short to show
+  // them all. Re-read on open and on every scroll of the menu.
+  const [moreMenuFade, setMoreMenuFade] = useState(false);
+  const syncMoreMenuFade = () => {
+    const menu = moreMenuRef.current?.querySelector<HTMLElement>('[role="menu"]');
+    setMoreMenuFade(
+      !!menu && menu.scrollHeight - menu.scrollTop - menu.clientHeight > 4,
+    );
+  };
+
+  // On a screen too short for every row the menu ends partway through one
+  // (menuPeek.ts). Measured from layout offsets, which the pop-up animation's
+  // transform does not change.
+  const fitMoreMenu = () => {
+    const menu = moreMenuRef.current?.querySelector<HTMLElement>('[role="menu"]');
+    if (!menu) return;
+    keepMenuInWindow(menu);
+    menu.style.maxHeight = "";
+    const rows = Array.from(
+      menu.querySelectorAll<HTMLElement>('[role^="menuitem"]'),
+      (row) => {
+        let top = 0;
+        for (
+          let el: HTMLElement | null = row;
+          el && el !== menu;
+          el = el.offsetParent as HTMLElement | null
+        ) {
+          top += el.offsetTop;
+        }
+        return { top, height: row.offsetHeight };
+      },
+    );
+    const height = menuPeekHeight(menu.clientHeight, rows);
+    if (height !== null) {
+      menu.style.maxHeight = `${height + menu.offsetHeight - menu.clientHeight}px`;
+    }
+  };
+
   useEffect(() => {
     if (!moreMenuOpen) return;
+    const fit = () => {
+      fitMoreMenu();
+      syncMoreMenuFade();
+    };
+    fit();
+    window.addEventListener("resize", fit);
     const firstItem = moreMenuRef.current?.querySelector<HTMLElement>(
       '[role="menu"] [role^="menuitem"]:not([disabled])',
     );
@@ -512,7 +576,10 @@ export function Composer({
       }
     };
     document.addEventListener("mousedown", handleMouseDown);
-    return () => document.removeEventListener("mousedown", handleMouseDown);
+    return () => {
+      window.removeEventListener("resize", fit);
+      document.removeEventListener("mousedown", handleMouseDown);
+    };
   }, [moreMenuOpen]);
 
   return (
@@ -1477,7 +1544,20 @@ export function Composer({
                         data-testid="composer-more-popover"
                         role="menu"
                         aria-label={tr("More composer options")}
-                        className={`${COMPOSER_POP_WIDE} max-h-[min(75vh,30rem)] overflow-y-auto sm:w-[20.5rem]`}
+                        // Tall enough for every row on an ordinary phone (the
+                        // old 30rem cap cut the last row off with no sign of
+                        // it). On a short screen it stops below the page
+                        // header (13rem = the 5rem bottom offset + the header
+                        // and title rows) rather than sliding under it, and
+                        // the fade below says there is more to scroll to.
+                        // From sm up the menu hangs above its button instead,
+                        // 7rem from the bottom of the window, so the same
+                        // budget is 14rem (a phone held sideways, a short
+                        // desktop window). In a window under 30rem tall the
+                        // rows are a little tighter, so a phone held sideways
+                        // shows three and the start of the fourth.
+                        className={`${COMPOSER_POP_WIDE} max-h-[min(calc(100dvh-13rem),36rem)] overflow-y-auto sm:max-h-[min(calc(100dvh-14rem),36rem)] sm:w-[20.5rem] [@media(max-height:30rem)]:[&_[role^=menuitem]]:py-[0.25rem]`}
+                        onScroll={syncMoreMenuFade}
                       >
                         <button
                           type="button"
@@ -1971,6 +2051,13 @@ export function Composer({
                             {sendOnEnter ? tr("On") : tr("Off")}
                           </span>
                         </button>
+                        {moreMenuFade ? (
+                          <div
+                            aria-hidden="true"
+                            data-testid="composer-more-fade"
+                            className="pointer-events-none sticky bottom-[-0.3rem] -mt-8 h-8 rounded-b-[0.7rem] bg-gradient-to-t from-[var(--color-surface-2)] to-transparent"
+                          />
+                        ) : null}
                       </div>
                     ) : null}
                   </div>
@@ -2011,7 +2098,7 @@ export function Composer({
                         <Icon name="persona" className="size-3.5" />
                       </button>
                       {personaPickerOpen && !shareBusy ? (
-                        <div className={`${COMPOSER_POP_WIDE} max-h-[min(26rem,70vh)] overflow-y-auto`}>
+                        <div ref={keepMenuInWindow} className={`${COMPOSER_POP_WIDE} max-h-[min(26rem,70vh)] overflow-y-auto`}>
                           <div role="listbox" aria-label={tr("Persona")} className="grid gap-[0.1rem]">
                             {(() => {
                               const pick = (p: string) => {

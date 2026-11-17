@@ -87,6 +87,7 @@ export type QueuedInput = {
   submission_id?: string;
 };
 import { formatBytes } from "./formatters";
+import { requestFollowBottom } from "./stickToBottom";
 import { joinTextSegments } from "./textSegments";
 import { foldNarration, settleDone, settleDoneMessages, settleNarration } from "./turnNarration";
 import type { ConversationSummary, MCPServerInfo } from "./chat-experience";
@@ -4507,6 +4508,14 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
             .join("\n")])
         : undefined;
 
+    // Sending is the reader saying "take me to the end", wherever they had
+    // scrolled to and however long the message is. Said here, once the
+    // message is about to appear: after the upload (scrolling while a large
+    // file goes up must not cancel it, and a failed upload must not leave the
+    // reader marked "at the end" with nothing sent), and only if they are
+    // still in the chat they sent from, since it applies to whichever
+    // transcript is on screen.
+    if (activeConversationIdRef.current === (convId ?? null)) requestFollowBottom();
     const nextMessages: Message[] = [
       {
         id: baseId,

@@ -20,6 +20,8 @@ import { UsagePanel } from "@/app/orchestrator/UsagePanel";
 import { AdoptionPanel } from "@/app/orchestrator/AdoptionPanel";
 import { ServerStatsView } from "@/app/settings/admin/server/page";
 import { errorMessage } from "@/app/shared/lib/errorMessage";
+import { readPref, writePref } from "@/app/shared/lib/storage";
+import { Icon } from "@/app/shared/ui/Icon";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -518,10 +520,15 @@ const MODEL_RANGES = [
   { value: 90, label: tr("Last 90 days") },
 ] as const;
 
+// Whether the "How model attribution … works" note is expanded; remembered
+// per browser ("open" | "closed"), closed until the reader opens it.
+const ATTRIBUTION_NOTE_PREF = "analytics-attribution-note";
+
 function ModelUsageTab() {
   const { models } = useClientConfig();
   const pinnedModels = models?.pinned;
   const [rangeDays, setRangeDays] = useState<number>(30);
+  const [noteOpen, setNoteOpen] = useState(() => readPref(ATTRIBUTION_NOTE_PREF) === "open");
   const {
     data: report,
     loading,
@@ -671,13 +678,24 @@ function ModelUsageTab() {
         </Card>
       </div>
 
-      <div
-        className="mb-4 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3.5 text-[0.78rem] leading-relaxed text-[var(--color-text-secondary)]"
+      {/* Reference reading, not data: closed by default so the breakdown table
+          starts on the first screen, and the reader's choice is remembered.
+          A native <details> keeps the text in the DOM (find-in-page opens it). */}
+      <details
+        className="group mb-4 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3.5 py-2.5 text-[0.78rem] leading-relaxed text-[var(--color-text-secondary)]"
         data-testid="model-attribution-note"
+        open={noteOpen}
+        onToggle={(e) => {
+          const open = e.currentTarget.open;
+          setNoteOpen(open);
+          writePref(ATTRIBUTION_NOTE_PREF, open ? "open" : "closed");
+        }}
       >
-        <div className="font-semibold text-[var(--color-text-primary)]">
-          {tr("How Model Attribution, Deleted Chats & Tiers Work")}</div>
-        <ul className="mt-1.5 list-disc space-y-1 pl-4">
+        <summary className="flex cursor-pointer list-none items-center gap-1.5 rounded-[var(--radius-sm)] font-semibold text-[var(--color-text-primary)] focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none [&::-webkit-details-marker]:hidden">
+          <Icon name="chevron-right" className="size-3.5 shrink-0 text-[var(--color-text-muted)] transition-transform group-open:rotate-90" />
+          {tr("How Model Attribution, Deleted Chats & Tiers Work")}
+        </summary>
+        <ul className="mt-1.5 list-disc space-y-1 pb-1 pl-4">
           <li>
         {rich("{0} Chat turns are grouped by each conversation's currently active model setting (whereas background task steps record the exact model used per step). If a conversation's model is switched later (or bulk-migrated), earlier turns in that conversation are grouped under the conversation's current model.", <strong className="text-[var(--color-text-primary)]">
               {tr("How Model Attribution Works:")}</strong>)}
@@ -693,7 +711,7 @@ function ModelUsageTab() {
               {tr("Model Tiers & Budget Impact:")}</strong>, <strong>{tr("Included ($0)")}</strong>, <code className="font-[family-name:var(--font-code)] text-[0.75rem]">free: true</code>, <code className="font-[family-name:var(--font-code)] text-[0.75rem]">$0</code>, <strong>$0.00</strong>, <strong>{tr("Billed")}</strong>, <strong>{tr("No price data")}</strong>)}
       </li>
         </ul>
-      </div>
+      </details>
 
       {loading && !report ? (
         <div className="empty-state">
@@ -1325,6 +1343,32 @@ function AnalyticsInner() {
                 <div className="empty-state">
                   <p>{tr("Loading analytics…")}</p>
                 </div>
+              ) : session.unreachable ? (
+                // The session probe failed without an auth verdict (5xx or
+                // network): the role is unknown, not "not an admin". Saying
+                // "Admin access required" here told an administrator they had
+                // lost access when the server was only restarting. Same card
+                // as Background tasks shows in this state.
+                <Card
+                  className="section gap-0"
+                  role="region"
+                  aria-label={tr("Server unreachable")}
+                  data-testid="analytics-unreachable"
+                >
+                  <h2>{tr("Can't reach the server")}</h2>
+                  <p className="mt-2 text-[0.88rem] text-[var(--color-text-secondary)]">
+                    {tr("The background-tasks server didn't answer — it may be restarting. Your sign-in state is untouched; try again in a moment.")}
+                  </p>
+                  <div className="mt-4">
+                    <Button
+                      type="button"
+                      className="btn btn-primary"
+                      onClick={() => window.location.reload()}
+                    >
+                      {tr("Retry")}
+                    </Button>
+                  </div>
+                </Card>
               ) : !session.signedIn || !isAdmin ? (
                 <Card
                   className="section gap-0"

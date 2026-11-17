@@ -59,7 +59,11 @@ export default function SettingsLayout({ children }: { children: ReactNode }) {
             <SetNav />
             <div
               key={pathname}
-              className="min-w-0 max-w-[46rem] flex-1 motion-safe:animate-set-fade"
+              // w-full: below 900px this column stacks under the nav, where
+              // without a set width it sized to its content, so a page with a
+              // table or a file field (Users, Shared files) came out wider
+              // than a phone. The help layout already does this.
+              className="w-full min-w-0 max-w-[46rem] flex-1 motion-safe:animate-set-fade"
             >
               {children}
             </div>

@@ -5,7 +5,7 @@ import type { Task } from "@/app/shared/lib/orchestratorApi";
 import type { TaskFilters } from "@/app/shared/hooks/useDashboardData";
 import { formatTimeFirst, truncate } from "@/app/shared/lib/format";
 import { Icon } from "@/app/shared/ui/Icon";
-import { StatusChip } from "@/app/shared/ui/StatusChip";
+import { StatusChip, runStateLabel } from "@/app/shared/ui/StatusChip";
 import { labelChipStyle } from "@/app/shared/lib/labelColors";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -143,6 +143,42 @@ export function TasksTable({
   // EXTERNAL reset (Clear button → filters.query="") re-seeds the box without
   // a mid-typing echo clobbering it.
   const [queryDraft, setQueryDraft] = useState(filters.query);
+
+  // Sideways scroll state of the table's own box. On a narrow window the
+  // table is wider than its card and scrolls sideways as a whole. While it
+  // does, the box is a labelled, focusable region (arrow keys then scroll
+  // it) — a table that fits is not a dead tab stop — and `start` / `end` say
+  // which side has columns out of view, so that edge of the frame can be
+  // shaded (globals.css, .tasks-table-frame).
+  const tableRef = useRef<HTMLTableElement | null>(null);
+  const [sideScroll, setSideScroll] = useState({ overflows: false, start: false, end: false });
+  useEffect(() => {
+    const table = tableRef.current;
+    const box = table?.parentElement;
+    if (!table || !box) return;
+    const sync = () => {
+      const max = box.scrollWidth - box.clientWidth;
+      const next = {
+        overflows: max > 1,
+        start: max > 1 && box.scrollLeft > 1,
+        end: max > 1 && box.scrollLeft < max - 1,
+      };
+      setSideScroll((prev) =>
+        prev.overflows === next.overflows && prev.start === next.start && prev.end === next.end
+          ? prev
+          : next,
+      );
+    };
+    sync();
+    box.addEventListener("scroll", sync, { passive: true });
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(sync);
+    observer?.observe(box);
+    observer?.observe(table);
+    return () => {
+      box.removeEventListener("scroll", sync);
+      observer?.disconnect();
+    };
+  }, []);
   const lastPropagated = useRef(filters.query);
 
   useEffect(() => {
@@ -206,7 +242,7 @@ export function TasksTable({
           >
             {STATUS_OPTIONS.map((s) => (
               <NativeSelectOption key={s || "all"} value={s}>
-                {s ? s.replaceAll("_", " ") : tr("All")}
+                {s ? runStateLabel(s).replaceAll("_", " ") : tr("All")}
               </NativeSelectOption>
             ))}
           </NativeSelect>
@@ -307,15 +343,28 @@ export function TasksTable({
         ) : null}
       </div>
 
-      <Table id="tasksTable" containerClassName="table-wrapper tasks-table-wrapper">
+      {/* The frame does not scroll; it carries the edge shades over the
+          scrolling box inside it. */}
+      <div
+        className={`tasks-table-frame${sideScroll.start ? " has-more-start" : ""}${sideScroll.end ? " has-more-end" : ""}`}
+      >
+      <Table
+        id="tasksTable"
+        ref={tableRef}
+        containerClassName="table-wrapper tasks-table-wrapper"
+        scrollLabel={sideScroll.overflows ? tr("Recent tasks, scrolls sideways") : undefined}
+      >
         <TableHeader>
           <TableRow>
-            <TableHead>{tr("ID")}</TableHead>
-            <TableHead>{tr("Task")}</TableHead>
+            {/* Six columns, not eight (globals.css, "Recent Tasks column
+                budget"): the short ID sits under the task's title and the
+                creator under the creation time. As columns of their own they
+                left Task its longest word's width and still pushed the row
+                actions outside the card on a laptop. */}
+            <TableHead className="task-col-task">{tr("Task")}</TableHead>
             <TableHead>{tr("Status")}</TableHead>
             <TableHead>{tr("SLA")}</TableHead>
             <TableHead>{tr("Schedule")}</TableHead>
-            <TableHead>{tr("Created By")}</TableHead>
             <TableHead>{tr("Created")}</TableHead>
             <TableHead>{tr("Logs")}</TableHead>
           </TableRow>
@@ -323,7 +372,7 @@ export function TasksTable({
         <TableBody>
           {tasks.length === 0 ? (
             <TableRow>
-              <TableCell colSpan={8} className="table-empty whitespace-normal">
+              <TableCell colSpan={6} className="table-empty whitespace-normal">
                 <TasksEmptyState
                   loading={loading}
                   error={error}
@@ -361,10 +410,7 @@ export function TasksTable({
                     }
                   }}
                 >
-                  <TableCell title={task.id}>
-                    <code>{task.id.slice(0, 8)}...</code>
-                  </TableCell>
-                  <TableCell className="prompt-cell whitespace-normal" title={task.prompt ?? ""}>
+                  <TableCell className="task-col-task prompt-cell whitespace-normal" title={task.prompt ?? ""}>
                     {task.title?.trim() || promptName(task.prompt ?? "") ? (
                       <>
                         <span className="task-title-line">
@@ -377,6 +423,7 @@ export function TasksTable({
                     ) : (
                       truncate((task.prompt ?? "").trim(), 80)
                     )}
+                    <TaskShortId id={task.id} className="task-id-inline" />
                     <TaskTagChips
                       tags={task.tags}
                       selected={filters.tags}
@@ -389,9 +436,18 @@ export function TasksTable({
                   <TableCell>
                     <TaskSlaBadge task={task} />
                   </TableCell>
-                  <TableCell title={scheduleTitle(task)}>{scheduleLabel(task)}</TableCell>
-                  <TableCell>{createdByLabel(task)}</TableCell>
-                  <TableCell>{formatTimeFirst(task.created_at)}</TableCell>
+                  <TableCell title={scheduleTitle(task)}>
+                    <ScheduleStamp label={scheduleLabel(task)} />
+                  </TableCell>
+                  <TableCell>
+                    {formatTimeFirst(task.created_at)}
+                    {/* A task with no recorded creator adds no second line. */}
+                    {createdByLabel(task) !== "—" ? (
+                      <span className="task-owner-inline" title={createdByLabel(task)}>
+                        {createdByLabel(task)}
+                      </span>
+                    ) : null}
+                  </TableCell>
                   <TableCell>
                     <span className="task-row-actions">
                       <StatusChip tone={hasLogs ? "run-assigned" : "neutral"} className={`logs-badge${hasLogs ? "" : " no-logs"}`}>
@@ -465,8 +521,9 @@ export function TasksTable({
           )}
         </TableBody>
       </Table>
+      </div>
 
-      {/* Phone card view: the 8-column table needs sideways scrolling on a
+      {/* Phone card view: the task table needs sideways scrolling on a
           phone, so <=720px renders each task as a stacked card instead. CSS
           toggles .tasks-table-wrapper/.task-cards; both share onOpenLogs.
           Created time + creator are deliberately omitted here — the log
@@ -516,7 +573,7 @@ export function TasksTable({
                   ) : null}
                   <span className="task-card-prompt">{truncate((task.prompt ?? "").trim(), 120)}</span>
                   <span className="task-card-meta">
-                    <code>{task.id.slice(0, 8)}</code>
+                    <TaskShortId id={task.id} />
                     {scheduleLabel(task) !== "-" ? (
                       <span title={scheduleTitle(task)}>{scheduleLabel(task)}</span>
                     ) : null}
@@ -682,6 +739,36 @@ export function TasksTable({
 }
 
 export default TasksTable;
+
+// TaskShortId shows a task's ID the way the table row and the phone card both
+// need it: labelled ("ID"), because eight hex characters on their own do not
+// say what they are; cropped to the first eight with a trailing "..." so it
+// does not read as the whole ID; and with the full ID in the tooltip.
+function TaskShortId({ id, className }: { id: string; className?: string }) {
+  return (
+    <span className={`task-short-id${className ? ` ${className}` : ""}`} title={tr("Task ID: {0}", [id])}>
+      <span className="task-short-id-label">{tr("ID")}</span>
+      <code>{id.slice(0, 8)}...</code>
+    </span>
+  );
+}
+
+// ScheduleStamp renders a schedule label ("⏰ 11:00 AM · 12/1/2026",
+// "🔄 9:00 AM · Sat, Sun") with its two halves in separate spans, so the
+// compact table can stack them (see "Recent Tasks column budget" in
+// globals.css) instead of holding one long nowrap line that pushes the row
+// actions out of view. A label with no " · " renders as it is.
+function ScheduleStamp({ label }: { label: string }) {
+  const cut = label.indexOf(" · ");
+  if (cut < 0) return <>{label}</>;
+  return (
+    <>
+      {label.slice(0, cut)}
+      <span className="task-when-sep"> · </span>
+      <span className="task-when-rest">{label.slice(cut + 3)}</span>
+    </>
+  );
+}
 
 // TaskTagChips renders a task's tags (#212) as chips that filter the board.
 //

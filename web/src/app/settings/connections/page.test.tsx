@@ -1312,3 +1312,46 @@ describe("ConnectionsPage browsable connectors directory", () => {
     expect(screen.getByTestId("dir-category-grid")).toBeInTheDocument();
   });
 });
+
+describe("ConnectionsPage with remote MCP not configured", () => {
+  // The connections read answers 503 remote_mcp_disabled on every load while
+  // the server has no remote-MCP bridge. That is a steady state: it used to
+  // raise an error toast on each visit, naming two server variables to people
+  // who cannot set them.
+  it("explains it inline, in the reader's terms, without an error toast", async () => {
+    const inner = mockFetch(undefined, { ...CATALOG, remote_mcp_enabled: false });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+        if (url.startsWith("/api/remote-mcp-servers") && (init?.method ?? "GET") === "GET") {
+          return jsonResponse({ error: "remote_mcp_disabled", detail: "not configured" }, 503);
+        }
+        return inner(url, init);
+      }),
+    );
+    toasts.length = 0;
+    visit("");
+    const notes = await screen.findAllByText(/ask your administrator to turn on remote MCP connections/);
+    // Once in "Added by you" (in place of "Nothing added yet"), once under the directory.
+    expect(notes.length).toBe(2);
+    expect(screen.queryByText(/Nothing added yet/)).toBeNull();
+    expect(toasts).toEqual([]);
+  });
+
+  it("still reports any other failure of the read", async () => {
+    const inner = mockFetch();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+        if (url.startsWith("/api/remote-mcp-servers") && (init?.method ?? "GET") === "GET") {
+          return jsonResponse({ detail: "try again later" }, 503);
+        }
+        return inner(url, init);
+      }),
+    );
+    toasts.length = 0;
+    visit("");
+    await waitFor(() => expect(toasts.length).toBe(1));
+    expect(screen.getByText(/Nothing added yet/)).toBeInTheDocument();
+  });
+});

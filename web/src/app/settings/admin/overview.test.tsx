@@ -203,8 +203,14 @@ describe("AdminOverviewPage MCP chips", () => {
     vi.stubGlobal("fetch", mockFetch());
     render(<AdminOverviewPage />);
 
-    const optional = await screen.findByText("optional-server");
-    const onByDefault = await screen.findByText("on-by-default-server");
+    // The name sits in a span inside the chip (it shortens there when long).
+    const chipOf = async (name: string) => {
+      const chip = (await screen.findByText(name)).closest<HTMLElement>('[data-slot="badge"]');
+      if (!chip) throw new Error(`no chip for ${name}`);
+      return chip;
+    };
+    const optional = await chipOf("optional-server");
+    const onByDefault = await chipOf("on-by-default-server");
 
     // The danger tone (which reads as "broken") must not be used for a
     // perfectly-normal optional server — nor for any chip: the endpoint

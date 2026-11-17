@@ -16,7 +16,7 @@ import { t as tr } from "@/app/lib/i18n";
 // /settings); authorization stays server-side — every endpoint here
 // independently 403s non-admins, and fetchUsers surfaces that below.
 
-import { useEffect, useId, useRef, useState, type MouseEvent } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type MouseEvent } from "react";
 import { getBootstrap } from "@/app/lib/bootstrap";
 import { Link } from "@/app/lib/Link";
 import { useRouter } from "@/app/lib/navigation";
@@ -25,6 +25,8 @@ import { fetchStats, formatAgo, type UserStat } from "../lib";
 import {
   InlineConfirmButton,
   RevealButton,
+  MissingFieldsHint,
+  useFocusOnOpen,
 } from "../../ui/atoms";
 import { ConnField, ConnForm, ConnPanel, SetSection } from "../../ui/panels";
 import { useIsAdmin } from "../../useIsAdmin";
@@ -417,8 +419,11 @@ function joinRows(users: AdminUser[] | null, stats: UserStat[] | null): Row[] {
 // Design table metrics (.users-table on the base table styles): th/td
 // 0.55rem/0.5rem padding, subtle bottom rule dropped on the last row, numeric
 // columns right-aligned tabular-nums.
+// max-sm:px-1 (here and on TH): on a phone the four columns were a few pixels
+// wider than the card in Spanish and Portuguese, which pushed the row's
+// actions button out of view; tighter side padding buys the room back.
 const TD =
-  "whitespace-nowrap border-b border-[var(--color-border-subtle)] px-2 py-[0.55rem] text-left group-last/row:border-b-0";
+  "whitespace-nowrap border-b border-[var(--color-border-subtle)] px-2 py-[0.55rem] text-left group-last/row:border-b-0 max-sm:px-1";
 // Wrap-safety for anything server-authored that lands inside a table cell.
 // Table layout sizes a column to its content, so one long unbroken token (a
 // server sentence, a project name, a generated password, a long email) both
@@ -429,7 +434,7 @@ const TD_TEXT_WRAP =
   "block max-w-[26rem] whitespace-normal [overflow-wrap:anywhere]";
 const TD_NUM = `${TD} text-right [font-variant-numeric:tabular-nums]`;
 const TH =
-  "whitespace-nowrap border-b border-[var(--color-border-subtle)] px-2 py-[0.55rem] text-left text-[0.7rem] font-semibold uppercase text-[var(--color-text-muted)]";
+  "whitespace-nowrap border-b border-[var(--color-border-subtle)] px-2 py-[0.55rem] text-left text-[0.7rem] font-semibold uppercase text-[var(--color-text-muted)] max-sm:px-1";
 const TH_NUM = `${TH} text-right`;
 
 // The design's .admin-badge (accent) and its neutral sibling for Viewer/ops.
@@ -447,7 +452,9 @@ function RoleBadge({
       variant={accent ? "accent" : "secondary"}
       title={title}
       className={[
-        "rounded-[0.35rem] px-[0.4rem] py-[0.12rem] text-[0.56rem] font-bold uppercase tracking-[0.08em]",
+        // On a phone a long badge ("TAREAS: CONTRIBUTOR") may take two
+        // lines: unbroken, it alone set the User column's minimum width.
+        "rounded-[0.35rem] px-[0.4rem] py-[0.12rem] text-[0.56rem] font-bold uppercase tracking-[0.08em] max-sm:shrink max-sm:whitespace-normal",
         accent
           ? "border-transparent bg-[color-mix(in_srgb,var(--color-accent)_14%,transparent)] text-[var(--color-accent)]"
           : "border-transparent bg-[var(--color-overlay-soft)] text-[var(--color-text-muted)]",
@@ -543,6 +550,29 @@ export default function AdminUsersPage() {
     menuTriggerRef.current?.focus();
     menuTriggerRef.current = null;
   }, [menuEmail]);
+
+  // openMenu places the panel from an estimate of its height. On a phone the
+  // text wraps and the panel is taller than the estimate, so for a user near
+  // the top of the list it opened downward with its last lines (what Delete
+  // user removes) below the screen, out of reach. Once the panel is laid out
+  // its real height is known: move it up until its bottom edge is on screen,
+  // and again if it grows (the delete confirmation, a refusal).
+  const menuY = menu?.y;
+  useLayoutEffect(() => {
+    const pop = popRef.current;
+    if (!menuEmail || !pop) return;
+    const fit = () => {
+      const maxTop = Math.max(8, window.innerHeight - 8 - pop.offsetHeight);
+      setMenu((m) => (m && m.y > maxTop ? { ...m, y: maxTop } : m));
+    };
+    fit();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(fit);
+    observer.observe(pop);
+    return () => observer.disconnect();
+    // menuY too: pressing the same row's button again places the panel from
+    // the estimate once more, with nothing else changed to re-run this.
+  }, [menuEmail, menuY]);
 
   useEffect(() => {
     if (admin === "member") router.replace("/settings");
@@ -796,6 +826,7 @@ export default function AdminUsersPage() {
 
   // ── add-user form state ──
   const [addOpen, setAddOpen] = useState(false);
+  const newEmailRef = useFocusOnOpen<HTMLInputElement>(addOpen);
   const [newEmail, setNewEmail] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [newRole, setNewRole] = useState<Role>("member");
@@ -1366,6 +1397,7 @@ export default function AdminUsersPage() {
                   <ConnField label={tr("Email")} grow>
                     <Input
                       id="newUserEmail"
+                      ref={newEmailRef}
                       aria-label={tr("New user email")}
                       type="email"
                       value={newEmail}
@@ -1418,9 +1450,19 @@ export default function AdminUsersPage() {
                     type="button"
                     onClick={() => void addUser()}
                     disabled={addDisabled}
+                    aria-describedby={newEmail.trim() !== "" && newPassword.length >= 8 ? undefined : "newUserMissing"}
                   >
                     {addStatus === "saving" ? tr("Adding…") : tr("Add user")}
                   </Button>
+                  <MissingFieldsHint
+                    block
+                    align="left"
+                    id="newUserMissing"
+                    missing={[
+                      ...(newEmail.trim() === "" ? [tr("Email")] : []),
+                      ...(newPassword.length < 8 ? [tr("Password (at least 8 characters)")] : []),
+                    ]}
+                  />
                 </ConnForm>
               ) : null}
               {addStatus && addStatus !== "saving" ? (

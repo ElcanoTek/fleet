@@ -74,7 +74,7 @@ export function SubmissionBubble({
     <div
       data-testid="genui-submission-bubble"
       data-card-id={submission.cardId}
-      className="min-w-0 [overflow-wrap:anywhere] rounded-[1.1rem] bg-[var(--color-overlay-soft)] px-3 py-2.5 text-[0.8125rem] leading-[1.5] text-[var(--color-text-primary)] sm:rounded-[1.25rem] sm:px-4 sm:py-3"
+      className="min-w-0 [overflow-wrap:anywhere] rounded-[1.1rem] bg-[var(--chat-bubble-user)] px-3 py-2.5 text-[0.8125rem] leading-[1.5] text-[var(--color-text-primary)] sm:rounded-[1.25rem] sm:px-4 sm:py-3"
     >
       <div className="flex items-center gap-1.5 font-medium">
         <span aria-hidden>◧</span>
@@ -130,7 +130,7 @@ export function ReplyBubble({ reply, notSent, message }: { reply: Reply; notSent
     <div
       data-testid="genui-reply-bubble"
       data-card-id={reply.cardId}
-      className="min-w-0 [overflow-wrap:anywhere] rounded-[1.1rem] bg-[var(--color-overlay-soft)] px-3 py-2.5 text-[0.875rem] leading-[1.55] text-[var(--color-text-primary)] sm:rounded-[1.25rem] sm:px-4 sm:py-3"
+      className="min-w-0 [overflow-wrap:anywhere] rounded-[1.1rem] bg-[var(--chat-bubble-user)] px-3 py-2.5 text-[0.875rem] leading-[1.55] text-[var(--color-text-primary)] sm:rounded-[1.25rem] sm:px-4 sm:py-3"
     >
       <div className="whitespace-pre-wrap">{reply.text}</div>
       <div className="mt-1 flex items-center gap-1.5 text-[0.7rem] text-[var(--color-text-muted)]">

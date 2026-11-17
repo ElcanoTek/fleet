@@ -2,7 +2,7 @@ import { bundleText } from "@/app/lib/i18n";
 import { localizeConnector } from "@/app/lib/i18n/bundle";
 import { rich } from "@/app/lib/i18n/rich";
 import { t as tr } from "@/app/lib/i18n";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { Icon } from "@/app/shared/ui/Icon";
@@ -47,6 +47,8 @@ import {
   SetSwitch,
   SETTINGS_INPUT,
   type BadgeVariant,
+  MissingFieldsHint,
+  useFocusOnOpen,
 } from "../ui/atoms";
 import { useIsAdmin } from "../useIsAdmin";
 import { useClientConfig } from "@/app/lib/useClientConfig";
@@ -71,7 +73,7 @@ import { CloseButton } from "@/app/shared/ui/CloseButton";
 import { responseErrorText } from "@/app/lib/responseError";
 import { copyText } from "@/app/shared/lib/clipboard";
 import { errorMessage } from "@/app/shared/lib/errorMessage";
-import { getGatedJson } from "@/app/settings/lib/getGated";
+import { gatedFailure, redirectToLogin } from "@/app/settings/lib/getGated";
 
 // Per-user remote (hosted) MCP connections (#443). Users add a hosted MCP server
 // by URL, then log in to it via the OAuth handshake (the backend handles
@@ -238,13 +240,44 @@ function provenanceVariant(provenance: string): BadgeVariant {
   return PROVENANCE_VARIANTS[label] ?? "neutral";
 }
 
+// RemoteMcpOffError is the one failure of the connections read that is a
+// steady state, not an event: the server has no remote-MCP bridge configured
+// (503 remote_mcp_disabled). The page says so inline, in words chosen for the
+// reader (RemoteMcpOffNote), instead of raising an error toast on every visit
+// that named two server variables to people who cannot set them.
+class RemoteMcpOffError extends Error {}
+
 async function fetchServers(): Promise<ListResponse | null> {
-  return getGatedJson<ListResponse>("/api/remote-mcp-servers", {
-    label: tr("Connections"),
-    statusText: {
-      503: tr("Remote MCP OAuth is not configured on this server (set FLEET_MCP_OAUTH_ENCRYPTION_KEY and FLEET_PUBLIC_BASE_URL)."),
-    },
-  });
+  const res = await fetch("/api/remote-mcp-servers", { cache: "no-store" });
+  if (res.status === 401) {
+    redirectToLogin();
+    return null;
+  }
+  if (res.status === 503) {
+    const body = (await res
+      .clone()
+      .json()
+      .catch(() => null)) as { error?: string } | null;
+    if (body?.error === "remote_mcp_disabled") throw new RemoteMcpOffError();
+  }
+  if (!res.ok) throw await gatedFailure(res, { label: tr("Connections") });
+  return (await res.json()) as ListResponse;
+}
+
+// RemoteMcpOffNote explains why hosted servers cannot be connected yet: an
+// admin gets the two settings to set, everyone else is pointed at their admin.
+function RemoteMcpOffNote({ isAdmin }: { isAdmin: boolean }) {
+  return isAdmin ? (
+    <>
+      {tr("Connecting hosted servers is off because remote MCP isn’t configured. To enable it, set")}{" "}
+      <CodeChip>FLEET_MCP_OAUTH_ENCRYPTION_KEY</CodeChip> {tr("(a 32-byte base64 key) and")}{" "}
+      <CodeChip>FLEET_PUBLIC_BASE_URL</CodeChip> {tr("on the server, then restart — see docs/MCP-CATALOG.md in the fleet repository for the walkthrough.")}
+    </>
+  ) : (
+    <>
+      {tr("Connecting hosted servers isn’t enabled on this workspace yet — ask your administrator to turn on remote MCP connections.")}
+    </>
+  );
 }
 
 // granteeLabel renders the everyone wildcard readably.
@@ -680,6 +713,22 @@ function DirectoryCard({
     (!secretRequired || clientSecret.trim() !== "") &&
     (!anotherAccount || account.trim() !== "");
 
+  // A generated id: an entry's name comes from the catalog and may hold a
+  // space, which aria-describedby would read as two ids.
+  const missingId = useId();
+  // Why Add is greyed out, for the line under it. Together the two lists are
+  // exactly the terms of `ready`.
+  const missingFields = [
+    ...(anotherAccount && account.trim() === "" ? [tr("Account label")] : []),
+    ...placeholders.filter((ph) => (values[ph] ?? "").trim() === "").map(placeholderLabel),
+    ...(entry.auth === "api_key" && apiKey.trim() === "" ? [tr("API key")] : []),
+    ...(manualClient && clientId.trim() === "" ? [tr("OAuth client ID")] : []),
+    ...(secretRequired && clientSecret.trim() === "" ? [tr("OAuth client secret")] : []),
+  ];
+  const unusableFields = placeholders
+    .filter((ph) => (values[ph] ?? "").trim() !== "" && !placeholderValueOK(values[ph] ?? ""))
+    .map(placeholderLabel);
+
   const submit = async () => {
     const ok = await onAdd({
       ...(placeholders.length > 0 ? { url: filledURL } : {}),
@@ -748,7 +797,10 @@ function DirectoryCard({
         </p>
       ) : null}
       <div className="mt-auto flex flex-wrap items-center justify-between gap-x-[0.6rem] gap-y-2 pt-1 text-[0.72rem] text-[var(--color-text-muted)]">
-        <span className="min-w-[8rem] flex-1 truncate">
+        {/* Wraps rather than truncates: cut short, the links at its end
+            (docs, source, setup guide) were out of reach in longer languages
+            and on a phone. */}
+        <span className="min-w-[8rem] flex-1 [overflow-wrap:anywhere]">
           {entry.vendor || entry.url}
           {entry.category ? ` · ${categoryLabel(entry.category)}` : ""}
           {entry.docs_url ? (
@@ -1029,11 +1081,26 @@ function DirectoryCard({
               data-testid={`dir-form-add-${entry.name}`}
               onClick={() => void submit()}
               disabled={busy || !ready}
+              aria-describedby={ready ? undefined : missingId}
               className={dirAddButtonClass(false)}
             >
               {tr("Add")}
             </button>
           </div>
+          {/* The same terms as `ready`, in the order the fields appear. A
+              value that is filled in but unusable (it has a space or a brace,
+              which would corrupt the URL) is named separately: "fill in" would
+              be the wrong thing to say about a field that is not empty. */}
+          {missingFields.length > 0 ? (
+            <MissingFieldsHint block id={missingId} missing={missingFields} />
+          ) : unusableFields.length > 0 ? (
+            <p
+              id={missingId}
+              className="m-0 w-full text-right text-[0.72rem] text-[var(--color-text-muted)]"
+            >
+              {tr("To continue, remove spaces and braces from: {0}", [unusableFields.join(", ")])}
+            </p>
+          ) : null}
         </FormShell>
       ) : null}
     </div>
@@ -1316,6 +1383,13 @@ function MS365SetupDialog({
       </div>
 
       <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-[var(--color-border-subtle)] bg-[var(--color-surface-1)] px-5 pb-[max(0.875rem,env(safe-area-inset-bottom))] pt-3.5 sm:pb-3.5 max-sm:px-4">
+        {canEdit ? (
+          <MissingFieldsHint
+            block
+            id="ms365ConfigMissing"
+            missing={clientId.trim() ? [] : [tr("Application (client) ID")]}
+          />
+        ) : null}
         <div>
           {config?.source === "db" && canEdit ? (
             <InlineConfirmButton
@@ -1340,6 +1414,7 @@ function MS365SetupDialog({
               type="button"
               data-testid="ms365-save-config-btn"
               disabled={busy || !clientId.trim()}
+              aria-describedby={clientId.trim() ? undefined : "ms365ConfigMissing"}
               onClick={() =>
                 void onSave(clientId.trim(), tenantId.trim() || "common")
               }
@@ -1400,6 +1475,9 @@ function ConnectionsPageInner() {
   // an entry means the operator default.
   const [prefs, setPrefs] = useState<ConnectorPref[]>([]);
   const [catalog, setCatalog] = useState<CatalogResponse | null>(null);
+  // True while the server answers the connections read with
+  // remote_mcp_disabled; drives the inline note in "Added by you".
+  const [remoteOff, setRemoteOff] = useState(false);
   const [bundledAnchor, setBundledAnchor] = useState(readConnectorAnchor);
   // A link to a connector outside the preview opens its full list as soon as
   // the catalog arrives. An explicit open/close choice wins after that.
@@ -1487,6 +1565,7 @@ function ConnectionsPageInner() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [addServerOpen, setAddServerOpen] = useState(false);
+  const serverNameRef = useFocusOnOpen<HTMLInputElement>(addServerOpen);
   const [name, setName] = useState("");
   const [url, setUrl] = useState("");
   // Optional seat label for the manual add form (#988); "" = the unlabeled
@@ -1503,12 +1582,17 @@ function ConnectionsPageInner() {
     fetchServers()
       .then((data) => {
         if (isStale() || data === null) return;
+        setRemoteOff(false);
         setServers(data.servers ?? []);
         setShares(data.shares ?? {});
         setSharedWithMe(data.shared_with_me ?? []);
       })
       .catch((e: unknown) => {
         if (isStale()) return;
+        if (e instanceof RemoteMcpOffError) {
+          setRemoteOff(true);
+          return;
+        }
         setError(errMessage(e));
       })
       .finally(() => {
@@ -2323,6 +2407,7 @@ function ConnectionsPageInner() {
                 <ConnField label={tr("Name")}>
                   <input
                     id="remoteServerName"
+                    ref={serverNameRef}
                     className={SETTINGS_INPUT}
                     value={name}
                     onChange={(e) => setName(e.target.value)}
@@ -2354,10 +2439,17 @@ function ConnectionsPageInner() {
                 <button
                   type="submit"
                   disabled={busy || !name.trim() || !url.trim()}
+                  aria-describedby={name.trim() && url.trim() ? undefined : "remoteServerMissing"}
                   className={btnClass({ variant: "primary" })}
                 >
                   {tr("Add")}
                 </button>
+                <MissingFieldsHint
+                  block
+                  align="left"
+                  id="remoteServerMissing"
+                  missing={[...(name.trim() ? [] : [tr("Name")]), ...(url.trim() ? [] : [tr("Server URL")])]}
+                />
               </ConnForm>
             </form>
           ) : null}
@@ -2863,7 +2955,11 @@ function ConnectionsPageInner() {
             </div>
           ) : (
             <ConnEmpty>
-              {tr("Nothing added yet. Pick one from the list below, or add one by URL.")}
+              {remoteOff ? (
+                <RemoteMcpOffNote isAdmin={adminState === "admin"} />
+              ) : (
+                tr("Nothing added yet. Pick one from the list below, or add one by URL.")
+              )}
             </ConnEmpty>
           )}
         </ConnPanel>
@@ -3268,7 +3364,12 @@ function ConnectionsPageInner() {
         {rich("View all ({0})", thirdParty.length)}
       </button>
                     </div>
-                    <div className="grid grid-cols-3 gap-[0.6rem] max-[960px]:grid-cols-2 max-[600px]:grid-cols-1">
+                    {/* As many 13rem tiles as fit, not a fixed three: the
+                        settings column is only ~440px wide at 1024, where
+                        three tiles left 115px for names like "Productivity &
+                        Projects". Names wrap instead of running into the next
+                        tile, and the count keeps its place. */}
+                    <div className="grid grid-cols-[repeat(auto-fill,minmax(min(13rem,100%),1fr))] gap-[0.6rem]">
                       {categories.map((cat) => {
                         const sampleNames = thirdParty
                           .filter(
@@ -3285,17 +3386,25 @@ function ConnectionsPageInner() {
                             onClick={() => selectDirectoryCategory(cat.slug)}
                             className="flex flex-col items-start gap-1.5 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-1)] p-3 text-left transition hover:border-[var(--color-border-strong)] hover:bg-[var(--color-overlay-soft)]"
                           >
-                            <div className="flex w-full items-center justify-between gap-2">
-                              <span className="inline-flex items-center gap-2 text-[0.8125rem] font-semibold text-[var(--color-text-primary)]">
+                            {/* The name keeps at least the width of its longest
+                                word (min-w-min), so a word is never split to
+                                make room for the count: when the two do not
+                                fit side by side the count drops to its own
+                                line instead. Otherwise the name takes the
+                                rest of the row and wraps between words. */}
+                            <div className="flex w-full flex-wrap items-start justify-between gap-x-2 gap-y-1">
+                              <span className="inline-flex min-w-min flex-[1_1_0] items-start gap-2 text-[0.8125rem] font-semibold text-[var(--color-text-primary)]">
                                 <span className="inline-flex size-6 shrink-0 items-center justify-center rounded-[var(--radius-sm)] bg-[var(--color-overlay-soft)] text-[var(--color-text-secondary)]">
                                   <Icon
                                     name={categoryIcon(cat.slug)}
                                     className="size-[0.85rem]"
                                   />
                                 </span>
-                                <span className="truncate">{cat.label}</span>
+                                <span className="min-w-0 pt-[0.12rem]">{cat.label}</span>
                               </span>
-                              <ConnBadge>{cat.count}</ConnBadge>
+                              <span className="ml-auto shrink-0 pt-[0.08rem]">
+                                <ConnBadge>{cat.count}</ConnBadge>
+                              </span>
                             </div>
                             {sampleNames ? (
                               <span className="w-full truncate text-[0.72rem] text-[var(--color-text-muted)]">
@@ -3310,17 +3419,7 @@ function ConnectionsPageInner() {
                 ) : null}
                 {!catalog.remote_mcp_enabled ? (
                   <p className="mt-2 text-[0.72rem] text-[var(--color-text-muted)]">
-                    {adminState === "admin" ? (
-                      <>
-                        {tr("Connecting hosted servers is off because remote MCP isn’t configured. To enable it, set")}{" "}
-                        <CodeChip>FLEET_MCP_OAUTH_ENCRYPTION_KEY</CodeChip> {tr("(a 32-byte base64 key) and")}{" "}
-                        <CodeChip>FLEET_PUBLIC_BASE_URL</CodeChip> {tr("on the server, then restart — see docs/MCP-CATALOG.md in the fleet repository for the walkthrough.")}
-                      </>
-                    ) : (
-                      <>
-                        {tr("Connecting hosted servers isn’t enabled on this workspace yet — ask your administrator to turn on remote MCP connections.")}
-                      </>
-                    )}
+                    <RemoteMcpOffNote isAdmin={adminState === "admin"} />
                   </p>
                 ) : null}
               </div>

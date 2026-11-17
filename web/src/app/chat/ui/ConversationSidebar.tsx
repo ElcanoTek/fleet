@@ -2088,7 +2088,11 @@ export function ConversationSidebar({
               ) : null}
               {labelsSection}
               <div className="mb-1">
-                <div className="flex items-center gap-1.5 px-2 pb-1 pt-2 text-[0.68rem] font-semibold uppercase tracking-[0.08em] text-[var(--color-text-muted)]">
+                {/* any-pointer-coarse:flex-wrap: at the 16px a touch screen
+                    forces on the sort control, "TEMPORALES" and "Actividad
+                    reciente" do not fit one row; the control then takes the
+                    next row whole instead of being cut off. */}
+                <div className="flex items-center gap-1.5 px-2 pb-1 pt-2 text-[0.68rem] font-semibold uppercase tracking-[0.08em] text-[var(--color-text-muted)] any-pointer-coarse:flex-wrap">
                   <Icon
                     name="clock"
                     className="size-3 shrink-0 text-[var(--color-accent)]"
@@ -2096,6 +2100,14 @@ export function ConversationSidebar({
                   {tr("Temporary")}
                   <RecentInfoButton />
                   {onRecentSortChange && recent.length > 1 ? (
+                    // On a touch screen every select is forced to 16px text
+                    // (so iOS does not zoom on focus); the width cap below is
+                    // sized for the 11px desktop label and cut the value off
+                    // ("Recent activit"), so it is lifted there. Without a
+                    // cap the control must still give way to the row: it is
+                    // sized to the chosen value where the engine can
+                    // (field-sizing) and may shrink (min-w-0), so a longer
+                    // translation no longer pushes it past the sidebar.
                     <select
                       aria-label={tr("Sort temporary chats")}
                       data-testid="recent-sort"
@@ -2103,7 +2115,7 @@ export function ConversationSidebar({
                       onChange={(e) => {
                         if (isRecentSort(e.target.value)) onRecentSortChange(e.target.value);
                       }}
-                      className="ml-auto h-6 max-w-[8.5rem] cursor-pointer rounded-md border border-transparent bg-transparent px-1 text-[0.68rem] font-semibold normal-case tracking-normal text-[var(--color-text-secondary)] hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] any-pointer-coarse:h-9"
+                      className="ml-auto h-6 max-w-[8.5rem] cursor-pointer rounded-md border border-transparent bg-transparent px-1 text-[0.68rem] font-semibold normal-case tracking-normal min-w-0 shrink any-pointer-coarse:max-w-full any-pointer-coarse:font-medium any-pointer-coarse:[field-sizing:content] text-[var(--color-text-secondary)] hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] any-pointer-coarse:h-9"
                     >
                       {RECENT_SORTS.map((o) => (
                         <option key={o.value} value={o.value}>
@@ -2170,7 +2182,9 @@ export function ConversationSidebar({
                               </span>
                             ) : null}
                             {ownerShort ? (
-                              <span className="shrink-0 font-[family-name:var(--font-code)] text-[0.66rem] text-[var(--color-text-muted)]">
+                              // Shortens, never pushes: a long mailbox name
+                              // ran out of the row and over the sidebar edge.
+                              <span className="max-w-[45%] min-w-0 shrink truncate font-[family-name:var(--font-code)] text-[0.66rem] text-[var(--color-text-muted)]">
                                 {ownerShort}
                               </span>
                             ) : null}

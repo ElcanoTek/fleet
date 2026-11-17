@@ -33,6 +33,7 @@ import { NavToChat, NavToOrchestrator } from "./CrossViewNav";
 import { CloseButton } from "./CloseButton";
 import { Icon } from "./Icon";
 import { AccountMenu } from "./AccountMenu";
+import { isInteractiveTarget } from "./interactiveTarget";
 import { readPref, writePref } from "@/app/shared/lib/storage";
 
 // "settings" renders the rail with neither surface active (the design's
@@ -123,11 +124,13 @@ function navTileClass(active: boolean): string {
   ].join(" ");
 }
 
-// RailLabel — a rail item's name with its one-line subtitle (hidden in the
-// collapsed strip, where the data-tip carries both).
+// RailLabel — a rail item's name with its one-line subtitle. In the collapsed
+// strip it is hidden from sight only (sm:sr-only): the hover data-tip is drawn
+// by the stylesheet, which a screen reader does not announce, so with the
+// label removed outright the icon was an unnamed link.
 function RailLabel({ title, subtitle, collapsed }: { title: string; subtitle: string; collapsed: boolean }) {
   return (
-    <span className={["flex min-w-0 flex-1 flex-col leading-tight", collapsed ? "sm:hidden" : ""].join(" ")}>
+    <span className={["flex min-w-0 flex-1 flex-col leading-tight", collapsed ? "sm:sr-only" : ""].join(" ")}>
       <span className="truncate">{title}</span>
       <span className="truncate text-[0.7rem] font-normal text-[var(--color-text-muted)]">{subtitle}</span>
     </span>
@@ -135,13 +138,31 @@ function RailLabel({ title, subtitle, collapsed }: { title: string; subtitle: st
 }
 
 // Focusable elements inside the overlay drawer, for the Tab trap. Mirrors the
-// selector Menu.tsx uses.
+// selector Menu.tsx uses. HTML elements only: `[href]` also matches the
+// <use href> inside every icon, which cannot take focus (and reports no
+// offsetParent at all, so the visibility test let it through as the "first"
+// item).
 function overlayFocusables(container: HTMLElement): HTMLElement[] {
   return Array.from(
     container.querySelectorAll<HTMLElement>(
       'button:not([disabled]), input:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
     ),
-  ).filter((el) => el.offsetParent !== null);
+  ).filter((el) => el instanceof HTMLElement && el.offsetParent !== null);
+}
+
+// Chat's "j" / "k" shortcut opens the phone drawer to show the list cursor,
+// and its Enter opens the chat under that cursor, but only while no control
+// has focus. The shortcut calls this just before it opens the drawer (not
+// when the drawer is already open), so the drawer can tell that opening from
+// one made with its button. The drawer's effect reads the mark and clears it
+// every time the drawer opens or closes, so a mark nothing used (the rail is
+// not a drawer at this width) is gone by the close that must come before the
+// next opening. No clock is involved: an earlier version let the mark expire
+// after half a second, which made a slow render look like a button press.
+const LAYER_ABOVE_DRAWER = '[role="menu"], [role="dialog"], [role="alertdialog"], [role="listbox"]';
+let drawerOpenedByShortcut = false;
+export function keepFocusForDrawerShortcut(): void {
+  drawerOpenedByShortcut = true;
 }
 
 export function NavRail({
@@ -178,6 +199,120 @@ export function NavRail({
   const overlay = isNarrow && !collapsed;
   const collapseToggleRef = useRef<HTMLButtonElement | null>(null);
   const asideRef = useRef<HTMLElement | null>(null);
+
+  // The closed phone drawer is invisible, so whatever held focus inside it
+  // would lose it to <body> and the next Tab would start from the top of the
+  // page. Closing it — its own Close button, Escape, choosing a destination —
+  // returns focus to the button that opens it. From sm up that button is
+  // hidden and the rail never closes, so nothing happens there.
+  const wasOpenRef = useRef(sidebarOpen);
+  useEffect(() => {
+    const wasOpen = wasOpenRef.current;
+    wasOpenRef.current = sidebarOpen;
+    if (!wasOpen || sidebarOpen) return;
+    if (!asideRef.current?.contains(document.activeElement)) return;
+    Array.from(document.querySelectorAll<HTMLButtonElement>("button[data-sidebar-toggle]"))
+      .find((button) => button.offsetParent !== null)
+      ?.focus();
+  }, [sidebarOpen]);
+
+  // The phone drawer (below sm) covers the page like the overlay below does,
+  // so it gets the same keyboard manners. Without them, on every page but
+  // Chat (which closes it on Escape itself), Escape did nothing, focus stayed
+  // on the button underneath, and Tab walked the page hidden behind the
+  // drawer before it reached the drawer. That is the layout a desktop zoomed
+  // far in falls into, where the keyboard is the way around.
+  //   - opening moves focus into the drawer;
+  //   - Escape closes it (the effect above then hands focus to the toggle);
+  //   - Tab stays within the drawer.
+  // A menu or dialog opened from the drawer is portaled out of it and runs
+  // its own trap, so focus inside one is left alone.
+  useEffect(() => {
+    const byShortcut = drawerOpenedByShortcut;
+    drawerOpenedByShortcut = false;
+    if (!sidebarOpen) return;
+    // The same test the layout uses (Tailwind's sm is 40rem, which follows
+    // the reader's font size), so the handling is on exactly while the rail
+    // is a drawer.
+    const isPhone = () =>
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(width < 40rem)").matches;
+    if (!isPhone()) return;
+    // On the frame the drawer opens it is still `invisible` (the visibility
+    // change rides the slide's transition and has not started), and a hidden
+    // element refuses focus: so try now, then again once it has begun.
+    // Where focus goes when the drawer opens, by how it was opened and what
+    // had focus (NavRail.test.tsx has one test per row):
+    //
+    //   opened by            focus was on             focus goes
+    //   its button, a tap    anything                 into the drawer
+    //   the j / k shortcut   a control (owns Enter)   into the drawer
+    //   the j / k shortcut   anything else, nothing   stays where it is
+    //
+    // The last row is the only exception, and it needs both halves. Enter
+    // opens the chat under the list cursor only while no control has focus,
+    // so the shortcut must not put focus on one. But a control that already
+    // has focus is now underneath the drawer, and leaving it there would
+    // let Enter press something the reader cannot see. "Is a control" is
+    // the very test Enter uses (isInteractiveTarget), so the two cannot
+    // disagree. "Was a control focused" cannot replace "was it opened from
+    // its button" either: Safari does not focus a button when it is clicked
+    // or tapped.
+    const stayOnPage = byShortcut && !isInteractiveTarget(document.activeElement);
+    const focusIn = () => {
+      const aside = asideRef.current;
+      if (!stayOnPage && aside && !aside.contains(document.activeElement)) {
+        overlayFocusables(aside)[0]?.focus();
+      }
+    };
+    focusIn();
+    let frame = requestAnimationFrame(() => {
+      focusIn();
+      frame = requestAnimationFrame(focusIn);
+    });
+    const onKey = (e: KeyboardEvent) => {
+      if (!isPhone()) return;
+      const rail = asideRef.current;
+      // A menu or dialog opened from the drawer sits on top of it and is
+      // portaled out of it. Its keys are its own: Escape there closes that
+      // layer only (closing the drawer too would leave it handing focus back
+      // to a button that is no longer on screen), and Tab is its trap's.
+      const active = document.activeElement;
+      const inLayerAbove =
+        active instanceof Element &&
+        !(rail?.contains(active) ?? false) &&
+        active.closest(LAYER_ABOVE_DRAWER) !== null;
+      if (e.key === "Escape") {
+        // defaultPrevented: a dialog's own handler (useDialogA11y listens on
+        // document, before this) has already used this Escape to close
+        // itself and put focus back on its trigger inside the rail, so by
+        // now focus alone no longer says a layer was open.
+        if (!inLayerAbove && !e.defaultPrevented) setSidebarOpen(false);
+        return;
+      }
+      if (e.key !== "Tab" || inLayerAbove) return;
+      if (!rail) return;
+      const items = overlayFocusables(rail);
+      if (items.length === 0) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (active instanceof Element && !rail.contains(active)) {
+        e.preventDefault();
+        (e.shiftKey ? last : first).focus();
+      } else if (e.shiftKey && active === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && active === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [sidebarOpen, setSidebarOpen]);
 
   // Modal-drawer keyboard behavior while the narrow overlay is up, on ONE
   // window listener:
@@ -254,8 +389,15 @@ export function NavRail({
           // background-image (the un-hinted arbitrary-value form emits
           // background-color, which drops gradient values); --color-bg
           // underneath keeps the drawer opaque over scrolled content.
-          "fixed inset-y-0 left-0 z-30 flex h-[100dvh] w-[min(19rem,85vw)] flex-col gap-2 border-r border-[var(--color-border)] bg-[var(--color-bg)] bg-[image:var(--sidebar-surface)] py-[0.85rem] shadow-[var(--shadow-lg)] backdrop-blur-xl transition-transform duration-base max-sm:overflow-hidden",
-          sidebarOpen ? "translate-x-0" : "-translate-x-full",
+          "fixed inset-y-0 left-0 z-30 flex h-[100dvh] w-[min(19rem,85vw)] flex-col gap-2 border-r border-[var(--color-border)] bg-[var(--color-bg)] bg-[image:var(--sidebar-surface)] py-[0.85rem] shadow-[var(--shadow-lg)] backdrop-blur-xl transition-[translate,visibility] duration-base max-sm:overflow-hidden",
+          // Closed on a phone it is also invisible, not only slid off-screen:
+          // an off-screen drawer still took keyboard focus (the first Tab
+          // stops on every page were its hidden items) and was still read
+          // out. Visibility joins the transition, so it stays painted until
+          // the slide-out has finished. (The property that moves it is
+          // `translate`, which is what Tailwind's translate-x-* sets; naming
+          // `transform` here left the slide with nothing to animate.)
+          sidebarOpen ? "translate-x-0" : "-translate-x-full max-sm:invisible",
           // ≥sm: in-flow sticky column (or the fixed narrow overlay), design
           // widths: 300px expanded / 4.25rem collapsed strip. The design's
           // rail surface is the semi-transparent --sidebar-surface gradient
@@ -264,7 +406,9 @@ export function NavRail({
           overlay
             ? "sm:fixed sm:inset-y-0 sm:left-0 sm:z-[390] sm:shadow-[var(--shadow-md)]"
             : "sm:sticky sm:top-0 sm:h-screen sm:shadow-none",
-          collapsed ? "sm:w-[4.25rem]" : "sm:w-[300px]",
+          // 300px at the default text size; it grows with the reader's own
+          // font size (18.75rem), up to a third of the window.
+          collapsed ? "sm:w-[4.25rem]" : "sm:w-[clamp(300px,18.75rem,34vw)]",
           railReady ? "sm:transition-[width,padding] sm:duration-fast" : "",
         ].join(" ")}
         style={{
@@ -306,7 +450,7 @@ export function NavRail({
             ref={collapseToggleRef}
             aria-label={collapsed ? tr("Expand sidebar") : tr("Collapse sidebar")}
             aria-expanded={!collapsed}
-            data-tip={collapsed ? "Expand" : "Collapse"}
+            data-tip={collapsed ? tr("Expand") : tr("Collapse")}
             className={[
               "hidden shrink-0 items-center justify-center rounded-[var(--radius-md)] text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:inline-flex",
               collapsed ? "size-10" : "ml-auto size-[1.9rem]",
@@ -326,7 +470,7 @@ export function NavRail({
         {/* Primary navigation */}
         <nav
           aria-label={tr("Switch surface")}
-          className={["grid gap-0.5", collapsed ? "sm:justify-items-center" : ""].join(" ")}
+          className={["grid grid-cols-[minmax(0,1fr)] gap-0.5", collapsed ? "sm:justify-items-center" : ""].join(" ")}
         >
           {/* The three ways of working, each with a subtitle that says what
               makes it different — patrols and background tasks both run on a

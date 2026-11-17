@@ -116,6 +116,25 @@ describe("SkillsPage workspace pack", () => {
   });
 });
 
+describe("SkillsPage new-skill form", () => {
+  // The form opens from a button that stays put, so the cursor has to be
+  // moved into it; and its greyed-out button says what it is waiting for.
+  it("puts the cursor in the name field and names the missing field", async () => {
+    vi.stubGlobal("fetch", mockFetch([]));
+    render(<SkillsPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "New skill" }));
+    const name = screen.getByPlaceholderText("my-skill");
+    expect(name).toHaveFocus();
+    const create = screen.getByRole("button", { name: "Create skill" });
+    expect(create).toBeDisabled();
+    expect(create).toHaveAccessibleDescription("To continue, fill in: Name");
+
+    fireEvent.change(name, { target: { value: "deal-check" } });
+    expect(create).toBeEnabled();
+    expect(screen.queryByText(/To continue, fill in/)).toBeNull();
+  });
+});
+
 describe("SkillsPage failure states", () => {
   it("says the personal-skills read failed, with Retry, instead of loading forever", async () => {
     let userSkillsStatus = 500;

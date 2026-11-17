@@ -9,6 +9,9 @@ import {
   InlineConfirmButton,
   RevealButton,
   SETTINGS_INPUT,
+  FormActions,
+  MissingFieldsHint,
+  useFocusOnOpen,
 } from "../ui/atoms";
 import {
   ConnEmpty,
@@ -79,9 +82,26 @@ function skillMd(sk: { name: string; description: string; body: string }): strin
 
 // The design's .skill-row anatomy, shared by both panels so personal and pack
 // rows read identically (head chip line, description, expandable SKILL.md).
+// grid-cols-[minmax(0,1fr)]: a bare grid's one column grows to its widest
+// child, so the unwrapped button row made the whole row (description
+// included) wider than its card on a phone.
 const SKILL_ROW =
-  "grid gap-[0.45rem] border-b border-[var(--color-border-subtle)] px-[0.1rem] py-3 last:border-b-0";
-const SKILL_HEAD = "flex flex-wrap items-center gap-[0.55rem]";
+  "grid grid-cols-[minmax(0,1fr)] gap-[0.45rem] border-b border-[var(--color-border-subtle)] px-[0.1rem] py-3 last:border-b-0";
+// The row's buttons: to the right while they fit beside the name, and onto
+// further lines (still right-aligned) when they do not.
+const SKILL_ACTIONS =
+  "ml-auto inline-flex max-w-full flex-wrap justify-end gap-[0.35rem] max-sm:order-1 max-sm:ml-0 max-sm:mt-[0.1rem] max-sm:justify-start";
+// What a row shows under its buttons on a phone (the opened SKILL.md, its
+// loading line or error).
+const SKILL_BELOW = "max-sm:order-2";
+// From sm up the head is one line: name and badges on the left, buttons on
+// the right. On a phone five buttons never fit beside the name, and wrapped
+// under it, right-aligned, they left a ragged block between the name and
+// what the skill does. So there the head dissolves (`contents`) and the row
+// reads top to bottom: name and status, the description, then one row of
+// buttons starting at the left edge, then the opened SKILL.md.
+const SKILL_HEAD = "flex flex-wrap items-center gap-[0.55rem] max-sm:contents";
+const SKILL_TITLE = "flex min-w-0 flex-wrap items-center gap-[0.55rem]";
 // The design's .skill-desc metrics, applied over ClampText's base (with
 // per-utility importance — same-property utilities are order-fragile). The
 // brief adds the 3-line clamp + expand the mock lacks.
@@ -89,7 +109,7 @@ const SKILL_DESC = "text-[0.76rem]! leading-[1.55]!";
 // .code-block.skill-md — capped height so a long SKILL.md scrolls inside the
 // row instead of stretching the page.
 const SKILL_MD =
-  "mt-[0.15rem] max-h-[23rem] overflow-y-auto whitespace-pre-wrap [overflow-wrap:anywhere] rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] px-[0.95rem] py-[0.8rem] font-[family-name:var(--font-code)] text-[0.74rem] leading-[1.75] text-[var(--color-text-secondary)]";
+  "max-sm:order-2 mt-[0.15rem] max-h-[23rem] overflow-y-auto whitespace-pre-wrap [overflow-wrap:anywhere] rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] px-[0.95rem] py-[0.8rem] font-[family-name:var(--font-code)] text-[0.74rem] leading-[1.75] text-[var(--color-text-secondary)]";
 
 const LOADING = "m-0 py-3 text-center text-[0.79rem] text-[var(--color-text-muted)]";
 
@@ -116,6 +136,7 @@ export default function SkillsPage() {
   const [openMine, setOpenMine] = useState<string | null>(null);
   // The builder form: id === "" is a new skill; otherwise an edit.
   const [draft, setDraft] = useState<typeof EMPTY_DRAFT | null>(null);
+  const firstFieldRef = useFocusOnOpen<HTMLInputElement>(draft !== null, draft?.id ?? null);
   const [busy, setBusy] = useState(false);
   const editorRef = useRef<HTMLDivElement | null>(null);
 
@@ -347,6 +368,9 @@ export default function SkillsPage() {
       .then((d) => {
         const existing = mine?.find((m) => m.name === (d.name || s.name));
         const body = (d.body ?? d.content.replace(/^---[\s\S]*?---\s*/, "")).trim();
+        // Loading another skill into a form that is already open may leave
+        // the form's id unchanged (two copies are both new): move the cursor.
+        firstFieldRef.current?.focus();
         setDraft({
           id: existing?.id ?? "",
           name: d.name || s.name,
@@ -447,6 +471,7 @@ export default function SkillsPage() {
             <ConnField label={tr("Name (lowercase-kebab, e.g. deal-check)")}>
               <input
                 id="skillName"
+                ref={firstFieldRef}
                 className={SETTINGS_INPUT}
                 placeholder="my-skill"
                 value={draft.name}
@@ -486,7 +511,10 @@ export default function SkillsPage() {
             </label>
             {/* The design tightens .conn-form-actions' top margin inside
                 .skill-create (the grid gap already provides the spacing). */}
-            <div className="mt-[0.1rem] flex justify-end gap-2">
+            <FormActions
+              className="mt-[0.1rem]"
+              hint={<MissingFieldsHint id="skillMissing" missing={draft.name.trim() ? [] : [tr("Name")]} />}
+            >
               <button
                 type="button"
                 className={btnClass({ sm: true, reveal: true })}
@@ -498,11 +526,12 @@ export default function SkillsPage() {
                 type="button"
                 className={btnClass({ variant: "primary" })}
                 disabled={busy || !draft.name.trim()}
+                aria-describedby={draft.name.trim() ? undefined : "skillMissing"}
                 onClick={saveDraft}
               >
                 {draft.id === "" ? tr("Create skill") : tr("Save changes")}
               </button>
-            </div>
+            </FormActions>
           </div>
         ) : null}
 
@@ -534,28 +563,30 @@ export default function SkillsPage() {
             {mine.map((sk) => (
               <div key={sk.id} data-testid={`skill-row-${sk.name}`} className={SKILL_ROW}>
                 <div className={SKILL_HEAD}>
-                  <CopyChip name={sk.name} />
-                  <ConnBadge
-                    variant={
-                      sk.status === "active"
-                        ? "success"
+                  <span className={SKILL_TITLE}>
+                    <CopyChip name={sk.name} />
+                    <ConnBadge
+                      variant={
+                        sk.status === "active"
+                          ? "success"
+                          : sk.status === "proposed"
+                            ? "warn"
+                            : "neutral"
+                      }
+                    >
+                      {sk.status === "active"
+                        ? tr("Active")
                         : sk.status === "proposed"
-                          ? "warn"
-                          : "neutral"
-                    }
-                  >
-                    {sk.status === "active"
-                      ? tr("Active")
-                      : sk.status === "proposed"
-                        ? tr("Proposed by agent")
-                        : tr("Disabled")}
-                  </ConnBadge>
-                  {sk.visibility === "workspace" ? (
-                    <ConnBadge variant="neutral">
-                      {sk.status === "active" ? tr("Shared with workspace") : tr("Shared (when enabled)")}
+                          ? tr("Proposed by agent")
+                          : tr("Disabled")}
                     </ConnBadge>
-                  ) : null}
-                  <span className="ml-auto inline-flex gap-[0.35rem]">
+                    {sk.visibility === "workspace" ? (
+                      <ConnBadge variant="neutral">
+                        {sk.status === "active" ? tr("Shared with workspace") : tr("Shared (when enabled)")}
+                      </ConnBadge>
+                    ) : null}
+                  </span>
+                  <span className={SKILL_ACTIONS}>
                     {sk.status === "proposed" ? (
                       <>
                         <button
@@ -580,9 +611,20 @@ export default function SkillsPage() {
                         type="button"
                         className={btnClass({ sm: true, reveal: true })}
                         disabled={busy}
+                        aria-label={sk.visibility === "workspace" ? undefined : tr("Share with workspace")}
                         onClick={() => toggleShareMine(sk)}
                       >
-                        {sk.visibility === "workspace" ? tr("Unshare") : tr("Share with workspace")}
+                        {sk.visibility === "workspace" ? (
+                          tr("Unshare")
+                        ) : (
+                          // "Share" on a phone, so the row's buttons fit one
+                          // line; the button keeps its full name for screen
+                          // readers (aria-label above).
+                          <>
+                            <span className="sm:hidden">{tr("Share")}</span>
+                            <span className="max-sm:hidden">{tr("Share with workspace")}</span>
+                          </>
+                        )}
                       </button>
                     )}
                     <button
@@ -659,21 +701,23 @@ export default function SkillsPage() {
             {filtered.map((s) => (
               <div key={s.name} data-testid={`skill-row-${s.name}`} className={SKILL_ROW}>
                 <div className={SKILL_HEAD}>
-                  <CopyChip name={s.name} />
-                  <ConnBadge
-                    variant={
-                      s.source === "bundle" || s.source === "workspace" ? "success" : "neutral"
-                    }
-                  >
-                    {s.source === "bundle"
-                      ? tr("Workspace")
-                      : s.source === "workspace"
-                        ? tr("Shared{0}", [s.shared_by ? `: ${s.shared_by}` : ""])
-                        : s.source === "plugin"
-                          ? tr("Plugin{0}", [s.plugin ? `: ${s.plugin}` : ""])
-                          : tr("Built-in")}
-                  </ConnBadge>
-                  <span className="ml-auto inline-flex gap-[0.35rem]">
+                  <span className={SKILL_TITLE}>
+                    <CopyChip name={s.name} />
+                    <ConnBadge
+                      variant={
+                        s.source === "bundle" || s.source === "workspace" ? "success" : "neutral"
+                      }
+                    >
+                      {s.source === "bundle"
+                        ? tr("Workspace")
+                        : s.source === "workspace"
+                          ? tr("Shared{0}", [s.shared_by ? `: ${s.shared_by}` : ""])
+                          : s.source === "plugin"
+                            ? tr("Plugin{0}", [s.plugin ? `: ${s.plugin}` : ""])
+                            : tr("Built-in")}
+                    </ConnBadge>
+                  </span>
+                  <span className={SKILL_ACTIONS}>
                     {s.source === "workspace" && !mine?.some((m) => m.name === s.name) ? (
                       <button
                         type="button"
@@ -718,7 +762,7 @@ export default function SkillsPage() {
                   detail && detail.name === s.name ? (
                     <pre className={SKILL_MD}>{detail.content}</pre>
                   ) : viewError && viewError.name === s.name ? (
-                    <p role="alert" className="m-0 text-[0.74rem] text-[var(--color-danger)]">
+                    <p role="alert" className={`${SKILL_BELOW} m-0 text-[0.74rem] text-[var(--color-danger)]`}>
                       {viewError.message}{" "}
                       <button
                         type="button"
@@ -729,7 +773,7 @@ export default function SkillsPage() {
                       </button>
                     </p>
                   ) : (
-                    <p className="m-0 text-[0.74rem] text-[var(--color-text-muted)]">{tr("Loading…")}</p>
+                    <p className={`${SKILL_BELOW} m-0 text-[0.74rem] text-[var(--color-text-muted)]`}>{tr("Loading…")}</p>
                   )
                 ) : null}
               </div>
