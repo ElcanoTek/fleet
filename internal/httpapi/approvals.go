@@ -685,7 +685,7 @@ func (a *approvalStager) emitUserScoped(name string, payload map[string]any) {
 // `chat_patrol` or `connector_studio`, or non-read-only `mcp_fast_io_storage`).
 func isArgumentSensitiveFloorCall(toolName, rawInput string) bool {
 	switch strings.ToLower(strings.TrimSpace(toolName)) {
-	case "bash", tools.ChatPatrolToolName, tools.ConnectorStudioToolName:
+	case "bash", "run_python", tools.ChatPatrolToolName, tools.ConnectorStudioToolName:
 		return agentcore.IsAutonomousHardBlocked(toolName, rawInput)
 	}
 	norm := strings.ReplaceAll(strings.ToLower(strings.TrimSpace(toolName)), "-", "_")

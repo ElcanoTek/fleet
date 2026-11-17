@@ -110,6 +110,8 @@ func IsAutonomousHardBlocked(toolName, rawInput string) bool {
 		return IsGatedConnectorStudioCall(rawInput)
 	case toolNameBash:
 		return IsGitPushBash(rawInput)
+	case toolNameRunPython:
+		return IsGitPushPython(rawInput)
 	}
 
 	// 3. M365 outbound/sharing/rules/batch tools and team-wide email template tools.
@@ -266,6 +268,91 @@ func IsGitPushBash(rawInput string) bool {
 	}
 	for _, c := range cmds {
 		if bashCommandRunsGitPush(c) {
+			return true
+		}
+	}
+	return false
+}
+
+var pythonProcessCapabilityMarkers = []string{
+	"subprocess",
+	"system",
+	"popen",
+	"exec",
+	"spawn",
+	"pty",
+	"ctypes",
+	"cffi",
+	"getoutput",
+	"__import__",
+	"importlib",
+	"getattr",
+}
+
+// IsGitPushPython reports whether a run_python tool JSON payload attempts to
+// launch `git push` (or tamper with the kernel's Git push transport guard) via
+// IPython shell escapes or Python process-execution APIs.
+func IsGitPushPython(rawInput string) bool {
+	codes, dupOrBad := extractTopLevelStringFieldSpellings(rawInput, "code")
+	if dupOrBad {
+		return true
+	}
+	for _, code := range codes {
+		if pythonCodeRunsGitPush(code) {
+			return true
+		}
+	}
+	return false
+}
+
+func pythonCodeRunsGitPush(code string) bool {
+	if pythonIPythonEscapeRunsGitPush(code) {
+		return true
+	}
+	lower := strings.ToLower(code)
+	if strings.Contains(lower, "git_config") || strings.Contains(lower, "fleet-approval-required") || strings.Contains(lower, "pushinsteadof") {
+		return true
+	}
+	if !pythonHasProcessCapability(lower) {
+		return false
+	}
+	if strings.Contains(lower, "git-push") || strings.Contains(lower, "git-send-pack") || strings.Contains(lower, "git-receive-pack") {
+		return true
+	}
+	return containsASCIIWordFold(code, "git") &&
+		(containsASCIIWordFold(code, "push") || containsASCIIWordFold(code, "send-pack") || containsASCIIWordFold(code, "receive-pack"))
+}
+
+func pythonIPythonEscapeRunsGitPush(code string) bool {
+	lines := strings.Split(code, "\n")
+	for idx, rawLine := range lines {
+		trimmed := strings.TrimSpace(rawLine)
+		if strings.HasPrefix(trimmed, "!") {
+			shellCmd := strings.TrimLeft(trimmed, "!")
+			if bashCommandRunsGitPush(shellCmd) {
+				return true
+			}
+		}
+		lowerLine := strings.ToLower(trimmed)
+		if strings.HasPrefix(lowerLine, "%sx ") || strings.HasPrefix(lowerLine, "%system ") {
+			space := strings.IndexByte(trimmed, ' ')
+			if space >= 0 && bashCommandRunsGitPush(trimmed[space+1:]) {
+				return true
+			}
+		}
+		if strings.HasPrefix(lowerLine, "%%bash") || strings.HasPrefix(lowerLine, "%%sh") || strings.HasPrefix(lowerLine, "%%script") {
+			body := strings.Join(lines[idx+1:], "\n")
+			if bashCommandRunsGitPush(body) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func pythonHasProcessCapability(lower string) bool {
+	for _, marker := range pythonProcessCapabilityMarkers {
+		if strings.Contains(lower, marker) {
 			return true
 		}
 	}

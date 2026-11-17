@@ -385,3 +385,49 @@ func TestInteractiveGates_HonorRecordedSentinelAndGateFloorTools(t *testing.T) {
 		}
 	}
 }
+
+func TestRunPythonGitPushFloor(t *testing.T) {
+	policy := NewInteractivePolicy(0, 0, &stubApprovalSink{returnID: RecordedSentinel}, nil)
+
+	blockedCases := []struct {
+		name  string
+		input string
+	}{
+		{"subprocess run git push", `{"code":"import subprocess\nsubprocess.run(['git', 'push', 'origin', 'main'], check=True)"}`},
+		{"os system git push", `{"code":"import os\nos.system('git -C /workspace/repo push origin HEAD')"}`},
+		{"ipython bang escape", `{"code":"!git push origin main"}`},
+		{"ipython bash cell magic", `{"code":"%%bash\ngit -C /workspace/repo push origin HEAD"}`},
+		{"git config guard tamper", `{"code":"import os\ndel os.environ['GIT_CONFIG_COUNT']"}`},
+		{"duplicate key smuggling", `{"code":"print(1)","Code":"import subprocess; subprocess.run(['git', 'push'])"}`},
+	}
+	for _, tc := range blockedCases {
+		t.Run(tc.name, func(t *testing.T) {
+			if !IsAutonomousHardBlocked("run_python", tc.input) {
+				t.Errorf("IsAutonomousHardBlocked(run_python, %s) = false, want true", tc.name)
+			}
+			blocked, msg := policy.BeforeToolCall("run_python", "py-1", tc.input)
+			if !blocked || !strings.Contains(msg, "REFUSED") || !strings.Contains(msg, "bash") {
+				t.Errorf("BeforeToolCall(run_python, %s) = (%v, %q), want REFUSED directing to bash", tc.name, blocked, msg)
+			}
+		})
+	}
+
+	allowedCases := []struct {
+		name  string
+		input string
+	}{
+		{"pandas with os path and git push text", `{"code":"import os\nmsg = 'remember not to git push without review'\nprint(os.path.basename('/tmp/a.csv'), msg)"}`},
+		{"subprocess git status", `{"code":"import subprocess\nprint(subprocess.check_output(['git', 'status', '--short'], text=True))"}`},
+		{"subprocess git log", `{"code":"import subprocess\nprint(subprocess.check_output(['git', 'log', '-n', '1'], text=True))"}`},
+	}
+	for _, tc := range allowedCases {
+		t.Run(tc.name, func(t *testing.T) {
+			if IsAutonomousHardBlocked("run_python", tc.input) {
+				t.Errorf("IsAutonomousHardBlocked(run_python, %s) = true, want false", tc.name)
+			}
+			if blocked, msg := policy.BeforeToolCall("run_python", "py-ok", tc.input); blocked {
+				t.Errorf("BeforeToolCall(run_python, %s) unexpectedly blocked: %q", tc.name, msg)
+			}
+		})
+	}
+}

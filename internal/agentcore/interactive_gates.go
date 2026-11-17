@@ -20,6 +20,7 @@ import (
 
 const (
 	toolNameBash                 = "bash"
+	toolNameRunPython            = "run_python"
 	toolNamePlaywrightBrowser    = "playwright_browser"
 	toolNameConnectorStudio      = "connector_studio"
 	toolNamePreviewEmail         = "preview_email"
@@ -65,6 +66,20 @@ func (o *orchestrationState) checkBashSafety(toolName, toolCallID, rawInput stri
 		return true, fmt.Sprintf("APPROVAL_DENIED: %s - the user pre-denied bash for this conversation (session policy). Do NOT retry.", reason)
 	}
 	return true, fmt.Sprintf("APPROVAL_REQUIRED: %s - staged for user approval (approval_id=%s). Do NOT retry. Summarize intent and wait for the user to click Approve.", reason, id)
+}
+
+// checkPythonSafety refuses git push attempts routed through run_python so the
+// agent runs git push via bash (which stages a real user approval card). The
+// kernel bootstrap in python_bridge.py enforces the same boundary at runtime
+// for dynamically constructed subprocess/shell calls.
+func (o *orchestrationState) checkPythonSafety(toolName, rawInput string) (bool, string) {
+	if toolName != toolNameRunPython {
+		return false, ""
+	}
+	if !IsGitPushPython(rawInput) {
+		return false, ""
+	}
+	return true, "REFUSED: git push is disabled inside run_python; run git push via the bash tool so Fleet can stage an approval card."
 }
 
 // BrowserCallKind says what a playwright_browser or connector_studio browser
