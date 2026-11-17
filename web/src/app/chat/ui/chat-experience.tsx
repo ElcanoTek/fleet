@@ -5878,14 +5878,56 @@ export function ChatExperience({
     () => uiAutoSubmitsByConv.get(currentConvKey),
     [currentConvKey, uiAutoSubmitsByConv],
   );
+  const refreshUIAutoSubmits = useCallback(async (convId: string) => {
+    const url = conversationApiUrl(convId, "?omit_history=1&approval_index=1");
+    if (!url) return;
+    try {
+      const res = await fetch(url, { cache: "no-store" });
+      if (!res.ok) return;
+      const data = (await res.json().catch(() => null)) as {
+        ui_autosubmits?: UIAutoSubmitState[] | null;
+      } | null;
+      if (!data || !Array.isArray(data.ui_autosubmits)) return;
+      const rows = data.ui_autosubmits;
+      const receivedAtMs = Date.now();
+      setUiAutoSubmitsByConv((prev) => {
+        const nextAuto = new Map(prev);
+        const prevByCall = prev.get(convId);
+        const byCall = new Map<string, UIAutoSubmitState>();
+        for (const item of rows) {
+          if (item && typeof item.call_id === "string") {
+            const existing = prevByCall?.get(item.call_id);
+            const keepClientDeadline =
+              existing &&
+              typeof existing.client_deadline_ms === "number" &&
+              existing.id === item.id &&
+              existing.deadline_ms === item.deadline_ms
+                ? existing.client_deadline_ms
+                : typeof item.remaining_ms === "number"
+                  ? receivedAtMs + Math.max(0, item.remaining_ms)
+                  : item.deadline_ms;
+            byCall.set(item.call_id, {
+              ...item,
+              client_deadline_ms: keepClientDeadline,
+            });
+          }
+        }
+        nextAuto.set(convId, byCall);
+        return nextAuto;
+      });
+    } catch {
+      // Ignore transient network errors; followApprovalResume retries reconciliation.
+    }
+  }, []);
   const handleAutoSubmitDue = useCallback(
     (_cardId: string) => {
       const convId = realConvId(currentConvKey);
       if (!convId) return;
+      void refreshUIAutoSubmits(convId);
       void refreshQueue(convId);
       void followApprovalResume(convId, approvalResumeFollowSettledMs);
     },
-    [currentConvKey, followApprovalResume, refreshQueue],
+    [currentConvKey, followApprovalResume, refreshQueue, refreshUIAutoSubmits],
   );
   // Ensure virtualized off-screen cards still follow the server-enqueued turn
   // when their 10-second server countdown expires.
@@ -5903,12 +5945,14 @@ export function ChatExperience({
       const waitMs = Math.max(0, targetMs - now);
       timers.push(
         window.setTimeout(() => {
+          void refreshUIAutoSubmits(convId);
           void refreshQueue(convId);
           void followApprovalResume(convId, approvalResumeFollowSettledMs);
         }, waitMs + 250),
       );
       timers.push(
         window.setTimeout(() => {
+          void refreshUIAutoSubmits(convId);
           void refreshQueue(convId);
           void followApprovalResume(convId, approvalResumeFollowSettledMs);
         }, waitMs + 1250),
@@ -5917,7 +5961,13 @@ export function ChatExperience({
     return () => {
       for (const tid of timers) window.clearTimeout(tid);
     };
-  }, [activeUIAutoSubmits, currentConvKey, followApprovalResume, refreshQueue]);
+  }, [
+    activeUIAutoSubmits,
+    currentConvKey,
+    followApprovalResume,
+    refreshQueue,
+    refreshUIAutoSubmits,
+  ]);
   const handlePauseAutoSubmit = useCallback(
     async (cardId: string): Promise<AutoSubmitPauseResult> => {
       const convId = realConvId(currentConvKey);
