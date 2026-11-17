@@ -32,7 +32,9 @@ export function shortcutHref(item: SidebarItem): string {
   const ref = encodeURIComponent(item.ref ?? "");
   switch (item.kind) {
     case "chat":
-      return `/chat?c=${ref}`;
+      // The view travels with the link, so opening it in a new tab or from a
+      // copied URL opens it the way the shortcut says.
+      return `/chat?c=${ref}&view=${item.view === "dashboard" ? "dashboard" : "chat"}`;
     case "project":
       return `/chat?project=${ref}`;
     case "task":

@@ -255,8 +255,11 @@ func TestSidebar_RevIsHonoured(t *testing.T) {
 	if body := put("tasks", 20); !strings.Contains(body, `"stale":false`) {
 		t.Errorf("first PUT = %s", body)
 	}
-	if body := put("", 10); !strings.Contains(body, `"stale":true`) {
-		t.Errorf("older PUT = %s; want stale", body)
+	if body := put("", 10); !strings.Contains(body, `"stale":true`) || !strings.Contains(body, `"home":"tasks"`) || !strings.Contains(body, `"rev":20`) {
+		t.Errorf("older PUT = %s; want stale, carrying the stored layout and its rev", body)
+	}
+	if w := do(t, h, http.MethodGet, "/sidebar", nil, "me@x.com"); !strings.Contains(w.Body.String(), `"rev":20`) {
+		t.Errorf("GET = %s; want the stored rev", w.Body.String())
 	}
 	got := decodeSidebar[sidebarGet](t, do(t, h, http.MethodGet, "/sidebar", nil, "me@x.com"))
 	if !strings.Contains(string(got.Layout), `"home":"tasks"`) {

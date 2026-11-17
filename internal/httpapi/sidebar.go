@@ -105,13 +105,8 @@ func (s *Server) handleSidebar(w http.ResponseWriter, r *http.Request) {
 	user := userFromCtx(ctx)
 	switch r.Method {
 	case http.MethodGet:
-		var mine *sidebar.Layout
-		raw, err := s.store.SidebarLayout(ctx, user)
-		switch {
-		case err == nil:
-			mine = storedSidebarLayout(ctx, raw, "user")
-		case !errors.Is(err, store.ErrSidebarLayoutNotFound):
-			http.Error(w, "internal error", http.StatusInternalServerError)
+		mine, rev, ok := s.ownSidebarLayout(w, r, user)
+		if !ok {
 			return
 		}
 		ws, _, err := s.workspaceSidebarDefault(ctx)
@@ -126,7 +121,7 @@ func (s *Server) handleSidebar(w http.ResponseWriter, r *http.Request) {
 			redacted := ws.ForMembers()
 			ws = &redacted
 		}
-		writeJSON(w, r, map[string]any{"layout": mine, "workspace_default": ws})
+		writeJSON(w, r, map[string]any{"layout": mine, "workspace_default": ws, "rev": rev})
 	case http.MethodPut:
 		rev, ok := readSidebarRev(w, r)
 		if !ok {
@@ -146,8 +141,11 @@ func (s *Server) handleSidebar(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
-		// stale: a newer save already landed; this one changed nothing.
-		writeJSON(w, r, map[string]any{"layout": l, "stale": !applied})
+		if applied {
+			writeJSON(w, r, map[string]any{"layout": l, "stale": false, "rev": rev})
+			return
+		}
+		s.writeStaleSidebar(w, r, user)
 	case http.MethodDelete:
 		rev, ok := readSidebarRev(w, r)
 		if !ok {
@@ -158,11 +156,47 @@ func (s *Server) handleSidebar(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
-		writeJSON(w, r, map[string]any{"layout": nil, "stale": !applied})
+		if applied {
+			writeJSON(w, r, map[string]any{"layout": nil, "stale": false, "rev": rev})
+			return
+		}
+		s.writeStaleSidebar(w, r, user)
 	default:
 		w.Header().Set("Allow", "GET, PUT, DELETE")
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// ownSidebarLayout reads the caller's layout (nil when none) and its
+// revision, answering 500 itself on a store failure.
+func (s *Server) ownSidebarLayout(w http.ResponseWriter, r *http.Request, user string) (*sidebar.Layout, int64, bool) {
+	ctx := r.Context()
+	var mine *sidebar.Layout
+	raw, err := s.store.SidebarLayout(ctx, user)
+	switch {
+	case err == nil:
+		mine = storedSidebarLayout(ctx, raw, "user")
+	case !errors.Is(err, store.ErrSidebarLayoutNotFound):
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return nil, 0, false
+	}
+	rev, err := s.store.SidebarLayoutRev(ctx, user)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return nil, 0, false
+	}
+	return mine, rev, true
+}
+
+// writeStaleSidebar answers a save or reset that a newer one already
+// overtook (another tab or device): it changed nothing, so the reply carries
+// what IS stored and its revision, for the browser to show instead.
+func (s *Server) writeStaleSidebar(w http.ResponseWriter, r *http.Request, user string) {
+	mine, rev, ok := s.ownSidebarLayout(w, r, user)
+	if !ok {
+		return
+	}
+	writeJSON(w, r, map[string]any{"layout": mine, "stale": true, "rev": rev})
 }
 
 // adminSidebarResponse is /admin/sidebar's answer.

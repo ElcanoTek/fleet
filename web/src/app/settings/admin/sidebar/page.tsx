@@ -112,9 +112,12 @@ function SidebarAdmin() {
   // Only a layout that really loaded is copied: when the admin's own read
   // failed, the store holds the built-in stand-in, and copying that would
   // replace the draft with something the admin never chose.
+  // The editor is locked while the copy loads (busy), so no edit made
+  // meanwhile is overwritten when it lands.
   const copyMine = async () => {
     setError(null);
-    const own = await loadOwnSidebar();
+    setBusy(true);
+    const own = await loadOwnSidebar().finally(() => setBusy(false));
     if (own.status !== "ready") {
       setError(tr("Couldn't load your sidebar, so nothing was copied. Try again."));
       return;

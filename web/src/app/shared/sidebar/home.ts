@@ -47,7 +47,14 @@ export function markEntryHomeUsed() {
 export async function resolveEntryHome(timeoutMs: number): Promise<SidebarItem | null> {
   const started = Date.now();
   const state = await sidebarSettled(timeoutMs);
+  // Home comes only from a layout the server answered with: a cached copy
+  // (shown while the read is slow) may name a Home changed or cleared since
+  // on another device.
+  if (state.status !== "ready") return null;
   const home = state.layout.home;
+  const remaining = () => Math.max(0, timeoutMs - (Date.now() - started));
+  const within = <T,>(p: Promise<T>): Promise<T | null> =>
+    Promise.race([p, new Promise<null>((resolve) => setTimeout(() => resolve(null), remaining()))]);
   if (!home) return null;
   const item = state.layout.items.find((i) => i.id === home);
   if (!item || item.hidden || item.id === "chat" || item.id === "patrols") return null;
@@ -58,7 +65,7 @@ export async function resolveEntryHome(timeoutMs: number): Promise<SidebarItem |
   // A personal Analytics Home outlives the role that set it: follow it only
   // while this account is still an admin, never into "admin access required".
   if (item.kind === "page" && item.ref === "analytics") {
-    const me = await fetchMe().catch(() => null);
+    const me = await within(fetchMe().catch(() => null));
     if (!me?.admin) return null;
   }
   if (item.kind === "chat" || item.kind === "project") {
@@ -66,11 +73,7 @@ export async function resolveEntryHome(timeoutMs: number): Promise<SidebarItem |
     // confirmed openable (in time) is skipped, so nobody lands on an error
     // page instead of their chats; the person's own Home is skipped only when
     // it is known to be gone.
-    const left = Math.max(0, timeoutMs - (Date.now() - started));
-    const ok = await Promise.race([
-      canOpen(item),
-      new Promise<null>((resolve) => setTimeout(() => resolve(null), left)),
-    ]);
+    const ok = await within(canOpen(item));
     if (ok === false || (ok === null && fromWorkspace)) return null;
   }
   return item;

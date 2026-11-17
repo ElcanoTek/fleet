@@ -595,3 +595,16 @@ test("the workspace editor flags an archived chat pinned there, and never copies
   await expect(editor.getByTestId("sidebar-item-not-shared")).toHaveCount(0);
   await expect(editor.getByPlaceholder("Analytics")).toHaveCount(0);
 });
+
+test("a dashboard shortcut's link opens as a dashboard, even in a new tab", async ({ page }) => {
+  await setup(page, {
+    own: { version: 1, items: [{ id: "s-board", kind: "chat", ref: "c2", title: "Revenue board", view: "dashboard" }], sections: [] },
+  });
+  await page.goto("/chat?c=c4");
+  const href = await page.getByTestId("rail-shortcut").getAttribute("href");
+  expect(href).toBe("/chat?c=c2&view=dashboard");
+  // Following the raw URL (a new tab, a copied link) honours the view too.
+  await page.goto(href!);
+  await expect(page.getByTestId("dashboard-hud")).toBeVisible();
+  await expect(page).toHaveURL(/\/chat$/);
+});

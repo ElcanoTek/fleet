@@ -74,8 +74,15 @@ export function resetPatrolCacheForTests() {
 // navigates to Chat (open returns false).
 
 type Named = { id: string; title?: string; name?: string };
-type Lists = { chats: Map<string, string>; projects: Map<string, string> };
-let listsRead: Promise<Lists | null> | null = null;
+// Each list is kept on its own: one that failed leaves only the targets it
+// could have answered "unknown", never hides a target another list found.
+type Lists = {
+  chats: Map<string, string>;
+  /** Every chat list (own, archived, shared) answered: a miss is a real "no". */
+  chatsComplete: boolean;
+  projects: Map<string, string> | null;
+};
+let listsRead: Promise<Lists> | null = null;
 
 async function readList(url: string, key: "conversations" | "projects"): Promise<Named[] | null> {
   try {
@@ -88,36 +95,43 @@ async function readList(url: string, key: "conversations" | "projects"): Promise
   }
 }
 
-function readLists(): Promise<Lists | null> {
+function readLists(): Promise<Lists> {
   if (!listsRead) {
     listsRead = Promise.all([
       readList("/api/conversations", "conversations"),
       readList("/api/conversations?archived=true", "conversations"),
       readList("/api/conversations?scope=shared", "conversations"),
       readList("/api/projects", "projects"),
-    ]).then(([own, archived, shared, projects]) => {
-      // Any list that failed leaves availability unknown rather than "no".
-      if (!own || !archived || !shared || !projects) return null;
-      return {
-        chats: new Map([...own, ...archived, ...shared].map((c) => [c.id, c.title ?? ""])),
-        projects: new Map(projects.map((p) => [p.id, p.name ?? ""])),
-      };
-    });
+    ]).then(([own, archived, shared, projects]) => ({
+      chats: new Map([...(own ?? []), ...(archived ?? []), ...(shared ?? [])].map((c) => [c.id, c.title ?? ""])),
+      chatsComplete: Boolean(own && archived && shared),
+      projects: projects ? new Map(projects.map((p) => [p.id, p.name ?? ""])) : null,
+    }));
   }
   return listsRead;
 }
 
+function availabilityIn(lists: Lists, item: SidebarItem): Availability {
+  const ref = item.ref ?? "";
+  if (item.kind === "chat") {
+    if (lists.chats.has(ref)) return "yes";
+    return lists.chatsComplete ? "no" : "unknown";
+  }
+  if (item.kind === "project") {
+    if (!lists.projects) return "unknown";
+    return lists.projects.has(ref) ? "yes" : "no";
+  }
+  return "unknown";
+}
+
 /**
  * canOpen: whether this account can open a chat or project shortcut's
- * target, from the same lists the rail reads (null when they could not be
- * read). Other kinds are not checked here.
+ * target, from the same lists the rail reads (null when that cannot be told:
+ * the list that would answer failed). Other kinds are not checked here.
  */
 export async function canOpen(item: SidebarItem): Promise<boolean | null> {
-  const lists = await readLists();
-  if (!lists) return null;
-  if (item.kind === "chat") return lists.chats.has(item.ref ?? "");
-  if (item.kind === "project") return lists.projects.has(item.ref ?? "");
-  return null;
+  const a = availabilityIn(await readLists(), item);
+  return a === "unknown" ? null : a === "yes";
 }
 
 /** useFallbackTargets: targets for a page that is not Chat (null until read, or when not needed). */
@@ -138,13 +152,9 @@ export function useFallbackTargets(enabled: boolean): SidebarTargets | null {
     activeConversationId: null,
     activeProjectId: null,
     titleFor: (item) =>
-      (item.kind === "chat" ? lists.chats.get(item.ref ?? "") : item.kind === "project" ? lists.projects.get(item.ref ?? "") : undefined) ||
+      (item.kind === "chat" ? lists.chats.get(item.ref ?? "") : item.kind === "project" ? lists.projects?.get(item.ref ?? "") : undefined) ||
       undefined,
-    availability: (item) => {
-      if (item.kind === "chat") return lists.chats.has(item.ref ?? "") ? "yes" : "no";
-      if (item.kind === "project") return lists.projects.has(item.ref ?? "") ? "yes" : "no";
-      return "unknown";
-    },
+    availability: (item) => availabilityIn(lists, item),
     open: () => false,
   };
 }

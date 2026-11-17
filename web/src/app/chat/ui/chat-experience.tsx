@@ -1,6 +1,7 @@
 import { localizeConnector } from "@/app/lib/i18n/bundle";
 import { entryHomeEligible, markEntryHomeUsed, resolveEntryHome } from "@/app/shared/sidebar/home";
 import { prepareShortcut, shortcutHref } from "@/app/shared/sidebar/RailNav";
+import { writeDashboardView } from "./dashboard/prefs";
 import type { SidebarItem } from "@/app/shared/sidebar/layout";
 import { rich } from "@/app/lib/i18n/rich";
 import { t as tr } from "@/app/lib/i18n";
@@ -2053,6 +2054,9 @@ export function ChatExperience({
   // Whether the projects list has loaded once: an empty list then means "no
   // projects", not "not read yet" (the sidebar's project shortcuts use it).
   const [projectsLoaded, setProjectsLoaded] = useState(false);
+  // Whether the shared/multiplayer conversation list has loaded once (the
+  // sidebar tells "not available" from "not read yet" by it).
+  const [teamSharedLoaded, setTeamSharedLoaded] = useState(false);
   // The person's own chat orders by scope — "pinned", and "project:<id>" for
   // their chats in a project (docs/CHAT-ORDER.md) — set in the rail's
   // reorder mode and saved per user on the server. Empty until read (or for a
@@ -3887,6 +3891,7 @@ export function ChatExperience({
             (c) => !mine || (c.user_email ?? "").trim().toLowerCase() !== mine,
           ),
         );
+        setTeamSharedLoaded(true);
       }
       if (!teamRes.ok) {
         // 400 is "you have no team": a KNOWN empty, not an unknown.
@@ -6538,6 +6543,13 @@ export function ChatExperience({
     {
       const params = new URLSearchParams(window.location.search);
       const c = params.get("c");
+      // ?view=dashboard|chat (a sidebar shortcut's link): open the chat in
+      // that view. Consumed and stripped with ?c=.
+      const view = params.get("view");
+      params.delete("view");
+      if (isRealConvId(c) && (view === "dashboard" || view === "chat")) {
+        writeDashboardView(c, view === "dashboard");
+      }
       if (isRealConvId(c)) {
         deepLinkConvId = c;
         params.delete("c");
@@ -7192,6 +7204,7 @@ export function ChatExperience({
           }
           activeProjectId={projectHome?.id ?? null}
           projectsLoaded={projectsLoaded}
+          teamSharedLoaded={teamSharedLoaded}
           onSetDashboardView={(dashboard) => {
             if (dashboard !== dashboardActive) toggleDashboardView();
             setSidebarOpen(false);

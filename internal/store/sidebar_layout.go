@@ -75,6 +75,25 @@ func (s *Store) DeleteSidebarLayout(ctx context.Context, userEmail string, rev i
 	return s.putSidebarLayout(ctx, email, "null", rev)
 }
 
+// SidebarLayoutRev returns the revision of the user's stored layout (0 when
+// they have never saved one). The browser numbers its next save after it, so
+// revisions come from one server-held sequence rather than from each
+// device's own clock.
+func (s *Store) SidebarLayoutRev(ctx context.Context, userEmail string) (int64, error) {
+	var rev int64
+	err := s.db.QueryRowContext(ctx,
+		`SELECT rev FROM chat.sidebar_layouts WHERE user_email = $1`,
+		normalizeEmail(userEmail),
+	).Scan(&rev)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("read sidebar layout rev: %w", err)
+	}
+	return rev, nil
+}
+
 func (s *Store) putSidebarLayout(ctx context.Context, email, layout string, rev int64) (bool, error) {
 	res, err := s.db.ExecContext(ctx,
 		`INSERT INTO chat.sidebar_layouts (user_email, layout, updated_at, rev)

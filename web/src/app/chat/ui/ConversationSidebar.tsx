@@ -1104,6 +1104,7 @@ export function ConversationSidebar({
   onMoveToProject,
   activeProjectId = null,
   projectsLoaded = false,
+  teamSharedLoaded = false,
   onSetDashboardView,
 }: {
   sidebarOpen: boolean;
@@ -1234,6 +1235,8 @@ export function ConversationSidebar({
   activeProjectId?: string | null;
   // The projects list has loaded once (an empty list is then a real "none").
   projectsLoaded?: boolean;
+  // The shared/multiplayer conversation list has loaded once.
+  teamSharedLoaded?: boolean;
   // Puts the open chat in dashboard view (true) or chat view (false): a
   // shortcut clicked while its chat is already open applies the view it
   // names, whichever view the chat is in.
@@ -1844,7 +1847,9 @@ export function ConversationSidebar({
   // What the sidebar's shortcuts need from this page (sidebar/targets.tsx):
   // live names, the open chat or project, whether a target can still be
   // opened by this account, and opening it in place.
-  const listsKnown = !isLoadingHistory && teamSharedChatCounts !== undefined;
+  // "Not available" needs every list a chat could be in to have answered:
+  // own and archived (the history load) and the shared list, read on its own.
+  const listsKnown = !isLoadingHistory && teamSharedLoaded;
   const sidebarTargets: SidebarTargets = {
     activeConversationId,
     activeProjectId,

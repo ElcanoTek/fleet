@@ -145,6 +145,42 @@ describe("sidebar store", () => {
     expect(getSidebarState()).toMatchObject({ saving: false, saveError: false });
   });
 
+  it("numbers saves after the server's revision, not the device clock", async () => {
+    vi.useFakeTimers();
+    const sent: number[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        if ((init?.method ?? "GET") === "GET") return Response.json({ layout: null, workspace_default: null, rev: 41 });
+        const body = JSON.parse(String(init?.body));
+        sent.push(body.rev);
+        return Response.json({ layout: body, stale: false, rev: body.rev });
+      }),
+    );
+    await loadSidebar();
+    setSidebarLayout(OWN);
+    await vi.advanceTimersByTimeAsync(600);
+    expect(sent).toEqual([42]);
+  });
+
+  it("a save overtaken by another tab or device shows what the server keeps, not 'saved'", async () => {
+    vi.useFakeTimers();
+    const theirs = addShortcut(BUILTIN_LAYOUT, { kind: "project", ref: "p-theirs", title: "Theirs" });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init?: RequestInit) =>
+        (init?.method ?? "GET") === "GET"
+          ? Response.json({ layout: null, workspace_default: null, rev: 5 })
+          : Response.json({ layout: theirs, stale: true, rev: 9 }),
+      ),
+    );
+    await loadSidebar();
+    setSidebarLayout(OWN);
+    await vi.advanceTimersByTimeAsync(600);
+    expect(getSidebarState().layout.items.some((i) => i.ref === "p-theirs")).toBe(true);
+    expect(getSidebarState()).toMatchObject({ saving: false, saveError: false, source: "user" });
+  });
+
   it("an edit made while the first read is in flight is not overwritten by it", async () => {
     let release: (v: Response) => void = () => {};
     vi.stubGlobal(
@@ -258,6 +294,31 @@ describe("Home on entry", () => {
         );
         expect((await resolveEntryHome(1000))?.ref ?? null).toBe(expected);
       }
+    });
+
+    it("never follows a cached Home while the server read is still out", async () => {
+      window.localStorage.setItem(
+        "fleet.sidebar.layout.v2",
+        JSON.stringify({ email: "ana@example.com", layout: chatHome("c1") }),
+      );
+      resetSidebarStoreForTests();
+      vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => {})));
+      expect(await resolveEntryHome(50)).toBeNull();
+    });
+
+    it("finds a chat in the lists that loaded even when another list failed", async () => {
+      listsAnswer.current = { layout: null, workspace_default: chatHome("c1") };
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string) => {
+          if (url === "/api/sidebar") return Response.json(listsAnswer.current);
+          if (url.startsWith("/api/projects")) return new Response("down", { status: 502 });
+          if (url.includes("scope=shared")) return new Response("down", { status: 502 });
+          if (url.includes("archived")) return Response.json({ conversations: [] });
+          return Response.json({ conversations: [{ id: "c1", title: "c1" }] });
+        }),
+      );
+      expect((await resolveEntryHome(1000))?.ref).toBe("c1");
     });
 
     it("never takes a task as a workspace Home", async () => {

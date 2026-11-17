@@ -109,7 +109,8 @@ export function loadSidebar(): Promise<void> {
     try {
       const res = await fetch("/api/sidebar", { cache: "no-store" });
       if (!res.ok) throw new Error(String(res.status));
-      const data = (await res.json()) as { layout?: unknown; workspace_default?: unknown };
+      const data = (await res.json()) as { layout?: unknown; workspace_default?: unknown; rev?: unknown };
+      learnRev(data.rev);
       const own = data.layout ? normalizeLayout(data.layout) : null;
       const workspace = data.workspace_default ? normalizeLayout(data.workspace_default) : null;
       if (gen !== editGen) {
@@ -155,10 +156,19 @@ export function sidebarSettled(timeoutMs: number): Promise<SidebarState> {
 // newer than the stored one, so two requests that overlap — a save still in
 // flight when the page unloads and sends the next one with keepalive — can
 // never leave the older layout on top, whichever reaches it last.
+//
+// The numbers continue the server's own sequence (the stored rev, read with
+// the layout and returned by every save), never a device clock: a device
+// whose clock runs ahead cannot lock out another. If another tab or device
+// saved meanwhile, the server answers "stale" with what it stores, and that
+// is what this page then shows (the other edit won; nothing claims "saved").
 let lastRev = 0;
 let pendingRev = 0;
+function learnRev(rev: unknown) {
+  if (typeof rev === "number" && Number.isFinite(rev) && rev > lastRev) lastRev = rev;
+}
 function nextRev(): number {
-  lastRev = Math.max(Date.now(), lastRev + 1);
+  lastRev += 1;
   return lastRev;
 }
 
@@ -192,8 +202,15 @@ async function sendInTurn(gen: number) {
     const res = await sendSave(false);
     if (!res.ok) throw new Error(String(res.status));
     if (gen !== editGen) return; // a newer edit has its own save queued
-    const data = (await res.json().catch(() => ({}))) as { layout?: unknown };
+    const data = (await res.json().catch(() => ({}))) as { layout?: unknown; stale?: unknown; rev?: unknown };
+    learnRev(data.rev);
     const saved = data.layout ? normalizeLayout(data.layout) : null;
+    if (data.stale === true) {
+      // Overtaken by a newer save from another tab or device: show what the
+      // server keeps, which is what every page will load from now on.
+      emit({ own: saved, saving: false, saveError: false, ...effective(saved, state.workspace) });
+      return;
+    }
     if (own && saved && !sameLayout(saved, own)) {
       // The server repaired something (a name cut to length, say): show its copy.
       emit({ own: saved, layout: saved, saving: false, saveError: false });
@@ -282,6 +299,8 @@ export function resetSidebarStoreForTests() {
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = null;
   saveChain = Promise.resolve();
+  lastRev = 0;
+  pendingRev = 0;
   loadPromise = null;
   editGen = 0;
   listeners.clear();
