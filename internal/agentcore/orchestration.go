@@ -258,13 +258,6 @@ type orchestrationState struct {
 	// borrowed from Prime Agent's post-compaction kernel-state announcement).
 	latestTaskTrackerRendered string
 
-	// delegatedFinish marks this run as a spawned SUB-AGENT (#1043 follow-up):
-	// checkFinishEnforcement then skips the self-audit ritual blocks and keeps
-	// every other finish gate. See checkFinishEnforcement for why the ritual is
-	// a root-run gate, and NewDelegatedPolicy for the one constructor that sets
-	// it — the flag is never model-reachable.
-	delegatedFinish bool
-
 	// lastRoundFinishReason is the FinishReason of the round's final step, set
 	// by Run immediately before consulting Policy.CanFinish and consumed by
 	// checkFinishEnforcement. When a round ended on FinishReasonLength
@@ -463,14 +456,6 @@ func (o *orchestrationState) setRepeatGuardNoun(noun string) {
 	}
 }
 
-// setDelegatedFinish marks the run as a spawned sub-agent's, relaxing ONLY the
-// self-audit finish ritual (see checkFinishEnforcement).
-func (o *orchestrationState) setDelegatedFinish(v bool) {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	o.delegatedFinish = v
-}
-
 // noteRoundFinishReason records the FinishReason of a finished round's last
 // step before Policy.CanFinish is consulted. Nil-safe.
 func (o *orchestrationState) noteRoundFinishReason(reason fantasy.FinishReason) {
@@ -663,98 +648,6 @@ func (st budgetWindDownState) windDownNotice() string {
 			"Then wrap up soon with: progress made, remaining work, blockers, and a concrete next step. "+
 			"The run is hard-stopped at the ceiling.",
 		strings.Join(parts, " and "))
-}
-
-// BudgetState snapshots a run's cost/token ceilings and accumulated spend. It is
-// the read side of the sub-agent budget split (#175): the spawn_subagent tool
-// reads the PARENT's BudgetState to compute how much of the parent's REMAINING
-// budget it may hand a child, so the parent ceiling stays the hard wall across
-// all descendants. A zero ceiling means "unlimited" (the same convention
-// checkCeilings uses). Spend already INCLUDES any prior children charged back
-// via chargeChildUsage, so each successive spawn sees a smaller remaining slice.
-type BudgetState struct {
-	MaxCostUSD     float64 // 0 = unlimited
-	SpentCostUSD   float64
-	MaxTotalTokens int // 0 = unlimited
-	SpentTokens    int // uncached: prompt - cached + completion (matches checkCeilings)
-}
-
-// RemainingCostUSD returns the unspent cost budget, or -1 when the ceiling is
-// unlimited (0). Never returns a negative slice for a finite ceiling: an
-// over-budget run reports 0 remaining.
-func (b BudgetState) RemainingCostUSD() float64 {
-	if b.MaxCostUSD <= 0 {
-		return -1
-	}
-	rem := b.MaxCostUSD - b.SpentCostUSD
-	if rem < 0 {
-		return 0
-	}
-	return rem
-}
-
-// RemainingTokens returns the unspent token budget, or -1 when the ceiling is
-// unlimited (0). Never negative for a finite ceiling.
-func (b BudgetState) RemainingTokens() int {
-	if b.MaxTotalTokens <= 0 {
-		return -1
-	}
-	rem := b.MaxTotalTokens - b.SpentTokens
-	if rem < 0 {
-		return 0
-	}
-	return rem
-}
-
-// budgetState reads the current ceilings + accumulated spend under the orch lock.
-func (o *orchestrationState) budgetState() BudgetState {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	return BudgetState{
-		MaxCostUSD:     o.maxCostUSD,
-		SpentCostUSD:   o.CostUSD,
-		MaxTotalTokens: o.maxTotalTokens,
-		SpentTokens:    o.PromptTokens - o.CachedTokens + o.CompletionTokens,
-	}
-}
-
-// chargeChildUsage folds a completed CHILD run's usage into THIS (parent) run's
-// accumulated counters. This is the enforcement linchpin of the #175 budget
-// split: a child runs as its own agentcore.Run with its OWN orchestrationState
-// (and its OWN sliced ceiling, which the child's checkCeilings/budgetGuardedStep
-// already enforce), so its spend is invisible to the parent's ceiling until it
-// is charged back here. After this call the parent's checkCeilings sees the
-// child's tokens+cost, so:
-//
-//   - the parent itself stops sooner (it has less budget left), and
-//   - the NEXT sibling spawn reads a smaller remaining slice (budgetState),
-//
-// which together make the parent ceiling a hard wall that the collective spend
-// of all children across fan-out AND depth can never breach. (Depth composes for
-// free: a grandchild's spend is charged to its parent, whose own run-end usage —
-// including that grandchild — is in turn charged to the grandparent here.)
-//
-// It deliberately does NOT touch the email/critical-action tracking that
-// recordToolResult owns: this is pure usage accounting, mirroring updateUsage's
-// counter math (uncached-token semantics are derived at read time in
-// checkCeilings/budgetState, so only the raw counters move here).
-func (o *orchestrationState) chargeChildUsage(u RunUsage) {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	o.PromptTokens += u.PromptTokens
-	o.CompletionTokens += u.CompletionTokens
-	o.CachedTokens += u.CachedTokens
-	o.CacheCreationTokens += u.CacheCreationTokens
-	o.CostUSD += u.CostUSD
-	if o.logSession != nil {
-		o.logSession.mu.Lock()
-		o.logSession.PromptTokens += u.PromptTokens
-		o.logSession.CompletionTokens += u.CompletionTokens
-		o.logSession.CachedTokens += u.CachedTokens
-		o.logSession.CacheCreationTokens += u.CacheCreationTokens
-		o.logSession.Cost += u.CostUSD
-		o.logSession.mu.Unlock()
-	}
 }
 
 // maxConsecutiveIdenticalCalls is how many times the SAME tool may run with
@@ -1183,13 +1076,12 @@ func (o *orchestrationState) accumulateUsage(modelSlug string, usage fantasy.Usa
 	// The counters here follow the LogSession contract instead: PromptTokens is
 	// the TOTAL prompt-side input including cache reads (the billing/display
 	// number CumulativeCacheHitRate divides by, and the one checkCeilings /
-	// budgetState subtract CachedTokens from to get uncached spend) — so the
+	// subtract CachedTokens from to get uncached spend) — so the
 	// cache reads are added back in ONCE, here, at the single accounting seam.
 	// Accumulating bare InputTokens (the pre-#587 behavior) made those
-	// subtraction sites double-discount the cache: the token ceiling and the
-	// sub-agent budget slices under-counted uncached spend by the cached amount
-	// of every step, so a run with a hot cache prefix was governed by a ceiling
-	// that fired late (or a child budget sliced too generously).
+	// subtraction sites double-discount the cache: the token ceiling
+	// under-counted uncached spend by the cached amount of every step, so a run
+	// with a hot cache prefix was governed by a ceiling that fired late.
 	totalPrompt := int(usage.InputTokens + usage.CacheReadTokens)
 	o.PromptTokens += totalPrompt
 	// The per-STEP input size is the context-pressure / window signal, so it too

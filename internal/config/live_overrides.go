@@ -60,17 +60,6 @@ func (c *Config) setLive(write func()) {
 	write()
 }
 
-// LiveSubagentsEnabled reports whether the spawn_subagent tool is on
-// fleet-wide (#175/#264), admin-override-aware.
-func (c *Config) LiveSubagentsEnabled() bool {
-	return c.liveBool(func() bool { return c.SubagentsEnabled })
-}
-
-// SetSubagentsEnabled applies the admin override for sub-agent delegation.
-func (c *Config) SetSubagentsEnabled(v bool) {
-	c.setLive(func() { c.SubagentsEnabled = v })
-}
-
 // LiveMemoryAutoIndexEnabled reports whether the post-turn memory auto-indexer
 // (#234) runs, admin-override-aware.
 func (c *Config) LiveMemoryAutoIndexEnabled() bool {

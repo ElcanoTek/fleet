@@ -26,9 +26,6 @@ export type ServerAgentStats = {
   queued_tasks: number;
   completed_tasks_today: number;
   failed_tasks_today: number;
-  active_subagents: number;
-  subagents_spawned_24h: number;
-  subagents_spawned_total: number;
   tool_calls_24h: number;
   tool_calls_total: number;
   active_conversations_24h: number;
@@ -173,9 +170,6 @@ export function ServerStatsView({ allowCleanup = true }: { allowCleanup?: boolea
     queued_tasks: 0,
     completed_tasks_today: 0,
     failed_tasks_today: 0,
-    active_subagents: 0,
-    subagents_spawned_24h: 0,
-    subagents_spawned_total: 0,
     tool_calls_24h: 0,
     tool_calls_total: 0,
     active_conversations_24h: 0,
@@ -198,7 +192,7 @@ export function ServerStatsView({ allowCleanup = true }: { allowCleanup?: boolea
         {
           title: tr("Total active agents"),
           value: plain.format(ag.active_agents_total),
-          sub: tr("{0} chat · {1} task bots · {2} sub-agents", [ag.active_chat_turns, ag.running_tasks, ag.active_subagents]),
+          sub: tr("{0} chat · {1} task bots", [ag.active_chat_turns, ag.running_tasks]),
         },
         {
           title: tr("Live chat agents"),
@@ -209,11 +203,6 @@ export function ServerStatsView({ allowCleanup = true }: { allowCleanup?: boolea
           title: tr("Scheduled task bots"),
           value: plain.format(ag.running_tasks),
           sub: tr("{0} queued · {1} completed today · {2} failed", [ag.queued_tasks, ag.completed_tasks_today, ag.failed_tasks_today]),
-        },
-        {
-          title: tr("Sub-agents used by bots"),
-          value: `${plain.format(ag.active_subagents)} active · ${plain.format(ag.subagents_spawned_24h)} (24h)`,
-          sub: tr("{0} total sub-agents spawned", [plain.format(ag.subagents_spawned_total)]),
         },
       ]
     : [];
@@ -387,7 +376,7 @@ export default function AdminServerPage() {
   return (
     <SetSection
       title={tr("Server")}
-      intro={tr("Live bot and sub-agent concurrency, host resources, and workspace storage for this Fleet node.")}
+      intro={tr("Live bot concurrency, host resources, and workspace storage for this Fleet node.")}
     >
       <ServerStatsView allowCleanup={true} />
     </SetSection>

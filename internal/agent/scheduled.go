@@ -92,48 +92,18 @@ type Agent struct {
 	// blocked rule (completion_blocked.go).
 	completionBlocked *completionBlockedRule
 
-	// ── sub-agents (#175, part b) ──
-	// subagent carries the spawn_subagent feature gate, recursion/fan-out caps,
-	// per-child model resolution, depth-in-tree, and the live fan-out counter for
-	// THIS run. OFF by default. See subagent.go. The live parent policy
-	// (runtimePolicy) is captured in Execute so the spawn tool can read the
-	// parent's remaining budget and charge child spend back against it.
-	subagent      subagentConfig
-	runtimePolicy runtimeBudgetPolicy
-
-	// spawnObserver is THIS run's Observer, captured so the spawn_subagent tool
-	// can stream a child's progress back to whoever is watching the parent (the
-	// chat SSE sink interactively, the task's live log stream + captain's log
-	// when scheduled). Without it a delegation was a silent black box for its
-	// whole lifetime — the operator saw the spawn arguments and then nothing
-	// until the child returned minutes later. Set by Execute (scheduled) and by
-	// newInteractiveSpawnHost (chat); nil = nobody is watching, and the spawn
-	// path degrades to exactly its pre-#1043-follow-up behaviour.
-	spawnObserver agentcore.Observer
-
-	// childProgress is set on a spawned CHILD by buildChild: the child's own
-	// Execute composes it into its run Observer so every child step is relabeled
-	// into the parent's stream as a subagent.progress event. nil on a root run.
-	childProgress agentcore.Observer
-
-	// budgetOverride, when set (>0), forces this run's cost/token ceilings instead
-	// of the config defaults. A spawned CHILD sets these to its SLICED budget so
-	// its own agentcore.Run enforces the sliced ceiling via the SAME checkCeilings
-	// the parent uses (#175). Zero leaves the config-derived ceiling in place.
+	// costCeilingOverride / tokenCeilingOverride, when set (>0), are the task's
+	// own per-run ceilings (#1533) and replace the config defaults. Zero leaves
+	// the config-derived ceiling in place.
 	costCeilingOverride  float64
 	tokenCeilingOverride int
 
 	// loadedServers is the set of MCP servers whose tools are currently
-	// registered. seatBaseServers maps a registered seat name (server_account)
-	// to its base server name so allow_servers can resolve named seats without
-	// prefix-matching unrelated underscore-containing server names.
-	// mcpServersDirty signals the loop to rebuild the tool list after a
+	// registered. mcpServersDirty signals the loop to rebuild the tool list after a
 	// mcp_load_servers call registered new servers.
 	mu              sync.Mutex
 	loadedServers   map[string]bool
-	seatBaseServers map[string]string
 	mcpServersDirty bool
-	optionalServers agentcore.MCPOptionalSet
 
 	// logFile is where the session log is persisted at run end ("" = default).
 	logFile string
@@ -151,12 +121,6 @@ type Agent struct {
 	// narrowing (the persona sees every tool the earlier gates permit); threaded
 	// into RunConfig so denied tools never enter the model's tool list.
 	personaPolicy *agentcore.PersonaToolPermissions
-
-	// hiddenToolSuffixes is agent_policy.interactive_hidden_tools when this
-	// agent carries a chat turn's wiring (the interactive spawn host, and
-	// every child it builds); nil for a scheduled task, which sees those
-	// tools. Threaded into RunConfig.HiddenToolSuffixes.
-	hiddenToolSuffixes []string
 
 	// prepareEmailAttachments is Options.PrepareEmailAttachments.
 	prepareEmailAttachments func(args map[string]any) (cleanup func(), err error)
@@ -188,16 +152,13 @@ type Options struct {
 	// injects the public allowlist here; nil derives the gate from
 	// Config.MCPServers (the local compatibility path).
 	MCPToolAllowlist agentcore.MCPAllowlist
-	// OptionalServers is the optional-server gate (Gate-1) inherited by
-	// children spawned from an interactive chat turn.
-	OptionalServers agentcore.MCPOptionalSet
-	NativeTools     []fantasy.AgentTool
-	SystemPrompt    string
-	Persona         string
-	MaxIterations   int
+	NativeTools      []fantasy.AgentTool
+	SystemPrompt     string
+	Persona          string
+	MaxIterations    int
 	// MaxCostUSD / MaxTotalTokens are the TASK's own per-run ceilings (#1533):
 	// 0 = inherit the deployment ceiling; >0 replaces it for this run through
-	// the same checkCeilings path a spawned child's sliced budget uses.
+	// the same checkCeilings path the deployment ceiling uses.
 	MaxCostUSD     float64
 	MaxTotalTokens int
 	Sandbox        *sandbox.Sandbox
@@ -225,7 +186,7 @@ type Options struct {
 	// unregistered and the interceptor answering "unavailable".
 	SkillProposer agentcore.SkillProposer
 
-	// TaskID labels sub-agents spawned by this run (#264 traceability).
+	// TaskID is the scheduled task this run belongs to (RunConfig.TaskID).
 	TaskID uuid.UUID
 
 	// CredentialAllowlist scopes which (server, account) MCP pairs this task may
@@ -243,16 +204,9 @@ type Options struct {
 	// (scheduledrun) resolves it from the bundle manifest's personas: block for
 	// the task's effective persona and threads it into RunConfig.
 	PersonaPolicy *agentcore.PersonaToolPermissions
-	// HiddenToolSuffixes are the tool suffixes this agent's runs neither
-	// offer nor call (agent_policy.interactive_hidden_tools). Only the
-	// interactive spawn host sets it, so a sub-agent spawned from chat cannot
-	// reach what the chat turn could not; scheduled drivers leave it nil.
-	HiddenToolSuffixes []string
 	// PrepareEmailAttachments is agentcore.Deps.PrepareEmailAttachments. The
-	// scheduled driver binds it to the run's working directory, the
-	// interactive spawn host to the chat turn's conversation, and every child
-	// copies it, so a sub-agent sends email attachments under its root run's
-	// rule. nil = no rewrite.
+	// scheduled driver binds it to the run's working directory. nil = no
+	// rewrite.
 	PrepareEmailAttachments func(args map[string]any) (cleanup func(), err error)
 	// AuditProtocolRef is the workspace-relative self-audit protocol path the
 	// audit guidance names, from AuditProtocolRef(protocolsDir); "" when the
@@ -285,70 +239,6 @@ type Options struct {
 	// blocked value finishes as success with run outcome "blocked". nil = no
 	// rule.
 	CompletionBlockedWhen *CompletionBlockedWhen
-
-	// ── sub-agents (#175 part b, #1043) ──
-	// Subagent configures the spawn_subagent native tool. The DRIVERS compose
-	// Enabled — scheduledrun: fleet flag AND task.allow_delegation (both default
-	// true, #1043); interactive (RunInteractiveTurn): the fleet flag alone. A
-	// zero-value Options (tests, embedders) still means "not registered". See
-	// subagentConfig / subagent.go for the governance properties (monotonic
-	// privilege, budget split, depth/fan-out caps).
-	Subagent SubagentOptions
-}
-
-// runtimeBudgetPolicy is the slice of the live run policy the spawn_subagent
-// tool needs: read the parent's remaining budget, and charge a finished child's
-// spend back into it. Both run-to-completion (*agentcore.ScheduledPolicy) and
-// live-turn (*agentcore.InteractivePolicy) policies satisfy it, which is what
-// lets interactive chat register the same tool (#1043) without a second
-// accounting path — the budget the tool reads is the budget the loop enforces.
-type runtimeBudgetPolicy interface {
-	Budget() agentcore.BudgetState
-	ChargeChildUsage(agentcore.RunUsage)
-}
-
-// SubagentOptions is the spawn_subagent feature configuration the driver supplies
-// (#175 part b, #1043). The tool is registered only when Enabled is set — the
-// DRIVER composes the default-on gates (see Options.Subagent). The child run
-// inherits the parent's sandbox, MCP client, and allowlists from the parent
-// Agent itself; this struct carries only the policy knobs and the host-side
-// model resolver a child needs.
-type SubagentOptions struct {
-	// Enabled gates the whole feature. When false the spawn_subagent tool is not
-	// registered at all (structural — not a soft check). Drivers compose it from
-	// the fleet-wide kill switch (FLEET_SUBAGENTS_ENABLED / Admin → Features,
-	// default true) and, for scheduled runs, the task's allow_delegation
-	// (default true), ANDed (#1043).
-	Enabled bool
-	// MaxDepth caps recursion depth (root run = depth 0; a spawn at MaxDepth is
-	// refused). MaxChildren caps fan-out per parent. Both <=0 fall back to the
-	// package defaults so a misconfiguration can never mean "unbounded". The
-	// default MaxDepth is 1 (#264): a child does not get the spawn tool registered
-	// at all (see buildChild), so "parent → sub-agent only".
-	MaxDepth    int
-	MaxChildren int
-	// BudgetFraction is each child's default/maximum slice of the parent's
-	// REMAINING budget (#264). A child requesting more than this fraction is refused
-	// with a tool-result error. <=0 falls back to the package default (0.10); >1 is
-	// clamped to 1.0 (the whole remaining budget).
-	BudgetFraction float64
-	// ModelSlug is the default child model slug (FLEET_SUBAGENTS_MODEL); empty
-	// means a child inherits the parent's model. A per-spawn override is resolved
-	// through Resolver too.
-	ModelSlug string
-	// Resolver resolves a child model slug to a host-side LanguageModel — the SAME
-	// cached resolver the parent's model came from, so a per-child model choice is
-	// resolved host-side exactly like the phone-a-friend reviewer and credentials
-	// never enter the sandbox or model context. Nil disables per-child model
-	// override (the child always inherits the parent's model handle).
-	Resolver ModelResolver
-}
-
-// ModelResolver resolves an OpenRouter model slug to a host-side LanguageModel.
-// *agent.Manager satisfies it via Resolve. Narrow seam so the spawn tool can
-// resolve a per-child model without depending on the whole Manager.
-type ModelResolver interface {
-	Resolve(ctx context.Context, slug string) (fantasy.LanguageModel, error)
 }
 
 // NewAgent builds a scheduled driver from options. The session log is fresh.
@@ -369,7 +259,6 @@ func NewAgent(opts Options) *Agent {
 		mcpBroker:               opts.MCPBroker,
 		mcpCatalog:              cloneMCPCatalog(opts.MCPCatalog),
 		mcpToolAllowlist:        opts.MCPToolAllowlist,
-		optionalServers:         opts.OptionalServers,
 		mcpRosterNarrowing:      opts.MCPRosterNarrowing,
 		overlay:                 opts.Overlay,
 		nativeTools:             opts.NativeTools,
@@ -389,12 +278,10 @@ func NewAgent(opts Options) *Agent {
 		credentialAllowlist:     opts.CredentialAllowlist,
 		thinkingBudget:          opts.ThinkingBudget,
 		personaPolicy:           opts.PersonaPolicy,
-		hiddenToolSuffixes:      append([]string(nil), opts.HiddenToolSuffixes...),
 		prepareEmailAttachments: opts.PrepareEmailAttachments,
 		auditProtocolRef:        opts.AuditProtocolRef,
 		outputSchema:            append(json.RawMessage(nil), opts.OutputSchema...),
 		verifierModel:           opts.VerifierModel,
-		subagent:                newSubagentConfig(opts.Subagent),
 	}
 	if len(opts.CompletionAnySucceeded) > 0 {
 		a.completionAnySucceeded = make(map[string]bool, len(opts.CompletionAnySucceeded))
@@ -402,12 +289,6 @@ func NewAgent(opts Options) *Agent {
 			a.completionAnySucceeded[name] = true
 		}
 		a.completionBlocked = newCompletionBlockedRule(opts.CompletionBlockedWhen)
-	}
-	// The parent task id labels any sub-agent this run spawns (#264 traceability).
-	// A child inherits this same value (buildChild), so every descendant's session
-	// log points back to the one owning task.
-	if opts.TaskID != uuid.Nil {
-		a.subagent.parentTaskID = opts.TaskID.String()
 	}
 	return a
 }
@@ -475,33 +356,6 @@ func composeObserver(ctx context.Context, base agentcore.Observer) agentcore.Obs
 		return multiObserver{base, stream}
 	}
 	return base
-}
-
-// isDelegatedChild reports whether THIS run is a spawned sub-agent's. buildChild
-// stamps the role (never empty on a child, always empty on a root run), so it is
-// an internal invariant the model cannot influence — the same property the depth
-// counter has.
-func (a *Agent) isDelegatedChild() bool { return a.subagent.role != "" }
-
-// runObserver builds this run's Observer. A ROOT run keeps the pre-existing
-// shape: the captain's-log writer plus the context-carried live stream sink.
-//
-// A spawned CHILD swaps that live sink for its parent's progress forwarder
-// (childProgress, set by buildChild). Two reasons it must not inherit the
-// parent's sink directly: the child's raw tool.call/tool.result events would be
-// written into the PARENT task's live stream with no attribution — reading as
-// if the parent had made them — and the forwarder is what turns those steps
-// into the attributed subagent.progress events the chat/task UIs render. The
-// child's OWN session log (its captain's log) is unaffected either way.
-func (a *Agent) runObserver(ctx context.Context) agentcore.Observer {
-	base := agentcore.Observer(&scheduledObserver{session: a.logSession})
-	if a.isDelegatedChild() {
-		if a.childProgress == nil {
-			return base
-		}
-		return multiObserver{base, a.childProgress}
-	}
-	return composeObserver(ctx, base)
 }
 
 // scheduledPolicy layers a bounded completion verifier and optional one-time
@@ -1182,10 +1036,7 @@ func (p *scheduledPolicy) persistVerifierWarning() {
 // must hold:
 //   - it was an outage, not a malformed verdict (errVerifierMalformedVerdict);
 //   - this run's OWN audit passed (ScheduledPolicy.AuditConfirmed), not merely
-//     finish enforcement — a delegated policy skips the self-audit ritual, so
-//     a sub-agent that never audited keeps the old spend-a-check path (today
-//     children do not run this gate at all; this keeps the premise true if
-//     they ever do);
+//     finish enforcement;
 //   - no critical tool's last execution failed (failedCriticalCalls);
 //   - at least one critical tool executed successfully. The audit alone proves
 //     nothing here: finish enforcement already demands it of every run, and
@@ -1444,33 +1295,15 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 		maxCostUSD = a.config.LiveMaxCostUSD()
 		maxTotalTokens = a.config.LiveMaxTotalTokens()
 	}
-	// A spawned child carries a SLICED budget (#175): its override REPLACES the
-	// config ceiling so the child's own agentcore.Run enforces the slice through
-	// the SAME checkCeilings the parent uses — the child cannot outspend its slice,
-	// and (because its spend is charged back to the parent) the collective spend of
-	// all children cannot breach the parent ceiling. A task's own max_cost_usd /
-	// max_total_tokens (#1533) arrive through the same fields (Options), so a
-	// per-task ceiling is enforced by exactly this path and nothing else.
+	// A task's own max_cost_usd / max_total_tokens (#1533) REPLACE the config
+	// ceiling, enforced through the same checkCeilings path and nothing else.
 	if a.costCeilingOverride > 0 {
 		maxCostUSD = a.costCeilingOverride
 	}
 	if a.tokenCeilingOverride > 0 {
 		maxTotalTokens = a.tokenCeilingOverride
 	}
-	// A DELEGATED run (this Agent is a spawned child) uses the delegated policy:
-	// the same ScheduledPolicy with the self-audit FINISH ritual relaxed. The
-	// ritual is the root run's deliverable gate — a scoped child forced through
-	// it burned rounds hunting protocols/self-audit.md, narrated the audit into
-	// the answer its parent got back, and sometimes ran out of iterations before
-	// producing any answer at all. Everything else (ceilings, repeat guard,
-	// critical-tool audit gating, commitments) is identical, and the PARENT's own
-	// audit still covers the delegated work.
-	var inner *agentcore.ScheduledPolicy
-	if a.isDelegatedChild() {
-		inner = agentcore.NewDelegatedPolicy(a.logSession, maxCostUSD, maxTotalTokens)
-	} else {
-		inner = agentcore.NewScheduledPolicy(a.logSession, maxCostUSD, maxTotalTokens)
-	}
+	inner := agentcore.NewScheduledPolicy(a.logSession, maxCostUSD, maxTotalTokens)
 	inner.SetAuditProtocolRef(a.auditProtocolRef)
 	if a.noteProposer != nil {
 		inner.SetNoteProposer(a.noteProposer)
@@ -1478,36 +1311,12 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 	if a.skillProposer != nil {
 		inner.SetSkillProposer(a.skillProposer)
 	}
-	// Capture the live policy so the spawn_subagent tool can read THIS run's
-	// remaining budget and charge child spend back against it (#175). It is the
-	// SAME ScheduledPolicy agentcore drives, so the budget the tool reads is the
-	// budget the loop enforces — there is no separate accounting.
-	a.runtimePolicy = inner
 	policy := &scheduledPolicy{inner: inner, agent: a, task: task, runCtx: ctx}
 
 	nativeTools := a.nativeTools
 	// propose_skill under the lockstep rule (docs/SKILLS.md phase 3).
 	if a.skillProposer != nil {
 		nativeTools = append(append([]fantasy.AgentTool{}, nativeTools...), tools.NewProposeSkillTool())
-	}
-
-	// spawn_subagent (#175 part b, #1043): register the tool ONLY when the
-	// composed gate is enabled (fleet-wide flag AND per-task allow_delegation,
-	// both default true — the driver composes them). Registration is structural:
-	// when disabled the tool does not exist. The tool body adapts I/O around a
-	// CHILD agentcore.Run (a fresh agent.Agent.Execute) — no second governance
-	// path. See subagent.go for the monotonic-privilege + budget-split +
-	// depth/fan-out enforcement.
-	if a.subagent.enabled {
-		nativeTools = append(append([]fantasy.AgentTool{}, nativeTools...), a.newSpawnSubagentTool())
-	}
-
-	// role=explore write-tool strip (#1043): a read-only child's roster is
-	// filtered LAST, over the fully composed set, so the strip covers the
-	// run-time-appended tools (remember, propose_note, propose_skill) as well as
-	// the inherited base roster. Root runs and worker children pass unchanged.
-	if a.subagent.role == SubagentRoleExplore {
-		nativeTools = filterExploreDeniedTools(nativeTools)
 	}
 
 	// Loader tools (mcp_list_servers / mcp_load_servers) drive the in-loop tool
@@ -1524,7 +1333,7 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 		temp = a.config.LiveTemperature()
 	}
 
-	allow, optional := a.mcpGates()
+	allow := a.mcpAllowlist()
 	taskID := ""
 	if a.taskID != uuid.Nil {
 		taskID = a.taskID.String()
@@ -1533,13 +1342,7 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 	// Observer is the captain's-log writer, tee'd to a live SSE buffer when the
 	// worker pool attached one via agentcore.WithStreamObserver (#200) so an
 	// in-progress task's run log can be tailed without forking the event path.
-	// A spawned CHILD instead tees to its parent's progress forwarder: its raw
-	// events would otherwise land unattributed in the PARENT task's live stream,
-	// indistinguishable from the parent's own steps.
-	observer := a.runObserver(ctx)
-	// Captured so this run's spawn_subagent calls can stream their children's
-	// progress to whoever is watching (see Agent.spawnObserver).
-	a.spawnObserver = observer
+	observer := composeObserver(ctx, agentcore.Observer(&scheduledObserver{session: a.logSession}))
 	policy.observer = observer
 
 	deps := agentcore.Deps{
@@ -1548,8 +1351,7 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 		Policy:            inner, // inner policy exposes orchestration() for confirm_audit + usage
 		Executor:          NewSandboxExecutor(a.sb),
 		ReadWorkspaceFile: tools.WorkspaceFileReader(a.sb),
-		// The run's own (scheduledrun binds it to the job's working
-		// directory); a chat turn's sub-agent carries the turn's.
+		// The run's own (scheduledrun binds it to the job's working directory).
 		PrepareEmailAttachments: a.prepareEmailAttachments,
 		Model:                   a.model,
 		FallbackModel:           a.fallbackModel,
@@ -1575,15 +1377,7 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 	// achieve that by giving the wrapper the same orchestration: agentcore reads
 	// CanFinish off Deps.Policy, so we instead set Deps.Policy to the wrapper and
 	// rely on the wrapper delegating BeforeToolCall/RecordToolResult to inner.
-	//
-	// A spawned CHILD skips the wrapper entirely: the end-of-run verifier is a
-	// deliverable re-check for the run the OPERATOR asked for, and running it per
-	// child bought an extra host-side LLM call (plus an enforcement round) on
-	// every delegation while the parent's own verifier still re-checks the whole
-	// run afterwards. Phone-a-friend is already off for children (buildChild).
-	if !a.isDelegatedChild() {
-		deps.Policy = policy
-	}
+	deps.Policy = policy
 
 	cfg := agentcore.RunConfig{
 		TaskID:              taskID,
@@ -1592,7 +1386,6 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 		MaxIterations:       a.maxIterations,
 		Allowlist:           allow,
 		MCPRosterNarrowing:  a.mcpRosterNarrowing,
-		OptionalServers:     optional,
 		Selection:           a.selection(),
 		IncludeConfirmAudit: true,
 		// Unattended runs gate proactive context compaction behind
@@ -1606,12 +1399,9 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 		// task persona's permitted tools. nil = no narrowing.
 		PersonaName:   personaLabel(a.persona),
 		PersonaPolicy: a.personaPolicy,
-		// A sub-agent of a chat turn keeps the turn's interactive-hidden
-		// list (nil for a scheduled task): its tools stay out of reach.
-		HiddenToolSuffixes: a.hiddenToolSuffixes,
-		LoaderTools:        loaderTools,
-		NativeTools:        nativeTools,
-		OutputSchema:       a.outputSchema,
+		LoaderTools:   loaderTools,
+		NativeTools:   nativeTools,
+		OutputSchema:  a.outputSchema,
 		// Extended thinking (#220): the per-task override (a.thinkingBudget) wins
 		// when set, else the GLOBAL default (FLEET_DEFAULT_THINKING_BUDGET_TOKENS).
 		// nil config (some test setups) with no override → thinking off.
@@ -1828,39 +1618,32 @@ func (a *Agent) clearMCPDirty() {
 	a.mcpServersDirty = false
 }
 
-// mcpGates derives the per-server allowlist + the optional-server set for the
-// run. A driver-injected allowlist (Options.MCPToolAllowlist) wins when set:
+// mcpAllowlist derives the per-server tool allowlist (Gate-2) for the run. A
+// driver-injected allowlist (Options.MCPToolAllowlist) wins when set:
 // production broker mode scrubs the parent's config.MCPServers after broker
 // boot, so only the injected public specs still carry ToolAllowlist. With no
 // injected allowlist the gate falls back to the scheduled config's MCPServers
 // catalog. Servers with a non-empty ToolAllowlist constrain which tools
-// register; every credentialed server is optional (the load-on-demand model —
-// only loaded servers' tools register).
-func (a *Agent) mcpGates() (agentcore.MCPAllowlist, agentcore.MCPOptionalSet) {
+// register.
+func (a *Agent) mcpAllowlist() agentcore.MCPAllowlist {
 	allow := agentcore.MCPAllowlist{}
-	optional := agentcore.MCPOptionalSet{}
-	for name, ok := range a.optionalServers {
-		if ok {
-			optional[name] = true
-		}
-	}
 	if a.mcpToolAllowlist != nil {
 		for name, list := range a.mcpToolAllowlist {
 			if len(list) > 0 {
 				allow[name] = list
 			}
 		}
-		return allow, optional
+		return allow
 	}
 	if a.config == nil {
-		return allow, optional
+		return allow
 	}
 	for name, sc := range a.config.MCPServers {
 		if len(sc.ToolAllowlist) > 0 {
 			allow[name] = sc.ToolAllowlist
 		}
 	}
-	return allow, optional
+	return allow
 }
 
 // selection returns the per-run MCP selection. For the scheduled driver this is

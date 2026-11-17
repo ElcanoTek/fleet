@@ -112,9 +112,6 @@ describe("conversationApiPath", () => {
     expect(conversationApiPath(uuid, "turns", approvalUuid)).toBe(
       `/api/conversations/${uuid}/turns/${approvalUuid}`,
     );
-    expect(conversationApiPath(uuid, "subagents", "child_1")).toBe(
-      `/api/conversations/${uuid}/subagents/child_1`,
-    );
   });
 
   it.each(hostileIds)("returns null when a nested segment is %j", (id) => {

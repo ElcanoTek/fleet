@@ -136,11 +136,6 @@ const META: Record<string, SettingMeta> = {
       tr("How long an action waiting for approval (sending an email, a risky command, changing a scheduled task) waits before it is declined automatically. The assistant is told the action did not happen. Some chats and tools set their own timeout, which wins. Email previews never expire."),
     unitHint: tr("seconds — 60 to 604800 (7d); default 86400 (24h)"),
   },
-  subagents_enabled: {
-    label: tr("Sub-agent delegation"),
-    description:
-      tr("On by default. Lets the assistant hand parts of a big job to helper assistants that follow the same limits and rules. Turn off to stop this everywhere. A single task can also opt out."),
-  },
   memory_autoindex_enabled: {
     label: tr("Memory auto-index"),
     description:
@@ -236,7 +231,6 @@ const GROUPS: { title: string; keys: string[] }[] = [
       "approval_timeout_seconds",
       "max_cost_usd",
       "max_total_tokens",
-      "subagents_enabled",
     ],
   },
   {

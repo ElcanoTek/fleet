@@ -43,7 +43,6 @@ The interactive driver reads the installed list at the start of each turn
 | `tool_search` / `tool_describe` | The tool never enters the deferred registry, so search does not find it. `tool_describe` answers with the explanation below, not "no tool named". |
 | `tool_call {name: …}` | Refused with the explanation below. The broker is never reached. |
 | A direct call to the hidden name | The out-of-roster recovery (#1744) records the gate as `interactive_hidden` and answers with the same explanation. The metric's `reason` label is `interactive_hidden`. |
-| `spawn_subagent` from the chat turn | The child inherits the list at every depth (`buildChild`), so delegating cannot reach the tool. |
 | Any other dispatch of a built MCP tool | `mcpTool.Run` checks the list first, before the policy gate. A hidden critical tool therefore never stages an approval card, nothing is journaled, and the broker is not called. |
 | The approval-card describer (ADR-0082) | Not called when it is hidden. It runs on the chat turn's scope, so it must not reach what the model could not. The card falls back to the generic one (`gated`). |
 | Email prevalidation (`validate_email_content`, when a chat turn stages `preview_email` / `send_email`) | Not called when it is hidden, for the same reason. Prevalidation is best-effort, so it is skipped exactly as when the validator is unreachable: the email is staged unvalidated and the skip is logged. |
@@ -180,8 +179,7 @@ connector's name (`ix_merge_deal_domains` on `ix`) is not mistaken for one.
   the roster.
 - `internal/httpapi/connector_recommend.go`: the connector recommendation.
 - `internal/agentcore/out_of_roster.go`: the direct-call explanation.
-- `internal/agent/manager.go`, `interactive.go`, `subagent.go`,
-  `scheduled.go`: the turn's list and its inheritance by sub-agents.
+- `internal/agent/manager.go`, `interactive.go`: the turn's list.
 - `internal/httpapi/approval_card.go`: the describer skip.
 - `internal/httpapi/approvals.go`: the email prevalidation skip
   (`prevalidateEmail`).

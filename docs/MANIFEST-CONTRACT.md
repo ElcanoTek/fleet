@@ -162,7 +162,7 @@ documentation only.
 
 | Checker fact | Spec location | Coverage |
 |---|---|---|
-| `taskCreate.fleetAcceptedFields[*]`, `deepAudit.taskCreateFields`, `deepAudit.manifestSentFields` | `.components.schemas.TaskCreate.properties` | **Partial.** Every fixture field is listed **except `allow_delegation`**. Go's `TaskCreate` also has fields the spec omits (`allow_event_triggers`, `run_if`, `sandbox_limits`, `loop_config`, `thinking_budget_tokens`, …); the fleet#720 gap is only partly closed |
+| `taskCreate.fleetAcceptedFields[*]`, `deepAudit.taskCreateFields`, `deepAudit.manifestSentFields` | `.components.schemas.TaskCreate.properties` | **Partial.** Every fixture field is listed **except `allow_delegation`**, which fleet no longer has: sub-agent delegation was removed ([ADR-0112](adr/0112-remove-sub-agents.md)), and a create body that still sends the key is accepted with the key ignored. Go's `TaskCreate` also has fields the spec omits (`allow_event_triggers`, `run_if`, `sandbox_limits`, `loop_config`, `thinking_budget_tokens`, …); the fleet#720 gap is only partly closed |
 | `taskCreate.serializationKeyHonored` | `.components.schemas.TaskCreate.properties.serialization_key` | Present and drift-tested to exist on the Go model. That a key is *enforced* at claim time is described in prose only ([`TASK-SERIALIZATION.md`](TASK-SERIALIZATION.md)) |
 | `taskCreate.mcpChoiceFields` (MCPChoice) | `.components.schemas.MCPChoice.properties` | `server`, `account`; drift-tested |
 | `taskCreate.mcpChoiceFields` (CredentialAllowlistEntry) | `.components.schemas.TaskCreate.properties.credential_allowlist.items.properties` | `server`, `account`; inline, so documentation only |
@@ -174,7 +174,7 @@ documentation only.
 | `deepAudit.terminalStatuses` | `.components.schemas.Task.properties.status.enum` | **Wrong today**: the enum is `scheduled, pending, running, completed, failed, cancelled`, while the Go `TaskStatus` values are `success`, `error`, `dead_lettered`, `leased`, `paused_*`, …. Enum values are not drift-tested |
 | `deepAudit.tagAllowedChars`, `tagMaxLength`, `titleMaxChars`, `promptMaxBytes`, `schemaLimits.*` | `TaskCreate.properties.{tags,title,prompt,output_schema}.description` | Stated in prose (`≤64 chars`, `max 120 characters`, `3 to 250000 bytes`, `65,536 … 32 … 2,048`) but not as `maxLength`/`pattern` keywords, and not tested |
 
-Fixing these gaps (adding `allow_delegation`, the upload response schema,
+Fixing these gaps (the upload response schema,
 `always_on`/`remote`, a correct status enum, real `maxLength`/`pattern`
 keywords, and moving the inline shapes to tested `components.schemas`) is
 fleet-side work for M-2. This PR does not include it.

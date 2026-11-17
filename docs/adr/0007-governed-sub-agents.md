@@ -1,6 +1,6 @@
 # ADR-0007: Governed sub-agents spawn only through the one run loop
 
-- **Status:** Accepted
+- **Status:** Superseded by [ADR-0112](0112-remove-sub-agents.md) (the feature was removed)
 - **Date:** 2026-06-28 (amended 2026-06-30 for #264, 2026-08-14 for #1043:
   default-on, parent decides, typed children, interactive in scope; 2026-08-15
   for the #1043 follow-up: the child's finish gate is delegated, and child

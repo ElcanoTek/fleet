@@ -113,7 +113,6 @@ type taskScanBuf struct {
 	actualDurSecs          sql.NullInt64
 	effectivePriority      int
 	sandboxLimits          sql.NullString
-	allowDelegation        bool
 	thinkingBudget         sql.NullInt64
 	outputSchema           sql.NullString
 	outputJSON             sql.NullString
@@ -205,6 +204,15 @@ const (
 // column order (insert set), so append new columns at the end (before
 // recurrence_spawned if the new column is read back; order within the list is
 // otherwise only cosmetic for the write sets).
+// retiredTaskColumns are tasks columns that historical migrations added and
+// fleet no longer reads or writes. They stay in the schema as inert history
+// (docs/MIGRATIONS.md: stop reading a column before any migration drops it),
+// each insertable through its column DEFAULT, and TestTaskRegistrySchemaAgreement
+// accepts them without a registry row.
+var retiredTaskColumns = map[string]string{
+	"allow_delegation": "sub-agent delegation was removed (ADR-0112); NOT NULL with a DEFAULT, so inserts omit it",
+}
+
 var taskColumnRegistry = []taskColumn{
 	{
 		name: "id",
@@ -813,13 +821,6 @@ var taskColumnRegistry = []taskColumn{
 		value:  func(t *models.Task) any { return marshalSandboxLimits(t.SandboxLimits) },
 		dest:   func(b *taskScanBuf) any { return &b.sandboxLimits },
 		assign: func(b *taskScanBuf, t *models.Task) { t.SandboxLimits = unmarshalSandboxLimits(b.ctx, b.sandboxLimits) },
-	},
-	{
-		name: "allow_delegation",
-		read: true, insert: true, upsert: true, txUpdate: true, export: true,
-		value:  func(t *models.Task) any { return t.AllowDelegation },
-		dest:   func(b *taskScanBuf) any { return &b.allowDelegation },
-		assign: func(b *taskScanBuf, t *models.Task) { t.AllowDelegation = b.allowDelegation },
 	},
 	{
 		name: "output_schema",

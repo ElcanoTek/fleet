@@ -408,8 +408,7 @@ type AgentPolicy struct {
 	// InteractiveHiddenTools is an OPTIONAL list of tool-name suffixes (same
 	// suffix matching as critical_tools) whose MCP tools interactive chat
 	// never sees or calls: not in the tool list, not findable through
-	// tool_search, refused by tool_call and by a direct call, and not
-	// reachable from a sub-agent a chat turn spawns. Scheduled and Operations
+	// tool_search, and refused by tool_call and by a direct call. Scheduled and Operations
 	// Center runs keep them. Use it for raw writes a scheduled protocol needs
 	// but chat must reach through a reviewed flow (a plan with one approval
 	// card) instead. Absent = chat and scheduled runs see the same tools. See
@@ -819,9 +818,10 @@ type TaskTemplateTask struct {
 	Timezone      string  `yaml:"timezone,omitempty" json:"timezone,omitempty"`
 	Priority      int     `yaml:"priority,omitempty" json:"priority,omitempty"`
 	AllowNetwork  bool    `yaml:"allow_network,omitempty" json:"allow_network,omitempty"`
-	// AllowDelegation is a pointer so an omitted key leaves the create form at
-	// its default (true since #1043) instead of forcing an opt-out.
-	AllowDelegation        *bool    `yaml:"allow_delegation,omitempty" json:"allow_delegation,omitempty"`
+	// AllowDelegation is the removed sub-agent opt-out (ADR-0112). It does
+	// nothing and is not served to the web; the key is kept only so the strict
+	// decoder still loads bundles whose task templates carry it.
+	AllowDelegation        *bool    `yaml:"allow_delegation,omitempty" json:"-"`
 	InstructionSelfImprove bool     `yaml:"instruction_self_improve,omitempty" json:"instruction_self_improve,omitempty"`
 	Persona                string   `yaml:"persona,omitempty" json:"persona,omitempty"`
 	Description            string   `yaml:"description,omitempty" json:"description,omitempty"`

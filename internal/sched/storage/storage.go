@@ -868,7 +868,6 @@ type TaskEdit struct {
 	InstructionSelfImprove bool
 	AllowNetwork           bool
 	CarryContext           bool
-	AllowDelegation        bool
 	// ThinkingBudgetTokens is the per-task extended-thinking override (#220);
 	// nil = inherit the global default.
 	ThinkingBudgetTokens *int
@@ -985,7 +984,6 @@ func TaskEditFromTask(t *models.Task) TaskEdit {
 		InstructionSelfImprove:  t.InstructionSelfImprove,
 		AllowNetwork:            t.AllowNetwork,
 		CarryContext:            t.CarryContext,
-		AllowDelegation:         t.AllowDelegation,
 		ThinkingBudgetTokens:    t.ThinkingBudgetTokens,
 		Persona:                 t.Persona,
 		ScheduledFor:            t.ScheduledFor,
@@ -1062,7 +1060,6 @@ func applyTaskEdit(task *models.Task, edit TaskEdit) {
 	task.InstructionSelfImprove = edit.InstructionSelfImprove
 	task.AllowNetwork = edit.AllowNetwork
 	task.CarryContext = edit.CarryContext
-	task.AllowDelegation = edit.AllowDelegation
 	task.ThinkingBudgetTokens = edit.ThinkingBudgetTokens
 	task.Persona = edit.Persona
 	task.ScheduledFor = edit.ScheduledFor

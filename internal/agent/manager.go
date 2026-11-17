@@ -1650,7 +1650,7 @@ func (o turnSink) Observe(eventType string, payload map[string]any) {
 			if _, ok := payload["sender_email"]; !ok {
 				payload["sender_email"] = o.senderEmail
 			}
-		case "tool.call", "tool.result", "subagent.progress", "reasoning.start", "reasoning.delta", "reasoning.end", "turn.completed", "turn.cancelled", "turn.error", "turn.model_required":
+		case "tool.call", "tool.result", "reasoning.start", "reasoning.delta", "reasoning.end", "turn.completed", "turn.cancelled", "turn.error", "turn.model_required":
 			if _, ok := payload["user_email"]; !ok {
 				payload["user_email"] = o.senderEmail
 			}
@@ -2000,20 +2000,6 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 		ThinkingConfig:   in.ThinkingConfig,
 		TurnJournal:      in.TurnJournal,
 		SteerSource:      in.SteerSource,
-		// Governed sub-agents in interactive chat (#1043): the fleet-wide flag
-		// (default true; Admin → Features / FLEET_SUBAGENTS_ENABLED is the kill
-		// switch) is the only chat gate — there is no per-conversation column.
-		// Mirrors the scheduledrun wiring; the child model resolves HOST-SIDE
-		// through the same Manager resolver, so credentials stay host-side.
-		Config: m.config,
-		Subagent: SubagentOptions{
-			Enabled:        m.config.LiveSubagentsEnabled(),
-			MaxDepth:       m.config.SubagentsMaxDepth,
-			MaxChildren:    m.config.SubagentsMaxChildren,
-			BudgetFraction: m.config.SubagentsBudgetFraction,
-			ModelSlug:      m.config.SubagentsModel,
-			Resolver:       m,
-		},
 	}
 	tc.Overlay = overlay
 

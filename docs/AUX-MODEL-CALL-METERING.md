@@ -6,16 +6,15 @@ labeled overhead ledger. Before #1118 several auxiliary calls did neither:
 the compaction summarizer, the three git-metadata tools, the end-of-run
 verifier, the phone-a-friend review, and the scheduled loop's `llm`
 exit-condition verifier all spent tokens that appeared nowhere. That meant
-`checkCeilings` and sub-agent `BudgetState` slices under-counted real spend:
-"the parent ceiling is a hard wall" had unmetered leaks.
+`checkCeilings` under-counted real spend: the run ceiling had unmetered
+leaks.
 
 ## The rule
 
 - A call that fires **during a run, inside its governed loop's lifetime**,
   counts **against the run's ceiling**: it meters into the same
   `orchestrationState` the main loop's `OnStepFinish` feeds, so
-  `Result.Usage`, the chat cost chip, `checkCeilings`, and sub-agent budget
-  slices all see it. The finalize retries already worked this way
+  `Result.Usage`, the chat cost chip and `checkCeilings` all see it. The finalize retries already worked this way
   (`FinalizeInput.RecordUsage`, #83); #1118 extends that seam to the
   remaining in-loop callers. Aux calls route through a dedicated
   `updateAuxUsage` path: they accumulate into the cumulative ceiling/billing
@@ -66,8 +65,7 @@ Why a context seam rather than a constructor argument: the tools are built by
 the driver (`internal/scheduledrun.runWorker`) before the run — and its
 policy, which owns the orchestration state — exists. The run context is the
 one channel that reaches the tool at call time; it is the same pattern the
-ask/notify handlers and the artifact collector already use, and a spawned
-sub-agent's own `Run` re-binds the key to the child's state, so spend is
+ask/notify handlers and the artifact collector already use, so spend is
 always attributed to the run that paid for it. Outside a governed run (unit
 tests, direct invocation) the recorder is absent and the tool simply has no
 run to charge.

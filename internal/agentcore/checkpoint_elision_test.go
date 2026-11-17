@@ -560,11 +560,11 @@ func TestElideStaleToolResults_KeepsTheArtifactPath(t *testing.T) {
 	}
 }
 
-// A subagent's answer and the task plan are conclusions the run continues
-// from, never data to fetch again: they are not elided.
-func TestElideStaleToolResults_KeepsSubagentAnswersAndThePlan(t *testing.T) {
+// The task plan is a conclusion the run continues from, never data to fetch
+// again: it is not elided.
+func TestElideStaleToolResults_KeepsThePlan(t *testing.T) {
 	history := elisionHistory(0, 0)
-	for _, tool := range []string{"spawn_subagent", toolNameTaskTracker, "fetch"} {
+	for _, tool := range []string{toolNameTaskTracker, "fetch"} {
 		ex := elisionExchange(tool+"-1", `{}`, elisionText(40_000))
 		ex[0].Content[0] = fantasy.ToolCallPart{ToolCallID: tool + "-1", ToolName: tool, Input: `{}`}
 		history = append(history, ex...)
@@ -574,10 +574,8 @@ func TestElideStaleToolResults_KeepsSubagentAnswersAndThePlan(t *testing.T) {
 	if res.stubs != 1 {
 		t.Fatalf("stubs = %d, want only the fetch result", res.stubs)
 	}
-	for i, id := range []string{"spawn_subagent-1", toolNameTaskTracker + "-1"} {
-		if !reflect.DeepEqual(res.messages[3+2*i], history[3+2*i]) {
-			t.Errorf("%s's result was elided", id)
-		}
+	if !reflect.DeepEqual(res.messages[3], history[3]) {
+		t.Errorf("%s's result was elided", toolNameTaskTracker)
 	}
 }
 
@@ -998,13 +996,13 @@ func TestElideBeforeSummary_RerunWithAReusedCallID(t *testing.T) {
 }
 
 // With a reused call ID, each result is paired with its own call, the nearest
-// before it: a subagent's answer is kept, and a stub names the tool that made
+// before it: the plan is kept, and a stub names the tool that made
 // the call, not the last tool to use that ID.
 func TestElideStaleToolResults_ReusedCallIDKeepsEachResultsTool(t *testing.T) {
 	history := make([]fantasy.Message, 0, 13)
 	history = append(history,
 		fantasy.NewUserMessage("refresh every page"),
-		fantasy.Message{Role: fantasy.MessageRoleAssistant, Content: []fantasy.MessagePart{fantasy.ToolCallPart{ToolCallID: "call_0", ToolName: "spawn_subagent", Input: `{"task":"a"}`}}},
+		fantasy.Message{Role: fantasy.MessageRoleAssistant, Content: []fantasy.MessagePart{fantasy.ToolCallPart{ToolCallID: "call_0", ToolName: toolNameTaskTracker, Input: `{"task":"a"}`}}},
 		fantasy.Message{Role: fantasy.MessageRoleTool, Content: []fantasy.MessagePart{fantasy.ToolResultPart{ToolCallID: "call_0", Output: elisionText(40_000)}}},
 		fantasy.Message{Role: fantasy.MessageRoleAssistant, Content: []fantasy.MessagePart{fantasy.ToolCallPart{ToolCallID: "call_0", ToolName: "read_page", Input: `{"page":1}`}}},
 		fantasy.Message{Role: fantasy.MessageRoleTool, Content: []fantasy.MessagePart{fantasy.ToolResultPart{ToolCallID: "call_0", Output: elisionText(40_000)}}},
@@ -1014,26 +1012,26 @@ func TestElideStaleToolResults_ReusedCallIDKeepsEachResultsTool(t *testing.T) {
 	}
 	res := elideStaleToolResults(history, 1)
 	if _, text := resultOf(t, res.messages[2].Content[0]); strings.HasPrefix(text, "[tool output truncated]") {
-		t.Fatal("the subagent's answer was stubbed under a reused call ID")
+		t.Fatal("the plan was stubbed under a reused call ID")
 	}
 	_, text := resultOf(t, res.messages[4].Content[0])
 	if !strings.Contains(text, "read_page") || strings.Contains(text, "fetch") {
 		t.Fatalf("the read_page result's stub names the wrong tool: %.300q", text)
 	}
-	if !slices.Contains(res.stubbedKeys, callKey("read_page", `{"page":1}`)) || slices.Contains(res.stubbedKeys, callKey("spawn_subagent", `{"task":"a"}`)) {
+	if !slices.Contains(res.stubbedKeys, callKey("read_page", `{"page":1}`)) || slices.Contains(res.stubbedKeys, callKey(toolNameTaskTracker, `{"task":"a"}`)) {
 		t.Fatalf("stubbed keys %q", res.stubbedKeys)
 	}
 }
 
 // Calls sharing one ID within a parallel step: each result answers the call in
-// its own position, so a subagent's answer in the batch is still kept.
+// its own position, so the plan in the batch is still kept.
 func TestElideStaleToolResults_ParallelCallsSharingAnID(t *testing.T) {
 	history := make([]fantasy.Message, 0, 11)
 	history = append(history,
 		fantasy.NewUserMessage("refresh every page"),
 		fantasy.Message{Role: fantasy.MessageRoleAssistant, Content: []fantasy.MessagePart{
 			fantasy.ToolCallPart{ToolCallID: "call_0", ToolName: "read_page", Input: `{"page":1}`},
-			fantasy.ToolCallPart{ToolCallID: "call_0", ToolName: "spawn_subagent", Input: `{"task":"a"}`},
+			fantasy.ToolCallPart{ToolCallID: "call_0", ToolName: toolNameTaskTracker, Input: `{"task":"a"}`},
 		}},
 		fantasy.Message{Role: fantasy.MessageRoleTool, Content: []fantasy.MessagePart{
 			fantasy.ToolResultPart{ToolCallID: "call_0", Output: elisionText(40_000)},
@@ -1048,7 +1046,7 @@ func TestElideStaleToolResults_ParallelCallsSharingAnID(t *testing.T) {
 		t.Fatalf("the first result should be read_page's stub, got %.200q", text)
 	}
 	if _, text := resultOf(t, res.messages[2].Content[1]); strings.HasPrefix(text, "[tool output truncated]") {
-		t.Fatal("the subagent's answer in a batch sharing one call ID was stubbed")
+		t.Fatal("the plan in a batch sharing one call ID was stubbed")
 	}
 }
 

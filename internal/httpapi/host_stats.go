@@ -7,12 +7,11 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/hoststats"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
-// ServerAgentStats summarizes live and 24h/cumulative agent, sub-agent, task
+// ServerAgentStats summarizes live and 24h/cumulative agent, task
 // worker, tool-call, LLM, sandbox, and runtime pool metrics alongside the host
 // hardware snapshot in GET /api/admin/server-stats.
 type ServerAgentStats struct {
@@ -22,9 +21,6 @@ type ServerAgentStats struct {
 	QueuedTasks            int     `json:"queued_tasks"`
 	CompletedTasksToday    int     `json:"completed_tasks_today"`
 	FailedTasksToday       int     `json:"failed_tasks_today"`
-	ActiveSubagents        int     `json:"active_subagents"`
-	SubagentsSpawned24h    int64   `json:"subagents_spawned_24h"`
-	SubagentsSpawnedTotal  int64   `json:"subagents_spawned_total"`
 	ToolCalls24h           int64   `json:"tool_calls_24h"`
 	ToolCallsTotal         int64   `json:"tool_calls_total"`
 	ActiveConversations24h int64   `json:"active_conversations_24h"`
@@ -71,16 +67,11 @@ func (s *Server) handleServerStats(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) collectServerAgentStats(ctx context.Context) ServerAgentStats {
 	chatTurns := s.ActiveTurns()
-	activeSubs := agent.ActiveSubagents()
-	sessionSubs := agent.SubagentsSpawnedSession()
 
 	out := ServerAgentStats{
-		ActiveChatTurns:       chatTurns,
-		ActiveSubagents:       activeSubs,
-		SubagentsSpawned24h:   sessionSubs,
-		SubagentsSpawnedTotal: sessionSubs,
-		Goroutines:            runtime.NumGoroutine(),
-		FleetVersion:          s.versionOrDefault(),
+		ActiveChatTurns: chatTurns,
+		Goroutines:      runtime.NumGoroutine(),
+		FleetVersion:    s.versionOrDefault(),
 	}
 
 	var ms runtime.MemStats
@@ -98,7 +89,7 @@ func (s *Server) collectServerAgentStats(ctx context.Context) ServerAgentStats {
 		cancel()
 	}
 
-	out.ActiveAgentsTotal = out.ActiveChatTurns + out.RunningTasks + out.ActiveSubagents
+	out.ActiveAgentsTotal = out.ActiveChatTurns + out.RunningTasks
 
 	if s.store != nil {
 		st := s.store.PoolStats()
@@ -117,12 +108,6 @@ func (s *Server) collectServerAgentStats(ctx context.Context) ServerAgentStats {
 			AgentRuntimeCounts(ctx context.Context, sinceUnix int64) (store.AgentRuntimeCounts, error)
 		}); ok {
 			if rc, err := arc.AgentRuntimeCounts(qCtx, since24h); err == nil {
-				if rc.SubagentsSpawned24h > out.SubagentsSpawned24h {
-					out.SubagentsSpawned24h = rc.SubagentsSpawned24h
-				}
-				if rc.SubagentsSpawnedTotal > out.SubagentsSpawnedTotal {
-					out.SubagentsSpawnedTotal = rc.SubagentsSpawnedTotal
-				}
 				out.ToolCalls24h = rc.ToolCalls24h
 				out.ToolCallsTotal = rc.ToolCallsTotal
 				out.ActiveConversations24h = rc.ActiveConversations24h

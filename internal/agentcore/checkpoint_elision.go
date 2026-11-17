@@ -51,12 +51,11 @@ const (
 
 // elisionKeptTools are the tools whose results are never elided: what they
 // return is a conclusion the run continues from, not data it can fetch again.
-// spawn_subagent (internal/agent) returns a child run's answer, which only a
-// whole new child run could reproduce; task_tracker returns the plan the
+// task_tracker returns the plan the
 // finish gate holds the run to (a summary re-announces it after a compaction,
 // an elision does not). A2A peer tools are named per peer (<peer>_<op>), so
 // they are not listed: their stubs say to repeat only a call that read data.
-var elisionKeptTools = map[string]bool{"spawn_subagent": true, toolNameTaskTracker: true}
+var elisionKeptTools = map[string]bool{toolNameTaskTracker: true}
 
 // elisionResult is what elideStaleToolResults did.
 type elisionResult struct {
@@ -514,7 +513,7 @@ func (e *engine) noteRerunStop(tool, kind string, raise bool) {
 // resend-budget summary dropped from dropped, and kept is the history it
 // left. Only a result the summary dropped that elision would have stubbed
 // counts: more than a stub's size of data from a tool elision does not keep
-// (not a sub-agent's answer or the plan), and no more than the hard cap,
+// (not the plan), and no more than the hard cap,
 // past which every request carries only a preview of it anyway
 // (reduceHistoricalPayloadsToHardCap), so no budget keeps it. Media come out of
 // toolResultOutputText as a short envelope, so they do not count either. A

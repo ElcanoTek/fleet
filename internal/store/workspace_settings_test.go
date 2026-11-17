@@ -29,7 +29,7 @@ func TestWorkspaceSettingsCRUD(t *testing.T) {
 	if row.Value != "redact" || row.UpdatedBy != "admin@x.com" || row.UpdatedAt == 0 {
 		t.Errorf("upsert should return the persisted row, got %+v", row)
 	}
-	if _, err := s.SetWorkspaceSetting(ctx, "subagents_enabled", "true", "admin@x.com"); err != nil {
+	if _, err := s.SetWorkspaceSetting(ctx, "auto_title_enabled", "true", "admin@x.com"); err != nil {
 		t.Fatalf("set second: %v", err)
 	}
 	// Upsert: same key again replaces value and attribution.
@@ -60,7 +60,7 @@ func TestWorkspaceSettingsCRUD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list after delete: %v", err)
 	}
-	if len(got) != 1 || got["subagents_enabled"].Value != "true" {
-		t.Errorf("after delete = %v, want only subagents_enabled", got)
+	if len(got) != 1 || got["auto_title_enabled"].Value != "true" {
+		t.Errorf("after delete = %v, want only auto_title_enabled", got)
 	}
 }

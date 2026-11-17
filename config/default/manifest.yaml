@@ -512,9 +512,8 @@ remote_mcp_catalog: []
 #                               matching as critical_tools) whose MCP tools
 #                               interactive chat never sees or calls: not in
 #                               the tool list, not found by tool_search,
-#                               refused by tool_call and by a direct call,
-#                               and out of reach of a sub-agent a chat turn
-#                               spawns. Scheduled and Operations Center runs
+#                               and refused by tool_call and by a direct
+#                               call. Scheduled and Operations Center runs
 #                               keep them. For raw writes chat must reach
 #                               through a reviewed flow instead. Absent =
 #                               chat and scheduled runs see the same tools.

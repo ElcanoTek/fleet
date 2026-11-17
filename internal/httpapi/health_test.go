@@ -122,8 +122,6 @@ func TestHandleServerStatsIncludesAgentMetrics(t *testing.T) {
 		calls: 14,
 		cost:  2.75,
 		counts: store.AgentRuntimeCounts{
-			SubagentsSpawnedTotal:  42,
-			SubagentsSpawned24h:    9,
 			ToolCalls24h:           180,
 			ToolCallsTotal:         1250,
 			ActiveConversations24h: 11,
@@ -155,9 +153,6 @@ func TestHandleServerStatsIncludesAgentMetrics(t *testing.T) {
 	}
 	if got.Agents.ActiveAgentsTotal < 2 {
 		t.Fatalf("expected ActiveAgentsTotal >= 2, got %d", got.Agents.ActiveAgentsTotal)
-	}
-	if got.Agents.SubagentsSpawned24h != 9 || got.Agents.SubagentsSpawnedTotal != 42 {
-		t.Fatalf("unexpected subagent counts: %+v", got.Agents)
 	}
 	if got.Agents.ToolCalls24h != 180 || got.Agents.ToolCallsTotal != 1250 || got.Agents.ActiveConversations24h != 11 {
 		t.Fatalf("unexpected tool/conv counts: %+v", got.Agents)

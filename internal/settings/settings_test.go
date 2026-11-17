@@ -58,7 +58,6 @@ func testDefaults() map[string]string {
 		"approval_timeout_seconds":          "86400",
 		"max_cost_usd":                      "50",
 		"max_total_tokens":                  "10000000",
-		"subagents_enabled":                 "true",
 		"default_model":                     "openai/gpt-5.6-luna-pro",
 		"advanced_model":                    "anthropic/claude-opus-5",
 		"task_model":                        "",
@@ -111,7 +110,7 @@ func TestNewServiceRequiresFullCoverage(t *testing.T) {
 		t.Fatal("missing default should fail construction")
 	}
 	hooks := testHooks(applied)
-	delete(hooks, "subagents_enabled")
+	delete(hooks, "auto_title_enabled")
 	if _, err := NewService(newFakeStore(), testDefaults(), hooks); err == nil {
 		t.Fatal("missing hook should fail construction")
 	}
@@ -157,8 +156,8 @@ func TestValidate(t *testing.T) {
 		{"pii_redaction_mode", "redact", "redact", false},
 		{"pii_redaction_mode", " Block ", "block", false},
 		{"pii_redaction_mode", "shred", "", true},
-		{"subagents_enabled", "TRUE", "true", false},
-		{"subagents_enabled", "yes", "", true},
+		{"auto_title_enabled", "TRUE", "true", false},
+		{"auto_title_enabled", "yes", "", true},
 		{"tool_disclosure_threshold", "42", "42", false},
 		{"tool_disclosure_threshold", "0", "", true}, // no MinZeroOK: 0 is out of range
 		{"tool_disclosure_threshold", "100001", "", true},
@@ -357,7 +356,7 @@ func TestResetRevertsToDefault(t *testing.T) {
 // every key, and one failing hook doesn't stop the rest.
 func TestApplyAllPushesEffectiveValues(t *testing.T) {
 	st := newFakeStore()
-	st.rows["subagents_enabled"] = store.WorkspaceSetting{Key: "subagents_enabled", Value: "true"}
+	st.rows["memory_autoindex_enabled"] = store.WorkspaceSetting{Key: "memory_autoindex_enabled", Value: "true"}
 	applied := map[string]string{}
 	hooks := testHooks(applied)
 	hooks["auto_title_enabled"] = func(string, bool) error { return fmt.Errorf("boom") }
@@ -370,8 +369,8 @@ func TestApplyAllPushesEffectiveValues(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "auto_title_enabled") {
 		t.Fatalf("ApplyAll should report the failing key, got %v", err)
 	}
-	if applied["subagents_enabled"] != "true" || applied["subagents_enabled/override"] != "true" {
-		t.Errorf("override should apply as override=true, got %q/%q", applied["subagents_enabled"], applied["subagents_enabled/override"])
+	if applied["memory_autoindex_enabled"] != "true" || applied["memory_autoindex_enabled/override"] != "true" {
+		t.Errorf("override should apply as override=true, got %q/%q", applied["memory_autoindex_enabled"], applied["memory_autoindex_enabled/override"])
 	}
 	if applied["pii_redaction_mode/override"] != "false" {
 		t.Error("a default must apply as override=false at boot")
@@ -388,7 +387,7 @@ func TestPersistFailureSurfaces(t *testing.T) {
 	st.failSet = fmt.Errorf("db down")
 	applied := map[string]string{}
 	svc := newTestService(t, st, applied)
-	if _, err := svc.Set(context.Background(), "subagents_enabled", "true", "admin@x"); err == nil {
+	if _, err := svc.Set(context.Background(), "auto_title_enabled", "true", "admin@x"); err == nil {
 		t.Fatal("want persist error")
 	}
 	if len(applied) != 0 {
@@ -431,15 +430,15 @@ func TestSetCompensatesOnApplyFailure(t *testing.T) {
 	st := newFakeStore()
 	applied := map[string]string{}
 	hooks := testHooks(applied)
-	hooks["subagents_enabled"] = func(string, bool) error { return fmt.Errorf("hook down") }
+	hooks["auto_title_enabled"] = func(string, bool) error { return fmt.Errorf("hook down") }
 	svc, err := NewService(st, testDefaults(), hooks)
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
-	if _, err := svc.Set(context.Background(), "subagents_enabled", "true", "admin@x"); err == nil {
+	if _, err := svc.Set(context.Background(), "auto_title_enabled", "true", "admin@x"); err == nil {
 		t.Fatal("want apply error")
 	}
-	if _, ok := st.rows["subagents_enabled"]; ok {
+	if _, ok := st.rows["auto_title_enabled"]; ok {
 		t.Error("a failed apply must roll back the persisted row")
 	}
 }
@@ -479,11 +478,11 @@ func TestResetCompensatesOnApplyFailure(t *testing.T) {
 // later successful ApplyAll clears the mark.
 func TestApplyAllRecordsPerKeyErrorsAndSnapshotSurfacesThem(t *testing.T) {
 	st := newFakeStore()
-	st.rows["subagents_enabled"] = store.WorkspaceSetting{Key: "subagents_enabled", Value: "true"}
+	st.rows["auto_title_enabled"] = store.WorkspaceSetting{Key: "auto_title_enabled", Value: "true"}
 	applied := map[string]string{}
 	hooks := testHooks(applied)
 	broken := true
-	hooks["subagents_enabled"] = func(string, bool) error {
+	hooks["auto_title_enabled"] = func(string, bool) error {
 		if broken {
 			return fmt.Errorf("boom")
 		}
@@ -503,7 +502,7 @@ func TestApplyAllRecordsPerKeyErrorsAndSnapshotSurfacesThem(t *testing.T) {
 	}
 	found := false
 	for _, r := range snap {
-		if r.Key == "subagents_enabled" {
+		if r.Key == "auto_title_enabled" {
 			found = true
 			if r.ApplyError == "" {
 				t.Error("failed key must surface ApplyError")
@@ -520,7 +519,7 @@ func TestApplyAllRecordsPerKeyErrorsAndSnapshotSurfacesThem(t *testing.T) {
 	}
 	snap, _ = svc.Snapshot(ctx)
 	for _, r := range snap {
-		if r.Key == "subagents_enabled" && r.ApplyError != "" {
+		if r.Key == "auto_title_enabled" && r.ApplyError != "" {
 			t.Error("recovered key must clear ApplyError")
 		}
 	}

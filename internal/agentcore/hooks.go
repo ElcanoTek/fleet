@@ -30,7 +30,7 @@ import (
 // never widen authority.
 //
 // This lives inside agentcore.Run / buildFantasyTools, so both interactive and
-// scheduled runs (and spawned sub-agents) inherit hooks with zero driver
+// scheduled runs inherit hooks with zero driver
 // changes — one governed core. It is nil-safe and zero-overhead when no hooks
 // are configured.
 

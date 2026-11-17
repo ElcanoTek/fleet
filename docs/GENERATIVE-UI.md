@@ -45,7 +45,7 @@ model reads the values ──▶ calls MCP tools as usual (approval cards apply)
   web derives all three from the messages (`web/src/app/chat/ui/genui/transcript.ts`),
   so a reload and a second tab agree on every card's state.
 - **Interactive turns only.** `show_ui` is in `interactiveOnlyToolNames`, so
-  scheduled runs, Operations Center tasks and sub-agents are never offered it.
+  scheduled runs and Operations Center tasks are never offered it.
   A headless run has no one to submit a form, and its reply would never come.
 - **Submissions are user turns.** They queue like any message while a turn is
   running (`mode: "queue"`). Because the model reads the values as user input

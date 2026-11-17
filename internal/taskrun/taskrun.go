@@ -76,9 +76,6 @@ type taskYAML struct {
 	FallbackModel string          `yaml:"fallback_model"`
 	MaxIterations *int            `yaml:"max_iterations"`
 	MCPSelection  []mcpChoiceYAML `yaml:"mcp_selection"`
-	// AllowDelegation mirrors the task column (#1043): omitted defaults to TRUE
-	// (sub-agents are opt-out), matching what a task created through the API gets.
-	AllowDelegation *bool `yaml:"allow_delegation"`
 	// AllowNetwork mirrors the task column: omitted is FALSE, so the run's
 	// sandbox is sealed and web_fetch is not registered (ADR-0094), exactly
 	// as for a task created through the API.
@@ -252,8 +249,7 @@ func loadTaskYAML(path string) (*models.Task, error) {
 		CreatedAt: time.Now().UTC(),
 		// Same default a task created through the API gets (#1043): delegation
 		// is opt-out, so an omitted key means true.
-		AllowDelegation: y.AllowDelegation == nil || *y.AllowDelegation,
-		AllowNetwork:    y.AllowNetwork,
+		AllowNetwork: y.AllowNetwork,
 	}
 	if s := strings.TrimSpace(y.Model); s != "" {
 		task.Model = &s

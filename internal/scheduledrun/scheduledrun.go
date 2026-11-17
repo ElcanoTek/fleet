@@ -1025,17 +1025,6 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 	// turns (docs/PROMPT-CACHE-CONTRACT.md).
 	taskSystemPrompt = r.appendSharedFilesSection(ctx, taskSystemPrompt)
 
-	// Sub-agent delegation (#1043): compute the composed gate once — it decides
-	// BOTH the tool registration (SubagentOptions.Enabled below) and this
-	// system-prompt policy section, so the advertised tool and the prompt
-	// teaching stay in lockstep. Both flags default true; either is a kill
-	// switch (fleet-wide Admin → Features / FLEET_SUBAGENTS_ENABLED, or the
-	// task's allow_delegation).
-	subagentsEnabled := r.cfg.LiveSubagentsEnabled() && task.AllowDelegation
-	if subagentsEnabled {
-		taskSystemPrompt += agent.DelegationPromptSection()
-	}
-
 	a := agent.NewAgent(agent.Options{
 		AuditProtocolRef:    agent.AuditProtocolRef(r.protocolsDir),
 		Config:              r.cfg,
@@ -1058,7 +1047,7 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 		SkillProposer:       r.taskSkillProposer(ownerSkillEmail),
 		TaskID:              task.ID,
 		CredentialAllowlist: taskCredentialAllowlist(task),
-		// Every email dispatch in this run (and its sub-agents) sends checked
+		// Every email dispatch in this run sends checked
 		// private copies of its attachments from the run's own working
 		// directory or the shared library, as a chat turn does.
 		PrepareEmailAttachments: scheduledEmailAttachmentSnapshotter(r.workspaceRoot(), toolRoot, r.cfg.EmailAttachmentDir),
@@ -1076,22 +1065,6 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 		// predicate completed whose recording call declared a blocked outcome
 		// finishes as success with run outcome "blocked".
 		CompletionBlockedWhen: requirements.completionBlockedWhen(),
-		// Governed sub-agents / delegation (#175, #264, #1043): ON by default —
-		// registered whenever the fleet-wide flag AND this task's allow_delegation
-		// are both true (each defaults true; each is an independent kill switch,
-		// composed as AND so either can turn the tool off). Registering the tool
-		// is the feature: the PARENT AGENT decides whether to actually spawn.
-		// The child model is resolved HOST-SIDE through the SAME Manager resolver the
-		// parent's model came from (r.mgr), so a per-child model choice keeps
-		// credentials host-side — never in the sandbox or model context.
-		Subagent: agent.SubagentOptions{
-			Enabled:        subagentsEnabled,
-			MaxDepth:       r.cfg.SubagentsMaxDepth,
-			MaxChildren:    r.cfg.SubagentsMaxChildren,
-			BudgetFraction: r.cfg.SubagentsBudgetFraction,
-			ModelSlug:      r.cfg.SubagentsModel,
-			Resolver:       r.mgr,
-		},
 	})
 
 	// On a retry (a prior attempt failed transiently and was re-queued), warn the

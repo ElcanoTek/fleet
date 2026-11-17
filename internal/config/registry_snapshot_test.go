@@ -227,13 +227,6 @@ var preRegistryAllowedEnvVars = map[string]bool{
 	"CUTLASS_ALLOWED_DIRS": true,
 	"GH_TOKEN":             true,
 
-	// ── sub-agents / delegation (#175, #264, #1043) ──
-	"FLEET_SUBAGENTS_ENABLED":         true,
-	"FLEET_SUBAGENTS_MAX_DEPTH":       true,
-	"FLEET_SUBAGENTS_MAX_CHILDREN":    true,
-	"FLEET_SUBAGENTS_BUDGET_FRACTION": true,
-	"FLEET_SUBAGENTS_MODEL":           true,
-
 	// ── task scheduler pacing: anti-starvation (#230), paused expiry (#510),
 	// and the POST /tasks + /upload sliding-window rate limits (cmd/fleet) ──
 	"FLEET_TASK_STARVATION_WINDOW_MINUTES":     true,
@@ -498,15 +491,6 @@ var preRegistryEnvKnobs = []envKnob{
 	// n<1 as "fall back to 8".) A set 0 is a misconfiguration; refuse it.
 	{key: "FLEET_MAX_CONCURRENT_AGENTS", kind: kindInt, min: bound(1)},
 
-	// ── sub-agents (#175, #264, #1043) ──
-	{key: "FLEET_SUBAGENTS_ENABLED", kind: kindBool},
-	{key: "FLEET_SUBAGENTS_MAX_DEPTH", kind: kindInt},
-	{key: "FLEET_SUBAGENTS_MAX_CHILDREN", kind: kindInt},
-	// Out-of-range numeric fractions are CLAMPED by normalizeBudgetFraction
-	// (documented: a misconfiguration must never mean "unbounded"), so no
-	// bounds here — only a non-numeric value errors.
-	{key: "FLEET_SUBAGENTS_BUDGET_FRACTION", kind: kindFloat},
-
 	// ── run-history retention (#252) + task pacing (#230, #510) ──
 	{key: "FLEET_RUN_LOG_RETENTION_DAYS", kind: kindInt},
 	{key: "FLEET_KEEP_RUNS_PER_TASK", kind: kindInt},
@@ -642,8 +626,7 @@ var preRegistryEnvKnobs = []envKnob{
 	{key: "FLEET_RETRY_MAX_ATTEMPTS", kind: kindInt, min: bound(0),
 		scope: scopeExternal, readBy: "internal/agentcore (provider retry budget)"},
 	// Clamped by the consumer to [MinMaxToolOutputBytes, HardMaxToolOutputBytes]
-	// and to (0,1] respectively — a documented clamp, like the subagent budget
-	// fraction above — so only a non-numeric value is refused.
+	// and to (0,1] respectively — a documented clamp — so only a non-numeric value is refused.
 	{key: "FLEET_MAX_TOOL_OUTPUT_BYTES", kind: kindInt,
 		scope: scopeExternal, readBy: "internal/agentcore (model-output boundary)"},
 	{key: "FLEET_CONTEXT_PRESSURE_WARN_THRESHOLD", kind: kindFloat,

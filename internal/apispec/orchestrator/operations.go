@@ -15,12 +15,8 @@ var (
 
 // PathParams types the path parameters that are not plain strings.
 var PathParams = map[string]*apispec.Schema{
-	"version":  apispec.Typed("integer"),
-	"entry_id": apispec.Typed("integer"),
-	"child_session_id": {
-		Type:    "string",
-		Pattern: "^subagent-[0-9a-f-]{36}$",
-	},
+	"version":   apispec.Typed("integer"),
+	"entry_id":  apispec.Typed("integer"),
 	"prompt_id": apispec.Typed("string", "uuid"),
 	"budget_id": apispec.Typed("string", "uuid"),
 }
@@ -563,7 +559,6 @@ var Operations = map[string]apispec.Operation{
 						"inherited names unless supplied here.",
 					Items: apispec.Typed("string"),
 				}),
-				apispec.Prop("allow_delegation", apispec.Typed("boolean")),
 				apispec.Prop("thinking_budget_tokens", &apispec.Schema{
 					Type:        "integer",
 					Description: "Negative clears to the global default; omitted inherits the source.",
@@ -1270,24 +1265,6 @@ var Operations = map[string]apispec.Operation{
 		Permission: "view_logs",
 		Responses: []apispec.Response{
 			apispec.OK("200", "OK", apispec.JSON(apispec.Ref("LogSession"))),
-			apispec.RefResponse("403", "Error"),
-			apispec.RefResponse("404", "Error"),
-		},
-	},
-	"GET /logs/{task_id}/subagents/{child_session_id}": {
-		Summary: "Fetch a spawned sub-agent's own transcript (#1043).",
-		Description: "Returns the sibling session log (LogSession shape) a sub-agent child " +
-			"run wrote. Same auth + ownership gate as GET /logs/{task_id}, PLUS a " +
-			"linkage check — the child id must appear in a subagent_spawned entry " +
-			"of this task's persisted log (latest or any history attempt). The " +
-			"transcript file is host-local and best-effort: 404 when it is no " +
-			"longer present, while the parent log's linkage entry remains the " +
-			"durable record.",
-		Security:   adminScopedOrSession,
-		Permission: "view_logs",
-		Responses: []apispec.Response{
-			apispec.OK("200", "OK", apispec.JSON(apispec.Ref("LogSession"))),
-			apispec.RefResponse("400", "Error"),
 			apispec.RefResponse("403", "Error"),
 			apispec.RefResponse("404", "Error"),
 		},

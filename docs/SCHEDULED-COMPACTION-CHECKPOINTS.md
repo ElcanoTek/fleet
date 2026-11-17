@@ -295,8 +295,7 @@ fewer summarizer calls; making the elided content recallable added nothing.
   the next call's, and a stub never changes once written, so a later elision
   rewrites only the results that left the window since
   (`TestRun_Elision_KeepsThePromptCachePrefix`, which fails if elision is moved
-  into the per-step chain). A subagent runs the scheduled loop, including one a
-  chat spawns, so it elides too; an interactive chat turn never does.
+  into the per-step chain). An interactive chat turn never elides.
 - **What.** Every tool result after the pinned head and before the recent
   window is replaced with its stub, when the stub is shorter: the start and end
   of the output (about 1 KiB, the whole stub at most 2 KiB), its original size,
@@ -336,8 +335,7 @@ fewer summarizer calls; making the elided content recallable added nothing.
   estimate).
 - **Left alone.** Results of 2 KiB or less; media; results over the 128 KiB
   hard cap, because the in-round guard already sends a stub of the same size in
-  their place on every call; and the results of `spawn_subagent` (a child run's
-  answer, which only a whole new child run could reproduce) and `task_tracker`
+  their place on every call; and the results of `task_tracker`
   (the plan the finish gate holds the run to, which a summary re-announces and
   an elision does not). A2A peer tools are named per peer, so they are not kept
   by name; their stubs say to repeat only a call that read data. Assistant
@@ -457,8 +455,7 @@ fewer summarizer calls; making the elided content recallable added nothing.
       results it dropped (`noteSummarizedCalls`), but only a result elision
       would have stubbed: more than a stub's size, no more than the 128 KiB
       hard cap (past it every request carries only a preview anyway), not
-      media, and not from a tool elision keeps (a sub-agent's answer, the
-      plan). A call that still
+      media, and not from a tool elision keeps (the plan). A call that still
       appears in what the summary kept is struck off, its result being
       there. So a repeated small call (a plan view, a list, a status poll)
       does not count.
@@ -478,7 +475,7 @@ fewer summarizer calls; making the elided content recallable added nothing.
   own call: the nearest earlier message with calls under that ID, and within
   it the call in the result's own position. Before this, a lookup by ID took
   the last call with that ID, so a stub could name the wrong tool or stub a
-  `spawn_subagent` answer.
+  result elision keeps.
 - **Knob.** `FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY`, on by default; `0` or `false`
   turns it off and restores the summary-only behaviour, apart from the
   raise after a summarized call, which has no knob of its own. It takes

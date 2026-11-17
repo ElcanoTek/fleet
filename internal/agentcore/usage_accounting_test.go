@@ -56,8 +56,8 @@ func TestUpdateUsage_CacheTokensCountedOnceAcrossSignals(t *testing.T) {
 	}
 
 	// Ceiling/budget math charges uncached spend once: 200 fresh + 50 completion.
-	if got := o.budgetState().SpentTokens; got != 250 {
-		t.Fatalf("budgetState().SpentTokens = %d, want 250 (200 uncached + 50 completion)", got)
+	if got := o.PromptTokens - o.CachedTokens + o.CompletionTokens; got != 250 {
+		t.Fatalf("uncached spend = %d, want 250 (200 uncached + 50 completion)", got)
 	}
 }
 

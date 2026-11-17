@@ -1211,58 +1211,6 @@ describe("TaskCreateModal — prompt editor sizing", () => {
   });
 });
 
-// ── sub-agent delegation (#1043) ──────────────────────────────────────────────
-// Default-on with an Advanced opt-out: the toggle starts checked, an untouched
-// form omits the field (server default = true), and switching it off sends the
-// explicit false.
-
-describe("TaskCreateModal — sub-agent delegation", () => {
-  const openAdvanced = () =>
-    fireEvent.click(screen.getByRole("button", { name: /Advanced/ }));
-
-  it("defaults the toggle ON and omits allow_delegation from the create payload", async () => {
-    createTask.mockResolvedValue({ id: "t-1" });
-    renderModal();
-    fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Do it" } });
-    openAdvanced();
-    expect(
-      screen.getByRole("checkbox", { name: /Allow sub-agent delegation/ }),
-    ).toBeChecked();
-    fireEvent.click(screen.getByRole("button", { name: "Run task now" }));
-    await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
-    const body = createTask.mock.calls[0][0] as Record<string, unknown>;
-    expect(body.allow_delegation).toBeUndefined();
-  });
-
-  it("sends the explicit opt-out when toggled off", async () => {
-    createTask.mockResolvedValue({ id: "t-2" });
-    renderModal();
-    fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Do it" } });
-    openAdvanced();
-    fireEvent.click(screen.getByRole("checkbox", { name: /Allow sub-agent delegation/ }));
-    fireEvent.click(screen.getByRole("button", { name: "Run task now" }));
-    await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
-    const body = createTask.mock.calls[0][0] as Record<string, unknown>;
-    expect(body.allow_delegation).toBe(false);
-  });
-
-  it("prefills an edited task's explicit opt-out (and an old payload as on)", () => {
-    renderModal({ editTask: { ...baseEdit, allow_delegation: false } });
-    openAdvanced();
-    expect(
-      screen.getByRole("checkbox", { name: /Allow sub-agent delegation/ }),
-    ).not.toBeChecked();
-    cleanup();
-    vi.clearAllMocks();
-    // A pre-#1043 payload has no field at all: treat as the default (on).
-    renderModal({ editTask: baseEdit });
-    openAdvanced();
-    expect(
-      screen.getByRole("checkbox", { name: /Allow sub-agent delegation/ }),
-    ).toBeChecked();
-  });
-});
-
 // ── Accessibility of the dialog shell ────────────────────────────────────────
 // These pin the behavior that the jsx-a11y pass moved around, so a later
 // "silence the linter" edit can't quietly take it away again: the scrim is
@@ -1317,12 +1265,9 @@ describe("TaskCreateModal — dialog shell a11y", () => {
     expect(network).toHaveAccessibleDescription(
       "Off = sealed — the sandbox has no internet access.",
     );
-    for (const name of [
-      "Allow sub-agent delegation",
-      "Carry context across runs",
-    ]) {
-      expect(screen.getByRole("checkbox", { name })).toHaveAccessibleName(name);
-    }
+    expect(
+      screen.getByRole("checkbox", { name: "Carry context across runs" }),
+    ).toHaveAccessibleName("Carry context across runs");
   });
 
   it("exposes the cost figure as a focusable button describing the full forecast", async () => {
@@ -1419,11 +1364,11 @@ describe("TaskCreateModal — resubmit override payload", () => {
 });
 
 // The create instance is keyed "create" for its whole life, so what resetForm
-// leaves behind is what the next New Task opens with. Title, the repeat-end
-// fields and the delegation switch were not reset — an untouched reopened form
+// leaves behind is what the next New Task opens with. Title and the repeat-end
+// fields were not reset — an untouched reopened form
 // then carried the previous task's title and raised "Discard this task?".
 describe("TaskCreateModal — resetForm covers every dirty-tracked field", () => {
-  it("clears title, repeat end and delegation so a reopened form is clean", () => {
+  it("clears title and repeat end so a reopened form is clean", () => {
     const { onClose, rerender } = renderModal();
     fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Pacing summary" } });
     fireEvent.click(screen.getByRole("radio", { name: "Repeat" }));
@@ -1431,8 +1376,6 @@ describe("TaskCreateModal — resetForm covers every dirty-tracked field", () =>
     fireEvent.change(screen.getByLabelText("Total runs before the repeat ends"), {
       target: { value: "4" },
     });
-    fireEvent.click(screen.getByRole("button", { name: /Advanced/ }));
-    fireEvent.click(screen.getByLabelText("Allow sub-agent delegation"));
 
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     fireEvent.click(screen.getByRole("button", { name: "Discard" }));
@@ -1444,7 +1387,6 @@ describe("TaskCreateModal — resetForm covers every dirty-tracked field", () =>
     rerender(<TaskCreateModal open servers={SERVERS} onClose={onClose} onCreated={() => {}} />);
     expect((screen.getByLabelText("Title") as HTMLInputElement).value).toBe("");
     expect(screen.getByRole("radio", { name: "Run now" })).toHaveAttribute("aria-checked", "true");
-    expect(screen.getByLabelText("Allow sub-agent delegation")).toBeChecked();
     // The proof: closing the untouched reopened form raises no guard.
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(screen.queryByText("Discard this task?")).not.toBeInTheDocument();

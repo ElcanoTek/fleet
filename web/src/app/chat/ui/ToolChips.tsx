@@ -1,7 +1,5 @@
-import { messageRoleLabel, warningSeverityLabel } from "@/app/lib/i18n/ownedLabels";
-import { formatFixed } from "@/app/lib/i18n";
+import { warningSeverityLabel } from "@/app/lib/i18n/ownedLabels";
 import { rich } from "@/app/lib/i18n/rich";
-import { getLanguage } from "@/app/lib/i18n";
 import { t as tr } from "@/app/lib/i18n";
 // Tool-call rendering family extracted from chat-experience.tsx (slice 3 of
 // #169). These components turn an agent ToolCall (and run_python output) into
@@ -15,19 +13,16 @@ import { t as tr } from "@/app/lib/i18n";
 import { lazy, Suspense, useState } from "react";
 import {
   prettyToolName,
-  subagentRoleLabel,
   safePretty,
   toolIcon,
   type Message,
   type PythonStream,
-  type SubagentActivity,
   type ToolCall,
 } from "./history";
 // From its own module (not AssistantContent) so this file doesn't statically
 // pull the lazy-loaded ReactMarkdown pipeline back into the initial bundle.
 import { WorkspaceImage } from "./WorkspaceImage";
 import { resolveWorkspaceHref } from "./workspaceHref";
-import { conversationApiPath } from "@/app/lib/conversationApiUrl";
 import { StatusChip } from "@/app/shared/ui/StatusChip";
 import { plural } from "@/app/shared/lib/format";
 
@@ -181,25 +176,17 @@ export function isStagedForApproval(tc: ToolCall, approvalIds: ReadonlySet<strin
 export function ToolChip({
   tc,
   taskTrackerDisplay,
-  conversationId,
   stagedForApproval = false,
 }: {
   tc: ToolCall;
   taskTrackerDisplay: TaskTrackerDisplay | null;
-  // Threaded so the spawn_subagent result card can fetch the child's own
-  // transcript through this conversation's authorized endpoint (#1043).
-  conversationId?: string | null;
   // The call was staged for approval (isStagedForApproval): a neutral chip
   // tagged "sent for approval", not an error. The tag makes no claim about
   // the card's state (pending, expired, running or decided): until a reload
   // the chip keeps the placeholder result, and the card says how it went.
   stagedForApproval?: boolean;
 }) {
-  // A delegation opens by default (#1043 follow-up): it is the one tool call
-  // that runs for minutes with the operator otherwise staring at a collapsed
-  // pill, and its live activity panel is the whole point of the events behind
-  // it. Every other tool keeps the click-to-open default.
-  const [open, setOpen] = useState(tc.name === "spawn_subagent");
+  const [open, setOpen] = useState(false);
   const label = prettyToolName(tc.name);
   const isErr = tc.state === "error" && !stagedForApproval;
   const stateStyle: React.CSSProperties =
@@ -229,14 +216,6 @@ export function ToolChip({
       >
         <span>{toolIcon(tc.name)}</span>
         <span className="font-medium">{label}</span>
-        {/* The child's live step count rides the collapsed pill so a
-            delegation shows movement even with the panel closed. */}
-        {tc.subagent && tc.state === "pending" ? (
-          <span className="text-[var(--color-text-muted)]">
-            · {subagentRoleLabel(tc.subagent.role || "explore")}
-            {tc.subagent.steps > 0 ? tr(" · {0} steps", [tc.subagent.steps]) : ""}
-          </span>
-        ) : null}
         {stagedForApproval ? (
           <span data-testid="tool-chip-staged" className="text-[var(--color-text-muted)]">
             {tr("· sent for approval")}
@@ -268,19 +247,12 @@ export function ToolChip({
               taskTrackerDisplay={taskTrackerDisplay}
             />
           )}
-          {/* Live sub-agent activity, while the child is still running. Once
-              the result arrives the card below carries the same trail from the
-              persisted JSON, so this panel retires rather than duplicating. */}
-          {tc.subagent && !tc.resultText ? (
-            <SubagentActivityPanel activity={tc.subagent} />
-          ) : null}
           {tc.resultText ? (
             <ToolResultView
               name={tc.name}
               resultText={tc.resultText}
               isErr={isErr}
               taskTrackerDisplay={taskTrackerDisplay}
-              conversationId={conversationId}
             />
           ) : null}
         </div>
@@ -584,28 +556,6 @@ function ToolInputView({
     );
   }
 
-  // Governed sub-agent delegation (#1043): show the child's role + task, not
-  // raw JSON.
-  if (name === "spawn_subagent" && typeof args.task === "string") {
-    const role = typeof args.role === "string" && args.role ? args.role : "explore";
-    return (
-      <div className="rounded-[0.6rem] border border-[var(--color-border)] bg-[var(--color-surface-inset)] min-w-0 max-w-full">
-        <div className="flex items-center gap-2 border-b border-[var(--color-border)] px-2 py-0.5 text-[0.65rem] uppercase tracking-wider text-[var(--color-text-muted)]">
-          <span>{tr("sub-agent")}</span>
-          <StatusChip tone="neutral" className="normal-case tracking-normal">
-            {subagentRoleLabel(role)}
-          </StatusChip>
-        </div>
-        <pre
-          className="overflow-auto whitespace-pre-wrap px-2 py-1.5 text-[0.72rem] leading-[1.4] text-[var(--color-text-primary)]"
-          style={{ maxHeight: "10rem" }}
-        >
-          {args.task}
-        </pre>
-      </div>
-    );
-  }
-
   return <JsonFallback raw={input} />;
 }
 
@@ -677,13 +627,11 @@ function ToolResultView({
   resultText,
   isErr,
   taskTrackerDisplay,
-  conversationId,
 }: {
   name: string;
   resultText: string;
   isErr: boolean;
   taskTrackerDisplay: TaskTrackerDisplay | null;
-  conversationId?: string | null;
 }) {
   if (name === "bash") {
     const parsed = parseJSON(resultText);
@@ -709,18 +657,6 @@ function ToolResultView({
     const parsed = parseJSON(resultText);
     if (parsed && typeof parsed === "object") {
       return <TaskTrackerResult result={parsed as Record<string, unknown>} />;
-    }
-  }
-
-  if (name === "spawn_subagent") {
-    const parsed = parseJSON(resultText);
-    if (parsed && typeof parsed === "object") {
-      return (
-        <SubagentSpawnResult
-          result={parsed as Record<string, unknown>}
-          conversationId={conversationId}
-        />
-      );
     }
   }
 
@@ -868,229 +804,6 @@ function readWarnings(value: unknown): EmailWarning[] {
       },
     ];
   });
-}
-
-// SubagentActivityPanel renders a running child's live trail (#1043
-// follow-up): what it is doing right now, how many steps it has taken, and the
-// last handful of tool calls with their argument/result previews. It exists
-// because a delegation used to be a spinner over the task text for its whole
-// (multi-minute) lifetime — the operator could not tell a working child from a
-// stuck one. Live-only: the tool result card replaces it once the child returns.
-function SubagentActivityPanel({ activity }: { activity: SubagentActivity }) {
-  const running = activity.phase !== "finished";
-  return (
-    <div
-      className="rounded-[0.6rem] border border-[var(--color-border)] bg-[var(--color-surface-inset)] min-w-0 max-w-full"
-      data-testid="chat-subagent-activity"
-    >
-      <div className="flex items-center gap-2 border-b border-[var(--color-border)] px-2 py-0.5 text-[0.65rem] uppercase tracking-wider text-[var(--color-text-muted)]">
-        <span>{tr("sub-agent activity")}</span>
-        {activity.steps > 0 ? (
-          <span className="normal-case tracking-normal">
-        {rich("{0} steps", activity.steps)}
-      </span>
-        ) : null}
-        {running ? (
-          <span className="ml-auto normal-case tracking-normal">{tr("running…")}</span>
-        ) : null}
-      </div>
-      {activity.current ? (
-        <div className="px-2 py-1 text-[0.72rem] text-[var(--color-text-primary)]">
-          <span className="truncate">{activity.current}</span>
-        </div>
-      ) : null}
-      {activity.trail.length > 0 ? (
-        <ul className="grid gap-0.5 px-2 pb-1 text-[0.7rem] text-[var(--color-text-muted)]">
-          {activity.trail.map((s, i) => (
-            <li key={i} className="flex min-w-0 items-baseline gap-1.5">
-              <span
-                className="shrink-0"
-                style={s.isErr ? { color: "var(--color-danger)" } : undefined}
-                aria-hidden
-              >
-                {s.phase === "tool" ? "→" : s.phase === "tool_result" ? (s.isErr ? "✗" : "✓") : "•"}
-              </span>
-              <span className="min-w-0 truncate">
-                {s.tool ? <span className="text-[var(--color-text-secondary)]">{s.tool}</span> : null}
-                {s.tool && s.detail ? " · " : null}
-                {s.detail}
-              </span>
-            </li>
-          ))}
-        </ul>
-      ) : null}
-    </div>
-  );
-}
-
-// SubagentTranscriptMessage is the subset of a child session-log message the
-// chat-side transcript viewer renders.
-type SubagentTranscriptMessage = {
-  role?: string;
-  content?: string;
-  tool_name?: string;
-};
-
-// SubagentChatTranscript lazy-loads a chat-spawned child's own session log
-// (#1043) through the conversation-authorized endpoint the first time its
-// disclosure opens, rendering a compact role-labelled message list. The
-// transcript file is best-effort (host-local) — a 404 renders as an inline
-// note.
-function SubagentChatTranscript({
-  conversationId,
-  childId,
-}: {
-  conversationId: string;
-  childId: string;
-}) {
-  const [state, setState] = useState<"idle" | "loading" | "error" | "loaded">("idle");
-  const [note, setNote] = useState("");
-  const [messages, setMessages] = useState<SubagentTranscriptMessage[]>([]);
-  const load = async () => {
-    const url = conversationApiPath(conversationId, "subagents", childId);
-    if (!url) {
-      setNote(tr("Transcript not available (invalid subagent id)."));
-      setState("error");
-      return;
-    }
-    setState("loading");
-    try {
-      const res = await fetch(url, { cache: "no-store" });
-      if (!res.ok) {
-        setNote(
-          res.status === 404
-            ? tr("Transcript not available (it may have been cleaned up on the server).")
-            : tr("Transcript fetch failed ({0}).", [res.status]),
-        );
-        setState("error");
-        return;
-      }
-      const session = (await res.json()) as { messages?: SubagentTranscriptMessage[] };
-      setMessages(session.messages ?? []);
-      setState("loaded");
-    } catch {
-      setNote(tr("Transcript fetch failed."));
-      setState("error");
-    }
-  };
-  return (
-    <details
-      className="border-t border-[var(--color-border)] px-2 py-1 text-[0.72rem]"
-      data-testid="chat-subagent-transcript"
-      onToggle={(e) => {
-        if ((e.target as HTMLDetailsElement).open && state === "idle") void load();
-      }}
-    >
-      <summary className="cursor-pointer text-[var(--color-text-muted)]">{tr("Transcript")}</summary>
-      {state === "loading" ? (
-        <p className="py-1 text-[var(--color-text-muted)]">{tr("Loading transcript…")}</p>
-      ) : null}
-      {state === "error" ? <p className="py-1 text-[var(--color-text-muted)]">{note}</p> : null}
-      {state === "loaded" ? (
-        <div className="grid gap-1 py-1">
-          {messages.map((m, i) => (
-            <div key={i} className="min-w-0">
-              <span className="text-[0.65rem] uppercase tracking-wider text-[var(--color-text-muted)]">
-                {m.role ? messageRoleLabel(m.role) : "?"}
-                {m.tool_name ? ` · ${m.tool_name}` : ""}
-              </span>
-              {(m.content ?? "").trim() ? (
-                <pre
-                  className="overflow-auto whitespace-pre-wrap leading-[1.4] text-[var(--color-text-secondary)]"
-                  style={{ maxHeight: "10rem" }}
-                >
-                  {m.content}
-                </pre>
-              ) : null}
-            </div>
-          ))}
-        </div>
-      ) : null}
-    </details>
-  );
-}
-
-// SubagentSpawnResult renders a spawn_subagent JSON result (#1043) as a child
-// card — status, role, spend — with the child's answer and full transcript
-// behind disclosures, never a raw JSON blob.
-function SubagentSpawnResult({
-  result,
-  conversationId,
-}: {
-  result: Record<string, unknown>;
-  conversationId?: string | null;
-}) {
-  const success = result.success === true;
-  const role = typeof result.role === "string" ? result.role : "";
-  const childId =
-    typeof result.child_session_id === "string" ? result.child_session_id : "";
-  const refused = !success && !childId; // a refusal never built a child
-  const cost = typeof result.cost_usd === "number" ? result.cost_usd : 0;
-  const tokens = typeof result.tokens === "number" ? result.tokens : 0;
-  const answer = typeof result.result === "string" ? result.result : "";
-  const status = success ? "done" : refused ? "refused" : "failed";
-  // The work trail the child reported (#1043 follow-up). Persisted in the tool
-  // result, so it survives a reload — unlike the live activity panel — and it
-  // is what distinguishes a child that tried and failed from one that never
-  // ran a step.
-  const steps = typeof result.steps === "number" ? result.steps : 0;
-  const toolsUsed = Array.isArray(result.tools_used)
-    ? result.tools_used.filter((t): t is string => typeof t === "string")
-    : [];
-  return (
-    <div
-      className="rounded-[0.6rem] border bg-[var(--color-surface-inset)] min-w-0 max-w-full"
-      style={{
-        borderColor: success ? "var(--color-border)" : "var(--color-danger-border)",
-      }}
-      data-testid="chat-subagent-card"
-    >
-      <div className="flex items-center gap-2 px-2 py-1 text-[0.7rem]">
-        <span className="font-semibold text-[var(--color-text-primary)]">
-        {rich("Sub-agent{0}", childId ? ` ${childId.replace(/^subagent-/, "").slice(0, 8)}…` : "")}
-      </span>
-        {role ? (
-          <StatusChip tone="neutral">{subagentRoleLabel(role)}</StatusChip>
-        ) : null}
-        <span
-          className="ml-auto font-semibold"
-          style={{ color: success ? "var(--color-success)" : "var(--color-danger)" }}
-        >
-          {tr(status)}
-        </span>
-      </div>
-      <div className="flex flex-wrap gap-2 px-2 pb-1 text-[0.68rem] text-[var(--color-text-muted)]">
-        {cost > 0 ? <span>${formatFixed(cost, 4)}</span> : null}
-        {tokens > 0 ? <span>
-        {rich("{0} tokens", tokens.toLocaleString(getLanguage()))}
-      </span> : null}
-        {steps > 0 ? <span>
-        {rich("{0} steps", steps)}
-      </span> : null}
-        {toolsUsed.length > 0 ? (
-          <span className="min-w-0 truncate" title={toolsUsed.join(", ")}>
-            {toolsUsed.join(", ")}
-          </span>
-        ) : null}
-      </div>
-      {answer ? (
-        <details className="border-t border-[var(--color-border)] px-2 py-1 text-[0.72rem]">
-          <summary className="cursor-pointer text-[var(--color-text-muted)]">
-            {tr("Result")}
-          </summary>
-          <pre
-            className="overflow-auto whitespace-pre-wrap py-1 leading-[1.4] text-[var(--color-text-secondary)]"
-            style={{ maxHeight: "12rem" }}
-          >
-            {answer}
-          </pre>
-        </details>
-      ) : null}
-      {conversationId && childId ? (
-        <SubagentChatTranscript conversationId={conversationId} childId={childId} />
-      ) : null}
-    </div>
-  );
 }
 
 function EmailSendPending() {

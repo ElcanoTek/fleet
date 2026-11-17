@@ -282,7 +282,7 @@ func (t *a2aToolTransport) execute(ctx context.Context, spec A2APeerSpec, client
 			return a2aErrorResult("message is required")
 		}
 		// A follow-up answer extends no chain; only a NEW delegation is
-		// gated on depth (mirrors spawn_subagent's in-body refusal).
+		// gated on depth.
 		if taskID == "" {
 			depth := spec.DefaultDepth
 			if d, ok := a2aDepthFrom(ctx); ok {

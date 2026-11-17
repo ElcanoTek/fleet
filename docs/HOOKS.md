@@ -104,7 +104,6 @@ supported.
 
 ## Deferred
 
-`pre_compact`/`post_compact` and `subagent_start`/`subagent_end` events (child
-runs already get `pre/post_tool_use` via the shared loop); argument rewriting
+`pre_compact`/`post_compact` events; argument rewriting
 and an "ask" outcome; hook config hot-reload; `turn_end` on interrupted runs;
 and multi-source hook discovery (fleet has one trusted source — the bundle).

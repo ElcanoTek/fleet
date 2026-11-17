@@ -260,11 +260,6 @@ function taskToFormValues(task: Task | null) {
       typeof task?.max_iterations === "number" ? String(task.max_iterations) : "",
     maxCostUSD: typeof task?.max_cost_usd === "number" ? String(task.max_cost_usd) : "",
     allowNetwork: Boolean(task?.allow_network),
-    // Sub-agent delegation (#1043) defaults ON: a fresh form starts true, and an
-    // edited/cloned task only starts false when it explicitly opted out (the
-    // server always serializes the field, so undefined means "old payload" =
-    // the default).
-    allowDelegation: task ? task.allow_delegation !== false : true,
     carryContext: Boolean(task?.carry_context),
     mcpSelection: task?.mcp_selection ?? [],
     runIfCommand: task?.run_if?.command ?? "",
@@ -474,7 +469,6 @@ export function TaskCreateModal({
   const [maxIterations, setMaxIterations] = useState(init.maxIterations);
   const [maxCostUSD, setMaxCostUSD] = useState(init.maxCostUSD);
   const [allowNetwork, setAllowNetwork] = useState(init.allowNetwork);
-  const [allowDelegation, setAllowDelegation] = useState(init.allowDelegation);
   const [carryContext, setCarryContext] = useState(init.carryContext);
   // Pre-run shell gate (#269): empty = no gate (unconditional promotion).
   const [runIfCommand, setRunIfCommand] = useState(init.runIfCommand);
@@ -605,7 +599,6 @@ export function TaskCreateModal({
     sandboxCpus.trim() !== "" ||
     sandboxPids.trim() !== "" ||
     allowNetwork ||
-    !allowDelegation ||
     carryContext ||
     runIfCommand.trim() !== "";
 
@@ -638,7 +631,6 @@ export function TaskCreateModal({
     maxIterations,
     maxCostUSD,
     allowNetwork,
-    allowDelegation,
     carryContext,
     runIfCommand,
     runIfOnError,
@@ -671,7 +663,6 @@ export function TaskCreateModal({
     init.maxIterations,
     init.maxCostUSD,
     init.allowNetwork,
-    init.allowDelegation,
     init.carryContext,
     init.runIfCommand,
     init.runIfOnError,
@@ -688,7 +679,7 @@ export function TaskCreateModal({
   // Every field createDirty inspects must be reset here: the parent keys the
   // create instance "create" for its whole life, so anything left behind is
   // what the next New Task opens with — and it re-raises the discard guard on
-  // an untouched form (title, repeat-end and delegation used to slip through).
+  // an untouched form (title and repeat-end used to slip through).
   const resetForm = useCallback(() => {
     setTitle("");
     setPrompt("");
@@ -720,7 +711,6 @@ export function TaskCreateModal({
     setMaxIterations("");
     setMaxCostUSD("");
     setAllowNetwork(false);
-    setAllowDelegation(true);
     setCarryContext(false);
     setRunIfCommand("");
     setRunIfOnError("run");
@@ -818,7 +808,6 @@ export function TaskCreateModal({
     modelTouched.current = !!t.model;
     fallbackTouched.current = !!t.fallback_model;
     setAllowNetwork(Boolean(t.allow_network));
-    setAllowDelegation(t.allow_delegation !== false);
     setCarryContext(Boolean(t.carry_context));
     setExpectedDuration(
       typeof t.expected_duration_minutes === "number" && t.expected_duration_minutes > 0
@@ -849,7 +838,6 @@ export function TaskCreateModal({
     if (
       t.persona ||
       t.allow_network ||
-      t.allow_delegation === false ||
       t.carry_context ||
       t.sandbox_limits
     ) {
@@ -974,9 +962,6 @@ export function TaskCreateModal({
     sandboxCpus.trim() !== "",
     sandboxPids.trim() !== "",
     allowNetwork,
-    // Delegation is ON by default (#1043): the opt-OUT is the non-default state
-    // worth surfacing in the Advanced badge.
-    !allowDelegation,
     carryContext,
     runIfCommand.trim() !== "",
   ].filter(Boolean).length;
@@ -1079,10 +1064,6 @@ export function TaskCreateModal({
     if (maxIterations.trim()) taskData.max_iterations = Number.parseInt(maxIterations, 10);
     if (maxCostUSD.trim()) taskData.max_cost_usd = Number.parseFloat(maxCostUSD);
     if (allowNetwork) taskData.allow_network = true;
-    // Delegation defaults ON server-side (#1043): omit when on, send the
-    // explicit false only for an opt-out — the tri-state server field treats a
-    // missing key as the default.
-    if (!allowDelegation) taskData.allow_delegation = false;
     if (carryContext) taskData.carry_context = true;
     if (mcpSelection.length > 0) taskData.mcp_selection = mcpSelection;
     if (scheduleMode === "once" && scheduledFor) {
@@ -1289,7 +1270,6 @@ export function TaskCreateModal({
               ? { max_iterations: taskData.max_iterations }
               : {}),
             allow_network: Boolean(taskData.allow_network),
-            allow_delegation: allowDelegation,
             tags: taskData.tags ?? [],
             persona: taskData.persona ?? "",
             // A terminal edit is a resubmit, but the connector picker is still
@@ -2370,24 +2350,6 @@ export function TaskCreateModal({
                           </span>
                           <span className="switch-row-desc" id="taskAllowNetwork-desc">
                             {tr("Off = sealed — the sandbox has no internet access.")}
-                          </span>
-                        </Label>
-                      </div>
-                      <div className="switch-row">
-                        <Checkbox
-                          id="taskAllowDelegation"
-                          className="mt-0.5"
-                          aria-labelledby="taskAllowDelegation-title"
-                          aria-describedby="taskAllowDelegation-desc"
-                          checked={allowDelegation}
-                          onCheckedChange={(v) => setAllowDelegation(v === true)}
-                        />
-                        <Label htmlFor="taskAllowDelegation" className="switch-row-text cursor-pointer font-normal">
-                          <span className="switch-row-title" id="taskAllowDelegation-title">
-                            {tr("Allow sub-agent delegation")}
-                          </span>
-                          <span className="switch-row-desc" id="taskAllowDelegation-desc">
-                            {tr("The agent may fan work out to governed child agents (capped at 5, each ≤10% of the remaining budget). Off = this task never delegates.")}
                           </span>
                         </Label>
                       </div>

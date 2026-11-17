@@ -5,7 +5,7 @@ without a restart, so an operator can adjust a cost/token/iteration ceiling or
 the sampling temperature without interrupting active chat conversations or
 in-flight scheduled tasks.
 
-> Feature toggles (PII redaction, sub-agents, memory auto-index, …) have their
+> Feature toggles (PII redaction, memory auto-index, …) have their
 > own, UI-first mechanism: admin-managed workspace settings, stored in the DB
 > and applied live — see [ADMIN-SETTINGS.md](ADMIN-SETTINGS.md). The two
 > cover **disjoint** settings: this page's reload is for the env-file ceilings
