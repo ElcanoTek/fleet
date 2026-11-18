@@ -310,3 +310,20 @@ test("a failure that lands after the dialog closed shows on the page", async ({ 
     timeout: 5_000,
   });
 });
+
+test("Save keeps the edit form open when the server refuses the new mode", async ({ page }) => {
+  await page.route("**/api/conversations/conv-patrol/auto-approve", (r: Route) =>
+    r.fulfill({ status: 500, body: "boom" }),
+  );
+  await mockPatrolChat(page);
+  await expect(page.getByTestId("patrol-banner")).toBeVisible({ timeout: 15_000 });
+  await page.getByTestId("chat-patrol-button").click();
+  const dialog = page.getByRole("dialog", { name: "Patrols & timers" });
+  await dialog.getByTestId("patrols-card").getByRole("button", { expanded: false }).click();
+  await dialog.getByRole("button", { name: "Edit schedule & task" }).click();
+  const form = dialog.getByTestId("patrol-form-edit");
+  await form.getByRole("radio", { name: /Manual/ }).click();
+  await form.getByRole("button", { name: "Save changes" }).click();
+  await expect(dialog.getByTestId("patrols-error")).toContainText("Couldn't change the approval mode");
+  await expect(form).toBeVisible();
+});

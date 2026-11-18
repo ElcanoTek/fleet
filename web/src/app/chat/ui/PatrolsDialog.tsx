@@ -251,14 +251,21 @@ export function PatrolForm({
       ? tr("Reminder")
       : tr("Recurring Patrol");
   const canSubmit = task.trim().length > 0 && (kind === "timer" || Boolean(cron)) && !submitting;
+  // A paused timer has no clock time to show: resuming starts its delay
+  // over from then, so it reads as the bar does (Paused · One-shot (2h)).
+  const pausedTimer = isEdit && schedule?.status === "paused";
   const summary =
     kind === "timer"
-      ? // An edit that leaves the schedule alone keeps the timer's own
-        // deadline (editBody sends no duration), so show that one.
-        formatRunOnce(
-          durationSeconds ?? 0,
-          isEdit && !scheduleChanged && schedule?.kind === "timer" ? schedule.next_run_at : undefined,
-        )
+      ? pausedTimer
+        ? [tr("Paused"), formatScheduleCadence({ kind: "timer", duration_seconds: durationSeconds } as ChatSchedule)]
+            .filter(Boolean)
+            .join(" · ")
+        : // An edit that leaves the schedule alone keeps the timer's own
+          // deadline (editBody sends no duration), so show that one.
+          formatRunOnce(
+            durationSeconds ?? 0,
+            isEdit && !scheduleChanged && schedule?.kind === "timer" ? schedule.next_run_at : undefined,
+          )
       : cron
         ? formatScheduleCadence({ kind: "patrol", cron } as ChatSchedule) ||
           describeCronExpression(cron)

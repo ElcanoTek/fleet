@@ -392,6 +392,18 @@ describe("PatrolsDialog", () => {
     }
   });
 
+  it("shows a paused timer's delay, not a deadline it won't keep", () => {
+    // Pausing keeps next_run_at (here already past); resuming restarts the delay.
+    renderDialog({
+      schedules: [{ ...timerSchedule, status: "paused", next_run_at: nowSec() - 600 }],
+    });
+    fireEvent.click(cardToggle(0));
+    fireEvent.click(screen.getByRole("button", { name: "Edit schedule & task" }));
+    const form = screen.getByTestId("patrol-form-edit");
+    expect(form).toHaveTextContent("Paused · One-shot (2h)");
+    expect(form).not.toHaveTextContent("Runs once");
+  });
+
   it("keeps the remove confirmation armed when the DELETE fails", async () => {
     const props = renderDialog({ onRemove: vi.fn().mockResolvedValue(false) });
     fireEvent.click(cardToggle(0));

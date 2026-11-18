@@ -1265,19 +1265,23 @@ export function ChatExperience({
   const autoApproveDisplayedRef = useRef<Map<string, ConversationApprovalMode>>(new Map());
   const autoApproveCommittedRef = useRef<Map<string, ConversationApprovalMode>>(new Map());
   const autoApproveInFlightRef = useRef<Map<string, number>>(new Map());
+  // Resolves when the server has answered: "ok" (committed, or nothing to
+  // send), "prompted" (409: the risk prompt is open again) or "failed" (the
+  // mode was rolled back). Most callers fire and forget; a patrol edit's
+  // Save waits so a refused mode isn't reported as saved.
   const changeApprovalMode = useCallback(
-    (next: ConversationApprovalMode) => {
+    (next: ConversationApprovalMode): Promise<"ok" | "prompted" | "failed"> => {
       if (!activeConversationId || isPendingKey(activeConversationId)) {
         const key = activeConversationId ?? draftKeyRef.current;
         setPendingApprovalModeForKey(key, next);
-        return;
+        return Promise.resolve("ok");
       }
       const convId = activeConversationId;
       if (!autoApproveCommittedRef.current.has(convId)) {
         autoApproveCommittedRef.current.set(convId, approvalMode);
       }
       const currentDesired = autoApproveValueRef.current.get(convId) ?? approvalMode;
-      if (currentDesired === next) return;
+      if (currentDesired === next) return Promise.resolve("ok");
       const seq = (autoApproveSeqRef.current.get(convId) ?? 0) + 1;
       autoApproveSeqRef.current.set(convId, seq);
       autoApproveValueRef.current.set(convId, next);
@@ -1315,9 +1319,10 @@ export function ChatExperience({
           convId,
           Math.max(0, (autoApproveInFlightRef.current.get(convId) ?? 1) - 1),
         );
-        return;
+        return Promise.resolve("failed");
       }
       const prev = autoApproveChainRef.current.get(convId) ?? Promise.resolve();
+      let outcome: "ok" | "prompted" | "failed" = "failed";
       const run = prev.then(async () => {
         try {
           const res = await fetch(url, {
@@ -1330,7 +1335,8 @@ export function ChatExperience({
           });
           if (res.status === 409) {
             applyLocalAutonomousAccepted(false);
-            requireAutonomousAccept(() => changeApprovalMode("autonomous"));
+            requireAutonomousAccept(() => void changeApprovalMode("autonomous"));
+            outcome = "prompted";
             throw new Error(tr("HTTP {0}", [res.status]));
           }
           if (!res.ok) throw new Error(tr("HTTP {0}", [res.status]));
@@ -1358,6 +1364,7 @@ export function ChatExperience({
             autoApproveValueRef.current.set(convId, committed);
             applyState(committed);
           }
+          outcome = "ok";
         } catch {
           if (autoApproveSeqRef.current.get(convId) === seq) {
             const fallback = autoApproveCommittedRef.current.get(convId) ?? "manual";
@@ -1373,6 +1380,7 @@ export function ChatExperience({
         }
       });
       autoApproveChainRef.current.set(convId, run);
+      return run.then(() => outcome);
     },
     [
       applyLocalAutonomousAccepted,
@@ -6454,7 +6462,15 @@ export function ChatExperience({
     // prompt when Autonomous was picked, so asking again here would be a
     // second prompt for one choice (a server that still refuses answers 409,
     // which asks once more).
-    if (mode !== approvalMode && isActiveConversationOwner) changeApprovalMode(mode);
+    if (mode !== approvalMode && isActiveConversationOwner) {
+      // Waited for: a refused mode is rolled back, so the edit is not done.
+      const outcome = await changeApprovalMode(mode);
+      if (outcome === "failed") {
+        reportPatrolError(tr("Couldn't change the approval mode. Try again."));
+        return false;
+      }
+      if (outcome === "prompted") return false;
+    }
     return true;
   };
 
