@@ -10,3 +10,8 @@
 #           presentation of a vendored blob in review, not a 689KB diff.
 #   -merge  never attempt a content merge; re-vendor deliberately instead.
 internal/clientconfig/builtin_skills/bento-slides/templates/*.bento.html -text -diff -merge
+
+# npm's lockfile is generated (npm ci / Dependabot), never hand-edited:
+# linguist-generated collapses its diff in GitHub reviews and keeps it out of
+# the repository's language stats. It still diffs normally on the command line.
+web/package-lock.json linguist-generated=true
