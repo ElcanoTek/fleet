@@ -21,9 +21,9 @@ import (
 
 // A multiplayer dashboard chat with a patrol: the owner's turn drew two
 // panels, a teammate's turn drew a third, and the patrol refreshed one. Each
-// of them must be able to update any of the cards: the replay carries the
-// cards whoever's turn drew them, and a patrol turn is also given the
-// list of the board's panels.
+// of them must be able to update any of the cards: the replay is the same
+// history for everyone (TestReplayIsSharedInAMultiplayerChat), and a patrol
+// turn is also given the list of the board's panels.
 
 func cardCall(id int64, callID, spec string) agent.HistoryEntry {
 	return agent.HistoryEntry{ID: id, Role: "assistant", Type: "tool_call", Content: fmt.Appendf(nil, `{"id":%q,"name":"show_ui","input":%q}`, callID, spec)}
@@ -170,99 +170,6 @@ func TestAppendConversationCardsBlock(t *testing.T) {
 	}
 }
 
-// Anyone in a team chat can ask for a card to be changed, and the assistant
-// must work from the card that is there. So the replay for one sender's turn
-// carries the cards of every other sender's turn, contents included,
-// and nothing else of their working trace.
-func TestReplayKeepsOtherSendersCards(t *testing.T) {
-	t.Parallel()
-
-	history := []agent.HistoryEntry{
-		userSaid(1, "owner@x.com", "build the board"),
-		{ID: 2, Role: "assistant", Type: "reasoning", Content: []byte(`{"text":"owner thinking"}`)},
-		{ID: 3, Role: "assistant", Type: "tool_call", Content: []byte(`{"id":"q","name":"run_python","input":"{}"}`)},
-		{ID: 4, Role: "tool", Type: "tool_result", Content: []byte(`{"id":"q","name":"run_python","text":"owner connector rows","sender_email":"owner@x.com"}`)},
-		cardCall(5, "old", `{"title":"Pacing v1","panel":"pacing","components":[{"type":"text","text":"yesterday"}]}`),
-		cardShown(6, "old"),
-		cardCall(7, "ref", `{"from_result":{"call_id":"q"},"panel":"recs"}`),
-		{ID: 8, Role: "tool", Type: "tool_result", Content: []byte(`{"id":"ref","name":"show_ui","text":"UI_DISPLAYED card_id=ref","sender_email":"owner@x.com","card":"{\"title\":\"Recs\",\"panel\":\"recs\",\"components\":[{\"type\":\"text\",\"text\":\"three recs\"}]}"}`)},
-		cardCall(9, "bad", `{"title":"Refused","secret":"rows"}`),
-		{ID: 10, Role: "tool", Type: "tool_result", Content: []byte(`{"id":"bad","name":"show_ui","text":"UI_INVALID: no","is_err":true}`)},
-		cardCall(11, "new", `{"title":"Pacing v2","panel":"pacing","components":[{"type":"text","text":"today"}]}`),
-		cardShown(12, "new"),
-		{ID: 13, Role: "assistant", Type: "text", Content: []byte(`{"text":"Board is up."}`)},
-		userSaid(14, "mate@x.com", "add yesterday to the pacing chart"),
-	}
-
-	out := redactHistoryForSender(history, "mate@x.com", "owner@x.com")
-	ids := make([]int64, 0, len(out))
-	for _, e := range out {
-		ids = append(ids, e.ID)
-		for _, private := range []string{"owner thinking", "owner connector rows", "Refused", "sender_email\":\"owner", `\"card\"`} {
-			if e.Role != "user" && strings.Contains(string(e.Content), private) {
-				t.Errorf("entry %d carries %q: %s", e.ID, private, e.Content)
-			}
-		}
-	}
-	// The owner's message, every card that was shown (the replaced pacing
-	// card too, as in the owner's own replay), the reply and the teammate's
-	// message: not the reasoning, the script or the refused card.
-	if want := []int64{1, 5, 6, 7, 8, 11, 12, 13, 14}; !slices.Equal(ids, want) {
-		t.Fatalf("replayed entries = %v, want %v", ids, want)
-	}
-	// The current card is replayed with its contents, and the by-reference
-	// card with the spec it was drawn from.
-	var call agent.ToolCallContent
-	if err := json.Unmarshal(out[5].Content, &call); err != nil || !strings.Contains(call.Input, `"text":"today"`) {
-		t.Errorf("the current card lost its contents: %s (err %v)", out[3].Content, err)
-	}
-	if err := json.Unmarshal(out[3].Content, &call); err != nil || !strings.Contains(call.Input, "three recs") || strings.Contains(call.Input, "from_result") {
-		t.Errorf("the by-reference card is not replayed with its spec: %s (err %v)", out[1].Content, err)
-	}
-
-	// The owner's own replay is untouched: every entry, as stored.
-	own := redactHistoryForSender(history, "owner@x.com", "owner@x.com")
-	if len(own) != len(history) || string(own[6].Content) != string(history[6].Content) {
-		t.Errorf("the owner's replay changed: %d entries", len(own))
-	}
-}
-
-// The replay for one sender only ever grows at its end: a later card that
-// replaces an earlier one removes nothing from the earlier part. The
-// compaction records a turn persists are positions in that turn's replay, so
-// a card dropping out later would make them cut in the wrong place.
-func TestReplayOfOtherSendersCardsIsAppendOnly(t *testing.T) {
-	t.Parallel()
-
-	history := make([]agent.HistoryEntry, 0, 12)
-	history = append(history,
-		userSaid(1, "owner@x.com", "build the board"),
-		cardCall(2, "v1", `{"title":"Pacing v1","panel":"pacing","components":[]}`),
-		cardShown(3, "v1"),
-		cardCall(4, "note", `{"title":"Note","components":[]}`),
-		cardShown(5, "note"),
-		userSaid(6, "mate@x.com", "what changed?"),
-		agent.HistoryEntry{ID: 7, Role: "assistant", Type: "text", Content: []byte(`{"text":"Nothing yet."}`)},
-	)
-	before := redactHistoryForSender(history, "mate@x.com", "owner@x.com")
-	history = append(history,
-		userSaid(8, "owner@x.com", "refresh"),
-		cardCall(9, "v2", `{"title":"Pacing v2","panel":"pacing","components":[]}`),
-		cardShown(10, "v2"),
-		cardCall(11, "note2", `{"title":"Note 2","replaces":"note","components":[]}`),
-		cardShown(12, "note2"),
-	)
-	after := redactHistoryForSender(history, "mate@x.com", "owner@x.com")
-	if len(after) != len(before)+5 {
-		t.Fatalf("replay grew from %d to %d entries, want %d", len(before), len(after), len(before)+5)
-	}
-	for i := range before {
-		if after[i].ID != before[i].ID || string(after[i].Content) != string(before[i].Content) {
-			t.Fatalf("entry %d of the earlier replay changed: %d -> %d", i, before[i].ID, after[i].ID)
-		}
-	}
-}
-
 // patrolCardEngine stands in for the model on a patrol turn: it records what
 // the turn was told and refreshes a panel with show_ui, as a patrol that
 // keeps a dashboard current does.
@@ -394,53 +301,5 @@ func TestCurrentConversationCardsRetiresAMovedKey(t *testing.T) {
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("cards = %+v, want %+v", got, want)
-	}
-}
-
-// The replay pairs calls with results by id alone, so a teammate's card whose
-// id one of the sender's own tool calls also has is left out of the replay
-// rather than handed the wrong result.
-func TestReplayDropsACardWhoseIDCollidesWithTheSendersCall(t *testing.T) {
-	t.Parallel()
-
-	history := []agent.HistoryEntry{
-		userSaid(1, "owner@x.com", "build the board"),
-		cardCall(2, "call_1", `{"title":"Pacing","panel":"pacing","components":[]}`),
-		cardShown(3, "call_1"),
-		cardCall(4, "call_2", `{"title":"Margin","panel":"margin","components":[]}`),
-		cardShown(5, "call_2"),
-		userSaid(6, "mate@x.com", "run the numbers"),
-		{ID: 7, Role: "assistant", Type: "tool_call", Content: []byte(`{"id":"call_1","name":"run_python","input":"{}"}`)},
-		{ID: 8, Role: "tool", Type: "tool_result", Content: []byte(`{"id":"call_1","name":"run_python","text":"42","sender_email":"mate@x.com"}`)},
-	}
-	ids := make([]int64, 0, len(history))
-	for _, e := range redactHistoryForSender(history, "mate@x.com", "owner@x.com") {
-		ids = append(ids, e.ID)
-	}
-	if want := []int64{1, 4, 5, 6, 7, 8}; !slices.Equal(ids, want) {
-		t.Fatalf("replayed entries = %v, want %v (the colliding card dropped, the other kept)", ids, want)
-	}
-}
-
-// A call from before the latest summary is not sent to the model, so it
-// cannot collide with a card drawn after it.
-func TestReplayKeepsACardWhoseIDOnlyCollidesBeforeTheSummary(t *testing.T) {
-	t.Parallel()
-
-	history := []agent.HistoryEntry{
-		userSaid(1, "owner@x.com", "run the numbers"),
-		{ID: 2, Role: "assistant", Type: "tool_call", Content: []byte(`{"id":"call_1","name":"run_python","input":"{}"}`)},
-		{ID: 3, Role: "tool", Type: "tool_result", Content: []byte(`{"id":"call_1","name":"run_python","text":"42"}`)},
-		{ID: 4, Role: "assistant", Type: "summary", Content: []byte(`{"text":"so far"}`)},
-		userSaid(5, "mate@x.com", "add a pacing panel"),
-		cardCall(6, "call_1", `{"title":"Pacing","panel":"pacing","components":[]}`),
-		cardShown(7, "call_1"),
-	}
-	kept := false
-	for _, e := range redactHistoryForSender(history, "owner@x.com", "owner@x.com") {
-		kept = kept || e.ID == 6
-	}
-	if !kept {
-		t.Error("a call from before the summary made the replay drop a teammate's later card")
 	}
 }

@@ -596,10 +596,9 @@ straight into this view.
   the panels"), and each run redraws the panels it has new figures for. In a
   [Multiplayer](#sharing-with-your-team) chat everyone sees the same panels,
   whoever's message or patrol drew them, and anyone in the chat can ask for a
-  panel to be updated or added: the assistant sees the cards that are on
-  screen, whoever asked for them, so it changes the existing panel instead of
-  adding a second one. It does not see how a teammate's card was made (their
-  tool calls and connector results stay with them).
+  panel to be updated or added: the assistant works from the whole chat,
+  including what it did on a teammate's turns, so it changes the existing
+  panel instead of adding a second one.
 - **Nothing changes about what the assistant can do.** You type, attach files,
   and answer approval cards in the chat rail exactly as before, and emails and
   other actions still wait for your approval. The status light at the top says
@@ -1474,7 +1473,7 @@ dialog). When Multiplayer mode is on:
   send messages into the shared thread.
 - Every message shows the sender's email above their bubble, and each turn runs
   under **the sender's own account** — using the sender's email, personal
-  memories, skills, per-user connector accounts, and approval cards. Because a turn's tool calls, reasoning, and token/cost summary belong to the person whose credentials ran it, turning on **Show details** shows **Turn details hidden for other users' turns** on turns started by someone else.
+  memories, skills, per-user connector accounts, and approval cards. Because a turn's tool calls, reasoning, and token/cost summary belong to the person whose credentials ran it, turning on **Show details** shows **Turn details hidden for other users' turns** on turns started by someone else. That keeps your screen clear; it is not a privacy wall. The assistant works from the whole chat, including what it fetched on a teammate's turn, and can repeat it, so turn Multiplayer mode on only with people who may see what the chat's turns bring in.
 - By default, everyone on the owner's team (or workspace) can participate. In the
   share dialog under **People who can participate**, the owner can remove
   specific people with `×`, restore removed people with `+`, or invite someone

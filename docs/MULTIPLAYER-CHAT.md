@@ -82,11 +82,11 @@ When an allowed participant submits `POST /chat` on a multiplayer conversation:
   `GET /conversations/{id}/events`. Live and replayed `queue.updated` SSE frames
   are filtered per viewer so one participant's queued drafts never overwrite
   another participant's visible queue.
-- **Working trace is the sender's, shown cards are everyone's:** another
+- **On screen, working trace is the sender's and shown cards are everyone's:** another
   sender's tool calls, tool results and reasoning are dropped from a
   participant's history read and live stream (`isPrivateTurnTraceEntry`,
-  `sanitizeTurnEventForViewer`), so connector responses stay with the person
-  whose credentials fetched them. The one exception is a card the assistant
+  `sanitizeTurnEventForViewer`), so a participant's screen is not filled with
+  the workings of turns they did not send. The one exception is a card the assistant
   showed: a `show_ui` call paired with its `UI_DISPLAYED` result
   (`sharedCardEntries`). A shown card is rendered output, like the reply text,
   and [dashboard view](DASHBOARD-VIEW.md) builds its panels from it; without
@@ -98,15 +98,22 @@ When an allowed participant submits `POST /chat` on a multiplayer conversation:
   and the web draws the card from that one frame. If the call frame is no
   longer in the replay window the card is not delivered live and arrives with
   the next history read.
-- **The assistant sees the shown cards too.** The model replay for a
-  participant's own turn (`redactHistoryForSender`) omits every other
-  sender's reasoning, tool calls and tool results, but keeps the cards the
-  conversation is showing, contents included, so anyone in the chat can ask
-  for a card to be changed and the assistant works from the card that is
-  there ([DASHBOARD-VIEW.md](DASHBOARD-VIEW.md), "Cards a turn did not draw").
-  Turning Multiplayer mode on therefore shares what the cards show with every
-  participant's assistant as well as with the participants. An in-chat patrol
-  runs as the participant who created it and gets the same replay.
+- **The assistant works from one history.** The model replay
+  (`redactHistoryForSender`) is the same for every participant, working trace
+  included: a teammate's or a patrol's tool calls, tool results and cards are
+  replayed as the sender's own are. People who share a chat share what was done
+  in it, and the assistant has to see the chart, file or query a teammate's
+  turn produced to continue from it. So the screen rule above is about clutter,
+  not secrecy: what a teammate's connector returned is not drawn on another
+  participant's screen, but the assistant has it and can say it. Turn
+  Multiplayer mode on for a chat only with people who may see what its turns
+  fetch. One replay for everyone is also what the replay machinery assumes
+  (tool results paired with calls by id, compaction records as positions in
+  the message sequence, the prompt cache as a prefix of it). What stays with
+  its sender in the replay is what only works for them: the injected context
+  of their messages (attachment paths, workspace inventory) and the images
+  they attached; and what their turns cost. An in-chat patrol runs as the
+  participant who created it and gets the same replay.
 
 ### Per-instance default (`team_chats_shared_by_default`)
 

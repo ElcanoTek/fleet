@@ -1,9 +1,6 @@
 // The cards a conversation is showing, read from its stored history
-// (docs/DASHBOARD-VIEW.md, "Cards a turn did not draw"). Two things are built
-// on it: the cards of another sender's turn that the model replay keeps
-// (redactHistoryForSender), and the list of current board panels an in-chat
-// patrol turn is given.
-// Split out of chat.go.
+// (docs/DASHBOARD-VIEW.md, "A patrol's list of the board"): the list of
+// current board panels an in-chat patrol turn is given. Split out of chat.go.
 
 package httpapi
 
@@ -185,102 +182,11 @@ func currentBoardCards(cards []shownCard) []dashboardBoardPanel {
 	return out
 }
 
-// sharedCardRef names one shown card, with the spec to replay as its call's
-// input.
-type sharedCardRef struct {
-	ordinal int
-	id      string
-	spec    string
-}
-
-// shownCardEntries maps the history index of each shown card's call and
-// result to the card. A replay keeps these entries on turns its sender did
-// not send (redactHistoryForSender). Every shown card is kept, replaced ones
-// included, exactly as a sender's replay keeps all of their own cards: the
-// replay must only ever grow at its end. The compaction records a turn
-// persists are positions in that turn's replay (agent.replayHistory), so a
-// card that dropped out of an earlier position later would make them cut in
-// the wrong place. The spec is the card as drawn: for a card drawn by
-// reference it replaces the call's input, because the result the reference
-// named is another sender's and is not replayed.
-func shownCardEntries(history []agent.HistoryEntry) map[int]sharedCardRef {
-	cards := conversationShownCards(history)
-	out := make(map[int]sharedCardRef, 2*len(cards))
-	for n, c := range cards {
-		ref := sharedCardRef{ordinal: n, id: c.id, spec: c.spec}
-		out[c.callIdx], out[c.resultIdx] = ref, ref
-	}
-	return out
-}
-
-// replayedCardEntry is one entry of another sender's card in a replay being
-// built: where it sits in the output, and which card it belongs to.
-type replayedCardEntry struct {
-	pos  int
-	card sharedCardRef
-}
-
-// dropCollidingSharedCards removes from out another sender's card whose call
-// id is also the id of a tool call the replay holds from the sender's own
-// turns since the latest summary. The replay pairs calls with results by id
-// alone (agent.replayHistory), so keeping both would hand one of them the
-// other's result. The card stays on screen; only the model's copy is
-// withheld. Its id cannot be rewritten instead, because the id is what the
-// model passes back in replaces. Withholding is the safe side of the choice:
-// the scan reads the entries before per-turn compaction is applied, so it can
-// withhold a card whose rival call a compaction later removes, and never the
-// reverse.
-func dropCollidingSharedCards(out []agent.HistoryEntry, kept []replayedCardEntry) []agent.HistoryEntry {
-	if len(kept) == 0 {
-		return out
-	}
-	foreign := make(map[int]bool, len(kept)) // positions in out
-	for _, k := range kept {
-		foreign[k.pos] = true
-	}
-	// Only calls the model will actually be sent can collide: the replay
-	// starts at the latest summary, so a call before it pairs with nothing.
-	start := 0
-	for pos := len(out) - 1; pos >= 0; pos-- {
-		if out[pos].Type == "summary" {
-			start = pos
-			break
-		}
-	}
-	ownCallIDs := make(map[string]bool)
-	for pos := start; pos < len(out); pos++ {
-		e := out[pos]
-		if foreign[pos] || e.Type != "tool_call" {
-			continue
-		}
-		var c agent.ToolCallContent
-		if json.Unmarshal(e.Content, &c) == nil {
-			ownCallIDs[c.ID] = true
-		}
-	}
-	drop := make(map[int]bool)
-	for _, k := range kept {
-		if ownCallIDs[k.card.id] {
-			drop[k.pos] = true
-		}
-	}
-	if len(drop) == 0 {
-		return out
-	}
-	trimmed := make([]agent.HistoryEntry, 0, len(out)-len(drop))
-	for pos, e := range out {
-		if !drop[pos] {
-			trimmed = append(trimmed, e)
-		}
-	}
-	return trimmed
-}
-
 // appendConversationCardsBlock names the conversation's current board cards
 // on an in-chat patrol turn. It runs unattended, often long after the turn
 // that drew a panel and after a compaction dropped that turn from its
 // context, and it carries no dashboard-view note because no browser sent it.
-// Other turns need no list: their replay holds the cards, other senders'
+// Other turns need no list: their replay holds the cards, a teammate's
 // included (redactHistoryForSender), and a dashboard-view turn brings the
 // sender's own board.
 //

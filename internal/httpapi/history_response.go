@@ -64,8 +64,8 @@ func isPrivateTurnTraceEntry(e agent.HistoryEntry) bool {
 // dashboard view builds its panels from it (docs/DASHBOARD-VIEW.md) — so every
 // participant's transcript carries it, whoever sent the turn. A call the
 // server refused (UI_INVALID) or never answered was not shown and stays with
-// its sender, raw input included. The model replay (redactHistoryForSender)
-// keeps them too (shownCardEntries).
+// its sender on screen, raw input included. (The model replay carries the
+// whole trace: redactHistoryForSender.)
 func sharedCardEntries(entries []agent.HistoryEntry) map[int]bool {
 	var shared map[int]bool
 	// call id → indexes of the show_ui calls still waiting for a result, oldest
@@ -135,20 +135,31 @@ func isShownCardResult(text string, isErr bool) bool {
 	return !isErr && strings.HasPrefix(text, "UI_DISPLAYED")
 }
 
-// redactHistoryForSender returns a shallow copy of entries with
-// InjectedContext cleared and working-trace entries (tool_call, tool_result,
-// reasoning) omitted on any turn whose sender is not callerEmail, so replaying
-// conversation history into a multiplayer participant's turn never feeds
-// another user's private attachment paths, workspace inventory, or connector
-// API responses to the model.
+// redactHistoryForSender returns the history a turn (or a summary, or an
+// export) sent by callerEmail works from. In a chat only its owner sends to,
+// that is the history as stored.
 //
-// The one part of another sender's trace the replay keeps is the cards the
-// conversation showed (shownCardEntries): the participant sees them on
-// screen, and "update that chart" has to work from the chart that is there,
-// not rebuild it. Every card that was shown is kept, as the sender's own
-// cards are, so the replay only grows at its end; a card drawn by reference
-// is replayed with the spec it was drawn from, since the result it named is
-// the other sender's and stays out.
+// In a multiplayer chat it is the same history for every participant, working
+// trace included: the tool calls, tool results and cards of a teammate's or a
+// patrol's turn are replayed exactly as the sender's own are. People who share
+// a chat share what was done in it, and the assistant has to see the chart, the
+// file and the query a teammate's turn produced to continue from them rather
+// than start again. One replay for everyone is also what the replay's own
+// machinery assumes: tool results are paired with calls by id, persisted
+// compaction records are positions in the message sequence, and the prompt
+// cache is a prefix of it — a per-sender view of the same history breaks all
+// three. (A participant's SCREEN is a separate projection, historyForParticipant.)
+//
+// What stays with its sender is what only works for that sender:
+//
+//   - InjectedContext of another sender's message: their attachment paths
+//     and workspace inventory, which name files in a private workspace
+//     subtree that is swapped out while someone else's turn runs.
+//   - Images another sender attached: the references resolve against the
+//     uploader's own uploads tree.
+//   - The cost and token figures of another sender's turn_summary. Its
+//     compaction records are kept — they are part of the replay.
+//   - sender_email on a tool result, which is bookkeeping, not content.
 func redactHistoryForSender(entries []agent.HistoryEntry, callerEmail, convOwnerEmail string) []agent.HistoryEntry {
 	if callerEmail == "" || len(entries) == 0 {
 		return entries
@@ -156,21 +167,7 @@ func redactHistoryForSender(entries []agent.HistoryEntry, callerEmail, convOwner
 	out := make([]agent.HistoryEntry, 0, len(entries))
 	currentTurnSender := strings.TrimSpace(convOwnerEmail)
 	toolCallSenders := make(map[string]string)
-	// Another sender's shown cards are appended as they are met; one whose id
-	// collides with a call of the sender's own is removed afterwards
-	// (dropCollidingSharedCards), once the replay is built.
-	currentCards := shownCardEntries(entries)
-	var kept []replayedCardEntry
-	for i, e := range entries {
-		if e.Type == "summary" && convOwnerEmail != "" && !strings.EqualFold(callerEmail, convOwnerEmail) {
-			out = append(out, agent.HistoryEntry{
-				ID:      e.ID,
-				Role:    e.Role,
-				Type:    agent.EntryTypeSummaryBoundary,
-				Content: json.RawMessage(`{}`),
-			})
-			continue
-		}
+	for _, e := range entries {
 		sender := currentTurnSender
 		var (
 			tc    agent.TextContent
@@ -211,19 +208,11 @@ func redactHistoryForSender(entries []agent.HistoryEntry, callerEmail, convOwner
 		}
 		if sender != "" && !strings.EqualFold(callerEmail, sender) {
 			if e.Type == "turn_summary" {
-				if redacted, ok := redactTurnSummaryForOtherParticipant(e.Content); ok {
-					e.Content = redacted
-					e.InjectedContext = ""
-					out = append(out, e)
+				redacted, ok := replayTurnSummaryOfOtherSender(e.Content)
+				if !ok {
+					continue
 				}
-				continue
-			}
-			if isPrivateTurnTraceEntry(e) {
-				if card, ok := currentCards[i]; ok {
-					out = append(out, replayedSharedCardEntry(e, card.spec))
-					kept = append(kept, replayedCardEntry{pos: len(out) - 1, card: card})
-				}
-				continue
+				e.Content = redacted
 			}
 			e.InjectedContext = ""
 			if hasTC && len(tc.Images) > 0 {
@@ -235,33 +224,34 @@ func redactHistoryForSender(entries []agent.HistoryEntry, callerEmail, convOwner
 		}
 		out = append(out, e)
 	}
-	return dropCollidingSharedCards(out, kept)
+	return out
 }
 
-// replayedSharedCardEntry is another sender's shown-card entry as the replay
-// carries it: the call with the spec the card was drawn from as its input,
-// the result without its sender or its display copy of that spec.
-func replayedSharedCardEntry(e agent.HistoryEntry, spec string) agent.HistoryEntry {
-	e.InjectedContext = ""
-	switch e.Type {
-	case "tool_call":
-		var c agent.ToolCallContent
-		if spec != "" && json.Unmarshal(e.Content, &c) == nil && c.Input != spec {
-			c.Input = spec
-			if b, err := json.Marshal(c); err == nil {
-				e.Content = b
-			}
-		}
-	case "tool_result":
-		var c agent.ToolResultContent
-		if json.Unmarshal(e.Content, &c) == nil && (c.Card != "" || c.SenderEmail != "") {
-			c.Card, c.SenderEmail = "", ""
-			if b, err := json.Marshal(c); err == nil {
-				e.Content = b
-			}
-		}
+// replayTurnSummaryOfOtherSender is another sender's turn_summary as a replay
+// carries it: how the turn ended and the compaction records the replay must
+// re-apply, without what the turn cost. ok is false when nothing of it
+// matters to a replay (a turn that completed with no compaction).
+func replayTurnSummaryOfOtherSender(raw json.RawMessage) (json.RawMessage, bool) {
+	var ts agent.TurnSummaryContent
+	if len(raw) == 0 || json.Unmarshal(raw, &ts) != nil {
+		return nil, false
 	}
-	return e
+	if !ts.Cancelled && ts.Failure == nil && len(ts.Compactions) == 0 {
+		return nil, false
+	}
+	redacted := agent.TurnSummaryContent{
+		Cancelled:   ts.Cancelled,
+		Model:       ts.Model,
+		Compactions: ts.Compactions,
+	}
+	if ts.Failure != nil {
+		redacted.Failure = &agent.TurnFailure{Reason: ts.Failure.Reason, Message: "Turn failed."}
+	}
+	b, err := json.Marshal(redacted)
+	if err != nil {
+		return nil, false
+	}
+	return b, true
 }
 
 func redactTurnSummaryForOtherParticipant(raw json.RawMessage) (json.RawMessage, bool) {

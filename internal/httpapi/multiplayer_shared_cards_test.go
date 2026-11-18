@@ -11,8 +11,9 @@ import (
 // A multiplayer participant's dashboard was empty on a chat whose panels the
 // owner's turns had built: the cards went out with the rest of those turns'
 // working trace. A show_ui card is what the assistant showed the conversation,
-// so every participant gets it; the rest of another sender's trace stays
-// private.
+// so every participant gets it on screen; the rest of another sender's trace
+// stays off their screen. The model replay is another matter: it is the same
+// for everyone (TestReplayIsSharedInAMultiplayerChat).
 
 func sharedCardHistory() []agent.HistoryEntry {
 	return []agent.HistoryEntry{
@@ -68,15 +69,79 @@ func TestHistoryForParticipantSharesCardsFromAnotherSendersTurn(t *testing.T) {
 	}
 }
 
-// The model replay for another participant's turn keeps the shown cards too
-// (TestReplayKeepsOtherSendersCurrentCards), and still nothing else of the
-// owner's working trace.
-func TestRedactHistoryForSenderKeepsOnlyCards(t *testing.T) {
+// The model replay is the same history for every participant of a
+// multiplayer chat, working trace included: a teammate's or a patrol's tool
+// calls, results and cards are replayed as the sender's own are, so the
+// assistant continues from the chart, file or query that is there. What stays
+// with its sender is what only works for them (injected context, images) and
+// what a turn cost.
+func TestReplayIsSharedInAMultiplayerChat(t *testing.T) {
 	t.Parallel()
 
-	for _, e := range redactHistoryForSender(sharedCardHistory(), "mate@x.com", "owner@x.com") {
-		if e.Type == "reasoning" || strings.Contains(string(e.Content), "run_python") || strings.Contains(string(e.Content), "owner connector rows") {
-			t.Errorf("replay kept a private %s entry (id %d) of another sender's turn: %s", e.Type, e.ID, e.Content)
+	history := append(sharedCardHistory(),
+		agent.HistoryEntry{ID: 10, Role: "assistant", Type: "turn_summary", Content: []byte(`{"cost_usd":1.5,"prompt_tokens":900,"model":"m","compactions":[{"head":1,"removed":2,"summary":"earlier work"}]}`)},
+		agent.HistoryEntry{ID: 11, Role: "user", Type: "text", Content: []byte(`{"text":"add last week","sender_email":"mate@x.com","images":[{"path":"a.png"}]}`), InjectedContext: "\n\n---\nmate files"},
+		agent.HistoryEntry{ID: 12, Role: "assistant", Type: "turn_summary", Content: []byte(`{"cost_usd":0.2,"prompt_tokens":100,"model":"m"}`)},
+	)
+
+	for _, caller := range []string{"mate@x.com", "owner@x.com"} {
+		out := redactHistoryForSender(history, caller, "owner@x.com")
+		byID := make(map[int64]agent.HistoryEntry, len(out))
+		for _, e := range out {
+			byID[e.ID] = e
+		}
+		// Every call, result and card of both senders' turns is there, in order.
+		for id := int64(1); id <= 9; id++ {
+			if _, ok := byID[id]; !ok {
+				t.Errorf("%s: the replay lacks entry %d", caller, id)
+			}
+		}
+		if !strings.Contains(string(byID[4].Content), "owner connector rows") || !strings.Contains(string(byID[8].Content), `\"panel\":\"recs\"`) {
+			t.Errorf("%s: a tool result or a card lost its content: %s / %s", caller, byID[4].Content, byID[8].Content)
+		}
+		if strings.Contains(string(byID[4].Content), "sender_email") {
+			t.Errorf("%s: a replayed tool result still names its sender: %s", caller, byID[4].Content)
+		}
+		// The compaction record of the owner's turn is replayed for everyone;
+		// what the turn cost is the owner's.
+		sum := string(byID[10].Content)
+		if !strings.Contains(sum, "earlier work") {
+			t.Errorf("%s: the owner's compaction record is not in the replay: %s", caller, sum)
+		}
+		if other := caller != "owner@x.com"; other && (strings.Contains(sum, "cost_usd\":1.5") || strings.Contains(sum, "900")) {
+			t.Errorf("%s: another sender's turn cost is in the replay: %s", caller, sum)
+		}
+		// Injected context and images stay with the sender they belong to.
+		ownerMsg, mateMsg := byID[1], byID[11]
+		if caller == "mate@x.com" {
+			if ownerMsg.InjectedContext != "" || mateMsg.InjectedContext == "" || !strings.Contains(string(mateMsg.Content), "a.png") {
+				t.Errorf("mate: injected context or images are wrong: owner=%q mate=%q %s", ownerMsg.InjectedContext, mateMsg.InjectedContext, mateMsg.Content)
+			}
+			if _, ok := byID[12]; !ok {
+				t.Error("mate: their own turn summary is missing")
+			}
+		} else {
+			if ownerMsg.InjectedContext == "" || mateMsg.InjectedContext != "" || strings.Contains(string(mateMsg.Content), "a.png") {
+				t.Errorf("owner: injected context or images are wrong: owner=%q mate=%q %s", ownerMsg.InjectedContext, mateMsg.InjectedContext, mateMsg.Content)
+			}
+			// A teammate's turn that completed with nothing to re-apply
+			// leaves no summary in the owner's replay.
+			if _, ok := byID[12]; ok {
+				t.Error("owner: a teammate's plain turn summary is in the replay")
+			}
+		}
+	}
+
+	// Two senders' replays are the same sequence of messages: same entries
+	// before the first one that is only one sender's own.
+	a := redactHistoryForSender(history[:10], "mate@x.com", "owner@x.com")
+	b := redactHistoryForSender(history[:10], "owner@x.com", "owner@x.com")
+	if len(a) != len(b) {
+		t.Fatalf("the two replays differ in length: %d vs %d", len(a), len(b))
+	}
+	for i := range a {
+		if a[i].ID != b[i].ID || a[i].Type != b[i].Type {
+			t.Fatalf("the two replays differ at %d: %d/%s vs %d/%s", i, a[i].ID, a[i].Type, b[i].ID, b[i].Type)
 		}
 	}
 }
