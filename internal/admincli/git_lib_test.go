@@ -107,3 +107,70 @@ git_trust_dir /srv/reset-me; git_trust_dir /srv/reset-me`)
 		t.Errorf("user.name = %q after git_trust_dir, want keep-me", got)
 	}
 }
+
+// TestGitTrustDirWorksWithoutHome — `fleet update` launched with systemd-run
+// has no HOME, so git can neither read nor write the global config that held
+// the safe.directory line, and every git call on the root-read, fleet-owned
+// client bundle died with "detected dubious ownership" (every box's bundle
+// stopped advancing on 2026-11-18 while the update still exited 0).
+// git_trust_dir must also trust DIR for the calling process through git's
+// environment config, once, and re-add it when a later empty value reset the
+// list. GIT_TEST_ASSUME_DIFFERENT_OWNER is git's own knob for exercising the
+// ownership check without a second user.
+func TestGitTrustDirWorksWithoutHome(t *testing.T) {
+	t.Parallel()
+
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	repo := t.TempDir()
+	setup := exec.Command("git", "-c", "init.defaultBranch=main", "init", "-q", repo)
+	if out, err := setup.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+	var env []string
+	for _, kv := range os.Environ() {
+		if strings.HasPrefix(kv, "HOME=") || strings.HasPrefix(kv, "XDG_CONFIG_HOME=") || strings.HasPrefix(kv, "GIT_CONFIG_") {
+			continue
+		}
+		env = append(env, kv)
+	}
+	env = append(env, "GIT_CONFIG_NOSYSTEM=1", "GIT_TEST_ASSUME_DIFFERENT_OWNER=1")
+	lib := filepath.Join(repoRootFromTest(t), "scripts", "lib", "git.sh")
+	run := func(script string) (string, error) {
+		t.Helper()
+		cmd := exec.Command("bash", "-c", "set -euo pipefail; . "+lib+"; "+script)
+		cmd.Env = env
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+
+	if out, err := run(`git -C "` + repo + `" rev-parse --git-dir`); err == nil || !strings.Contains(out, "dubious ownership") {
+		t.Fatalf("precondition: without HOME and trust, git must refuse the checkout (err=%v)\n%s", err, out)
+	}
+	out, err := run(`git_trust_dir "` + repo + `"; git_trust_dir "` + repo + `"
+git -C "` + repo + `" rev-parse --git-dir >/dev/null
+echo "count=$GIT_CONFIG_COUNT"`)
+	if err != nil {
+		t.Fatalf("git_trust_dir without HOME must leave the checkout readable: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "count=1") {
+		t.Errorf("two calls must add one environment entry, not two\n%s", out)
+	}
+
+	// An entry the caller already had, then an empty reset after it: DIR is
+	// not trusted any more, so the helper appends it again, after the reset.
+	out, err = run(`export GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0="` + repo + `" GIT_CONFIG_KEY_1=safe.directory GIT_CONFIG_VALUE_1=
+git_trust_dir "` + repo + `"
+git -C "` + repo + `" rev-parse --git-dir >/dev/null
+echo "count=$GIT_CONFIG_COUNT last=$GIT_CONFIG_VALUE_2"`)
+	if err != nil {
+		t.Fatalf("an entry undone by a later reset must be re-added: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "count=3 last="+repo) {
+		t.Errorf("want the entry re-added after the reset\n%s", out)
+	}
+}

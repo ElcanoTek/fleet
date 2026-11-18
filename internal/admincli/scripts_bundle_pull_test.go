@@ -152,3 +152,38 @@ func TestUpdateReexecPreservesBundleExplicitness(t *testing.T) {
 		t.Errorf("a re-exec'd fallback must still reconcile to the service's bundle\n--- output ---\n%s", out)
 	}
 }
+
+// TestUpdateFailsWhenTheBundlePullFails — a refused bundle pull used to be a
+// warning at the end of a run that exited 0, and the deploy agent, which
+// reads only the exit code of a `systemd-run … ; echo $? > rc` launch, took
+// four refused pulls on fleet and fleetdev (2026-11-18) for successes. A pull
+// that was attempted and did not reach the upstream must end the run with 3;
+// the deliberate holds (--no-pull, a pin, a chosen branch) must not set it.
+// The bundle must also be trusted before update.sh first reads it.
+func TestUpdateFailsWhenTheBundlePullFails(t *testing.T) {
+	t.Parallel()
+
+	body, err := os.ReadFile(filepath.Join(repoRootFromTest(t), "scripts", "update.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(body)
+	for _, want := range []string{
+		"BUNDLE_PULL_FAILED=1\n    BUNDLE_STALE_WHY=\"git pull --ff-only was refused in ${CLIENT_DIR}\"",
+		"BUNDLE_PULL_FAILED=1\n      BUNDLE_STALE_WHY=\"${CLIENT_DIR} is still ${_bundle_behind} commit(s) behind its upstream after the pull\"",
+		"BUNDLE_PULL_FAILED_EXIT=3",
+		`exit "$BUNDLE_PULL_FAILED_EXIT"`,
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("update.sh is missing %q", want)
+		}
+	}
+	if n := strings.Count(script, "BUNDLE_PULL_FAILED=1"); n != 2 {
+		t.Errorf("BUNDLE_PULL_FAILED=1 appears %d times; only the refused pull and the still-behind check may set it", n)
+	}
+	trust := strings.Index(script, "git_trust_dir \"$CLIENT_DIR\"\n  bundle_sha_before=")
+	read := strings.Index(script, `bundle_sha_before="$(git -C "$CLIENT_DIR" rev-parse HEAD`)
+	if trust < 0 || read < 0 || trust > read {
+		t.Error("the client bundle must be trusted before update.sh first reads it")
+	}
+}

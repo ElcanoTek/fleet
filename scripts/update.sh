@@ -117,6 +117,12 @@
 #                          no --check) when you want an answer as an exit code.
 #   -h | --help            this help
 #
+# Exit status: 0 = updated (a bundle held back on purpose — --no-pull, --pin, a
+# chosen branch — is a warning, not a failure); 3 = fleet was installed but the
+# client-config bundle pull failed or left it behind its upstream (the warning
+# above the exit says why); any other non-zero = the update stopped, including
+# a new release that did not become ready and was rolled back (message above).
+#
 # Re-run safe (idempotent): re-installing the release that is already live is a
 # verified no-op swap and restart; the published sandbox image is pulled only
 # when its digest changed or the service user's store lacks it; an on-box
@@ -761,8 +767,21 @@ fi
 # it in step 2 of 5 is how it goes unnoticed.
 BUNDLE_STALE=0
 BUNDLE_STALE_WHY=""
+# Set only when this run TRIED to advance the bundle and it did not move to
+# its upstream (a refused pull, or still behind after one). The deliberate holds
+# above and below (--no-pull, a pin, a branch the operator chose, a staged or
+# generic bundle) stay warnings; this one ends the run with
+# BUNDLE_PULL_FAILED_EXIT so a caller that only reads the exit code (a
+# `systemd-run … ; echo $? > rc` launch) sees it. The fleet binary is still
+# installed and live when it fires.
+BUNDLE_PULL_FAILED=0
+BUNDLE_PULL_FAILED_EXIT=3
 bundle_sha_before=""
-[[ -e "$CLIENT_DIR/.git" ]] && bundle_sha_before="$(git -C "$CLIENT_DIR" rev-parse HEAD 2>/dev/null || true)"
+if [[ -e "$CLIENT_DIR/.git" ]]; then
+  # Trusted before the first read: root reads a checkout the service user owns.
+  git_trust_dir "$CLIENT_DIR"
+  bundle_sha_before="$(git -C "$CLIENT_DIR" rev-parse HEAD 2>/dev/null || true)"
+fi
 
 step "2/5  Updating the client-config bundle"
 if [[ "$CLIENT_DIR" == "$SRC_DIR/config/default" || "$CLIENT_DIR" == "config/default" ]]; then
@@ -850,6 +869,7 @@ else
     warn "  usual causes: the checkout is on a feature branch or detached HEAD, has local edits,"
     warn "  or has commits the remote does not. Inspect: git -C ${CLIENT_DIR} status -sb"
     BUNDLE_STALE=1
+    BUNDLE_PULL_FAILED=1
     BUNDLE_STALE_WHY="git pull --ff-only was refused in ${CLIENT_DIR}"
   fi
   [[ "$_pull_err_file" != "/dev/null" ]] && rm -f "$_pull_err_file"
@@ -873,6 +893,7 @@ if [[ -e "$CLIENT_DIR/.git" ]]; then
     _bundle_behind="$(git -C "$CLIENT_DIR" rev-list --count 'HEAD..@{upstream}' 2>/dev/null || echo 0)"
     if [[ "${_bundle_behind:-0}" != "0" ]]; then
       BUNDLE_STALE=1
+      BUNDLE_PULL_FAILED=1
       BUNDLE_STALE_WHY="${CLIENT_DIR} is still ${_bundle_behind} commit(s) behind its upstream after the pull"
     fi
   fi
@@ -2030,3 +2051,8 @@ report_bundle_state
 say "  Health:    ${c_dim}fleet status${c_reset}"
 say "  Logs:      ${c_dim}journalctl -u ${SERVICE_NAME} -n 50${c_reset}"
 say "  Roll back: ${c_dim}sudo fleet release rollback${c_reset}   (swaps ${INSTALL_DIR}/fleet.prev back in, restarts, waits for /readyz)"
+if [[ "$BUNDLE_PULL_FAILED" == "1" ]]; then
+  say
+  warn "exiting ${BUNDLE_PULL_FAILED_EXIT}: fleet ${RELEASE_TAG} is live, but the client-config bundle pull failed (see above)."
+  exit "$BUNDLE_PULL_FAILED_EXIT"
+fi
