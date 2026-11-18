@@ -361,3 +361,84 @@ func TestPatrolTurnUpdatesDashboardCards(t *testing.T) {
 		t.Errorf("a patrol turn armed an auto-submit countdown: %+v", active)
 	}
 }
+
+// A refresh that moves a panel to a new key retires the old key: a later
+// card that uses the old key opens a new panel, listed after the others, as
+// the web's board places it.
+func TestCurrentConversationCardsRetiresAMovedKey(t *testing.T) {
+	t.Parallel()
+
+	history := []agent.HistoryEntry{
+		userSaid(1, "owner@x.com", "go"),
+		cardCall(2, "a", `{"title":"A","panel":"a","components":[]}`),
+		cardShown(3, "a"),
+		cardCall(4, "x", `{"title":"X","panel":"x","components":[]}`),
+		cardShown(5, "x"),
+		cardCall(6, "b", `{"title":"B","panel":"b","replaces":"a","components":[]}`),
+		cardShown(7, "b"),
+		cardCall(8, "c", `{"title":"C","panel":"a","components":[]}`),
+		cardShown(9, "c"),
+	}
+	got := currentBoardCards(conversationShownCards(history))
+	want := []dashboardBoardPanel{
+		{Title: "B", CardID: "b", Panel: "b"},
+		{Title: "X", CardID: "x", Panel: "x"},
+		{Title: "C", CardID: "c", Panel: "a"},
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("cards = %+v, want %+v", got, want)
+	}
+}
+
+// The bound on replayed cards counts other senders' cards only: the sender's
+// own cards are in their replay anyway and must not push a teammate's out.
+func TestReplayBoundCountsOnlyOtherSendersCards(t *testing.T) {
+	t.Parallel()
+
+	const own = maxReplayedSharedCards + 4
+	history := make([]agent.HistoryEntry, 0, 4+2*own)
+	history = append(history,
+		userSaid(1, "mate@x.com", "add a margin panel"),
+		cardCall(2, "margin", `{"title":"Margin","panel":"margin","components":[]}`),
+		cardShown(3, "margin"),
+		userSaid(4, "owner@x.com", "lots of one-off cards"),
+	)
+	for i := range own {
+		id := fmt.Sprintf("own%02d", i)
+		history = append(history, cardCall(int64(10+2*i), id, fmt.Sprintf(`{"title":"Own %d","components":[]}`, i)), cardShown(int64(11+2*i), id))
+	}
+	found := false
+	for _, e := range redactHistoryForSender(history, "owner@x.com", "owner@x.com") {
+		if e.ID == 2 {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("the owner's own cards used up the bound and the teammate's card was dropped")
+	}
+}
+
+// The replay pairs calls with results by id alone, so a teammate's card whose
+// id one of the sender's own tool calls also has is left out of the replay
+// rather than handed the wrong result.
+func TestReplayDropsACardWhoseIDCollidesWithTheSendersCall(t *testing.T) {
+	t.Parallel()
+
+	history := []agent.HistoryEntry{
+		userSaid(1, "owner@x.com", "build the board"),
+		cardCall(2, "call_1", `{"title":"Pacing","panel":"pacing","components":[]}`),
+		cardShown(3, "call_1"),
+		cardCall(4, "call_2", `{"title":"Margin","panel":"margin","components":[]}`),
+		cardShown(5, "call_2"),
+		userSaid(6, "mate@x.com", "run the numbers"),
+		{ID: 7, Role: "assistant", Type: "tool_call", Content: []byte(`{"id":"call_1","name":"run_python","input":"{}"}`)},
+		{ID: 8, Role: "tool", Type: "tool_result", Content: []byte(`{"id":"call_1","name":"run_python","text":"42","sender_email":"mate@x.com"}`)},
+	}
+	ids := make([]int64, 0, len(history))
+	for _, e := range redactHistoryForSender(history, "mate@x.com", "owner@x.com") {
+		ids = append(ids, e.ID)
+	}
+	if want := []int64{1, 4, 5, 6, 7, 8}; !slices.Equal(ids, want) {
+		t.Fatalf("replayed entries = %v, want %v (the colliding card dropped, the other kept)", ids, want)
+	}
+}

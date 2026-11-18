@@ -148,6 +148,12 @@ func conversationShownCards(history []agent.HistoryEntry) []shownCard {
 				card.slot = slots
 				slots++
 			}
+			// The refined card's slot moved to this key (or merged into it),
+			// so its old key names no panel any more: a later card that uses
+			// that key opens a new panel, placed as new.
+			if replaced >= 0 && cards[replaced].panel != card.panel {
+				delete(panelOwner, cards[replaced].panel)
+			}
 		case replaced >= 0 && cards[replaced].onBoard:
 			// It inherits the replaced card's slot, and its key if it had one.
 			card.onBoard, card.slot, card.panel = true, cards[replaced].slot, cards[replaced].panel
@@ -185,25 +191,97 @@ func currentBoardCards(cards []shownCard) []dashboardBoardPanel {
 	return out
 }
 
-// replayedSharedCards returns, by history index, the entries of the cards a
-// replay keeps from turns its sender did not send: the current cards, most
-// recently shown first up to maxReplayedSharedCards. For a card drawn by
-// reference the map also carries the spec to replay as the call's input,
-// because the result it referred to is another sender's and is not replayed.
-func replayedSharedCards(history []agent.HistoryEntry) map[int]string {
+// sharedCardRef names one current card by its position among the shown cards
+// (later is more recent), with the spec to replay as its call's input.
+type sharedCardRef struct {
+	ordinal int
+	id      string
+	spec    string
+}
+
+// currentSharedCardEntries maps the history index of each current card's call
+// and result to the card. A replay keeps these entries on turns its sender
+// did not send (redactHistoryForSender). The spec is the card as drawn: for a
+// card drawn by reference it replaces the call's input, because the result
+// the reference named is another sender's and is not replayed.
+func currentSharedCardEntries(history []agent.HistoryEntry) map[int]sharedCardRef {
 	cards := conversationShownCards(history)
-	keep := make(map[int]string)
-	kept := 0
-	for i := len(cards) - 1; i >= 0 && kept < maxReplayedSharedCards; i-- {
-		c := cards[i]
+	out := make(map[int]sharedCardRef, 2*len(cards))
+	for n, c := range cards {
 		if !c.current {
 			continue
 		}
-		kept++
-		keep[c.callIdx] = c.spec
-		keep[c.resultIdx] = ""
+		ref := sharedCardRef{ordinal: n, id: c.id, spec: c.spec}
+		out[c.callIdx], out[c.resultIdx] = ref, ref
 	}
-	return keep
+	return out
+}
+
+// replayedCardEntry is one entry of another sender's card in a replay being
+// built: where it sits in the output, and which card it belongs to.
+type replayedCardEntry struct {
+	pos  int
+	card sharedCardRef
+}
+
+// keepReplayedSharedCards settles which of another sender's cards a replay
+// carries, and removes the rest from out:
+//
+//   - A card whose call id is also the id of a tool call the replay holds
+//     from the sender's own turns is dropped. The replay pairs calls with
+//     results by id alone (agent.replayHistory), so keeping both would hand
+//     one of them the other's result. The card stays on screen; only the
+//     model's copy is withheld. Its id cannot be rewritten instead, because
+//     the id is what the model passes back in replaces.
+//   - Of what is left, the maxReplayedSharedCards most recently shown are
+//     kept. The bound counts other senders' cards only: the sender's own
+//     cards are in the replay regardless and use none of it.
+func keepReplayedSharedCards(out []agent.HistoryEntry, kept []replayedCardEntry) []agent.HistoryEntry {
+	if len(kept) == 0 {
+		return out
+	}
+	foreign := make(map[int]bool, len(kept)) // positions in out
+	for _, k := range kept {
+		foreign[k.pos] = true
+	}
+	ownCallIDs := make(map[string]bool)
+	for pos, e := range out {
+		if foreign[pos] || e.Type != "tool_call" {
+			continue
+		}
+		var c agent.ToolCallContent
+		if json.Unmarshal(e.Content, &c) == nil {
+			ownCallIDs[c.ID] = true
+		}
+	}
+	// kept is in history order, so its tail holds the most recent cards.
+	allowed := make(map[int]bool)
+	for i := len(kept) - 1; i >= 0; i-- {
+		card := kept[i].card
+		if ownCallIDs[card.id] || allowed[card.ordinal] {
+			continue
+		}
+		if len(allowed) == maxReplayedSharedCards {
+			break
+		}
+		allowed[card.ordinal] = true
+	}
+	drop := make(map[int]bool)
+	for _, k := range kept {
+		if !allowed[k.card.ordinal] {
+			drop[k.pos] = true
+		}
+	}
+	if len(drop) == 0 {
+		return out
+	}
+	trimmed := make([]agent.HistoryEntry, 0, len(out)-len(drop))
+	for pos, e := range out {
+		if !drop[pos] {
+			trimmed = append(trimmed, e)
+		}
+	}
+	return trimmed
 }
 
 // appendConversationCardsBlock names the conversation's current board cards

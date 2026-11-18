@@ -73,7 +73,9 @@ that work (`internal/httpapi/chat_cards_context.go`):
   from the chart that is there. Only a card that was shown and that nothing
   has replaced is kept (`conversationShownCards` follows `replaces`, panel
   keys and reused call ids by occurrence, as the web does), the most recent
-  ones up to 48. A card drawn by reference (`from_result`) is replayed with
+  ones up to 48, counting other senders' cards only. A card whose call id one
+  of the sender's own tool calls also has is left out, because the replay
+  pairs calls with results by id. A card drawn by reference (`from_result`) is replayed with
   the spec it was drawn from, because the tool result it named is the other
   sender's and stays out.
 - **A patrol turn is given the board's panels.** No browser sent it, so it has

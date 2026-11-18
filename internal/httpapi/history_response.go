@@ -156,7 +156,11 @@ func redactHistoryForSender(entries []agent.HistoryEntry, callerEmail, convOwner
 	out := make([]agent.HistoryEntry, 0, len(entries))
 	currentTurnSender := strings.TrimSpace(convOwnerEmail)
 	toolCallSenders := make(map[string]string)
-	sharedCards := replayedSharedCards(entries)
+	// Another sender's current cards are appended as they are met and trimmed
+	// afterwards (keepReplayedSharedCards): which ones stay depends on what
+	// else the replay holds, known only once it is built.
+	currentCards := currentSharedCardEntries(entries)
+	var kept []replayedCardEntry
 	for i, e := range entries {
 		if e.Type == "summary" && convOwnerEmail != "" && !strings.EqualFold(callerEmail, convOwnerEmail) {
 			out = append(out, agent.HistoryEntry{
@@ -215,8 +219,9 @@ func redactHistoryForSender(entries []agent.HistoryEntry, callerEmail, convOwner
 				continue
 			}
 			if isPrivateTurnTraceEntry(e) {
-				if spec, ok := sharedCards[i]; ok {
-					out = append(out, replayedSharedCardEntry(e, spec))
+				if card, ok := currentCards[i]; ok {
+					out = append(out, replayedSharedCardEntry(e, card.spec))
+					kept = append(kept, replayedCardEntry{pos: len(out) - 1, card: card})
 				}
 				continue
 			}
@@ -230,7 +235,7 @@ func redactHistoryForSender(entries []agent.HistoryEntry, callerEmail, convOwner
 		}
 		out = append(out, e)
 	}
-	return out
+	return keepReplayedSharedCards(out, kept)
 }
 
 // replayedSharedCardEntry is another sender's shown-card entry as the replay
