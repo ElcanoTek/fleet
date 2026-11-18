@@ -61,6 +61,29 @@ is skipped. Like every injected block it is persisted with the user message, so
 the transcript shows exactly what the model was told. Any `view` other than
 `"dashboard"` adds nothing, and `board` is ignored without it.
 
+**A patrol's list of the board.** Anyone in a chat can ask for a card to be
+changed, and a patrol can refresh one, whoever's turn drew it. In a
+[multiplayer](MULTIPLAYER-CHAT.md) chat the assistant works from the same
+history whoever is asking, tool calls, results and cards included, so "add
+last week to the pacing chart" starts from the chart that is there.
+
+A patrol turn needs one more thing. No browser sent it, so it has no `board`,
+and a long-running patrol's earlier `show_ui` calls are often compacted out of
+its context. `appendConversationCardsBlock`
+(`internal/httpapi/chat_cards_context.go`) gives it the current board cards,
+derived on the server from the stored history with the web's slot rules
+(`conversationShownCards`: the newest card of each `panel` key, a card that
+replaced a board card, and each display-only card nothing has replaced,
+followed by occurrence because a provider can reuse a call id), with the same
+update instruction per line as the board list above, bounded and sanitized
+the same way (the 24 most recently updated). A patrol in a chat with no board
+cards gets no note.
+
+`show_ui` is on a patrol turn's roster, so a patrol that re-shows a panel
+updates the board for every participant. A patrol turn never arms the
+Autonomous auto-submit countdown (`newShowUIDisplayedHandler`), and a card it
+replaces has its countdown stopped as on any other turn.
+
 **Pin, then update.** A pinned card keeps its slot when the agent refreshes it
 with `replaces`. If the refresh also gives it a `panel` key, the slot moves to
 that key and keeps its place, version count and the user's width, order and
@@ -116,7 +139,11 @@ its id. A new chat started from dashboard view stays in it.
 **Tests.** Go: the `cards.json` fixture cases (a valid panel card, a non-slug
 key, a non-string key), `TestShowUIPanelCard`, `TestShowUIRef_Panel`, and
 `TestAppendDashboardViewBlock`, `TestDashboardBoardIsListed` (keys, pinned cards,
-sanitizing, the bound) and `TestChatRequestDecodesView`. Web: `board.test.ts`
+sanitizing, the bound) and `TestChatRequestDecodesView`; for the card list,
+`TestCurrentConversationCards*`, `TestAppendConversationCardsBlock`,
+`TestReplayIsSharedInAMultiplayerChat`,
+`TestPatrolTurnUpdatesDashboardCards` (a fired patrol turn is told the cards
+and `show_ui` draws on it) and `TestManagerRunTurn_PatrolTurnOffersShowUI`. Web: `board.test.ts`
 (slotting, lineage, pins, the slot moving to a new key, removal, order, width,
 reordering, status, the manifest),
 `prefs.test.ts` (round-trip, bounds, throwing storage), and `transcript.test.ts`
@@ -151,7 +178,12 @@ themes.
   (`chat_input_queue.view_context`, migration 094) and drains with the same
   note as a direct send. A *steer* is injected into the running turn as text
   and carries none (that turn already had the note if it was sent from
-  dashboard view), and patrol and approval-resume turns carry none either.
+  dashboard view), and an approval-resume turn carries none either. A patrol
+  turn carries the server-derived card list instead ("A patrol's list of the
+  board" above), which has no order or pins.
+- **A patrol's list has no contents.** After a compaction the patrol knows
+  each panel's title, id and key from its list, not what the panel showed; it
+  redraws the panel from the run's fresh data.
 - **The board list is the sender's.** In a multiplayer chat each participant's
   board is their own arrangement, so "the second panel" means the second panel
   on the board of whoever sent the message.

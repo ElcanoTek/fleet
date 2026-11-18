@@ -598,6 +598,9 @@ func (m *Manager) buildSystemPrompt(persona string, layer *UserPersonaLayer, con
 			fmt.Fprintf(&sb, "- In this workspace, tools matching `%s` remain gated on an approval card even in **Autonomous** mode (`critical_tool_autonomous_blocked`).\n", strings.Join(blockedSuffixes, "`, `"))
 		}
 		sb.WriteString("- If `approval_mode` is `\"manual\"` or `\"auto\"` and a patrol needs unattended execution of external platform plans or writes while the owner is away, let the user know they can switch the chat to **Autonomous** in the Patrol bar or composer.\n")
+		if !agentcore.InteractiveHiddenIn(hidden, tools.ShowUIToolName) {
+			sb.WriteString("- A patrol run can draw and refresh `show_ui` cards. When a patrol should keep a dashboard current, give each panel a `panel` key now and name those keys in the patrol prompt, so every run updates the same panels instead of adding new ones.\n")
+		}
 		sb.WriteString("- Use `chat_patrol` (`action=\"list\"`, `\"update\"`, `\"pause\"`, `\"resume\"`, or `\"cancel\"`) to inspect or adjust this conversation's active patrol.\n\n")
 	}
 

@@ -704,6 +704,10 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 		fail(http.StatusInternalServerError, err)
 		return true
 	}
+	// The cards the conversation is showing are read from every sender's
+	// turns, before the replay drops the ones this sender did not send
+	// (appendConversationCardsBlock).
+	fullHistory := history
 	history = redactHistoryForSender(history, user, conv.UserEmail)
 	req.Message = s.vaultUISubmissionSecretsWithHistory(user, conv.ID, req.Message, history)
 
@@ -897,6 +901,10 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 		injected = appendMultiplayerSenderBlock(injected, conv, user)
 		injected = appendDashboardViewBlock(injected, req.View, req.Board)
 	}
+	// A patrol turn, or a turn in a multiplayer chat outside dashboard view,
+	// is told which cards the chat is showing: its own replay may not hold
+	// the turns that drew them.
+	injected = appendConversationCardsBlock(injected, req.inputKind, fullHistory)
 
 	// Lockdown model migration, at the last moment before the client can be
 	// TOLD about it: every fallible preparation above (history, memories,
@@ -1553,8 +1561,12 @@ func (s *Server) prepareTurnExecutionContext(
 	if inputKind != agent.InputKindChatPatrol {
 		availableOptional = s.availableOptionalConnectorsForUser(turnCtx, user, conv.MCPAccounts)
 		turnCtx = tools.WithEnableMCPConnectorsHandler(turnCtx, s.newEnableMCPConnectorsHandler(conv, user, buf, turnStager, availableOptional))
-		turnCtx = tools.WithShowUIDisplayedHandler(turnCtx, s.newShowUIDisplayedHandler(conv, user, inputKind, userInput, buf, turnStager, userCommitted))
 	}
+	// Wired on patrol turns too: a patrol refreshes dashboard panels with
+	// show_ui, and a card it replaces or supersedes must stop that card's
+	// countdown like any other turn's would. The handler itself never arms a
+	// countdown on a patrol turn.
+	turnCtx = tools.WithShowUIDisplayedHandler(turnCtx, s.newShowUIDisplayedHandler(conv, user, inputKind, userInput, buf, turnStager, userCommitted))
 	senderEmail := ""
 	if conv.Multiplayer || (conv.UserEmail != "" && !strings.EqualFold(conv.UserEmail, user)) {
 		senderEmail = user

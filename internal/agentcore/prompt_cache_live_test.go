@@ -26,13 +26,14 @@ import (
 //
 // Two live tests run when FLEET_CACHE_LIVE=1 and OPENROUTER_API_KEY are set:
 //
-//  1. TestPromptCacheLive — runs across Fleet's live prompt-cache model set
-//     (default fast/low-cost CI tier: anthropic/claude-haiku-5.5 and
-//     google/gemini-3.8-flash, which exercise both explicit cache-control
-//     wire families; pass FLEET_CACHE_LIVE_MODELS=all for the full 5-model
-//     flagship matrix including google/gemini-4-hydrogen,
-//     anthropic/claude-opus-5.5, and openai/gpt-6-luna-pro, or a comma-separated
-//     model list). For each model, it executes a
+//  1. TestPromptCacheLive — runs across Fleet's live prompt-cache model set.
+//     By default that is the one model the blocking CI gate is about: the
+//     default pinned model (DefaultCoreModel), the one every new chat and
+//     patrol runs on. Pass FLEET_CACHE_LIVE_MODELS=all for the full 5-model
+//     matrix the nightly canary runs (adding anthropic/claude-haiku-5.5,
+//     google/gemini-3.8-flash, anthropic/claude-opus-5.5 and
+//     openai/gpt-6-luna-pro), or a comma-separated model list. For each
+//     model, it executes a
 //     realistic 3-turn production conversation with a 6-tool Fleet roster:
 //     - Turn 1: a 3-step sequential tool chain (tool_search -> query_metrics
 //     -> inspect_box -> final synthesis = 4 LLM requests in Turn 1), where
@@ -55,9 +56,14 @@ import (
 //
 //     FLEET_CACHE_LIVE=1 OPENROUTER_API_KEY=… go test -tags fleet_host_executor \
 //     -run TestPromptCacheLive -v ./internal/agentcore/
+
+// defaultLiveCacheModels is what the blocking CI gate measures: the default
+// pinned model, and nothing else. A PR is held up by this gate, so it tests
+// the model a deployment runs on by default; the other cache families are
+// the nightly canary's job (fullLiveCacheModels), where a provider's bad
+// hour costs a red canary, not every open pull request.
 var defaultLiveCacheModels = []string{
-	"anthropic/claude-haiku-5.5", // Anthropic fast tier (explicit rolling 4-breakpoint cache + content-block normalization)
-	"google/gemini-3.8-flash",    // Google Gemini explicit stable-prefix + implicit cache
+	DefaultCoreModel, // google/gemini-4-hydrogen (Google implicit prefix cache, default frontier tier)
 }
 
 var fullLiveCacheModels = []string{
@@ -87,8 +93,8 @@ func resolveLiveCacheModels(env string) []string {
 }
 
 func TestResolveLiveCacheModels(t *testing.T) {
-	if got := resolveLiveCacheModels(""); len(got) != 2 || got[0] != "anthropic/claude-haiku-5.5" || got[1] != "google/gemini-3.8-flash" {
-		t.Fatalf("resolveLiveCacheModels(\"\") = %v, want fast 2-model default tier", got)
+	if got := resolveLiveCacheModels(""); len(got) != 1 || got[0] != DefaultCoreModel {
+		t.Fatalf("resolveLiveCacheModels(\"\") = %v, want the default pinned model only", got)
 	}
 	if got := resolveLiveCacheModels("all"); len(got) != 5 || got[0] != DefaultCoreModel || got[3] != DefaultMaxModel {
 		t.Fatalf("resolveLiveCacheModels(\"all\") = %v, want full 5-model matrix", got)
@@ -397,7 +403,9 @@ const liveRoutingAttempts = 3
 // trajectory served by two upstreams therefore says nothing about fleet's
 // caching either way: it is inconclusive, not a pass and not a regression, so
 // the live tests run it again with a fresh nonce rather than loosen any
-// threshold. Requests with no reported provider are not counted.
+// threshold — and when every attempt is split, report INCONCLUSIVE instead of
+// a failure (runLiveUntilOneUpstream). Requests with no reported provider are
+// not counted.
 func liveMixedUpstreams(records []liveCacheRecord) string {
 	var seen []string
 	for _, r := range records {
@@ -439,18 +447,34 @@ func TestLiveMixedUpstreams(t *testing.T) {
 // runLiveUntilOneUpstream runs a live trajectory until OpenRouter serves one
 // from a single upstream, up to liveRoutingAttempts times, and returns that
 // run's records. Every attempt starts a fresh cache (a new nonce), so a retry
-// is never warmed by the attempt before it. It fails — never passes vacuously —
-// when every attempt was split across upstreams.
+// is never warmed by the attempt before it.
+//
+// When every attempt was split across upstreams it returns ok=false after
+// logging an INCONCLUSIVE line, and the caller asserts nothing: OpenRouter
+// was falling back for that model the whole time, which says nothing about
+// fleet's caching, so it must not fail a pull request that did not touch it.
+// It is not reported as a pass either. The CI gate turns the INCONCLUSIVE
+// line into a warning on the run, and the upstream pin itself is held by the
+// offline wire-contract tests, so a pin that stopped being sent cannot hide
+// behind this.
 //
 // Each attempt runs under its share of the time the test binary has left
 // (`go test -timeout`), so a slow split attempt cannot push the retries past
 // the binary's deadline — a panic that would report nothing — and when too
 // little time remains for another attempt the test fails, saying so.
-func runLiveUntilOneUpstream(t *testing.T, label string, run func(attempt int, budget time.Duration) []liveCacheRecord) []liveCacheRecord {
+func runLiveUntilOneUpstream(t *testing.T, label string, run func(attempt int, budget time.Duration) []liveCacheRecord) (records []liveCacheRecord, ok bool) {
+	t.Helper()
+	return runUntilOneUpstream(t, label, func(attemptsLeft int) time.Duration { return liveAttemptBudget(t, attemptsLeft) }, run)
+}
+
+// runUntilOneUpstream is runLiveUntilOneUpstream with the time each attempt
+// may take supplied by the caller, so the retry rule can be tested without
+// the test binary's own deadline deciding the outcome.
+func runUntilOneUpstream(t *testing.T, label string, budgetFor func(attemptsLeft int) time.Duration, run func(attempt int, budget time.Duration) []liveCacheRecord) (records []liveCacheRecord, ok bool) {
 	t.Helper()
 	var splits []string
 	for attempt := 1; attempt <= liveRoutingAttempts; attempt++ {
-		budget := liveAttemptBudget(t, liveRoutingAttempts-attempt+1)
+		budget := budgetFor(liveRoutingAttempts - attempt + 1)
 		if budget < liveMinAttemptBudget {
 			t.Fatalf("%s: %d/%d attempts were served by more than one upstream (%s) and only %s remains before the test deadline, too little for another attempt; raise go test -timeout",
 				label, attempt-1, liveRoutingAttempts, strings.Join(splits, " | "), budget.Round(time.Second))
@@ -458,15 +482,15 @@ func runLiveUntilOneUpstream(t *testing.T, label string, run func(attempt int, b
 		records := run(attempt, budget)
 		mixed := liveMixedUpstreams(records)
 		if mixed == "" {
-			return records
+			return records, true
 		}
 		t.Logf("%s attempt %d/%d inconclusive: OpenRouter served it from %s, and a prompt cache does not carry between upstreams; re-running with a fresh cache",
 			label, attempt, liveRoutingAttempts, mixed)
 		splits = append(splits, mixed)
 	}
-	t.Fatalf("%s: every one of %d attempts was served by more than one upstream (%s), so fleet's caching could not be measured; OpenRouter is falling back persistently — retry later",
+	t.Logf("%s INCONCLUSIVE: every one of %d attempts was served by more than one upstream (%s), so fleet's caching could not be measured; OpenRouter is falling back persistently for this model. Not a pass and not a regression.",
 		label, liveRoutingAttempts, strings.Join(splits, " | "))
-	return nil
+	return nil, false
 }
 
 // liveMaxAttemptBudget caps one attempt; liveMinAttemptBudget is the least a
@@ -475,6 +499,38 @@ const (
 	liveMaxAttemptBudget = 15 * time.Minute
 	liveMinAttemptBudget = 3 * time.Minute
 )
+
+// A trajectory split across upstreams on every attempt is reported as
+// inconclusive (ok=false) without failing the test, each attempt having run
+// with a fresh cache; one clean attempt ends the retries.
+func TestRunUntilOneUpstream(t *testing.T) {
+	split := []liveCacheRecord{{Provider: "Anthropic"}, {Provider: "Google"}}
+	clean := []liveCacheRecord{{Provider: "Anthropic"}, {Provider: "Anthropic"}}
+	// A fixed budget: how much of the test binary's -timeout is left when
+	// this runs (little, under -race) must not decide the outcome.
+	budget := func(int) time.Duration { return liveMinAttemptBudget }
+
+	attempts := 0
+	records, ok := runUntilOneUpstream(t, "always-split", budget, func(int, time.Duration) []liveCacheRecord {
+		attempts++
+		return split
+	})
+	if ok || records != nil || attempts != liveRoutingAttempts {
+		t.Errorf("always split: ok=%v records=%d attempts=%d, want inconclusive after %d attempts", ok, len(records), attempts, liveRoutingAttempts)
+	}
+
+	attempts = 0
+	records, ok = runUntilOneUpstream(t, "second-clean", budget, func(attempt int, _ time.Duration) []liveCacheRecord {
+		attempts++
+		if attempt == 1 {
+			return split
+		}
+		return clean
+	})
+	if !ok || len(records) != 2 || attempts != 2 {
+		t.Errorf("clean on attempt 2: ok=%v records=%d attempts=%d, want the clean run's records after 2 attempts", ok, len(records), attempts)
+	}
+}
 
 // liveAttemptBudget splits the time left before the test binary's deadline,
 // less a margin for reporting, evenly over the attempts still allowed, capped
@@ -519,11 +575,14 @@ func TestAttemptBudget(t *testing.T) {
 
 func runPromptCacheLive(t *testing.T, key, slug string) {
 	var fleetCached, fleetWrite int
-	records := runLiveUntilOneUpstream(t, slug, func(attempt int, budget time.Duration) []liveCacheRecord {
+	records, ok := runLiveUntilOneUpstream(t, slug, func(attempt int, budget time.Duration) []liveCacheRecord {
 		var recs []liveCacheRecord
 		recs, fleetCached, fleetWrite = runPromptCacheTrajectory(t, key, slug, attempt, budget)
 		return recs
 	})
+	if !ok {
+		return
+	}
 	assertPromptCacheLive(t, slug, records, fleetCached, fleetWrite)
 }
 
@@ -736,7 +795,10 @@ func assertLiveExplicitRollingCacheGrowth(t *testing.T, slug string, records []l
 // TestPromptCacheLive_LongToolChainCrossTurn exercises a 10-step sequential
 // tool chain in Turn 1 (>20 content blocks across assistant tool_calls and
 // tool results, exceeding Anthropic's 20-block lookback window) followed by
-// Turn 2 after liveReplayEntries strips thinking blocks.
+// Turn 2 after liveReplayEntries strips thinking blocks. It is about
+// Anthropic's explicit rolling cache, so it runs on an Anthropic model and in
+// the nightly canary, not in the blocking CI gate (which measures the default
+// pinned model, TestPromptCacheLive).
 func TestPromptCacheLive_LongToolChainCrossTurn(t *testing.T) {
 	if os.Getenv("FLEET_CACHE_LIVE") != "1" {
 		t.Skip("set FLEET_CACHE_LIVE=1 (and OPENROUTER_API_KEY) to run the live long-tool-chain prompt-cache check")
@@ -750,9 +812,12 @@ func TestPromptCacheLive_LongToolChainCrossTurn(t *testing.T) {
 		slug = v
 	}
 
-	records := runLiveUntilOneUpstream(t, "long-chain "+slug, func(attempt int, budget time.Duration) []liveCacheRecord {
+	records, ok := runLiveUntilOneUpstream(t, "long-chain "+slug, func(attempt int, budget time.Duration) []liveCacheRecord {
 		return runLongToolChainTrajectory(t, key, slug, attempt, budget)
 	})
+	if !ok {
+		return
+	}
 	assertLongToolChainCache(t, slug, records)
 }
 

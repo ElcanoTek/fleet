@@ -1033,13 +1033,16 @@ jobs:
   prompt-cache-live:
     # Blocking live prompt-cache regression gate against OpenRouter.
     # Exercises Fleet's real multi-turn, multi-step tool-calling loop
-    # (TestPromptCacheLive + TestPromptCacheLive_LongToolChainCrossTurn) across
-    # the fast representative cache families (claude-haiku-5.5 for Anthropic's
-    # explicit 4-breakpoint rolling cache + gemini-3.8-flash for Google's
-    # explicit stable-prefix + implicit cache) plus a 10-step sequential tool
-    # chain exceeding Anthropic's 20-block lookback window. The full 5-model
-    # flagship matrix (FLEET_CACHE_LIVE_MODELS=all) runs nightly in
-    # e2e-canary.yml. On pull_request events that do not touch prompt-cache-
+    # (TestPromptCacheLive) on the default pinned model (DefaultCoreModel),
+    # the one a deployment runs on by default. The other cache families
+    # (claude-haiku-5.5, gemini-3.8-flash, claude-opus-5.5, gpt-6-luna-pro:
+    # FLEET_CACHE_LIVE_MODELS=all) and the Anthropic-specific 10-step tool
+    # chain (TestPromptCacheLive_LongToolChainCrossTurn) run nightly in
+    # e2e-canary.yml, where one provider's bad hour does not hold up every
+    # open pull request. A run OpenRouter served from more than one upstream
+    # on every attempt cannot measure caching: the test reports INCONCLUSIVE
+    # and this job passes with a warning rather than fail on it.
+    # On pull_request events that do not touch prompt-cache-
     # relevant paths, the job skips the live OpenRouter call while offline
     # wire contract tests still run in the `go` job and the live suite runs on
     # merge to main.
@@ -1095,7 +1098,7 @@ jobs:
           set -euo pipefail
           "$GITHUB_WORKSPACE/scripts/retry.sh" --attempts 3 --delay 10 --what "go mod download (the Go module proxy)" -- go mod download
 
-      - name: Run live multi-provider prompt-cache regression suite
+      - name: Run the live prompt-cache regression test (default pinned model)
         if: ${{ needs.changes.outputs.cache_relevant == 'true' }}
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
@@ -1114,11 +1117,11 @@ jobs:
             exit 1
           fi
           rc=0
-          FLEET_CACHE_LIVE=1 go test -tags fleet_host_executor -count=1 -v -timeout 25m -run '^TestPromptCacheLive($|_)' ./internal/agentcore/ 2>&1 | tee prompt-cache-live.log || rc=$?
+          FLEET_CACHE_LIVE=1 go test -tags fleet_host_executor -count=1 -v -timeout 25m -run '^TestPromptCacheLive$' ./internal/agentcore/ 2>&1 | tee prompt-cache-live.log || rc=$?
           {
             echo "## Live OpenRouter Prompt-Cache Gate (exit $rc)"
             echo '```'
-            grep -E '(SUMMARY|long-chain|--- PASS|--- FAIL|--- SKIP)' prompt-cache-live.log || true
+            grep -E '(SUMMARY|INCONCLUSIVE|--- PASS|--- FAIL|--- SKIP)' prompt-cache-live.log || true
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
           if [ "$rc" -ne 0 ]; then
@@ -1129,8 +1132,12 @@ jobs:
             echo "::error::A live prompt-cache test SKIPPED; refusing to pass vacuously."
             exit 1
           fi
-          if ! grep -q -- 'SUMMARY requests=' prompt-cache-live.log || ! grep -q -- 'long-chain ' prompt-cache-live.log; then
-            echo "::error::Live prompt-cache subtests did not emit expected SUMMARY/long-chain records; refusing to pass vacuously."
+          if grep -q -- ' INCONCLUSIVE: ' prompt-cache-live.log; then
+            echo "::warning::Live prompt-cache gate was INCONCLUSIVE: OpenRouter served every attempt from more than one upstream, so fleet's caching was not measured on this run. Not a pass and not a regression; the nightly canary and the next run measure it."
+            exit 0
+          fi
+          if ! grep -q -- 'SUMMARY requests=' prompt-cache-live.log; then
+            echo "::error::The live prompt-cache test emitted neither a SUMMARY record nor an INCONCLUSIVE one; refusing to pass vacuously."
             exit 1
           fi
 

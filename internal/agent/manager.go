@@ -1915,9 +1915,12 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 	if !enableConnectorsWired {
 		turnTools.Tools = dropToolByName(turnTools.Tools, tools.EnableMCPConnectorsToolName)
 	}
-	if in.InputKind == InputKindChatPatrol {
-		turnTools.Tools = dropToolByName(turnTools.Tools, tools.ShowUIToolName)
-	}
+	// show_ui stays on a patrol turn's roster: a patrol that re-shows a panel
+	// is how a dashboard board updates (docs/DASHBOARD-VIEW.md), and a card it
+	// draws reaches every participant of a multiplayer chat. What a patrol
+	// turn never does is arm the Autonomous auto-submit countdown — that is
+	// refused where the countdown is armed (newShowUIDisplayedHandler), not by
+	// taking the tool away.
 
 	model, providerFallbacks, err := m.modelResolver().ResolveWithFallbacks(ctx, in.Model)
 	if err != nil {
