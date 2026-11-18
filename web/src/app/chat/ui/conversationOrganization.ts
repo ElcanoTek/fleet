@@ -91,21 +91,82 @@ export function isFiltering(filter: ConversationFilter): boolean {
   return (filter.labels?.length ?? 0) > 0 || (filter.query?.trim().length ?? 0) > 0;
 }
 
+// ── Search matching (the rail's search) ──────────────────────────────────────
+// One rule for everything the rail searches by name (own chats, team chats,
+// archived chats, projects): every word of the query must appear somewhere in
+// the text, in any order, ignoring case and accents. "renewal acme" finds
+// "Acme renewal"; "resume" finds "Résumé review".
+
+// foldChar lowercases one UTF-16 unit and strips its accents. It maps one
+// unit to at most a few, and the callers below keep the index of the unit
+// each folded character came from, so a match can be marked in the original.
+function foldChar(ch: string): string {
+  return ch.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+}
+
+/** foldSearchText is the form text is compared in: lowercase, no accents. */
+export function foldSearchText(text: string): string {
+  return text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+}
+
+/** searchTokens splits a query into its folded words ([] for a blank query). */
+export function searchTokens(query: string | undefined): string[] {
+  return foldSearchText(query ?? "").split(/\s+/).filter(Boolean);
+}
+
+/** matchesSearch: every token appears in at least one of the texts. */
+export function matchesSearch(tokens: readonly string[], ...texts: readonly (string | undefined)[]): boolean {
+  if (tokens.length === 0) return true;
+  const folded = texts.map((x) => foldSearchText(x ?? ""));
+  return tokens.every((tok) => folded.some((x) => x.includes(tok)));
+}
+
+/**
+ * searchMatchRanges returns the [start, end) ranges of `text` (in its own,
+ * unfolded indices) that match any token, merged and in order — what the
+ * rail marks in a result's title.
+ */
+export function searchMatchRanges(text: string, tokens: readonly string[]): [number, number][] {
+  if (tokens.length === 0 || !text) return [];
+  // folded[i] came from text[origin[i]].
+  let folded = "";
+  const origin: number[] = [];
+  for (let i = 0; i < text.length; i++) {
+    const f = foldChar(text[i]);
+    for (let k = 0; k < f.length; k++) origin.push(i);
+    folded += f;
+  }
+  const ranges: [number, number][] = [];
+  for (const tok of tokens) {
+    for (let at = folded.indexOf(tok); at !== -1; at = folded.indexOf(tok, at + tok.length)) {
+      ranges.push([origin[at], origin[at + tok.length - 1] + 1]);
+    }
+  }
+  ranges.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const merged: [number, number][] = [];
+  for (const r of ranges) {
+    const last = merged[merged.length - 1];
+    if (last && r[0] <= last[1]) last[1] = Math.max(last[1], r[1]);
+    else merged.push([r[0], r[1]]);
+  }
+  return merged;
+}
+
 // filterConversations applies labels (AND — every selected label must be
-// present) and a case-insensitive title substring query.
+// present) and the title query (matchesSearch: every word, any order,
+// ignoring case and accents).
 export function filterConversations<T extends OrganizableConversation>(
   conversations: readonly T[],
   filter: ConversationFilter,
 ): T[] {
-  const q = filter.query?.trim().toLowerCase() ?? "";
+  const tokens = searchTokens(filter.query);
   const labels = filter.labels ?? [];
   return conversations.filter((c) => {
     if (labels.length > 0) {
       const own = c.labels ?? [];
       if (!labels.every((l) => own.includes(l))) return false;
     }
-    if (q && !c.title.toLowerCase().includes(q)) return false;
-    return true;
+    return matchesSearch(tokens, c.title);
   });
 }
 

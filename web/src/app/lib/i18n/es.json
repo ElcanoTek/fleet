@@ -5947,5 +5947,17 @@
   "1 patrol or timer in this chat": "1 patrulla o temporizador en este chat",
   "No patrols or timers in this chat.": "No hay patrullas ni temporizadores en este chat.",
   "Dismiss error": "Descartar error",
-  "Couldn't change the approval mode. Try again.": "No se pudo cambiar el modo de aprobación. Inténtalo de nuevo."
+  "Couldn't change the approval mode. Try again.": "No se pudo cambiar el modo de aprobación. Inténtalo de nuevo.",
+  "Hidden in your sidebar. Search still finds what is in it.": "Oculta en tu barra lateral. La búsqueda sigue encontrando lo que contiene.",
+  "Show it": "Mostrarla",
+  "Search results": "Resultados de búsqueda",
+  "Searching…": "Buscando…",
+  "1 result for “{0}”": "1 resultado para «{0}»",
+  "{0} results for “{1}”": "{0} resultados para «{1}»",
+  "1 result": "1 resultado",
+  "{0} results": "{0} resultados",
+  "Search looked through all your chats with the chosen labels, plus team chats and projects, including hidden and folded sections. Try fewer words, or clear the label filter.": "La búsqueda revisó todos tus chats con las etiquetas elegidas, además de los chats del equipo y los proyectos, incluidas las secciones ocultas y plegadas. Prueba con menos palabras o quita el filtro de etiquetas.",
+  "Search looked through all your chats, team chats, projects and archived chats, including hidden and folded sections. Try fewer or different words.": "La búsqueda revisó todos tus chats, los chats del equipo, los proyectos y los chats archivados, incluidas las secciones ocultas y plegadas. Prueba con menos palabras o con otras.",
+  "Try fewer or different words.": "Prueba con menos palabras o con otras.",
+  "Not searched, because it has not loaded: {0}. If this stays, reload the page.": "No se buscó en lo que aún no se ha cargado: {0}. Si sigue así, recarga la página."
 }

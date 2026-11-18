@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import type { Page, Route } from "@playwright/test";
+import AxeBuilder from "@axe-core/playwright";
 import { loginViaCookie } from "./_session";
 import { mockChatBoot } from "./_mocks";
 
@@ -107,8 +108,8 @@ test("a query filters the Projects section and breadcrumbs message hits", async 
     .waitFor({ timeout: 15_000 });
 
   await page.getByTestId("search-input").fill("python");
-  // The matching project appears as a real tree row under the Projects
-  // section (split row: expand chevron + open-home name button); the
+  // The matching project appears as a real tree row in the results' Projects
+  // group (split row: expand chevron + open-home name button); the
   // non-matching one is filtered out.
   await expect(
     page.getByRole("button", { name: "Open project Python migrations" }),
@@ -165,4 +166,101 @@ test("clicking a message hit loads that conversation", async ({ page }) => {
       .getByLabel("Conversation", { exact: true })
       .getByText("tell me about async functions"),
   ).toBeVisible({ timeout: 10_000 });
+});
+
+// Search looks everywhere, whatever the sidebar is set to show
+// (docs/SIDEBAR-SEARCH.md). The report: with Team chats folded, a search for a
+// teammate's chat showed nothing at all, and the chats looked deleted.
+const SEARCH_CHATS = [
+  { id: "c1", title: "Budget pacing review" },
+  { id: "t1", title: "Quarterly pacing plan", team_visible: true, user_email: "dana@example.com" },
+  { id: "m1", title: "Launch checklist", multiplayer: true, user_email: "lee@example.com" },
+];
+
+async function mockSearchRail(page: Page, sections: Record<string, unknown>[]) {
+  const puts: Record<string, unknown>[] = [];
+  await mockChatBoot(page, { conversations: SEARCH_CHATS });
+  await page.route("**/api/me", (r: Route) => r.fulfill({ json: { email: "e2e@example.com", role: "member" } }));
+  await page.route("**/api/projects", (r: Route) => r.fulfill({ json: { projects: [] } }));
+  await page.route("**/api/patrols", (r: Route) => r.fulfill({ json: { patrols: [] } }));
+  await page.route("**/api/search**", (r: Route) => r.fulfill({ json: { results: [], total: 0 } }));
+  let own: Record<string, unknown> | null = { version: 1, items: [], sections };
+  await page.route("**/api/sidebar", (r: Route) => {
+    if (r.request().method() === "PUT") {
+      own = r.request().postDataJSON() as Record<string, unknown>;
+      puts.push(own);
+      return r.fulfill({ json: { layout: own } });
+    }
+    return r.fulfill({ json: { layout: own, workspace_default: null } });
+  });
+  await page.goto("/chat");
+  await page.getByRole("heading", { name: /what can i help with/i }).waitFor({ timeout: 15_000 });
+  return { puts };
+}
+
+test("a search finds a teammate's chat while every section is folded", async ({ page }) => {
+  await mockSearchRail(page, [
+    { id: "team", collapsed: true },
+    { id: "projects", collapsed: true },
+    { id: "chats", collapsed: true },
+  ]);
+  // Folded: the rail lists no chats at all.
+  await expect(page.getByTestId("team-shared-conv-row")).toHaveCount(0);
+
+  await page.getByTestId("search-input").fill("pacing plan");
+  const team = page.getByTestId("search-group-team");
+  await expect(team.getByTestId("team-shared-conv-row")).toHaveCount(1);
+  await expect(team.getByTestId("team-shared-conv-row")).toContainText("Quarterly pacing plan");
+  await expect(team.locator("mark")).toHaveText(["pacing", "plan"]);
+  await expect(page.getByTestId("search-hidden-note")).toHaveCount(0);
+
+  // The keyboard reaches a result from the field, and gets back to it.
+  await page.getByTestId("search-input").press("ArrowDown");
+  await expect(page.getByTestId("search-results").locator("[data-rail-row]").first()).toBeFocused();
+  await page.keyboard.press("ArrowUp");
+  await expect(page.getByTestId("search-input")).toBeFocused();
+
+  const results = await new AxeBuilder({ page }).include('[data-testid="search-results"]').analyze();
+  expect(results.violations).toEqual([]);
+
+  // Clearing the search gives the folded rail back.
+  await page.getByRole("button", { name: "Clear search" }).click();
+  await expect(page.getByTestId("search-results")).toHaveCount(0);
+  await expect(page.getByTestId("team-chats-section")).toBeVisible();
+});
+
+test("a search finds chats in a hidden section, says so, and can bring it back", async ({ page }) => {
+  const { puts } = await mockSearchRail(page, [
+    { id: "projects" },
+    { id: "chats" },
+    { id: "team", hidden: true },
+  ]);
+  await expect(page.getByTestId("team-chats-section")).toHaveCount(0);
+
+  // By whose chat it is, too.
+  await page.getByTestId("search-input").fill("lee");
+  const team = page.getByTestId("search-group-team");
+  await expect(team.getByTestId("team-shared-conv-row")).toContainText("Launch checklist");
+  await expect(team.getByTestId("search-hidden-note")).toBeVisible();
+
+  await team.getByRole("button", { name: "Show Team chats in the sidebar" }).click();
+  await expect(team.getByTestId("search-hidden-note")).toHaveCount(0);
+  // The choice is saved to the account, with only that section changed.
+  await expect.poll(() => puts.length).toBeGreaterThan(0);
+  const saved = puts.at(-1)?.sections as { id: string; hidden?: boolean }[];
+  expect(saved.find((x) => x.id === "team")?.hidden).toBeFalsy();
+
+  await page.getByTestId("search-input").fill("");
+  await expect(page.getByTestId("team-chats-section")).toBeVisible();
+});
+
+test("a search with no match says where it looked and offers to clear", async ({ page }) => {
+  await mockSearchRail(page, [{ id: "projects" }, { id: "chats" }, { id: "team" }]);
+  await page.getByTestId("search-input").fill("zebra");
+  const empty = page.getByTestId("search-empty");
+  await expect(empty).toContainText("Nothing matches “zebra”.");
+  await expect(empty).toContainText("including hidden and folded sections");
+  await empty.getByRole("button", { name: "Clear search" }).click();
+  await expect(page.getByTestId("search-input")).toHaveValue("");
+  await expect(page.getByTestId("search-input")).toBeFocused();
 });

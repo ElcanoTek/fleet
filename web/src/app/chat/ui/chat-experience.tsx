@@ -6552,6 +6552,15 @@ export function ChatExperience({
     refreshConversationsRef.current = refreshConversations;
     loadMcpServerCatalogPreviewRef.current = loadMcpServerCatalogPreview;
   });
+  // The rail's search looks in every list (docs/SIDEBAR-SEARCH.md), and the
+  // archived one is not read with the boot: the first search reads it (the
+  // same refresh re-reads the team lists, so one that failed gets another
+  // try). Once per search, not per keystroke; a read that fails is retried
+  // by the next search, and meanwhile the rail says what it could not see.
+  const railSearching = sidebarQuery.trim().length > 0;
+  useEffect(() => {
+    if (railSearching && bootstrapped && !archivedLoaded) void refreshConversationsRef.current();
+  }, [railSearching, bootstrapped, archivedLoaded]);
 
   // ── mount effects, hoisted below their callback dependencies ────────────
   // These three effects all kick off work via callbacks declared above

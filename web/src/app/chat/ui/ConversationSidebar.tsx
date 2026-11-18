@@ -36,7 +36,11 @@ import {
   addLabel as addLabelTo,
   canAddLabel,
   deriveLabels,
+  filterConversations,
   isFiltering as computeIsFiltering,
+  matchesSearch,
+  searchMatchRanges,
+  searchTokens,
   pinnedUnfiled,
   projectGroups,
   railProjectEmptyState,
@@ -55,9 +59,10 @@ import { teamLinkUrl } from "./teamSharing";
 import { copyText } from "@/app/shared/lib/clipboard";
 import { ChatReorderList } from "./ChatReorderList";
 import { AddToSidebarItem } from "@/app/shared/sidebar/AddToSidebarItem";
-import { sectionOf, type SectionId } from "@/app/shared/sidebar/layout";
-import { useSidebar } from "@/app/shared/sidebar/store";
-import { SidebarTargetsContext, type SidebarTargets } from "@/app/shared/sidebar/targets";
+import { sectionOf, updateSection, type SectionId } from "@/app/shared/sidebar/layout";
+import { updateSidebarLayout, useSidebar } from "@/app/shared/sidebar/store";
+import { SidebarTargetsContext, usePatrolIds, type SidebarTargets } from "@/app/shared/sidebar/targets";
+import { useCanCustomize } from "@/app/shared/sidebar/useCanCustomize";
 
 // ── Sealed-chat button + explainer tooltip ───────────────────────────────────
 // The icon-only "new sealed chat" lock lives in the Temporary section's
@@ -973,8 +978,17 @@ function ConvRow({
   onCancelRename,
   kebab,
   onDragStart,
+  titleNode,
+  context,
+  tag,
 }: {
   conversation: ConversationSummary;
+  // Search results only: the title with the matched words marked, the place
+  // the chat lives (its project's name) and a kind tag ("Patrol"). A result
+  // is shown out of its section, so the row says where it belongs.
+  titleNode?: ReactNode;
+  context?: string;
+  tag?: string;
   active: boolean;
   // focused = the keyboard j/k cursor is on this row (distinct from active =
   // the open conversation). Renders a ring so the cursor is visible.
@@ -1049,6 +1063,7 @@ function ConvRow({
         <button
           type="button"
           aria-pressed={selecting ? checked : undefined}
+          data-rail-row=""
           className={[
             "block w-full min-w-0 rounded-md py-2 pl-[0.55rem] pr-9 text-left text-[0.875rem] transition any-pointer-coarse:min-h-11",
             selecting && checked
@@ -1113,7 +1128,13 @@ function ConvRow({
                 <ShareGlyph className="size-3 shrink-0 text-[var(--color-accent)]" />
               </span>
             ) : null}
-            <span className="block truncate">{conversation.title}</span>
+            <span className="block min-w-0 truncate">
+              {context ? (
+                <span className="text-[var(--color-text-muted)]">{context} › </span>
+              ) : null}
+              {titleNode ?? conversation.title}
+            </span>
+            {tag ? <ResultTag>{tag}</ResultTag> : null}
             {conversation.lockdown ? (
               <span
                 aria-label={tr("Sealed chat")}
@@ -1150,6 +1171,87 @@ function ConvRow({
         </div>
       ) : null}
     </div>
+  );
+}
+
+// ── Search results (the rail's unified search) ──────────────────────────────
+// A small pill naming what a result is or where it lives ("Patrol",
+// "Archived"): a result is shown out of its section, so it says so itself.
+function ResultTag({ children }: { children: ReactNode }) {
+  return (
+    <span className="shrink-0 rounded-full border border-[var(--color-border)] px-1.5 py-px text-[0.62rem] font-medium text-[var(--color-text-muted)]">
+      {children}
+    </span>
+  );
+}
+
+// The matched words of a result's title.
+const MARK_CLASS =
+  "rounded-[2px] bg-[color-mix(in_srgb,var(--color-accent)_25%,transparent)] text-[var(--color-text-primary)]";
+
+function markMatches(text: string, tokens: readonly string[]): ReactNode {
+  const ranges = searchMatchRanges(text, tokens);
+  if (ranges.length === 0) return text;
+  const nodes: ReactNode[] = [];
+  let last = 0;
+  for (const [start, end] of ranges) {
+    if (start > last) nodes.push(text.slice(last, start));
+    nodes.push(
+      <mark key={start} className={MARK_CLASS}>
+        {text.slice(start, end)}
+      </mark>,
+    );
+    last = end;
+  }
+  if (last < text.length) nodes.push(text.slice(last));
+  return nodes;
+}
+
+// One group of results, under the name of the sidebar section its rows come
+// from. When the person has hidden that section, the group says so — the
+// reason these chats are nowhere else in the rail — and offers to bring the
+// section back (to an account that may change its sidebar).
+function SearchGroup({
+  testId,
+  title,
+  count,
+  hidden,
+  onShow,
+  children,
+}: {
+  testId: string;
+  title: string;
+  count: number;
+  hidden?: boolean;
+  onShow?: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <section data-testid={testId} aria-label={title} className="mb-2">
+      <div className="flex items-center gap-1.5 px-2 pb-1 pt-1.5 text-[0.68rem] font-semibold uppercase tracking-[0.08em] text-[var(--color-text-muted)]">
+        <span className="min-w-0 truncate">{title}</span>
+        <span className="font-[family-name:var(--font-code)] font-normal tabular-nums">{count}</span>
+      </div>
+      {hidden ? (
+        <p
+          data-testid="search-hidden-note"
+          className="mx-2 mb-1 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md bg-[var(--color-overlay-soft)] px-2 py-1 text-[0.72rem] text-[var(--color-text-secondary)]"
+        >
+          <span className="min-w-0 flex-1">{tr("Hidden in your sidebar. Search still finds what is in it.")}</span>
+          {onShow ? (
+            <button
+              type="button"
+              className="shrink-0 rounded px-1 font-semibold text-[var(--color-accent)] underline decoration-dotted underline-offset-2 transition hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] any-pointer-coarse:min-h-11"
+              aria-label={tr("Show {0} in the sidebar", [title])}
+              onClick={onShow}
+            >
+              {tr("Show it")}
+            </button>
+          ) : null}
+        </p>
+      ) : null}
+      {children}
+    </section>
   );
 }
 
@@ -1432,12 +1534,20 @@ export function ConversationSidebar({
   // over message content, 300ms debounce). null = no query / search
   // disabled server-side / fetch failed — the "In messages" group simply
   // doesn't render; the title filter still works.
-  const [contentResults, setContentResults] = useState<SearchResult[] | null>(
+  // contentFor is the query the current answer belongs to: until it matches
+  // what is typed, the message search is still on its way (the empty state
+  // says "searching" rather than "nothing matches").
+  const [contentResults, setContentResultsRaw] = useState<SearchResult[] | null>(
     null,
   );
+  const [contentFor, setContentFor] = useState("");
   useEffect(() => {
     const q = sidebarQuery.trim();
     let cancelled = false;
+    const setContentResults = (results: SearchResult[] | null) => {
+      setContentResultsRaw(results);
+      setContentFor(q);
+    };
     // Every setState happens inside the timer callback, never synchronously
     // in the effect body (the React compiler lint's cascading-render rule);
     // a too-short query clears immediately via a 0ms timer for the same
@@ -1563,11 +1673,30 @@ export function ConversationSidebar({
   // Unified-search derivations: project names matching the query, and
   // content hits deduped against conversations the title filter already
   // shows (a chat matching both ways should appear once).
-  const queryLower = sidebarQuery.trim().toLowerCase();
+  const trimmedQuery = sidebarQuery.trim();
+  const tokens = useMemo(() => searchTokens(trimmedQuery), [trimmedQuery]);
   const matchingProjects = useMemo(
-    () => (searching ? projects.filter((p) => p.name.toLowerCase().includes(queryLower)) : []),
-    [searching, projects, queryLower],
+    () => (searching ? projects.filter((p) => matchesSearch(tokens, p.name)) : []),
+    [searching, projects, tokens],
   );
+  // Search looks everywhere, whatever the sidebar shows: teammates' chats
+  // (by title or by whose they are) and archived chats are matched here, the
+  // person's own in filteredConversations. A hidden or folded section never
+  // hides a result (docs/SIDEBAR-SEARCH.md).
+  const teamMatches = useMemo(
+    () => (searching ? teamSharedConversations.filter((c) => matchesSearch(tokens, c.title, c.user_email)) : []),
+    [searching, teamSharedConversations, tokens],
+  );
+  const archivedMatches = useMemo(
+    () => (searching ? filterConversations(archivedConversations, { labels: filterLabels, query: trimmedQuery }) : []),
+    [searching, archivedConversations, filterLabels, trimmedQuery],
+  );
+  // Which chats are patrols, read once the first search starts, so a result
+  // can say so.
+  const patrolIds = usePatrolIds(searching);
+  const canCustomize = useCanCustomize();
+  const showSection = (id: SectionId) =>
+    canCustomize ? () => updateSidebarLayout((l) => updateSection(l, id, { hidden: false })) : undefined;
   // The Projects SECTION's tree: every project, or — while searching — the
   // name matches, as normal expandable tree rows (results live under their
   // real heading, not in an ad-hoc group inside the Chats list). Only the tree
@@ -1580,10 +1709,16 @@ export function ConversationSidebar({
         : projectGroups(conversations, projects, Number.POSITIVE_INFINITY, chatOrders),
     [searching, conversations, matchingProjects, projects, chatOrders],
   );
-  const shownIds = new Set(filteredConversations.map((c) => c.id));
-  const messageHits = searching
-    ? (contentResults ?? []).filter((r) => !shownIds.has(r.conversation_id))
-    : [];
+  const shownIds = new Set([
+    ...filteredConversations.map((c) => c.id),
+    ...archivedMatches.map((c) => c.id),
+  ]);
+  // Only the answer to what is typed now: while a new query's answer is on
+  // its way, the previous query's hits are not shown, counted or opened.
+  const messageHits =
+    searching && contentFor === sidebarQuery.trim()
+      ? (contentResults ?? []).filter((r) => !shownIds.has(r.conversation_id))
+      : [];
 
   const selecting = selectMode;
   const largeSelection = selectedIds.size > 50;
@@ -1631,10 +1766,17 @@ export function ConversationSidebar({
     />
   );
 
-  const renderRow = (conversation: ConversationSummary) => (
+  const renderRowIn = (conversation: ConversationSummary, inResults: boolean) => (
     <ConvRow
       key={conversation.id}
       conversation={conversation}
+      titleNode={inResults ? markMatches(conversation.title, tokens) : undefined}
+      context={
+        inResults && conversation.project_id
+          ? projects.find((p) => p.id === conversation.project_id)?.name
+          : undefined
+      }
+      tag={inResults && patrolIds.has(conversation.id) ? tr("Patrol") : undefined}
       active={activeConversationId === conversation.id}
       focused={focusedConversationId === conversation.id}
       streaming={streamingConvs.has(conversation.id)}
@@ -1656,50 +1798,16 @@ export function ConversationSidebar({
       }
     />
   );
+  const renderRow = (conversation: ConversationSummary) => renderRowIn(conversation, false);
+  const renderResultRow = (conversation: ConversationSummary) => renderRowIn(conversation, true);
 
   // Projects section (#509 follow-up): every project, pinned first, as
   // expandable groups inside the section's own scroller; each project row is also the drop target for a
   // conversation drag. The header always renders — its + creates a project
   // (opens the modal straight on the new-project form), and each row's kebab
   // (where the chat count used to be) carries edit/rename/delete.
-  const projectsSection = (
-    <div className="mb-1">
-      <div className="flex items-center gap-1">
-        <div className="min-w-0 flex-1">
-          <SectionToggle
-            icon="briefcase"
-            label={projectsSec.label || tr("Projects")}
-            open={projectsSectionOpen}
-            onToggle={() => setProjectsSectionOpen((o) => !o)}
-          />
-        </div>
-        <PortalTipIconButton
-          tip="Create project"
-          ariaLabel={tr("Create project")}
-          icon="plus"
-          iconClassName="size-4"
-          className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-[var(--color-text-muted)] transition motion-safe:hover:scale-110 hover:bg-[var(--color-status-success-bg)] hover:text-[var(--color-status-success-fg)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
-          onClick={onCreateProject}
-        />
-      </div>
-      {projectsSectionOpen ? (
-        visibleProjectTree.length === 0 ? (
-          searching ? (
-            <p className="px-2 py-1.5 text-[0.78rem] text-[var(--color-text-muted)]">
-              {tr("No matching projects.")}
-            </p>
-          ) : (
-            <button
-              type="button"
-              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[0.82rem] text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)]"
-              onClick={onCreateProject}
-            >
-              <Icon name="plus" className="size-3.5 shrink-0" />
-              {tr("New project…")}
-            </button>
-          )
-        ) : (
-          visibleProjectTree.map(({ project, chats }) => {
+  const projectTreeRows = (
+visibleProjectTree.map(({ project, chats }) => {
             const expanded = expandedProjects.has(project.id);
             const dropReady = dragOverProject === project.id;
             // Team sharing, on the row itself. Until now the only tell was
@@ -1818,6 +1926,7 @@ export function ConversationSidebar({
                       <button
                         type="button"
                         aria-label={tr("Open project {0}", [project.name])}
+                        data-rail-row=""
                         className={[
                           "flex min-w-0 flex-1 items-center gap-2 rounded-md py-1.5 pl-1 pr-2 text-[0.875rem] transition focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]",
                           dropReady
@@ -1953,6 +2062,45 @@ export function ConversationSidebar({
               </div>
             );
           })
+  );
+  const projectsSection = (
+    <div className="mb-1">
+      <div className="flex items-center gap-1">
+        <div className="min-w-0 flex-1">
+          <SectionToggle
+            icon="briefcase"
+            label={projectsSec.label || tr("Projects")}
+            open={projectsSectionOpen}
+            onToggle={() => setProjectsSectionOpen((o) => !o)}
+          />
+        </div>
+        <PortalTipIconButton
+          tip="Create project"
+          ariaLabel={tr("Create project")}
+          icon="plus"
+          iconClassName="size-4"
+          className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-[var(--color-text-muted)] transition motion-safe:hover:scale-110 hover:bg-[var(--color-status-success-bg)] hover:text-[var(--color-status-success-fg)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+          onClick={onCreateProject}
+        />
+      </div>
+      {projectsSectionOpen ? (
+        visibleProjectTree.length === 0 ? (
+          searching ? (
+            <p className="px-2 py-1.5 text-[0.78rem] text-[var(--color-text-muted)]">
+              {tr("No matching projects.")}
+            </p>
+          ) : (
+            <button
+              type="button"
+              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[0.82rem] text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)]"
+              onClick={onCreateProject}
+            >
+              <Icon name="plus" className="size-3.5 shrink-0" />
+              {tr("New project…")}
+            </button>
+          )
+        ) : (
+          projectTreeRows
         )
       ) : null}
     </div>
@@ -2054,7 +2202,7 @@ export function ConversationSidebar({
 
   // The Projects section with its divider, placed above or below the chats
   // as the person's layout orders the sections (hidden when they hid it).
-  const projectsBlock = projectsSec.hidden ? null : projectsFirst ? (
+  const projectsBlock = projectsSec.hidden || searching ? null : projectsFirst ? (
     <>
       {/* Projects section — ABOVE the New-chat row (the rail's primary nav
           block). Wide-collapsed (≥sm) it hides with the rest of the wide-only
@@ -2104,6 +2252,128 @@ export function ConversationSidebar({
     </>
   );
 
+  // One Archived row: in the collapsible section, and in the search results.
+  const renderArchivedRow = (conversation: ConversationSummary, inResults: boolean) => (
+                    <div
+                      key={conversation.id}
+                      className={[
+                        "group relative rounded-md transition",
+                        activeConversationId === conversation.id
+                          ? "bg-[var(--rail-active)]"
+                          : "hover:bg-[var(--rail-hover)]",
+                      ].join(" ")}
+                    >
+                      <button
+                        type="button"
+                        data-rail-row=""
+                        className="block w-full min-w-0 rounded-md py-1.5 pl-3 pr-20 text-left text-[0.8125rem] text-[var(--color-text-muted)] transition hover:text-[var(--color-text-secondary)] any-pointer-coarse:min-h-11 any-pointer-coarse:pr-28"
+                        onClick={() => void loadConversation(conversation.id)}
+                      >
+                        <span className="block truncate italic">
+                          {inResults ? markMatches(conversation.title, tokens) : conversation.title}
+                        </span>
+                      </button>
+                      <div className={`absolute inset-y-0 right-1 flex items-center gap-1 transition any-pointer-coarse:gap-4 ${ROW_ACTIONS_REVEAL}`}>
+                        <button
+                          type="button"
+                          aria-label={tr("Unarchive {0}", [conversation.title])}
+                          data-tip-top="Unarchive"
+                          className="hit-area-touch inline-flex size-10 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-strong)] hover:text-[var(--color-text-primary)] sm:size-7"
+                          onClick={() =>
+                            void toggleArchive(conversation, false)
+                          }
+                        >
+                          <svg
+                            aria-hidden="true"
+                            viewBox="0 0 24 24"
+                            className="size-3.5"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth={1.8}
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          >
+                            <rect x="3" y="4" width="18" height="4" rx="1" />
+                            <path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8" />
+                            <path d="M12 18v-6" />
+                            <path d="M9.5 14.5 12 12l2.5 2.5" />
+                          </svg>
+                        </button>
+                        <button
+                          type="button"
+                          aria-label={tr("Delete {0}", [conversation.title])}
+                          data-tip-top="Delete"
+                          className="hit-area-touch inline-flex size-10 items-center justify-center rounded-md text-[var(--color-text-muted)] transition motion-safe:hover:scale-110 hover:bg-[var(--color-status-error-bg)] hover:text-[var(--color-status-error-fg)] sm:size-7"
+                          onClick={() =>
+                            setPendingDeleteConversation({
+                              id: conversation.id,
+                              title: conversation.title,
+                            })
+                          }
+                        >
+                          <Icon name="trash" className="size-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  );
+
+  // One Team chats row: in the section, and in the search results (where the
+  // title's matched words are marked).
+  const renderTeamRow = (c: ConversationSummary, inResults: boolean) => {
+                        const active = activeConversationId === c.id;
+                        const ownerShort = c.user_email
+                          ? c.user_email.split("@")[0]
+                          : "";
+                        return (
+                          <div key={c.id} className="group relative">
+                          <button
+                            type="button"
+                            data-testid="team-shared-conv-row"
+                            data-rail-row=""
+                            className={[
+                              "flex w-full min-w-0 items-center gap-1.5 rounded-md py-1.5 pl-2 pr-10 text-left text-[0.84rem] transition any-pointer-coarse:min-h-11 any-pointer-coarse:pr-12",
+                              active
+                                ? "bg-[var(--rail-active)] text-[var(--color-text-primary)]"
+                                : "text-[var(--color-text-secondary)] hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)]",
+                            ].join(" ")}
+                            onClick={() => {
+                              setSidebarOpen(false);
+                              if (onSelectTeamSharedConversation) {
+                                onSelectTeamSharedConversation(c);
+                              } else {
+                                void loadConversation(c.id);
+                              }
+                            }}
+                            title={
+                              c.user_email
+                                ? `${c.title} (${c.user_email})`
+                                : c.title
+                            }
+                          >
+                            <TeamGlyph className="size-3 shrink-0 text-[var(--color-accent)]" />
+                            <span className="min-w-0 flex-1 truncate">
+                              {inResults ? markMatches(c.title, tokens) : c.title}
+                            </span>
+                            {c.multiplayer ? (
+                              <span className="shrink-0 rounded-full bg-[color-mix(in_srgb,var(--color-accent)_16%,transparent)] px-1.5 py-px text-[0.62rem] font-medium text-[var(--color-accent)]">
+                                {tr("Live")}
+                              </span>
+                            ) : null}
+                            {ownerShort ? (
+                              // Shortens, never pushes: a long mailbox name
+                              // ran out of the row and over the sidebar edge.
+                              <span className="max-w-[45%] min-w-0 shrink truncate font-[family-name:var(--font-code)] text-[0.66rem] text-[var(--color-text-muted)]">
+                                {ownerShort}
+                              </span>
+                            ) : null}
+                          </button>
+                          <div className="absolute inset-y-0 right-1 flex items-center">
+                            <TeamChatKebab conversation={c} />
+                          </div>
+                          </div>
+                        );
+                      };
+
   // Teammates' shared and multiplayer chats, above or below the person's own
   // chats as their layout orders the sections.
   const teamBlock =
@@ -2127,59 +2397,7 @@ export function ConversationSidebar({
                     onToggle={() => setTeamChatsOpen((o) => !o)}
                   />
                   {teamChatsOpen
-                    ? teamSharedConversations.map((c) => {
-                        const active = activeConversationId === c.id;
-                        const ownerShort = c.user_email
-                          ? c.user_email.split("@")[0]
-                          : "";
-                        return (
-                          <div key={c.id} className="group relative">
-                          <button
-                            type="button"
-                            data-testid="team-shared-conv-row"
-                            className={[
-                              "flex w-full min-w-0 items-center gap-1.5 rounded-md py-1.5 pl-2 pr-10 text-left text-[0.84rem] transition any-pointer-coarse:min-h-11 any-pointer-coarse:pr-12",
-                              active
-                                ? "bg-[var(--rail-active)] text-[var(--color-text-primary)]"
-                                : "text-[var(--color-text-secondary)] hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)]",
-                            ].join(" ")}
-                            onClick={() => {
-                              setSidebarOpen(false);
-                              if (onSelectTeamSharedConversation) {
-                                onSelectTeamSharedConversation(c);
-                              } else {
-                                void loadConversation(c.id);
-                              }
-                            }}
-                            title={
-                              c.user_email
-                                ? `${c.title} (${c.user_email})`
-                                : c.title
-                            }
-                          >
-                            <TeamGlyph className="size-3 shrink-0 text-[var(--color-accent)]" />
-                            <span className="min-w-0 flex-1 truncate">
-                              {c.title}
-                            </span>
-                            {c.multiplayer ? (
-                              <span className="shrink-0 rounded-full bg-[color-mix(in_srgb,var(--color-accent)_16%,transparent)] px-1.5 py-px text-[0.62rem] font-medium text-[var(--color-accent)]">
-                                {tr("Live")}
-                              </span>
-                            ) : null}
-                            {ownerShort ? (
-                              // Shortens, never pushes: a long mailbox name
-                              // ran out of the row and over the sidebar edge.
-                              <span className="max-w-[45%] min-w-0 shrink truncate font-[family-name:var(--font-code)] text-[0.66rem] text-[var(--color-text-muted)]">
-                                {ownerShort}
-                              </span>
-                            ) : null}
-                          </button>
-                          <div className="absolute inset-y-0 right-1 flex items-center">
-                            <TeamChatKebab conversation={c} />
-                          </div>
-                          </div>
-                        );
-                      })
+                    ? teamSharedConversations.map((c) => renderTeamRow(c, false))
                     : null}
                 </div>
     ) : null;
@@ -2189,7 +2407,8 @@ export function ConversationSidebar({
   // scrolling on its own like Projects — never inside the Chats list, so
   // folding Chats does not hide them.
   const teamAboveProjects = sectionIndex("team") < sectionIndex("projects");
-  const teamTop = teamBlock ? (
+  // While searching, the sections step aside for one list of results (below).
+  const teamTop = teamBlock && !searching ? (
     <div
       className={[
         "max-h-[30vh] shrink-0 overflow-y-auto overflow-x-hidden",
@@ -2199,6 +2418,190 @@ export function ConversationSidebar({
       {teamBlock}
     </div>
   ) : null;
+
+  // ── Search results ─────────────────────────────────────────────────────────
+  // One list for the whole query, in place of the sections: the person's own
+  // chats, teammates' chats, projects, archived chats and message hits, each
+  // group under the name of the section it comes from. It ignores what the
+  // sidebar is set to show: a hidden or folded section is exactly where a
+  // chat "goes missing", and search is how people look for it.
+  const sectionLabel = (id: SectionId, fallback: string) => sectionOf(railLayout, id).label || fallback;
+  const messageSearchPending = trimmedQuery.length >= 2 && contentFor !== trimmedQuery;
+  const resultCount =
+    filteredConversations.length +
+    teamMatches.length +
+    matchingProjects.length +
+    archivedMatches.length +
+    messageHits.length;
+  // The lists search could not look in: each is read on its own after the
+  // boot, and a read still on its way (or one that failed) leaves its flag
+  // down. Search then says which lists it did not see, instead of claiming
+  // it looked everywhere.
+  const unreadLists = [
+    teamSharedLoaded ? null : sectionLabel("team", tr("Team chats")),
+    projectsLoaded ? null : sectionLabel("projects", tr("Projects")),
+    archivedLoaded ? null : tr("Archived"),
+  ].filter((x): x is string => x !== null);
+  const openMessageHit = (id: string) => {
+    const team = teamSharedConversations.find((c) => c.id === id);
+    if (team && onSelectTeamSharedConversation) onSelectTeamSharedConversation(team);
+    else void loadConversation(id);
+  };
+  const searchResults = (
+    <div data-testid="search-results" role="region" aria-label={tr("Search results")}>
+      <p role="status" className="sr-only">
+        {resultCount === 0
+          ? messageSearchPending
+            ? tr("Searching…")
+            : tr("Nothing matches “{0}”.", [trimmedQuery])
+          : resultCount === 1
+            ? tr("1 result for “{0}”", [trimmedQuery])
+            : tr("{0} results for “{1}”", [resultCount, trimmedQuery])}
+      </p>
+      {resultCount === 0 ? (
+        messageSearchPending ? (
+          <p className="px-2 py-1.5 text-[0.82rem] text-[var(--color-text-muted)]">{tr("Searching…")}</p>
+        ) : (
+          <div data-testid="search-empty" className="px-2 py-1.5 text-[0.82rem] text-[var(--color-text-muted)]">
+            <p className="m-0 font-medium text-[var(--color-text-secondary)]">
+              {tr("Nothing matches “{0}”.", [trimmedQuery])}
+            </p>
+            <p className="m-0 mt-1 text-[0.78rem] leading-[1.5]">
+              {unreadLists.length > 0
+                ? tr("Try fewer or different words.")
+                : filterLabels.length > 0
+                ? tr("Search looked through all your chats with the chosen labels, plus team chats and projects, including hidden and folded sections. Try fewer words, or clear the label filter.")
+                : tr("Search looked through all your chats, team chats, projects and archived chats, including hidden and folded sections. Try fewer or different words.")}
+            </p>
+            <button
+              type="button"
+              className="mt-2 rounded-md border border-[var(--color-border)] px-2 py-1 text-[0.78rem] font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] any-pointer-coarse:min-h-11"
+              onClick={() => {
+                setSidebarQuery("");
+                searchRef.current?.focus();
+              }}
+            >
+              {tr("Clear search")}
+            </button>
+          </div>
+        )
+      ) : null}
+      {filteredConversations.length > 0 ? (
+        <SearchGroup
+          testId="search-group-chats"
+          title={sectionLabel("chats", tr("Chats"))}
+          count={filteredConversations.length}
+          hidden={chatsSec.hidden}
+          onShow={showSection("chats")}
+        >
+          {filteredConversations.map(renderResultRow)}
+        </SearchGroup>
+      ) : null}
+      {teamMatches.length > 0 ? (
+        <SearchGroup
+          testId="search-group-team"
+          title={sectionLabel("team", tr("Team chats"))}
+          count={teamMatches.length}
+          hidden={teamSec.hidden}
+          onShow={showSection("team")}
+        >
+          {teamMatches.map((c) => renderTeamRow(c, true))}
+        </SearchGroup>
+      ) : null}
+      {matchingProjects.length > 0 ? (
+        <SearchGroup
+          testId="search-group-projects"
+          title={sectionLabel("projects", tr("Projects"))}
+          count={matchingProjects.length}
+          hidden={projectsSec.hidden}
+          onShow={showSection("projects")}
+        >
+          {projectTreeRows}
+        </SearchGroup>
+      ) : null}
+      {archivedMatches.length > 0 ? (
+        <SearchGroup testId="search-group-archived" title={tr("Archived")} count={archivedMatches.length}>
+          {archivedMatches.map((c) => renderArchivedRow(c, true))}
+        </SearchGroup>
+      ) : null}
+      {/* Full-text hits inside message content, deduped against the chats
+          already listed above. Each hit carries its path (Project › chat
+          title when the chat is filed) with the matched snippet beneath. */}
+      {messageHits.length > 0 ? (
+        <SearchGroup testId="search-group-messages" title={tr("In messages")} count={messageHits.length}>
+          {messageHits.map((r) => {
+            const conv = conversations.find((c) => c.id === r.conversation_id);
+            const archived = !conv && archivedConversations.some((c) => c.id === r.conversation_id);
+            const proj = conv?.project_id ? projects.find((p) => p.id === conv.project_id) : undefined;
+            return (
+              <button
+                key={r.conversation_id}
+                type="button"
+                data-testid="search-result"
+                data-rail-row=""
+                className="block w-full rounded-md px-2 py-1.5 text-left transition hover:bg-[var(--rail-hover)] any-pointer-coarse:min-h-11"
+                onClick={() => openMessageHit(r.conversation_id)}
+              >
+                <span className="flex min-w-0 items-center gap-1.5 text-[0.85rem] text-[var(--color-text-secondary)]">
+                  <span className="min-w-0 truncate">
+                    {proj ? <span className="text-[var(--color-text-muted)]">{proj.name} › </span> : null}
+                    {r.title || tr("Untitled")}
+                  </span>
+                  {archived ? <ResultTag>{tr("Archived")}</ResultTag> : null}
+                  {patrolIds.has(r.conversation_id) ? <ResultTag>{tr("Patrol")}</ResultTag> : null}
+                </span>
+                <span className="block truncate text-[0.75rem] text-[var(--color-text-muted)] [&_mark]:rounded-[2px] [&_mark]:bg-[var(--color-accent)]/25 [&_mark]:text-[var(--color-text-primary)]">
+                  {previewNodes(r.match_preview)}
+                </span>
+              </button>
+            );
+          })}
+        </SearchGroup>
+      ) : null}
+      {unreadLists.length > 0 ? (
+        <p
+          data-testid="search-incomplete"
+          className="mx-2 mt-1 rounded-md bg-[var(--color-overlay-soft)] px-2 py-1 text-[0.72rem] leading-[1.5] text-[var(--color-text-secondary)]"
+        >
+          {tr("Not searched, because it has not loaded: {0}. If this stays, reload the page.", [unreadLists.join(", ")])}
+        </p>
+      ) : null}
+    </div>
+  );
+
+  // Arrow keys walk the results from the search field and back (Enter in the
+  // field opens the first one), so a search never needs the mouse. Rows are
+  // the primary button of each result ([data-rail-row]); a row's ⋯ menu stays
+  // reachable with Tab.
+  const listRef = useRef<HTMLDivElement | null>(null);
+  const resultRows = () =>
+    Array.from(listRef.current?.querySelectorAll<HTMLElement>("[data-rail-row]") ?? []);
+  const onSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (!searching || e.nativeEvent.isComposing) return;
+    if (e.key === "ArrowDown") {
+      const first = resultRows()[0];
+      if (!first) return;
+      e.preventDefault();
+      first.focus();
+    } else if (e.key === "Enter") {
+      const first = resultRows()[0];
+      if (!first) return;
+      e.preventDefault();
+      first.click();
+    }
+  };
+  const onResultsKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (!searching || (e.key !== "ArrowDown" && e.key !== "ArrowUp")) return;
+    const target = e.target as HTMLElement;
+    if (!target.matches("[data-rail-row]")) return;
+    const rows = resultRows();
+    const at = rows.indexOf(target);
+    if (at === -1) return;
+    e.preventDefault();
+    if (e.key === "ArrowDown") rows[Math.min(rows.length - 1, at + 1)]?.focus();
+    else if (at === 0) searchRef.current?.focus();
+    else rows[at - 1]?.focus();
+  };
 
   return (
     <SidebarTargetsContext.Provider value={sidebarTargets}>
@@ -2232,10 +2635,12 @@ export function ConversationSidebar({
         </div>
       }
     >
-      {/* Unified search — one bar for everything: a live client-side filter
-          over chat titles (project chats included), matching project names,
+      {/* Unified search — one bar for everything in the rail: the person's
+          own chats, teammates' chats, projects and archived chats by name,
           and (debounced) Postgres full-text hits inside message content.
-          Replaces the old top-right ⌘K palette; ⌘K now focuses this input. */}
+          While it holds text the sections below step aside for one list of
+          results, so a hidden or folded section never hides a match
+          (docs/SIDEBAR-SEARCH.md). ⌘K focuses this input. */}
       <div
         className={[
           "relative mb-1.5 flex items-center",
@@ -2251,6 +2656,7 @@ export function ConversationSidebar({
           type="search"
           value={sidebarQuery}
           onChange={(e) => setSidebarQuery(e.target.value)}
+          onKeyDown={onSearchKeyDown}
           placeholder={tr("Search… ({0})", [searchShortcut])}
           aria-label={tr("Search")}
           data-testid="search-input"
@@ -2288,7 +2694,19 @@ export function ConversationSidebar({
         ].join(" ")}
       >
         <div className="min-w-0 flex-1">
-          {chatsSec.hidden ? null : (
+          {searching ? (
+            // The sections step aside while searching: this row names what
+            // the list below is, and keeps the new-chat buttons in reach.
+            <p
+              aria-hidden="true"
+              className="m-0 flex w-full items-center gap-1.5 px-2 py-1.5 text-[0.8rem] font-semibold text-[var(--color-text-secondary)]"
+            >
+              <Icon name="search" className="size-3.5 shrink-0 text-[var(--color-accent)]" />
+              <span className="min-w-0 flex-1 truncate">
+                {resultCount === 1 ? tr("1 result") : tr("{0} results", [resultCount])}
+              </span>
+            </p>
+          ) : chatsSec.hidden ? null : (
             <SectionToggle
               icon="message"
               label={chatsSec.label || tr("Chats")}
@@ -2321,7 +2739,8 @@ export function ConversationSidebar({
       <div
         className={[
           "flex min-h-0 flex-1 flex-col",
-          chatsSectionOpen || chatsSec.hidden ? "" : railCollapsed ? "hidden sm:flex" : "hidden",
+          // A search shows its results whether or not Chats is folded.
+          chatsSectionOpen || chatsSec.hidden || searching ? "" : railCollapsed ? "hidden sm:flex" : "hidden",
         ].join(" ")}
       >
         {/* The full-size New-chat row is gone (the Chats heading's + owns it);
@@ -2383,7 +2802,11 @@ export function ConversationSidebar({
         ) : null}
 
         {/* Conversation list */}
+        {/* The arrow-key handler is delegated from the rows (buttons) inside. */}
+        {/* eslint-disable-next-line jsx-a11y/no-static-element-interactions */}
         <div
+          ref={listRef}
+          onKeyDown={onResultsKeyDown}
           className={[
             "mt-2 flex-1 overflow-y-auto",
             railCollapsed ? "sm:hidden" : "",
@@ -2393,62 +2816,17 @@ export function ConversationSidebar({
             <p className="px-2 py-1.5 text-[0.82rem] text-[var(--color-text-muted)]">
               {tr("Loading…")}
             </p>
+          ) : searching ? (
+            searchResults
           ) : filtering ? (
-            <>
-              {filteredConversations.length === 0 ? (
-                messageHits.length === 0 && matchingProjects.length === 0 ? (
-                  <p className="px-2 py-1.5 text-[0.82rem] text-[var(--color-text-muted)]">
-                    {searching
-                      ? tr("Nothing matches “{0}”.", [sidebarQuery.trim()])
-                      : tr("Nothing matches this filter.")}
-                  </p>
-                ) : null
-              ) : (
-                filteredConversations.map(renderRow)
-              )}
-              {/* Full-text hits inside message content (unified search) —
-                  deduped against the title matches above. Each hit carries
-                  its path (Project › chat title when the chat is filed) with
-                  the matched prompt snippet beneath. */}
-              {messageHits.length > 0 ? (
-                <div className="mt-2">
-                  <p className="px-2 pb-1 text-[0.6rem] uppercase tracking-[0.1em] text-[var(--color-text-muted)]">
-                    {tr("In messages")}
-                  </p>
-                  {messageHits.map((r) => {
-                    const conv = conversations.find((c) => c.id === r.conversation_id);
-                    const proj = conv?.project_id
-                      ? projects.find((p) => p.id === conv.project_id)
-                      : undefined;
-                    return (
-                      <button
-                        key={r.conversation_id}
-                        type="button"
-                        data-testid="search-result"
-                        className="block w-full rounded-md px-2 py-1.5 text-left transition hover:bg-[var(--rail-hover)]"
-                        onClick={() => void loadConversation(r.conversation_id)}
-                      >
-                        <span className="block truncate text-[0.85rem] text-[var(--color-text-secondary)]">
-                          {proj ? (
-                            <>
-                              <span className="text-[var(--color-text-muted)]">{proj.name} › </span>
-                              {r.title || tr("Untitled")}
-                            </>
-                          ) : (
-                            r.title || tr("Untitled")
-                          )}
-                        </span>
-                        <span
-                          className="block truncate text-[0.75rem] text-[var(--color-text-muted)] [&_mark]:rounded-[2px] [&_mark]:bg-[var(--color-accent)]/25 [&_mark]:text-[var(--color-text-primary)]"
-                        >
-                          {previewNodes(r.match_preview)}
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
-              ) : null}
-            </>
+            // A label filter alone: the person's own chats carrying it.
+            filteredConversations.length === 0 ? (
+              <p className="px-2 py-1.5 text-[0.82rem] text-[var(--color-text-muted)]">
+                {tr("Nothing matches this filter.")}
+              </p>
+            ) : (
+              filteredConversations.map(renderRow)
+            )
           ) : (
             <>
               {chatsSec.hidden ? null : (
@@ -2542,7 +2920,7 @@ export function ConversationSidebar({
           )}
 
           {/* Archived (collapsible) */}
-          {!chatsSec.hidden && archivedConversations.length > 0 ? (
+          {!chatsSec.hidden && !searching && archivedConversations.length > 0 ? (
             <div className="mt-3 border-t border-[var(--color-border)] pt-2">
               <button
                 type="button"
@@ -2558,68 +2936,7 @@ export function ConversationSidebar({
                 {tr("Archived (")}{archivedConversations.length})
               </button>
               {showArchived
-                ? archivedConversations.map((conversation) => (
-                    <div
-                      key={conversation.id}
-                      className={[
-                        "group relative rounded-md transition",
-                        activeConversationId === conversation.id
-                          ? "bg-[var(--rail-active)]"
-                          : "hover:bg-[var(--rail-hover)]",
-                      ].join(" ")}
-                    >
-                      <button
-                        type="button"
-                        className="block w-full min-w-0 rounded-md py-1.5 pl-3 pr-20 text-left text-[0.8125rem] text-[var(--color-text-muted)] transition hover:text-[var(--color-text-secondary)] any-pointer-coarse:min-h-11 any-pointer-coarse:pr-28"
-                        onClick={() => void loadConversation(conversation.id)}
-                      >
-                        <span className="block truncate italic">
-                          {conversation.title}
-                        </span>
-                      </button>
-                      <div className={`absolute inset-y-0 right-1 flex items-center gap-1 transition any-pointer-coarse:gap-4 ${ROW_ACTIONS_REVEAL}`}>
-                        <button
-                          type="button"
-                          aria-label={tr("Unarchive {0}", [conversation.title])}
-                          data-tip-top="Unarchive"
-                          className="hit-area-touch inline-flex size-10 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-strong)] hover:text-[var(--color-text-primary)] sm:size-7"
-                          onClick={() =>
-                            void toggleArchive(conversation, false)
-                          }
-                        >
-                          <svg
-                            aria-hidden="true"
-                            viewBox="0 0 24 24"
-                            className="size-3.5"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeWidth={1.8}
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                          >
-                            <rect x="3" y="4" width="18" height="4" rx="1" />
-                            <path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8" />
-                            <path d="M12 18v-6" />
-                            <path d="M9.5 14.5 12 12l2.5 2.5" />
-                          </svg>
-                        </button>
-                        <button
-                          type="button"
-                          aria-label={tr("Delete {0}", [conversation.title])}
-                          data-tip-top="Delete"
-                          className="hit-area-touch inline-flex size-10 items-center justify-center rounded-md text-[var(--color-text-muted)] transition motion-safe:hover:scale-110 hover:bg-[var(--color-status-error-bg)] hover:text-[var(--color-status-error-fg)] sm:size-7"
-                          onClick={() =>
-                            setPendingDeleteConversation({
-                              id: conversation.id,
-                              title: conversation.title,
-                            })
-                          }
-                        >
-                          <Icon name="trash" className="size-3.5" />
-                        </button>
-                      </div>
-                    </div>
-                  ))
+                ? archivedConversations.map((conversation) => renderArchivedRow(conversation, false))
                 : null}
             </div>
           ) : null}
