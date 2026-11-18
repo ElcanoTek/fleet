@@ -117,6 +117,21 @@ agent_policy:
    blocks that read the user's words (context handles, `/skill` invocation,
    connector hints) and memory auto-indexing are skipped for it; the
    workspace, shared-file and branch blocks are not.
+
+   "The result is in the conversation" is the staged call's own tool result.
+   Replay pairs the settled outcome with the original call (every provider
+   needs a result right after its call), which puts it before the text the
+   model wrote after staging ("I staged a card; nothing has changed yet").
+   Read in that order, a model "corrected" its accurate reply and told the
+   user the write had run before approval. So replay
+   (`agent.selectToolResults`, `approvalOutcomeNote`) prefixes a staged
+   call's settled outcome with a note: during that turn the call was only
+   staged, and the card was settled after the turn ended (or, for a click
+   that landed while the turn was still running, out of band and unseen).
+   The note stays inside the tool result, so the outcome keeps its
+   tool-output provenance; a card still pending replays its placeholder
+   unchanged. This applies to every staged call's outcome, with or without
+   a resume turn.
 6. **A resume never approves anything.** The new turn's critical calls go
    through the same stager and stage new cards. A tool in
    `critical_tool_no_session_approval` cannot carry a session pre-approval at
