@@ -50,6 +50,12 @@ func TestStruggleSignals(t *testing.T) {
 		{"compaction", []agent.HistoryEntry{ok}, 1, escalationSignalCompaction},
 		{"long turn", repeat(ok, escalationLongTurnToolCalls), 0, escalationSignalLongTurn},
 		{"just under long", repeat(ok, escalationLongTurnToolCalls-1), 0, ""},
+		// Schema lookups are not steps: a turn that describes every tool it
+		// then calls is not long for it.
+		{"lookups do not make a turn long", append(repeat(ok, escalationLongTurnToolCalls-1), repeat(namedResult(t, "tool_describe", "{}", false), 10)...), 0, ""},
+		{"tool_search is a lookup too", append(repeat(ok, escalationLongTurnToolCalls-1), namedResult(t, "tool_search", "[]", false)), 0, ""},
+		{"real calls still make a turn long", append(repeat(namedResult(t, "tool_call", "{}", false), escalationLongTurnToolCalls), namedResult(t, "tool_describe", "{}", false)), 0, escalationSignalLongTurn},
+		{"failed lookups still count in a streak", repeat(namedResult(t, "tool_describe", "no tool named x", true), 3), 0, escalationSignalToolErrors},
 		// Calls held for the user's approval are not failures, and do not
 		// break a real streak either.
 		{"approvals are not failures", repeat(toolResult(t, "APPROVAL_REQUIRED: send email — staged for user approval", true), 3), 0, ""},
@@ -68,6 +74,15 @@ func TestStruggleSignals(t *testing.T) {
 			}
 		})
 	}
+}
+
+func namedResult(t *testing.T, name, text string, isErr bool) agent.HistoryEntry {
+	t.Helper()
+	raw, err := json.Marshal(agent.ToolResultContent{ID: "c", Name: name, Text: text, IsErr: isErr})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return agent.HistoryEntry{Role: "tool", Type: "tool_result", Content: raw}
 }
 
 func repeat(e agent.HistoryEntry, n int) []agent.HistoryEntry {

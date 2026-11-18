@@ -53,9 +53,17 @@ const (
 	escalationClassifierReason = "Your last message suggests my previous answer missed what you needed. Switching to the fallback model may handle this better."
 )
 
+// lookupTools only fetch a tool's schema or search the tool catalog: on a
+// progressive-disclosure deployment the model calls them before nearly every
+// real step, so they say nothing about whether a turn is wandering. They do
+// not count toward the long-turn signal (a 36-deal booking check, live
+// 2026-11-18, took 26 calls of which 8 were these, and was offered the
+// fallback model for it); a failed lookup still counts in a failure streak.
+var lookupTools = map[string]bool{"tool_describe": true, "tool_search": true}
+
 // turnStruggle is what the turn's own history and stream say about how it went.
 type turnStruggle struct {
-	toolCalls       int
+	toolCalls       int // tool calls that did work (lookupTools are not counted)
 	toolErrorStreak int // the longest run of consecutive failed tool calls
 	loopGuardBlocks int
 	compactions     int
@@ -75,7 +83,9 @@ func struggleFromHistory(history []agent.HistoryEntry, compactions int) turnStru
 		if err := json.Unmarshal(h.Content, &c); err != nil {
 			continue
 		}
-		t.toolCalls++
+		if !lookupTools[c.Name] {
+			t.toolCalls++
+		}
 		text := strings.TrimSpace(c.Text)
 		if strings.HasPrefix(text, "LOOP_GUARD") {
 			t.loopGuardBlocks++
