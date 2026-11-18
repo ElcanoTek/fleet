@@ -982,12 +982,14 @@ func (b *turnBuffer) AttachForViewerChecked(ctx context.Context, lastEventID uin
 	}
 }
 
-// showUICallInput returns the input of the latest show_ui tool.call frame for
-// callID among events with an id below before.
+// showUICallInput returns the input of the show_ui call that the tool.result
+// frame with id `before` answers: among the earlier frames, the first call
+// with callID that no earlier result has answered (the pairing
+// sharedCardEntries and the web's applyToolResult use for a reused id).
 func showUICallInput(events []bufferedEvent, callID string, before uint64) (string, bool) {
-	for i := len(events) - 1; i >= 0; i-- {
-		e := events[i]
-		if e.ID >= before || e.Name != "tool.call" {
+	var waiting []string
+	for _, e := range events {
+		if e.ID >= before || (e.Name != "tool.call" && e.Name != "tool.result") {
 			continue
 		}
 		var c struct {
@@ -995,11 +997,19 @@ func showUICallInput(events []bufferedEvent, callID string, before uint64) (stri
 			Name  string `json:"name"`
 			Input string `json:"input"`
 		}
-		if json.Unmarshal(e.Data, &c) == nil && c.ID == callID && c.Name == tools.ShowUIToolName {
-			return c.Input, true
+		if json.Unmarshal(e.Data, &c) != nil || c.ID != callID || c.Name != tools.ShowUIToolName {
+			continue
+		}
+		if e.Name == "tool.call" {
+			waiting = append(waiting, c.Input)
+		} else if len(waiting) > 0 {
+			waiting = waiting[1:]
 		}
 	}
-	return "", false
+	if len(waiting) == 0 {
+		return "", false
+	}
+	return waiting[0], true
 }
 
 // cardInputBefore is the cardInput lookup for an event of this buffer: the

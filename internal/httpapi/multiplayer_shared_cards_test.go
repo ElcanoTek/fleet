@@ -162,3 +162,38 @@ func TestSanitizeTurnEventSharesShownCardsLive(t *testing.T) {
 		t.Errorf("sender frames = %v", owner)
 	}
 }
+
+// Two calls can share an id before either is answered (a provider reusing ids
+// within one step). Results answer them oldest first, in history and live, so
+// the card a participant draws is the one that was shown, and a refused
+// call's input is never the one that is published.
+func TestSharedCardsPairAReusedIDOldestFirst(t *testing.T) {
+	t.Parallel()
+
+	entries := []agent.HistoryEntry{
+		{ID: 1, Role: "user", Type: "text", Content: []byte(`{"text":"go","sender_email":"owner@x.com"}`)},
+		{ID: 2, Role: "assistant", Type: "tool_call", Content: []byte(`{"id":"dup","name":"show_ui","input":"{\"title\":\"first\"}"}`)},
+		{ID: 3, Role: "assistant", Type: "tool_call", Content: []byte(`{"id":"dup","name":"show_ui","input":"{\"secret\":\"second\"}"}`)},
+		{ID: 4, Role: "tool", Type: "tool_result", Content: []byte(`{"id":"dup","name":"show_ui","text":"UI_DISPLAYED card_id=dup"}`)},
+		{ID: 5, Role: "tool", Type: "tool_result", Content: []byte(`{"id":"dup","name":"show_ui","text":"UI_INVALID: nope","is_err":true}`)},
+	}
+	out := historyForParticipant(entries, "mate@x.com", "owner@x.com")
+	if len(out) != 3 || out[1].ID != 2 || out[2].ID != 4 {
+		t.Fatalf("history kept %+v, want the user text, the first call and its result", out)
+	}
+
+	events := []bufferedEvent{
+		{ID: 2, Name: "tool.call", Data: []byte(`{"id":"dup","name":"show_ui","input":"first","user_email":"owner@x.com"}`)},
+		{ID: 3, Name: "tool.call", Data: []byte(`{"id":"dup","name":"show_ui","input":"second","user_email":"owner@x.com"}`)},
+		{ID: 4, Name: "tool.result", Data: []byte(`{"id":"dup","name":"show_ui","text":"UI_DISPLAYED card_id=dup","user_email":"owner@x.com"}`)},
+		{ID: 5, Name: "tool.result", Data: []byte(`{"id":"dup","name":"show_ui","text":"UI_DISPLAYED card_id=dup","user_email":"owner@x.com"}`)},
+	}
+	for before, want := range map[uint64]string{4: "first", 5: "second"} {
+		if got, ok := showUICallInput(events, "dup", before); !ok || got != want {
+			t.Errorf("result %d answers input %q (found %v), want %q", before, got, ok, want)
+		}
+	}
+	if _, ok := showUICallInput(events, "dup", 2); ok {
+		t.Error("a result before any call found an input")
+	}
+}

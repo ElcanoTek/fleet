@@ -68,24 +68,30 @@ func isPrivateTurnTraceEntry(e agent.HistoryEntry) bool {
 // omits cards with the rest of the trace.
 func sharedCardEntries(entries []agent.HistoryEntry) map[int]bool {
 	var shared map[int]bool
-	// call id → index of the show_ui call still waiting for its result (a
-	// provider can reuse an id, so a result answers the latest open call).
-	open := make(map[string]int)
+	// call id → indexes of the show_ui calls still waiting for a result, oldest
+	// first. A provider can reuse an id, even for two calls in one step: a
+	// result answers the first call still waiting, as the web pairs them
+	// (applyToolResult).
+	open := make(map[string][]int)
 	for i, e := range entries {
 		switch e.Type {
 		case "tool_call":
 			var c agent.ToolCallContent
 			if json.Unmarshal(e.Content, &c) == nil && c.Name == tools.ShowUIToolName {
-				open[c.ID] = i
+				open[c.ID] = append(open[c.ID], i)
 			}
 		case "tool_result":
 			var c agent.ToolResultContent
 			if json.Unmarshal(e.Content, &c) != nil || c.Name != tools.ShowUIToolName {
 				continue
 			}
-			call, ok := open[c.ID]
-			delete(open, c.ID)
-			if !ok || !isShownCardResult(c.Text, c.IsErr) {
+			waiting := open[c.ID]
+			if len(waiting) == 0 {
+				continue
+			}
+			call := waiting[0]
+			open[c.ID] = waiting[1:]
+			if !isShownCardResult(c.Text, c.IsErr) {
 				continue
 			}
 			if shared == nil {

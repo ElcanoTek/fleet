@@ -148,12 +148,14 @@ test("the streamed tool.call and tool.result render in the execution trail", asy
   await expect(bashChip).toBeVisible({ timeout: 15_000 });
   await expect(page.getByRole("button", { name: /view_file/i })).toBeVisible();
 
+  // Wait for the turn to finish before opening a chip: the chips appear while
+  // the recorded stream is still landing, and a chip opened mid-stream closes
+  // again when the turn completes (about 1 run in 12 clicked in that window).
+  await expect(conversation.getByText("All three tools reported back.")).toBeVisible({ timeout: 15_000 });
+
   // Expanding the first chip reveals its tool.result (the is_err=false branch).
   await bashChip.click();
   await expect(conversation.locator("pre", { hasText: "CONTRACT_TOOL_OK" }).first()).toBeVisible();
-
-  // And the final assistant message is still present.
-  await expect(conversation.getByText("All three tools reported back.")).toBeVisible();
 });
 
 // A stopped turn must read the same after a reload as it did live. The live
