@@ -37,6 +37,9 @@ sidebar"), which `/help` renders.
   section of their own in every order (never inside the Chats list), so
   folding Chats does not hide them. Hiding Chats keeps the **+** (and the
   sealed-chat lock) so a new chat is always one click away.
+  None of this affects search: while the search field holds text the
+  sections step aside for one list of results drawn from all of them, hidden
+  and folded ones included ([SIDEBAR-SEARCH.md](SIDEBAR-SEARCH.md)).
 - **Compact** hides the one-line subtitles.
 - **The Customize panel** (`SidebarCustomizer.tsx`, `SidebarEditor.tsx`) is a
   *non-modal* sheet: the rail stays visible and usable beside it, so every edit

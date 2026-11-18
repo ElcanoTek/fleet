@@ -347,8 +347,8 @@ schedule* — your patrol chats, and the
 **Background tasks** (*Runs without a chat*; formerly the
 Operations Center). **New chat** starts a fresh
 conversation. The search field, also reachable with
-`⌘K` or `Ctrl K`, matches conversation titles, and can search **In messages**
-too. Below that, conversations are grouped:
+`⌘K` or `Ctrl K`, searches everything in the rail at once (see **Searching
+the rail**, below the table). Below that, conversations are grouped:
 
 | Group | What it holds |
 | --- | --- |
@@ -358,6 +358,33 @@ too. Below that, conversations are grouped:
 | **Labels** | Your labels, each a filter. Click one to show only conversations carrying it; click several to narrow further. |
 | **Temporary** | Everything else, most recently active first; the menu beside the heading can sort it by **Newest first** or **Title A–Z** instead. Chats here are deleted after a period of inactivity (14 days on a default deployment); the ⓘ beside the heading says so. Pin a chat or move it into a project to keep it. **Delete temporary chats**, in red at the bottom of the sidebar, deletes them all at once after you confirm. |
 | **Archived** | Collapsed by default. Conversations you have put away but not deleted; open the group to bring one back. |
+
+**Searching the rail.** Type in the search field and the groups above step aside for one list of
+results. Search looks through all of your chats (pinned, temporary, and filed
+in a project), your teammates' **Team chats**, your **Projects**, and your
+**Archived** chats, whichever lists you have folded or hidden in your sidebar.
+Clear the field and the rail returns exactly as you left it.
+
+- Every word you type must appear in the name, in any order; capitals and
+  accents do not matter. The matched words are highlighted.
+- Results are grouped by where they live — **Chats**, **Team chats**,
+  **Projects**, **Archived** — each with a count. A chat in a project shows
+  the project's name before its title, and a patrol chat is tagged
+  **Patrol**.
+- A teammate's chat is also found by its owner: type a colleague's name to
+  see the chats they shared.
+- **In messages** lists chats where the words appear in the conversation
+  itself, with the matching line beneath. This covers your own chats,
+  archived ones included (tagged **Archived**); teammates' chats are found by
+  title and owner only. A deployment can switch message search off, in which
+  case this group does not appear.
+- If a result comes from a list you have hidden, the group says **Hidden in
+  your sidebar** and offers **Show it**, which puts that list back in your
+  sidebar (not offered on a read-only **Viewer** account).
+- From the field, `↓` moves into the results, `↑` and `↓` move between them,
+  and `Enter` opens the first one.
+- When nothing matches, the rail says so and **Clear search** empties the
+  field.
 
 A chat row can carry two small badges, each labeled with its audience when you
 hover: one means it is shared by link, the other that it is shared with your
@@ -468,7 +495,8 @@ A read-only **Viewer** account can open the panel but not change anything.
   a chat still opens that chat. With no Home set, fleet opens your most
   recent chat, as before.
 - **On the Chat page** orders, renames, hides or folds the **Projects**,
-  **Chats** and **Team chats** lists. A hidden Chats list still leaves the
+  **Chats** and **Team chats** lists. Search still finds what is in a hidden
+  or folded list. A hidden Chats list still leaves the
   **+** for a new chat.
 - **Compact** shows one line per item, without the descriptions.
 

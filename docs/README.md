@@ -271,6 +271,7 @@ above fails otherwise.
 - [`CHAT-PATROLS.md`](CHAT-PATROLS.md) — In-Chat Patrols & Timers (`chat_patrol`)
 - [`CHAT-ORDER.md`](CHAT-ORDER.md) — your own order for pinned chats and for each project's chats, and the Temporary sort (Reorder mode; `GET`/`PUT /api/conversations/order`)
 - [`SIDEBAR.md`](SIDEBAR.md) — a sidebar of your own: pinned chats, dashboards, patrols, projects, tasks and pages, Home, presets, and the admin workspace default (`/api/sidebar`, `/api/admin/sidebar`)
+- [`SIDEBAR-SEARCH.md`](SIDEBAR-SEARCH.md) — the rail's search looks everywhere: own, team, project and archived chats in one list of results, whatever sections are hidden or folded
 - [`PATROL-LAUNCHPAD.md`](PATROL-LAUNCHPAD.md) — Patrols in the rail and the Patrol Launchpad wizard (Chat · Patrols · Background tasks; `GET /api/patrols`, `POST /api/patrol-draft`)
 - [`CHAT-STREAM-RECOVERY.md`](CHAT-STREAM-RECOVERY.md) — Chat stream recovery — losing the socket is not losing the turn
 - [`CHAT-SURFACE-METRICS.md`](CHAT-SURFACE-METRICS.md) — Chat-surface metrics: rate-limit 429s and stream reattaches (`/metrics`)

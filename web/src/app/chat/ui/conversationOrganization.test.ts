@@ -5,7 +5,11 @@ import {
   canAddLabel,
   deriveLabels,
   filterConversations,
+  foldSearchText,
   isFiltering,
+  matchesSearch,
+  searchMatchRanges,
+  searchTokens,
   applyChatOrder,
   movePinned,
   normalizeLabel,
@@ -100,6 +104,36 @@ describe("filterConversations", () => {
   it("combines label + query", () => {
     const res = filterConversations(convs, { labels: ["client"], query: "acme" });
     expect(res.map((c) => c.title)).toEqual(["Acme renewal"]);
+  });
+});
+
+describe("search matching", () => {
+  it("matches every word in any order, ignoring case and accents", () => {
+    const convs = [conv({ title: "Acme renewal" }), conv({ title: "Résumé review" }), conv({ title: "Renewal dates" })];
+    expect(filterConversations(convs, { query: "renewal ACME" }).map((c) => c.title)).toEqual(["Acme renewal"]);
+    expect(filterConversations(convs, { query: "resume" }).map((c) => c.title)).toEqual(["Résumé review"]);
+    expect(filterConversations(convs, { query: "acme dates" })).toEqual([]);
+  });
+
+  it("a word may be found in any of the texts given", () => {
+    const tokens = searchTokens("  Pacing   dana ");
+    expect(tokens).toEqual(["pacing", "dana"]);
+    expect(matchesSearch(tokens, "Omnicom pacing", "dana@example.com")).toBe(true);
+    expect(matchesSearch(tokens, "Omnicom pacing", undefined)).toBe(false);
+    expect(matchesSearch([], "anything")).toBe(true);
+  });
+
+  it("marks the matched ranges in the original text, merged and in order", () => {
+    expect(searchMatchRanges("Acme renewal", searchTokens("renew ac"))).toEqual([
+      [0, 2],
+      [5, 10],
+    ]);
+    // Accented text: the range covers the accented letters themselves.
+    expect(searchMatchRanges("Résumé review", searchTokens("resume"))).toEqual([[0, 6]]);
+    // Overlapping tokens merge into one range.
+    expect(searchMatchRanges("pacing", searchTokens("pac acin"))).toEqual([[0, 5]]);
+    expect(searchMatchRanges("pacing", [])).toEqual([]);
+    expect(foldSearchText("ÀÉÎ")).toBe("aei");
   });
 });
 
