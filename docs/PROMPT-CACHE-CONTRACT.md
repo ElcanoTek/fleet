@@ -275,7 +275,8 @@ serves a trajectory from more than one (a fallback while the pinned upstream
 is busy), nothing about fleet's caching can be read from it, so the test runs
 it again with a fresh cache, up to 3 times. If every attempt is split, the
 test logs `INCONCLUSIVE` and asserts nothing: it neither passes the cache
-checks nor fails. The CI gate then passes with a warning on the run. A real
+checks nor fails. The CI gate then passes with a warning on the run, and
+the nightly canary raises one warning per model it could not measure. A real
 caching regression shows up on a run served by one upstream, which still
 fails; the upstream pin itself is held by the offline wire-contract tests.
 
