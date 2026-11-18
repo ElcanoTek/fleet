@@ -63,8 +63,11 @@ sidebar"), which `/help` renders.
   (`/chat?team=<id>`) for a chat shared with the team, the chat link
   (`/chat?c=<id>`) for one reached only through Multiplayer (a team link
   refuses it), and no Copy link otherwise. When the clipboard refuses, the
-  menu stays open with the link shown to copy by hand. Not done: a long-press
-  to open a row's menu.
+  menu stays open with the link shown to copy by hand. A Team chats row keeps
+  its right edge clear for the `⋯` (`pr-10`, `any-pointer-coarse:pr-12`), so
+  neither the button nor its tap box ever covers the title, the **Live**
+  badge or the owner's name; the mocked e2e measures that gap with a mouse
+  and on a touch screen. Not done: a long-press to open a row's menu.
 - **Read-only accounts.** The API refuses a Viewer's writes, so the editor,
   **Reset** and the quick pins are offered only once `GET /api/me` has
   confirmed another role (the rule chat reordering uses). A Viewer can open the

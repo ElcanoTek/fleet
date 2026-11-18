@@ -298,15 +298,23 @@ test("Settings → Admin → Sidebar edits the workspace default", async ({ page
 });
 
 // A teammate's chats, the way the Team chats tests below need them.
-async function setupTeamChats(page: Page) {
+const TEAM_CHATS = [
+  { id: "c1", title: "My own notes" },
+  { id: "m1", title: "Incident room", multiplayer: true, user_email: "ops@example.com" },
+  { id: "t1", title: "Q4 planning", team_visible: true, user_email: "pm@example.com" },
+];
+
+// Long titles, a Live badge and long owner names: everything a Team chats row
+// can carry, pressed up against the row's ⋯.
+const CROWDED_TEAM_CHATS = [
+  { id: "m1", title: "Incident room for the big outage review", multiplayer: true, user_email: "operations.team@example.com" },
+  { id: "t1", title: "Q4 planning and budget review for everyone", team_visible: true, user_email: "pm@example.com" },
+  { id: "m2", title: "Short", multiplayer: true, team_visible: true, user_email: "averyveryverylongmailbox@example.com" },
+];
+
+async function setupTeamChats(page: Page, conversations: Record<string, unknown>[] = TEAM_CHATS) {
   const puts: Layout[] = [];
-  await mockChatBoot(page, {
-    conversations: [
-      { id: "c1", title: "My own notes" },
-      { id: "m1", title: "Incident room", multiplayer: true, user_email: "ops@example.com" },
-      { id: "t1", title: "Q4 planning", team_visible: true, user_email: "pm@example.com" },
-    ],
-  });
+  await mockChatBoot(page, { conversations });
   await page.route("**/api/me", (r: Route) => r.fulfill({ json: { email: "e2e@example.com", role: "member" } }));
   await page.route("**/api/projects", (r: Route) => r.fulfill({ json: { projects: [] } }));
   await page.route("**/api/patrols", (r: Route) => r.fulfill({ json: { patrols: [] } }));
@@ -322,6 +330,34 @@ async function setupTeamChats(page: Page) {
   });
   return { puts };
 }
+
+// The gap between a Team chats row's badges (title, Live, owner) and its ⋯ —
+// both the drawn button and its invisible tap box (2rem with a mouse, 44px on
+// a touch screen). Negative means they overlap.
+async function teamRowGaps(page: Page) {
+  return page.evaluate(() =>
+    [...document.querySelectorAll('[data-testid="team-shared-conv-row"]')].map((row) => {
+      const kebab = row.parentElement!.querySelector('[data-testid="team-chat-options"]') as HTMLElement;
+      const k = kebab.getBoundingClientRect();
+      const tap = parseFloat(getComputedStyle(kebab, "::before").width) || k.width;
+      const content = Math.max(...[...row.querySelectorAll("span")].map((s) => s.getBoundingClientRect().right));
+      return { drawn: k.left - content, tap: k.left + k.width / 2 - tap / 2 - content };
+    }),
+  );
+}
+
+test("a Team chats row's ⋯ never covers its badges or owner name", async ({ page }) => {
+  await setupTeamChats(page, CROWDED_TEAM_CHATS);
+  await page.goto("/chat");
+  const first = page.getByTestId("team-shared-conv-row").first();
+  await first.hover();
+  const gaps = await teamRowGaps(page);
+  expect(gaps).toHaveLength(3);
+  for (const g of gaps) {
+    expect(g.drawn).toBeGreaterThanOrEqual(4);
+    expect(g.tap).toBeGreaterThanOrEqual(4);
+  }
+});
 
 test("a Team chats row has a menu: pin it, or copy the link that opens it", async ({ page, context }) => {
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
@@ -481,6 +517,16 @@ test.describe("on a short touch screen", () => {
 
 test.describe("on a touch screen", () => {
   test.use({ hasTouch: true, isMobile: true, viewport: { width: 1280, height: 900 } });
+
+  test("a Team chats row's 44px ⋯ tap box stays clear of its badges", async ({ page }) => {
+    await setupTeamChats(page, CROWDED_TEAM_CHATS);
+    await page.goto("/chat");
+    await expect(page.getByTestId("team-shared-conv-row")).toHaveCount(3);
+    for (const g of await teamRowGaps(page)) {
+      expect(g.drawn).toBeGreaterThanOrEqual(4);
+      expect(g.tap).toBeGreaterThanOrEqual(4);
+    }
+  });
 
   test("row menus are shown without a hover", async ({ page }) => {
     await setupTeamChats(page);

@@ -2135,7 +2135,7 @@ export function ConversationSidebar({
                             type="button"
                             data-testid="team-shared-conv-row"
                             className={[
-                              "flex w-full min-w-0 items-center gap-1.5 rounded-md py-1.5 pl-2 pr-9 text-left text-[0.84rem] transition any-pointer-coarse:min-h-11",
+                              "flex w-full min-w-0 items-center gap-1.5 rounded-md py-1.5 pl-2 pr-10 text-left text-[0.84rem] transition any-pointer-coarse:min-h-11 any-pointer-coarse:pr-12",
                               active
                                 ? "bg-[var(--rail-active)] text-[var(--color-text-primary)]"
                                 : "text-[var(--color-text-secondary)] hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)]",
