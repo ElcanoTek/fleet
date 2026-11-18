@@ -246,25 +246,38 @@ upstream pins, realistic 6-tool roster (`tool_search`, `query_metrics`,
 `runtime_today` notes — against OpenRouter, and reports per request the served
 provider, prompt / cached / cache-write tokens, hit rate, and cost.
 
-Two tests run in the `prompt-cache-live` CI gate (`.github/workflows/ci.yml`,
-required by `CI gate`, path-gated on PRs to prompt-cache-relevant changes and
-always run on `main`) and the nightly canary (`.github/workflows/e2e-canary.yml`):
+The `prompt-cache-live` CI gate (`.github/workflows/ci.yml`, required by
+`CI gate`, path-gated on PRs to prompt-cache-relevant changes and always run on
+`main`) runs the first test on the default pinned model only. The nightly
+canary (`.github/workflows/e2e-canary.yml`) runs both, across every model:
 
 1. `TestPromptCacheLive`: runs a 3-turn multi-tool conversation (Turn 1 makes 3
    sequential tool calls returning ~1,200–1,400 tokens each; Turn 2 replays
    Turn 1 via `liveReplayEntries`, sends a ~1,300-token user message, and calls
-   `read_runbook`; Turn 3 synthesizes across both turns). By default in CI it
-   runs across the fast representative models for each explicit cache family
-   (`anthropic/claude-haiku-5.5` and `google/gemini-3.8-flash`); with
+   `read_runbook`; Turn 3 synthesizes across both turns). By default, and in
+   the blocking CI gate, it runs on the default pinned model
+   (`DefaultCoreModel`, `google/gemini-4-hydrogen`): the gate holds up pull
+   requests, so it measures the model a deployment runs on by default. With
    `FLEET_CACHE_LIVE_MODELS=all` (used by the nightly canary) it runs across the
-   full 5-model matrix (`anthropic/claude-opus-5.5`, `anthropic/claude-haiku-5.5`,
-   `google/gemini-3.8-flash`, `google/gemini-4-argon`, and
+   full 5-model matrix (`google/gemini-4-hydrogen`, `anthropic/claude-haiku-5.5`,
+   `google/gemini-3.8-flash`, `anthropic/claude-opus-5.5`, and
    `openai/gpt-6-luna-pro`).
 2. `TestPromptCacheLive_LongToolChainCrossTurn`: runs a 10-step sequential
    pagination tool chain in Turn 1 (>20 content blocks, exceeding Anthropic's
    20-block lookback window) followed by Turn 2 after history replay, asserting
    step-by-step cache growth, all 4 breakpoints (`system` + `runtime_today` + 2
    rolling tail messages), and cross-turn cache preservation on Turn 2 Step 0.
+   It is about Anthropic's explicit rolling cache and runs on
+   `anthropic/claude-haiku-5.5`, in the nightly canary only.
+
+**Inconclusive runs.** A prompt cache belongs to one upstream. When OpenRouter
+serves a trajectory from more than one (a fallback while the pinned upstream
+is busy), nothing about fleet's caching can be read from it, so the test runs
+it again with a fresh cache, up to 3 times. If every attempt is split, the
+test logs `INCONCLUSIVE` and asserts nothing: it neither passes the cache
+checks nor fails. The CI gate then passes with a warning on the run. A real
+caching regression shows up on a run served by one upstream, which still
+fails; the upstream pin itself is held by the offline wire-contract tests.
 
 ```sh
 FLEET_CACHE_LIVE=1 OPENROUTER_API_KEY=… \
