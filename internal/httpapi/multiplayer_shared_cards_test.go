@@ -125,17 +125,17 @@ func TestReplayIsSharedInAMultiplayerChat(t *testing.T) {
 				t.Errorf("owner: injected context or images are wrong: owner=%q mate=%q %s", ownerMsg.InjectedContext, mateMsg.InjectedContext, mateMsg.Content)
 			}
 			// A teammate's turn that completed with nothing to re-apply
-			// leaves no summary in the owner's replay.
-			if _, ok := byID[12]; ok {
-				t.Error("owner: a teammate's plain turn summary is in the replay")
+			// still ends with its summary, which marks the end of the turn
+			// for the replay, without what the turn cost.
+			if e, ok := byID[12]; !ok || strings.Contains(string(e.Content), "0.2") || strings.Contains(string(e.Content), ":100") {
+				t.Errorf("owner: a teammate's plain turn summary is missing or carries its cost: %s", e.Content)
 			}
 		}
 	}
 
-	// Two senders' replays are the same sequence of messages: same entries
-	// before the first one that is only one sender's own.
-	a := redactHistoryForSender(history[:10], "mate@x.com", "owner@x.com")
-	b := redactHistoryForSender(history[:10], "owner@x.com", "owner@x.com")
+	// Two senders' replays are the same sequence of entries.
+	a := redactHistoryForSender(history, "mate@x.com", "owner@x.com")
+	b := redactHistoryForSender(history, "owner@x.com", "owner@x.com")
 	if len(a) != len(b) {
 		t.Fatalf("the two replays differ in length: %d vs %d", len(a), len(b))
 	}

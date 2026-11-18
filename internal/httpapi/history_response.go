@@ -208,11 +208,7 @@ func redactHistoryForSender(entries []agent.HistoryEntry, callerEmail, convOwner
 		}
 		if sender != "" && !strings.EqualFold(callerEmail, sender) {
 			if e.Type == "turn_summary" {
-				redacted, ok := replayTurnSummaryOfOtherSender(e.Content)
-				if !ok {
-					continue
-				}
-				e.Content = redacted
+				e.Content = replayTurnSummaryOfOtherSender(e.Content)
 			}
 			e.InjectedContext = ""
 			if hasTC && len(tc.Images) > 0 {
@@ -229,15 +225,15 @@ func redactHistoryForSender(entries []agent.HistoryEntry, callerEmail, convOwner
 
 // replayTurnSummaryOfOtherSender is another sender's turn_summary as a replay
 // carries it: how the turn ended and the compaction records the replay must
-// re-apply, without what the turn cost. ok is false when nothing of it
-// matters to a replay (a turn that completed with no compaction).
-func replayTurnSummaryOfOtherSender(raw json.RawMessage) (json.RawMessage, bool) {
+// re-apply, without what the turn cost. The entry is always kept, even for a
+// turn that completed with no compaction: the replay reads every
+// turn_summary as the end of a turn (agent.selectToolResults assigns pending
+// tool calls to it), so dropping some would move those boundaries for one
+// sender and not another.
+func replayTurnSummaryOfOtherSender(raw json.RawMessage) json.RawMessage {
 	var ts agent.TurnSummaryContent
-	if len(raw) == 0 || json.Unmarshal(raw, &ts) != nil {
-		return nil, false
-	}
-	if !ts.Cancelled && ts.Failure == nil && len(ts.Compactions) == 0 {
-		return nil, false
+	if len(raw) > 0 {
+		_ = json.Unmarshal(raw, &ts)
 	}
 	redacted := agent.TurnSummaryContent{
 		Cancelled:   ts.Cancelled,
@@ -249,9 +245,9 @@ func replayTurnSummaryOfOtherSender(raw json.RawMessage) (json.RawMessage, bool)
 	}
 	b, err := json.Marshal(redacted)
 	if err != nil {
-		return nil, false
+		return json.RawMessage(`{}`)
 	}
-	return b, true
+	return b
 }
 
 func redactTurnSummaryForOtherParticipant(raw json.RawMessage) (json.RawMessage, bool) {
