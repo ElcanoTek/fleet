@@ -197,3 +197,33 @@ func TestSharedCardsPairAReusedIDOldestFirst(t *testing.T) {
 		t.Error("a result before any call found an input")
 	}
 }
+
+// A call left unanswered when its turn ended is never answered by a later
+// turn: a result there that reuses the id answers that turn's own call. A
+// mid-turn steer is not a boundary.
+func TestSharedCardsDoNotPairAcrossTurns(t *testing.T) {
+	t.Parallel()
+
+	entries := []agent.HistoryEntry{
+		{ID: 1, Role: "user", Type: "text", Content: []byte(`{"text":"one","sender_email":"owner@x.com"}`)},
+		{ID: 2, Role: "assistant", Type: "tool_call", Content: []byte(`{"id":"ui","name":"show_ui","input":"{\"secret\":\"stale\"}"}`)},
+		// Turn one was cancelled before the card's result.
+		{ID: 3, Role: "user", Type: "text", Content: []byte(`{"text":"two","sender_email":"owner@x.com"}`)},
+		{ID: 4, Role: "assistant", Type: "tool_call", Content: []byte(`{"id":"ui","name":"show_ui","input":"{\"title\":\"shown\"}"}`)},
+		{ID: 5, Role: "user", Type: "text", Content: []byte(`{"text":"also this","sender_email":"owner@x.com","steered":true}`)},
+		{ID: 6, Role: "tool", Type: "tool_result", Content: []byte(`{"id":"ui","name":"show_ui","text":"UI_DISPLAYED card_id=ui"}`)},
+		// After a compaction nothing earlier is waiting either.
+		{ID: 7, Role: "assistant", Type: "tool_call", Content: []byte(`{"id":"late","name":"show_ui","input":"{}"}`)},
+		{ID: 8, Role: "user", Type: "summary", Content: []byte(`{"text":"summary"}`)},
+		{ID: 9, Role: "tool", Type: "tool_result", Content: []byte(`{"id":"late","name":"show_ui","text":"UI_DISPLAYED card_id=late"}`)},
+	}
+	shared := sharedCardEntries(entries)
+	if len(shared) != 2 || !shared[3] || !shared[5] {
+		t.Fatalf("shared entry indexes = %v, want the second turn's call (3) and its result (5)", shared)
+	}
+	for _, e := range historyForParticipant(entries, "mate@x.com", "owner@x.com") {
+		if strings.Contains(string(e.Content), "stale") {
+			t.Errorf("entry %d publishes the cancelled turn's card input", e.ID)
+		}
+	}
+}

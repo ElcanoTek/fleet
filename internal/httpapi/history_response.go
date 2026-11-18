@@ -74,6 +74,15 @@ func sharedCardEntries(entries []agent.HistoryEntry) map[int]bool {
 	// (applyToolResult).
 	open := make(map[string][]int)
 	for i, e := range entries {
+		// A call left unanswered when its turn ended (cancelled, or the server
+		// stopped) is never answered later: a result in a later turn that
+		// reuses the id answers that turn's call. So nothing waits across a
+		// turn boundary — a new user message that is not a mid-turn steer, or
+		// a compaction summary.
+		if startsNewTurn(e) {
+			clear(open)
+			continue
+		}
 		switch e.Type {
 		case "tool_call":
 			var c agent.ToolCallContent
@@ -101,6 +110,23 @@ func sharedCardEntries(entries []agent.HistoryEntry) map[int]bool {
 		}
 	}
 	return shared
+}
+
+// startsNewTurn reports whether e opens a new turn in the stored history: a
+// user message that was not steered into a running turn, or a compaction
+// summary (or its content-free boundary).
+func startsNewTurn(e agent.HistoryEntry) bool {
+	switch e.Type {
+	case "summary", agent.EntryTypeSummaryBoundary:
+		return true
+	case "text":
+		if e.Role != "user" {
+			return false
+		}
+		var c agent.TextContent
+		return json.Unmarshal(e.Content, &c) != nil || !c.Steered
+	}
+	return false
 }
 
 // isShownCardResult reports whether a show_ui result says the card was drawn:
