@@ -839,6 +839,10 @@ function TeamChatKebab({ conversation }: { conversation: ConversationSummary }) 
   const [copy, setCopy] = useState<"idle" | "copied" | "failed">("idle");
   const anchorRef = useRef<HTMLButtonElement | null>(null);
   const closeTimer = useRef<number | null>(null);
+  // Bumped on every close: a copy still pending when the menu closed (a
+  // browser asking for permission) must not write its result into, or
+  // close, a later opening of the menu.
+  const attempt = useRef(0);
   useEffect(
     () => () => {
       if (closeTimer.current !== null) window.clearTimeout(closeTimer.current);
@@ -846,6 +850,7 @@ function TeamChatKebab({ conversation }: { conversation: ConversationSummary }) 
     [],
   );
   const close = () => {
+    attempt.current += 1;
     if (closeTimer.current !== null) window.clearTimeout(closeTimer.current);
     closeTimer.current = null;
     setOpen(false);
@@ -901,7 +906,9 @@ function TeamChatKebab({ conversation }: { conversation: ConversationSummary }) 
             icon={<ShareGlyph className="size-4" />}
             onClick={() => {
               // The menu stays open long enough to say whether it worked.
+              const mine = attempt.current;
               void copyText(link).then((ok) => {
+                if (mine !== attempt.current) return;
                 setCopy(ok ? "copied" : "failed");
                 if (ok) closeTimer.current = window.setTimeout(close, 900);
               });
@@ -2538,19 +2545,19 @@ export function ConversationSidebar({
                     >
                       <button
                         type="button"
-                        className="block w-full min-w-0 rounded-md py-1.5 pl-3 pr-20 text-left text-[0.8125rem] text-[var(--color-text-muted)] transition hover:text-[var(--color-text-secondary)]"
+                        className="block w-full min-w-0 rounded-md py-1.5 pl-3 pr-20 text-left text-[0.8125rem] text-[var(--color-text-muted)] transition hover:text-[var(--color-text-secondary)] any-pointer-coarse:min-h-11 any-pointer-coarse:pr-28"
                         onClick={() => void loadConversation(conversation.id)}
                       >
                         <span className="block truncate italic">
                           {conversation.title}
                         </span>
                       </button>
-                      <div className={`absolute inset-y-0 right-1 flex items-center gap-1 transition ${ROW_ACTIONS_REVEAL}`}>
+                      <div className={`absolute inset-y-0 right-1 flex items-center gap-1 transition any-pointer-coarse:gap-4 ${ROW_ACTIONS_REVEAL}`}>
                         <button
                           type="button"
                           aria-label={tr("Unarchive {0}", [conversation.title])}
                           data-tip-top="Unarchive"
-                          className="inline-flex size-10 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-strong)] hover:text-[var(--color-text-primary)] sm:size-7"
+                          className="hit-area-touch inline-flex size-10 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-strong)] hover:text-[var(--color-text-primary)] sm:size-7"
                           onClick={() =>
                             void toggleArchive(conversation, false)
                           }
@@ -2575,7 +2582,7 @@ export function ConversationSidebar({
                           type="button"
                           aria-label={tr("Delete {0}", [conversation.title])}
                           data-tip-top="Delete"
-                          className="inline-flex size-10 items-center justify-center rounded-md text-[var(--color-text-muted)] transition motion-safe:hover:scale-110 hover:bg-[var(--color-status-error-bg)] hover:text-[var(--color-status-error-fg)] sm:size-7"
+                          className="hit-area-touch inline-flex size-10 items-center justify-center rounded-md text-[var(--color-text-muted)] transition motion-safe:hover:scale-110 hover:bg-[var(--color-status-error-bg)] hover:text-[var(--color-status-error-fg)] sm:size-7"
                           onClick={() =>
                             setPendingDeleteConversation({
                               id: conversation.id,

@@ -375,6 +375,33 @@ test("when the clipboard refuses, a Team chats row's menu shows the link to copy
   await expect(menu).toBeVisible();
 });
 
+test("a copy that finishes after the menu closed does not touch the next opening", async ({ page }) => {
+  await page.addInitScript(() => {
+    const w = window as unknown as { finishCopy?: () => void };
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      // Pending until the test lets it finish, like a browser asking for permission.
+      value: { writeText: () => new Promise<void>((resolve) => (w.finishCopy = resolve)) },
+    });
+  });
+  await setupTeamChats(page);
+  await page.goto("/chat");
+  const row = page.getByTestId("team-shared-conv-row").filter({ hasText: "Q4 planning" }).locator("..");
+  await row.hover();
+  const options = row.getByTestId("team-chat-options");
+  const menu = page.getByRole("menu", { name: "Options for Q4 planning" });
+  await options.click();
+  await menu.getByRole("menuitem", { name: "Copy link" }).click();
+  await page.keyboard.press("Escape");
+  await expect(menu).toBeHidden();
+  await options.click();
+  await page.evaluate(() => (window as unknown as { finishCopy?: () => void }).finishCopy?.());
+  // The old attempt neither relabels nor closes the menu opened since.
+  await page.waitForTimeout(1200);
+  await expect(menu).toBeVisible();
+  await expect(menu.getByRole("menuitem", { name: "Copy link" })).toBeVisible();
+});
+
 test.describe("on a touch screen", () => {
   test.use({ hasTouch: true, isMobile: true, viewport: { width: 1280, height: 900 } });
 
