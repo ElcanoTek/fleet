@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/safe"
@@ -41,18 +42,31 @@ func (s *Server) handleConversationTransfer(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	// A running turn has the chat's workspace mid-flight: a participant's
-	// turn swaps the owner's private subtrees (attachments, personal skills)
-	// out and back (activateTurnPrivateWorkspace). Moving the chat under it
-	// could hand those to the new owner when the turn puts them back, so the
-	// transfer waits for the chat to be idle. A submission that was admitted
-	// before the transfer and registers after it is refused by the ownership
-	// epoch bumped below (registerTurnGated); one that registers in the
-	// moment before the commit is stopped by the reconciliation.
-	if s.turnRunning(convID) {
+	// The chat must be idle, and stay idle until the transfer is done. A
+	// participant's turn swaps the owner's private subtrees (attachments,
+	// personal skills) out of the workspace and back
+	// (activateTurnPrivateWorkspace); moving the chat under one could hand
+	// those to the new owner when the turn puts them back. So:
+	//
+	//   - beginTransfer refuses while a turn is running and, under the same
+	//     lock registration takes, marks the chat as changing hands: no turn
+	//     can register until the deferred end (registerTurnGated).
+	//   - the workspace lock is the one a turn, or an approval being
+	//     executed, holds from the moment it prepares the workspace until it
+	//     has put it back. Holding it here means the last turn's restore has
+	//     finished, and nothing else touches the workspace meanwhile.
+	endTransfer, idle := s.beginTransfer(convID)
+	if !idle {
 		http.Error(w, store.ErrTransferBusy.Error(), http.StatusConflict)
 		return
 	}
+	defer endTransfer()
+	unlockWorkspace, ok := s.lockWorkspaceWithin(convID, transferWorkspaceWait)
+	if !ok {
+		http.Error(w, store.ErrTransferBusy.Error(), http.StatusConflict)
+		return
+	}
+	defer unlockWorkspace()
 	// The previous owner's personal skills are theirs, not part of the chat,
 	// and must be gone before the chat is anyone else's: they are removed
 	// first, and a failure stops the transfer. Nothing is lost if the
@@ -107,11 +121,11 @@ func (s *Server) handleConversationTransfer(w http.ResponseWriter, r *http.Reque
 	// streams — the same reconciliation a participant's removal gets.
 	s.enforceMultiplayerRevocation(ctx, convID, res.Conversation, seeds)
 	s.cancelConversationAutoSubmits(ctx, convID)
-	// A turn that slipped in before the commit may have written the previous
-	// owner's skills again; it has been stopped, so clear them once more.
-	if err := s.purgeOwnerSkills(convID); err != nil {
-		logging.From(ctx).Warn("conversations: transfer could not clear user skills after the commit", "conv_id", safe.LogSafe(convID), "err", safe.LogSafe(err.Error()))
-	}
+	// The chat's persistent sandbox, where the deployment keeps one, holds
+	// the previous owner's live Python state: variables, imports and threads
+	// that were never part of the transcript or the workspace. The new
+	// owner's first turn starts a fresh one.
+	s.releasePersistentSandbox(convID)
 	// A new owner who took part in the chat as a participant has attachments
 	// of their own in the participant stash; as the owner, theirs live in the
 	// workspace.
@@ -129,12 +143,50 @@ func (s *Server) handleConversationTransfer(w http.ResponseWriter, r *http.Reque
 	})
 }
 
-// turnRunning reports whether a turn is running in convID right now.
-func (s *Server) turnRunning(convID string) bool {
+// transferWorkspaceWait bounds how long a transfer waits for a turn that has
+// just ended, or an approval being executed, to put the workspace back.
+var transferWorkspaceWait = 10 * time.Second
+
+// beginTransfer marks convID as changing hands, unless a turn is running in
+// it or another transfer of it is under way (idle=false). While the mark is
+// set, registerTurnGated refuses every turn for the conversation; both read
+// and write it under inflightMu, so "no turn is running" and "none can start"
+// are one decision. The returned func clears the mark.
+func (s *Server) beginTransfer(convID string) (end func(), idle bool) {
 	s.inflightMu.Lock()
-	entry, ok := s.inflight[convID]
-	s.inflightMu.Unlock()
-	return ok && entry.IsRunning()
+	defer s.inflightMu.Unlock()
+	if entry, ok := s.inflight[convID]; ok && entry.IsRunning() {
+		return nil, false
+	}
+	if s.transferring[convID] {
+		return nil, false
+	}
+	if s.transferring == nil {
+		s.transferring = make(map[string]bool)
+	}
+	s.transferring[convID] = true
+	return func() {
+		s.inflightMu.Lock()
+		delete(s.transferring, convID)
+		s.inflightMu.Unlock()
+	}, true
+}
+
+// lockWorkspaceWithin takes the conversation's workspace lock, giving up
+// after wait. When it gives up, the lock is released as soon as it is
+// eventually acquired.
+func (s *Server) lockWorkspaceWithin(convID string, wait time.Duration) (unlock func(), ok bool) {
+	got := make(chan func(), 1)
+	go func() { got <- s.workspaceLocks.lock(convID) }()
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case unlock := <-got:
+		return unlock, true
+	case <-timer.C:
+		go func() { (<-got)() }()
+		return nil, false
+	}
 }
 
 // currentOwnershipEpoch returns how many times this process has transferred
@@ -149,6 +201,7 @@ func (s *Server) currentOwnershipEpoch(convID string) uint64 {
 // conversation keeps them: the workspace, and the stash a participant's turn
 // moves the owner's copy to.
 func (s *Server) purgeOwnerSkills(convID string) error {
+	defer s.workspaceSwapLocks.lock(convID)()
 	dirs := []string{filepath.Join(tools.WorkspaceDirForConversation(convID), userSkillsRoot)}
 	if stash, err := s.privateWorkspaceStashDir(convID); err == nil {
 		dirs = append(dirs, filepath.Join(stash, "owner", userSkillsRoot))
@@ -168,6 +221,7 @@ func (s *Server) purgeOwnerSkills(convID string) error {
 // earlier turns keep resolving. A name the workspace already holds is left in
 // the stash rather than overwritten. Best-effort: a failure is logged.
 func (s *Server) promoteParticipantAttachments(ctx context.Context, convID, newOwner string) {
+	defer s.workspaceSwapLocks.lock(convID)()
 	stash, err := s.privateWorkspaceStashDir(convID)
 	if err != nil {
 		return

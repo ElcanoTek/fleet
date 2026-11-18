@@ -75,7 +75,7 @@ test("the owner transfers a chat from its row menu", async ({ page }) => {
   await confirm.click();
   const done = page.getByTestId("transfer-chat-done");
   await expect(done).toContainText("now belongs to sam@reklaim.example");
-  await expect(done).toContainText("patrols and timers (2) moved with it and are paused");
+  await expect(done).toContainText("Its patrols and timers are paused until the new owner resumes them.");
   expect(sent).toEqual([{ to_email: "sam@reklaim.example" }, { to_email: "sam@reklaim.example" }]);
   // The chat is no longer this person's: its row is gone.
   await expect(page.getByRole("button", { name: "Conversation options for Reklaim Opti workbench" })).toHaveCount(0);
@@ -126,7 +126,7 @@ test("an admin transfers a teammate's chat from Team chats", async ({ page }) =>
   const dialog = page.getByTestId("transfer-chat-dialog");
   await dialog.getByTestId("transfer-chat-email").fill("sam@reklaim.example");
   await dialog.getByTestId("transfer-chat-confirm").click();
-  await expect(page.getByTestId("transfer-chat-done")).toContainText("It had no patrols or timers to move.");
+  await expect(page.getByTestId("transfer-chat-done")).toContainText("It has no patrols or timers.");
   expect(body).toEqual({ to_email: "sam@reklaim.example" });
   await expect(page.getByTestId("team-shared-conv-row").filter({ hasText: "Client handover board" })).toHaveCount(0);
 });

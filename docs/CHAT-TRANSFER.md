@@ -23,10 +23,18 @@ The new owner must have an enabled account that is not a read-only viewer.
 They can be on any team, or none. An archived chat or a Lockdown chat is
 refused (409), and the menu does not offer the item on one; a target that
 cannot take the chat is refused (400) with one message whatever the reason.
-A chat with a turn running is refused (409) until the turn finishes or is
-stopped: a participant's turn has the owner's private workspace subtrees
-swapped out, and moving the chat under it could hand them to the new owner
-when the turn puts them back.
+A chat that is not idle is refused (409) until it is: a turn running in it,
+or a turn or approval that still holds its workspace. A participant's turn has
+the owner's private workspace subtrees swapped out, and moving the chat under
+one could hand them to the new owner when the turn puts them back. Idle is
+made to hold for the whole transfer:
+
+- `beginTransfer` refuses while a turn is running and marks the chat as
+  changing hands under the lock turn registration takes, so no turn can
+  register until the transfer has finished (`registerTurnGated`).
+- The handler then takes the conversation's workspace lock, the one a turn or
+  an approval being executed holds from preparing the workspace until it has
+  put it back, waiting up to 10 seconds for it.
 
 **What `store.TransferConversation` does, in one transaction:**
 
@@ -63,6 +71,10 @@ client that has gone away does not skip it) the handler:
   pending approvals, session approvals and their own patrols in the chat are
   cancelled, and their live streams are detached.
 - cancels pending auto-submit countdowns.
+- releases the chat's persistent sandbox, where the deployment keeps one
+  (`FLEET_PYTHON_REPL_MODE=persistent`): the previous owner's live Python
+  state was never part of the transcript or the workspace, and the new
+  owner's first turn starts a fresh one.
 - moves the attachments the new owner uploaded while they were a participant
   out of the participant stash and into the workspace, where an owner's
   attachments live, so links from their earlier turns keep resolving.

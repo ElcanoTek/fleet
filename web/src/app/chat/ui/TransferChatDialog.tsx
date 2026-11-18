@@ -100,12 +100,9 @@ export function TransferChatDialog({
               <strong>&quot;{title}&quot;</strong>,
               <strong>{done.ownerEmail}</strong>,
             )}{" "}
-            {done.patrolsMoved > 0
-              ? tr(
-                  "Its patrols and timers ({0}) moved with it and are paused until the new owner resumes them.",
-                  [done.patrolsMoved],
-                )
-              : tr("It had no patrols or timers to move.")}
+            {done.patrolsMoved > 0 || done.patrolsPaused > 0
+              ? tr("Its patrols and timers are paused until the new owner resumes them.")
+              : tr("It has no patrols or timers.")}
           </p>
         </div>
         <div className="mt-4 flex justify-end">

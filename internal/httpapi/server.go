@@ -155,7 +155,10 @@ type Server struct {
 	// has made (docs/CHAT-TRANSFER.md). Guarded by inflightMu, like the
 	// registration it gates: an owner's submission admitted before a
 	// transfer must not register its turn after it.
-	ownershipEpochs    map[string]uint64
+	ownershipEpochs map[string]uint64
+	// transferring marks the conversations whose transfer is under way
+	// (beginTransfer). Guarded by inflightMu: no turn registers for one.
+	transferring       map[string]bool
 	workspaceLocks     keyedLocks
 	workspaceSwapLocks keyedLocks
 	// sharedFilesMu serializes shared-file-library staging (upload/rename/
@@ -884,6 +887,10 @@ func (s *Server) registerTurnGated(convID string, cancel context.CancelFunc, ste
 		return nil, "", 0, false, true
 	}
 	if steer != nil && steer.ownerChecked && s.ownershipEpochs[convID] != steer.ownerEpoch {
+		s.inflightMu.Unlock()
+		return nil, "", 0, false, true
+	}
+	if s.transferring[convID] {
 		s.inflightMu.Unlock()
 		return nil, "", 0, false, true
 	}

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/tools"
@@ -69,22 +70,7 @@ func TestConversationTransferRoute(t *testing.T) {
 		t.Fatal("a refused transfer moved the chat")
 	}
 
-	// While a turn is running the chat cannot change hands: the turn has the
-	// workspace's private subtrees mid-swap.
-	_, stopTurn := context.WithCancel(ctx)
-	srv.inflightMu.Lock()
-	srv.inflight[conv.ID] = inflightEntry{buf: newTurnBuffer("t-running", ""), cancel: stopTurn}
-	srv.inflightMu.Unlock()
-	if rec := post(asUser(ctx, owner), `{"to_email":"`+next+`"}`); rec.Code != http.StatusConflict {
-		t.Errorf("transfer during a running turn = %d, want 409: %s", rec.Code, rec.Body.String())
-	}
-	if c, _ := st.Get(ctx, owner, conv.ID); c == nil {
-		t.Fatal("a transfer refused for a running turn moved the chat")
-	}
-	srv.inflightMu.Lock()
-	delete(srv.inflight, conv.ID)
-	srv.inflightMu.Unlock()
-	stopTurn()
+	assertTransferNeedsAnIdleChat(ctx, t, srv, st, conv.ID, owner, next, mate, post)
 
 	// A message the owner submitted just before the transfer was admitted
 	// while they still owned the chat, and has not registered its turn yet.
@@ -162,4 +148,51 @@ func TestConversationTransferRoute(t *testing.T) {
 	if c, _ := st.Get(ctx, mate, conv.ID); c == nil {
 		t.Error("the admin's transfer did not move the chat")
 	}
+}
+
+// assertTransferNeedsAnIdleChat: a chat changes hands only when no turn is
+// running in it and nothing holds its workspace, and while it does, no turn
+// can register for it.
+func assertTransferNeedsAnIdleChat(ctx context.Context, t *testing.T, srv *Server, st *scheduleFakeStore, convID, owner, next, mate string, post func(context.Context, string) *httptest.ResponseRecorder) {
+	t.Helper()
+	// While a turn is running the chat cannot change hands: the turn has the
+	// workspace's private subtrees mid-swap.
+	_, stopTurn := context.WithCancel(ctx)
+	srv.inflightMu.Lock()
+	srv.inflight[convID] = inflightEntry{buf: newTurnBuffer("t-running", ""), cancel: stopTurn}
+	srv.inflightMu.Unlock()
+	if rec := post(asUser(ctx, owner), `{"to_email":"`+next+`"}`); rec.Code != http.StatusConflict {
+		t.Errorf("transfer during a running turn = %d, want 409: %s", rec.Code, rec.Body.String())
+	}
+	if c, _ := st.Get(ctx, owner, convID); c == nil {
+		t.Fatal("a transfer refused for a running turn moved the chat")
+	}
+	srv.inflightMu.Lock()
+	delete(srv.inflight, convID)
+	srv.inflightMu.Unlock()
+	stopTurn()
+
+	// Nor while the workspace is still held: by a turn that has ended but
+	// not yet put the workspace back, or by an approval being executed.
+	transferWorkspaceWait = 50 * time.Millisecond
+	t.Cleanup(func() { transferWorkspaceWait = 10 * time.Second })
+	releaseWorkspace := srv.workspaceLocks.lock(convID)
+	if rec := post(asUser(ctx, owner), `{"to_email":"`+next+`"}`); rec.Code != http.StatusConflict {
+		t.Errorf("transfer while the workspace is held = %d, want 409: %s", rec.Code, rec.Body.String())
+	}
+	releaseWorkspace()
+	// And while a transfer is under way, no turn can register for the chat.
+	endTransfer, idle := srv.beginTransfer(convID)
+	if !idle {
+		t.Fatal("an idle chat could not begin a transfer")
+	}
+	if _, again := srv.beginTransfer(convID); again {
+		t.Error("a second transfer of the same chat began while the first was under way")
+	}
+	_, stopGated := context.WithCancel(ctx)
+	if _, _, _, ok, swept := srv.registerTurnGated(convID, stopGated, &steerMailbox{store: st, user: mate, convID: convID}, nil, ""); ok || !swept {
+		t.Errorf("a turn registered while the chat was changing hands (ok=%v swept=%v)", ok, swept)
+	}
+	stopGated()
+	endTransfer()
 }
