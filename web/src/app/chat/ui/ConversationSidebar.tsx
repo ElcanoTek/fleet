@@ -55,7 +55,7 @@ import type {
 import type { Project } from "./ProjectsModal";
 import { previewNodes, type SearchResult } from "./SearchBar";
 import { isTemporaryChat } from "./deleteAllUnpinnedScope";
-import { HourglassGlyph, ShareGlyph, TeamGlyph } from "./ShareGlyphs";
+import { HourglassGlyph, ShareGlyph, TeamGlyph, UnarchiveGlyph } from "./ShareGlyphs";
 import { teamLinkUrl } from "./teamSharing";
 import { copyText } from "@/app/shared/lib/clipboard";
 import { ChatReorderList } from "./ChatReorderList";
@@ -817,22 +817,7 @@ function ConversationKebab({
         </MenuItem>
         <MenuSeparator />
         <MenuItem
-          icon={
-            <svg
-              aria-hidden="true"
-              viewBox="0 0 24 24"
-              className="size-4"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth={1.8}
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <rect x="3" y="4" width="18" height="4" rx="1" />
-              <path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8" />
-              <path d="M10 12h4" />
-            </svg>
-          }
+          icon={<Icon name="archive" className="size-4" />}
           onClick={() => {
             onArchive();
             close();
@@ -2370,21 +2355,7 @@ visibleProjectTree.map(({ project, chats }) => {
                             void toggleArchive(conversation, false)
                           }
                         >
-                          <svg
-                            aria-hidden="true"
-                            viewBox="0 0 24 24"
-                            className="size-3.5"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeWidth={1.8}
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                          >
-                            <rect x="3" y="4" width="18" height="4" rx="1" />
-                            <path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8" />
-                            <path d="M12 18v-6" />
-                            <path d="M9.5 14.5 12 12l2.5 2.5" />
-                          </svg>
+                          <UnarchiveGlyph className="size-3.5" />
                         </button>
                         <button
                           type="button"
