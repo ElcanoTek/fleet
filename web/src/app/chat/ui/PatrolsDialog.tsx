@@ -34,7 +34,10 @@ export type CreatePatrolInput = {
   cron?: string;
   timezone?: string;
   durationSeconds?: number;
-  autoApprove: boolean;
+  /** Both left out when the viewer can't set the chat's approval mode (not
+   *  its owner): the server keeps the owner's mode either way, and an
+   *  Autonomous request would still ask this viewer to accept the risk. */
+  autoApprove?: boolean;
   approvalMode?: ConversationApprovalMode;
   /** Add alongside the chat's existing patrols; without it the server
    *  updates the latest recurring patrol in place. */
@@ -980,6 +983,7 @@ export function PatrolsDialog({
               mode="new"
               initialPrompt={initialPrompt}
               approvalMode={approvalMode}
+              showApprovalMode={canChangeApprovalMode}
               onRequireAutonomousAccept={onRequireAutonomousAccept}
               confirmAutonomous={anyArmed}
               canCancel={hasPatrols}
@@ -991,8 +995,9 @@ export function PatrolsDialog({
                   cron: v.cron,
                   timezone: v.timezone,
                   durationSeconds: v.durationSeconds,
-                  autoApprove: v.approvalMode !== "manual",
-                  approvalMode: v.approvalMode,
+                  ...(canChangeApprovalMode
+                    ? { autoApprove: v.approvalMode !== "manual", approvalMode: v.approvalMode }
+                    : {}),
                   // "New patrol or timer" next to existing patrols adds one;
                   // it must never overwrite the patrol already running.
                   allowMultiple: hasPatrols || undefined,

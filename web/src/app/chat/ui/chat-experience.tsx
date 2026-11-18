@@ -5998,8 +5998,14 @@ export function ChatExperience({
   // A patrol action's failure while the dialog is open: the rail toast sits
   // under the dialog's scrim, so the dialog shows it (as Share does).
   const [patrolError, setPatrolError] = useState<string | null>(null);
+  // Read when the request settles, not when it started: a dialog closed
+  // meanwhile is gone, so its failure belongs on the rail again.
+  const patrolsOpenRef = useRef(false);
+  useEffect(() => {
+    patrolsOpenRef.current = patrolsOpen;
+  }, [patrolsOpen]);
   const reportPatrolError = (message: string) => {
-    if (patrolsOpen) setPatrolError(message);
+    if (patrolsOpenRef.current) setPatrolError(message);
     else showRailError(message);
   };
   const [patrolBarHiddenOverride, setPatrolBarHiddenOverride] = useState<
@@ -6321,11 +6327,13 @@ export function ChatExperience({
     input: CreatePatrolInput,
     opts: { accepted?: boolean } = {},
   ): Promise<boolean> => {
+    // A viewer who can't set the chat's mode sends none (CreatePatrolInput).
+    const setsMode = input.approvalMode !== undefined || input.autoApprove !== undefined;
     const requestedMode = resolveApprovalMode(
       input.approvalMode,
       input.autoApprove,
     );
-    if (requestedMode === "autonomous" && !autonomousAccepted && !opts.accepted) {
+    if (setsMode && requestedMode === "autonomous" && !autonomousAccepted && !opts.accepted) {
       requireAutonomousAccept(() => {
         void handleStartPatrol(input, { accepted: true });
       });
@@ -6351,8 +6359,9 @@ export function ChatExperience({
         cron: input.cron,
         timezone: input.timezone,
         duration_seconds: input.durationSeconds,
-        auto_approve: requestedMode !== "manual",
-        approval_mode: requestedMode,
+        ...(setsMode
+          ? { auto_approve: requestedMode !== "manual", approval_mode: requestedMode }
+          : {}),
         allow_multiple: input.allowMultiple,
       });
       applyScheduleResponse(convId, data);

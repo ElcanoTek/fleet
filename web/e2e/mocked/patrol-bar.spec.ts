@@ -39,7 +39,7 @@ const PATROL = {
 
 async function mockPatrolChat(
   page: Page,
-  opts: { pending?: boolean; padding?: number; failRunNow?: boolean } = {},
+  opts: { pending?: boolean; padding?: number; failRunNow?: boolean; failDelayMs?: number } = {},
 ) {
   const calls: string[] = [];
   let schedules = [PATROL];
@@ -51,7 +51,12 @@ async function mockPatrolChat(
     calls.push(`${r.request().method()} ${new URL(r.request().url()).pathname}`);
     if (r.request().method() === "DELETE") schedules = [];
     if (opts.failRunNow && r.request().url().endsWith("/run-now")) {
-      return r.fulfill({ status: 500, json: { error: "Patrol runner is unavailable" } });
+      return new Promise<void>((done) =>
+        setTimeout(
+          () => void r.fulfill({ status: 500, json: { error: "Patrol runner is unavailable" } }).then(done),
+          opts.failDelayMs ?? 0,
+        ),
+      );
     }
     return r.fulfill({
       json: { schedules, auto_approve: true, approval_mode: "auto" },
@@ -291,4 +296,17 @@ test("picking Autonomous in the edit form asks once, and Save applies it", async
   await expect.poll(() => modes).toEqual(["autonomous"]);
   await expect(risk).toBeHidden();
   expect(accepts).toBe(1);
+});
+
+test("a failure that lands after the dialog closed shows on the page", async ({ page }) => {
+  await mockPatrolChat(page, { failRunNow: true, failDelayMs: 1500 });
+  await expect(page.getByTestId("patrol-banner")).toBeVisible({ timeout: 15_000 });
+  await page.getByTestId("chat-patrol-button").click();
+  const dialog = page.getByRole("dialog", { name: "Patrols & timers" });
+  await dialog.getByRole("button", { name: "Run now" }).first().click();
+  await dialog.getByRole("button", { name: "Close patrols" }).click();
+  await expect(dialog).toBeHidden();
+  await expect(page.getByRole("alert").filter({ hasText: /Patrol runner is unavailable|Couldn't/ })).toBeVisible({
+    timeout: 5_000,
+  });
 });

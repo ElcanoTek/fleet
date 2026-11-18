@@ -461,6 +461,19 @@ describe("PatrolsDialog with no patrols (first patrol)", () => {
     expect(vi.mocked(props.onStart).mock.calls[0][0]).toMatchObject({ durationSeconds: 168 * 3600 });
   });
 
+  it("offers a non-owner no approval mode, and starts without one", async () => {
+    const props = renderDialog({ schedules: [], approvalMode: "autonomous", canChangeApprovalMode: false });
+    const form = screen.getByTestId("patrol-form-new");
+    expect(within(form).queryByRole("radiogroup")).toBeNull();
+    fireEvent.click(within(form).getByRole("button", { name: "Every 1h" }));
+    fireEvent.click(within(form).getByRole("button", { name: "Start patrol" }));
+    await waitFor(() => expect(props.onStart).toHaveBeenCalledTimes(1));
+    const input = vi.mocked(props.onStart).mock.calls[0][0];
+    expect(input).not.toHaveProperty("approvalMode");
+    expect(input).not.toHaveProperty("autoApprove");
+    expect(props.onRequireAutonomousAccept).not.toHaveBeenCalled();
+  });
+
   it("asks for the Autonomous risk prompt before picking Autonomous, every time", () => {
     const props = renderDialog({ schedules: [] });
     fireEvent.click(screen.getByRole("radio", { name: "Autonomous" }));
