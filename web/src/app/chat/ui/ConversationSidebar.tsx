@@ -583,6 +583,7 @@ function ConversationKebab({
   onSetLabels,
   onSetProject,
   onShare,
+  onTransfer,
   isShared,
   onSelect,
   onArchive,
@@ -601,6 +602,8 @@ function ConversationKebab({
   // Opens the Share dialog (both scopes). It no longer mints a link as a
   // side effect of opening: creating one is a click inside the dialog.
   onShare: () => void;
+  // Opens the Transfer ownership dialog (docs/CHAT-TRANSFER.md).
+  onTransfer: () => void;
   isShared: boolean;
   onSelect: () => void;
   onArchive: () => void;
@@ -807,6 +810,15 @@ function ConversationKebab({
           {tr("Share…")}
         </MenuItem>
         <MenuItem
+          icon={<Icon name="arrow-right" className="size-4" />}
+          onClick={() => {
+            onTransfer();
+            close();
+          }}
+        >
+          {tr("Transfer ownership…")}
+        </MenuItem>
+        <MenuItem
           icon={<Icon name="check-square" className="size-4" />}
           onClick={() => {
             onSelect();
@@ -855,7 +867,14 @@ function teamChatLink(c: ConversationSummary): string | null {
   return null;
 }
 
-function TeamChatKebab({ conversation }: { conversation: ConversationSummary }) {
+function TeamChatKebab({
+  conversation,
+  onTransfer,
+}: {
+  conversation: ConversationSummary;
+  // Set for an admin only: an admin may hand any chat to another person.
+  onTransfer?: () => void;
+}) {
   const [open, setOpen] = useState(false);
   const [copy, setCopy] = useState<"idle" | "copied" | "failed">("idle");
   const anchorRef = useRef<HTMLButtonElement | null>(null);
@@ -973,6 +992,17 @@ function TeamChatKebab({ conversation }: { conversation: ConversationSummary }) 
               className="mt-1 w-full rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-transparent px-1.5 py-1 text-[0.72rem] text-[var(--color-text-primary)] focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none any-pointer-coarse:min-h-11"
             />
           </div>
+        ) : null}
+        {onTransfer ? (
+          <MenuItem
+            icon={<Icon name="arrow-right" className="size-4" />}
+            onClick={() => {
+              close();
+              onTransfer();
+            }}
+          >
+            {tr("Transfer ownership…")}
+          </MenuItem>
         ) : null}
       </Menu>
     </>
@@ -1357,6 +1387,8 @@ export function ConversationSidebar({
   setPendingDeleteConversation,
   setConversationLabels,
   openShareDialog,
+  openTransferDialog,
+  canTransferTeamChats,
   archivedConversations,
   showArchived,
   setShowArchived,
@@ -1453,6 +1485,10 @@ export function ConversationSidebar({
   // Opens the Share dialog for one conversation — link scope and team scope
   // in one place (ADR-0057).
   openShareDialog: (conversation: ConversationSummary) => void;
+  // Opens the Transfer ownership dialog for one conversation. The owner's
+  // row menu always offers it; a Team chats row offers it to an admin.
+  openTransferDialog: (conversation: ConversationSummary) => void;
+  canTransferTeamChats: boolean;
   archivedConversations: ConversationSummary[];
   showArchived: boolean;
   setShowArchived: Dispatch<SetStateAction<boolean>>;
@@ -1826,6 +1862,7 @@ export function ConversationSidebar({
       }
       isShared={Boolean(conversation.share_token)}
       onShare={() => openShareDialog(conversation)}
+      onTransfer={() => openTransferDialog(conversation)}
       onSelect={() => onEnterSelectMode(conversation.id)}
       onArchive={() => void toggleArchive(conversation, true)}
       onDelete={() =>
@@ -2431,7 +2468,10 @@ visibleProjectTree.map(({ project, chats }) => {
                             ) : null}
                           </button>
                           <div className="absolute inset-y-0 right-1 flex items-center">
-                            <TeamChatKebab conversation={c} />
+                            <TeamChatKebab
+                              conversation={c}
+                              onTransfer={canTransferTeamChats ? () => openTransferDialog(c) : undefined}
+                            />
                           </div>
                           </div>
                         );

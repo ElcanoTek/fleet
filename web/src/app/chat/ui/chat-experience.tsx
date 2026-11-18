@@ -120,6 +120,7 @@ import {
 import { ConversationSidebar } from "./ConversationSidebar";
 import { SavePromptDialog } from "./SavePromptDialog";
 import { ChatShareControls, ShareDialog } from "./ShareDialog";
+import { TransferChatDialog } from "./TransferChatDialog";
 import { OutputShareContext } from "./OutputShareMarkers";
 import { useOutputShareStates } from "./useOutputShareStates";
 import {
@@ -3495,6 +3496,29 @@ export function ChatExperience({
     return true;
   };
 
+  // A chat handed to someone else is no longer this person's: it leaves
+  // every list, and the pane moves on if it was the open chat. (An admin who
+  // moved a teammate's chat only loses the Team chats row.)
+  const dropTransferredConversation = async (conversationId: string) => {
+    const remaining = conversations.filter((c) => c.id !== conversationId);
+    setConversations(remaining);
+    setArchivedConversations((current) => current.filter((c) => c.id !== conversationId));
+    setTeamSharedConversations((current) => current.filter((c) => c.id !== conversationId));
+    clearConvSlot(conversationId);
+    if (activeConversationId !== conversationId) return;
+    const next = remaining[0];
+    if (!next) {
+      clearConversation();
+      return;
+    }
+    try {
+      await loadConversation(next.id);
+    } catch (err) {
+      console.error("load next conversation after transfer error:", err);
+      clearConversation();
+    }
+  };
+
   // The "Delete chat?" dialog stays open until the server has actually
   // deleted the chat: a failure (toasted by deleteConversationById) leaves the
   // user exactly where they were — same chat, same confirm, Delete re-enabled
@@ -4729,6 +4753,8 @@ export function ChatExperience({
   // toggle inside the dialog is reflected without re-plumbing a snapshot.
   // null = closed.
   const [shareDialog, setShareDialog] = useState<{ id: string } | null>(null);
+  // The Transfer ownership dialog (docs/CHAT-TRANSFER.md). null = closed.
+  const [transferDialog, setTransferDialog] = useState<{ id: string; title: string } | null>(null);
   const [shareLinkCopied, setShareLinkCopied] = useState(false);
   const [shareBusy, setShareBusy] = useState(false);
 
@@ -7444,6 +7470,8 @@ export function ChatExperience({
           setPendingDeleteConversation={setPendingDeleteConversation}
           setConversationLabels={setConversationLabels}
           openShareDialog={openShareDialog}
+          openTransferDialog={(c) => setTransferDialog({ id: c.id, title: c.title })}
+          canTransferTeamChats={adminState === "admin"}
           archivedConversations={archivedConversations}
           showArchived={showArchived}
           setShowArchived={setShowArchived}
@@ -7769,6 +7797,15 @@ export function ChatExperience({
               </button>
             </div>
           </DialogShell>
+        ) : null}
+
+        {transferDialog ? (
+          <TransferChatDialog
+            conversationId={transferDialog.id}
+            title={transferDialog.title}
+            onClose={() => setTransferDialog(null)}
+            onTransferred={(id) => void dropTransferredConversation(id)}
+          />
         ) : null}
 
         {shareDialog ? (

@@ -682,6 +682,47 @@ func (s *fakeChatStore) SetConversationMultiplayer(_ context.Context, ownerEmail
 	cp := *c
 	return &cp, nil
 }
+func (s *fakeChatStore) GetConversationOwnerAndMultiplayer(_ context.Context, convID string) (*store.Conversation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c := s.convs[convID]
+	if c == nil {
+		return nil, nil
+	}
+	cp := *c
+	return &cp, nil
+}
+
+// TransferConversation mirrors the store's effect on the conversation row:
+// a new owner and a private, Manual-approval chat. Patrols live in
+// scheduleFakeStore, which moves and pauses them.
+func (s *fakeChatStore) TransferConversation(_ context.Context, ownerEmail, convID, toEmail string) (*store.ConversationTransfer, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	to := strings.ToLower(strings.TrimSpace(toEmail))
+	c := s.convs[convID]
+	if c == nil || !strings.EqualFold(c.UserEmail, ownerEmail) {
+		return nil, store.ErrConversationNotFound
+	}
+	if to == "" || strings.EqualFold(to, ownerEmail) {
+		return nil, store.ErrTransferTarget
+	}
+	if u, ok := s.users[to]; ok && !u.Enabled {
+		return nil, store.ErrTransferTarget
+	}
+	if c.ArchivedAt != nil || c.Lockdown {
+		return nil, store.ErrTransferNotAllowed
+	}
+	from := c.UserEmail
+	c.UserEmail = to
+	c.Pinned, c.Labels, c.ProjectID, c.ShareToken = false, nil, "", ""
+	c.TeamVisible, c.Multiplayer = false, false
+	c.MultiplayerParticipants, c.MultiplayerExcluded, c.MCPAccounts = nil, nil, nil
+	c.AutoApprove, c.ApprovalMode = false, store.ConversationApprovalManual
+	cp := *c
+	return &store.ConversationTransfer{Conversation: &cp, FromEmail: from, ToEmail: to}, nil
+}
+
 func (s *fakeChatStore) UpdateConversationMultiplayerAccess(_ context.Context, ownerEmail, convID string, addEmails, removeEmails []string) (*store.Conversation, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

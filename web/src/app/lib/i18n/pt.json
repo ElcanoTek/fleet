@@ -5975,5 +5975,22 @@
   "Chats here are deleted after {0} days of inactivity. Pin a chat or move it into a project to keep it.": "Os chats aqui são eliminados após {0} dias de inatividade. Fixe um chat ou mova-o para um projeto para o manter.",
   "Chats marked with an hourglass are temporary: they are deleted after {0} days of inactivity. Pin a chat or move it into a project to keep it. A teammate's chat is theirs to keep.": "Os chats marcados com uma ampulheta são temporários: são eliminados após {0} dias de inatividade. Fixe um chat ou mova-o para um projeto para o manter. O chat de um colega é mantido pelo respetivo proprietário.",
   "Temporary — deleted after {0} days of inactivity. Pin it or move it into a project to keep it.": "Temporário: é eliminado após {0} dias de inatividade. Fixe-o ou mova-o para um projeto para o manter.",
-  "Delete every temporary chat": "Eliminar todos os chats temporários"
+  "Delete every temporary chat": "Eliminar todos os chats temporários",
+  "Transfer ownership…": "Transferir a propriedade…",
+  "Couldn't transfer the chat — it has an invalid id.": "Não foi possível transferir o chat: o identificador não é válido.",
+  "Couldn't transfer the chat": "Não foi possível transferir o chat",
+  "Couldn't transfer the chat — network error.": "Não foi possível transferir o chat: erro de rede.",
+  "Chat transferred": "Chat transferido",
+  "Close transfer ownership": "Fechar a transferência de propriedade",
+  "{0} now belongs to {1}.": "{0} pertence agora a {1}.",
+  "Its patrols and timers ({0}) moved with it and are paused until the new owner resumes them.": "As patrulhas e os temporizadores ({0}) foram com ele e estão em pausa até o novo proprietário os retomar.",
+  "It had no patrols or timers to move.": "Não tinha patrulhas nem temporizadores para mover.",
+  "Hand {0} to someone else. It becomes their chat as soon as you confirm.": "Entregue {0} a outra pessoa. Passa a ser o chat dela assim que confirmar.",
+  "New owner's email": "E-mail do novo proprietário",
+  "name@company.com": "nome@empresa.com",
+  "They need an active account here. They can be on another team.": "Precisa de uma conta ativa aqui. Pode estar noutra equipa.",
+  "They get everything in the chat: the messages, the files and the dashboard.": "Recebe tudo o que está no chat: as mensagens, os ficheiros e o painel.",
+  "Its patrols and timers move with it and are paused. A patrol runs with its owner's connectors, so the new owner starts them again.": "As patrulhas e os temporizadores vão com ele e ficam em pausa. Uma patrulha é executada com os conectores do proprietário, por isso o novo proprietário volta a iniciá-las.",
+  "It becomes private to them: team sharing, Multiplayer and any public link are turned off, and approval mode goes back to Manual.": "Passa a ser privado dessa pessoa: a partilha com a equipa, o chat colaborativo e qualquer ligação pública são desativados, e o modo de aprovação volta a Manual.",
+  "You lose access to it, unless they share it with you.": "Perde o acesso, a menos que essa pessoa o partilhe consigo."
 }

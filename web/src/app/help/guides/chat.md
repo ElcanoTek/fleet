@@ -1526,6 +1526,19 @@ dialog). When Multiplayer mode is on:
   specific people with `×`, restore removed people with `+`, or invite someone
   with **Add person by email**.
 
+**Transferring a chat.** To hand a chat to someone else, with its dashboard,
+files and patrols, open the chat's `⋯` menu in the sidebar and choose
+**Transfer ownership…**, then enter the new owner's email. They need an active
+account here and can be on another team. The chat becomes theirs as soon as
+you confirm; they are not asked to accept. Its patrols and timers move with it
+and are paused, because a patrol runs with its owner's connectors: the new
+owner presses **Resume** in the Patrol bar to start them again. The chat
+becomes private to the new owner (team sharing, Multiplayer mode and any
+public link are turned off, and approval mode goes back to **Manual**), and
+you lose access to it unless they share it with you. An archived or Lockdown
+chat can't be transferred. An admin can also transfer a chat listed under
+**Team chats** from its `⋮` menu.
+
 ### While a turn is running
 
 **Stop** halts the current turn; the partial reply stays in the transcript,
