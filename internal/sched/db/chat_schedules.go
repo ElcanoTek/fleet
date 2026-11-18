@@ -268,7 +268,7 @@ func (db *Database) FailChatScheduleFire(ctx context.Context, fire models.ChatSc
 //     A schedule cancelled meanwhile keeps that status.
 //   - busy: the slot is skipped — a patrol moves to its next slot, a timer
 //     retries in chatScheduleBusyRetry — so a blocked schedule never sits at
-//     the head of the due scan.
+//     the head of the due scan. Its row records the delivery's reason.
 //   - gone: the schedule is cancelled.
 //   - coalesced, stale, rejected: the definition is left as it is and the
 //     fire ends (a rejected Run now is terminal: nothing retries it).
@@ -384,11 +384,16 @@ func (db *Database) SettleChatScheduleFire(ctx context.Context, fire models.Chat
 		if fire.Trigger == models.ChatScheduleTriggerSchedule {
 			dueAt = fire.DueAt
 		}
+		// Only a busy run carries a reason (why its slot was skipped).
+		reason := ""
+		if d.Outcome == models.ChatScheduleBusy {
+			reason = d.Reason
+		}
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO chat_schedule_runs (schedule_id, run_number, trigger_kind, outcome, input_id, due_at, fired_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7)
+			INSERT INTO chat_schedule_runs (schedule_id, run_number, trigger_kind, outcome, reason, input_id, due_at, fired_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 			ON CONFLICT DO NOTHING`,
-			fire.ScheduleID, runNumber, string(fire.Trigger), string(d.Outcome), d.InputID, dueAt, now.UTC(),
+			fire.ScheduleID, runNumber, string(fire.Trigger), string(d.Outcome), reason, d.InputID, dueAt, now.UTC(),
 		); err != nil {
 			return false, err
 		}
@@ -449,7 +454,7 @@ func (db *Database) ListChatScheduleRuns(ctx context.Context, scheduleID string,
 		limit = 100
 	}
 	rows, err := db.conn.QueryContext(ctx, `
-		SELECT schedule_id, run_number, trigger_kind, outcome, input_id, due_at, fired_at
+		SELECT schedule_id, run_number, trigger_kind, outcome, reason, input_id, due_at, fired_at
 		  FROM chat_schedule_runs
 		 WHERE schedule_id = $1
 		 ORDER BY fired_at DESC, id DESC
@@ -467,7 +472,7 @@ func (db *Database) ListChatScheduleRuns(ctx context.Context, scheduleID string,
 			dueAt     sql.NullInt64
 			runNumber sql.NullInt64
 		)
-		if err := rows.Scan(&r.ScheduleID, &runNumber, &trigger, &outcome, &r.InputID, &dueAt, &r.FiredAt); err != nil {
+		if err := rows.Scan(&r.ScheduleID, &runNumber, &trigger, &outcome, &r.Reason, &r.InputID, &dueAt, &r.FiredAt); err != nil {
 			return nil, err
 		}
 		r.RunNumber = int(runNumber.Int64)
