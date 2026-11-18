@@ -69,11 +69,6 @@ these hold, and the script checks each one:
 
 The register's first and only entry is GHSA-fc5q-39xc-vjpf on picomatch.
 
-**Update 2026-11-18.** GitHub withdrew GHSA-fc5q-39xc-vjpf that day, so
-`npm audit` stopped reporting it and the stale-entry check failed CI. The
-entry was removed and the register is empty; the register and its checks stay
-for the next advisory of this kind.
-
 ## Consequences
 
 - PRs are unblocked. Any other advisory, including a new one on picomatch or
