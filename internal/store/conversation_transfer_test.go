@@ -47,6 +47,18 @@ func TestTransferConversation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateChatSchedule(mate): %v", err)
 	}
+	// The new owner already takes part in the chat and has a patrol of their
+	// own in it.
+	if _, err := s.UpdateConversationMultiplayerAccess(ctx, from, conv.ID, []string{to}, nil); err != nil {
+		t.Fatalf("add the new owner as a participant: %v", err)
+	}
+	ownPatrol, err := s.CreateChatSchedule(ctx, ChatScheduleInput{
+		ConversationID: conv.ID, UserEmail: to, Title: "Client's own check",
+		Prompt: "Check delivery.", CronExpr: "0 12 * * *", Timezone: "UTC",
+	})
+	if err != nil {
+		t.Fatalf("CreateChatSchedule(new owner): %v", err)
+	}
 	if _, err := s.db.ExecContext(ctx,
 		`INSERT INTO chat_input_queue (id, conversation_id, user_email, message, mode, state, client_input_id, position, created_at, updated_at)
 		 VALUES ('q1', $1, $2, 'queued by the old owner', 'queued', 'queued', 'k1', 1, 1, 1)`, conv.ID, from); err != nil {
@@ -59,8 +71,11 @@ func TestTransferConversation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TransferConversation: %v", err)
 	}
-	if res.FromEmail != from || res.ToEmail != to || res.PatrolsMoved != 1 || res.PatrolsPaused != 1 {
-		t.Errorf("result = %+v, want 1 patrol moved and paused from %s to %s", res, from, to)
+	if res.FromEmail != from || res.ToEmail != to || res.PatrolsMoved != 1 || res.PatrolsPaused != 2 {
+		t.Errorf("result = %+v, want 1 patrol moved and 2 paused (the moved one and the new owner's own) from %s to %s", res, from, to)
+	}
+	if res.Conversation == nil || res.Conversation.UserEmail != to {
+		t.Errorf("the result does not carry the transferred conversation: %+v", res.Conversation)
 	}
 	if old, _ := s.Get(ctx, from, conv.ID); old != nil {
 		t.Error("the previous owner still owns the chat")
@@ -80,7 +95,7 @@ func TestTransferConversation(t *testing.T) {
 		t.Errorf("the previous owner's arrangement carried over: %+v", c)
 	}
 
-	assertTransferredPatrols(ctx, t, s, conv.ID, patrol.ID, matePatrol.ID, to, mate)
+	assertTransferredPatrols(ctx, t, s, conv.ID, patrol.ID, ownPatrol.ID, matePatrol.ID, to, mate)
 }
 
 // assertTransferRefusedUnchanged: a transfer that is refused changes nothing.
@@ -107,13 +122,19 @@ func assertTransferRefusedUnchanged(ctx context.Context, t *testing.T, s *Store,
 // assertTransferredPatrols: the previous owner's patrol is the new owner's,
 // paused, and theirs to resume; a participant's own patrol and the queue are
 // as the transfer leaves them.
-func assertTransferredPatrols(ctx context.Context, t *testing.T, s *Store, convID, patrolID, matePatrolID, to, mate string) {
+func assertTransferredPatrols(ctx context.Context, t *testing.T, s *Store, convID, patrolID, ownPatrolID, matePatrolID, to, mate string) {
 	t.Helper()
 	// The owner's patrol is the new owner's, paused; the participant's is
 	// left for the caller's reconciliation.
+	// The moved patrol and the one the new owner already had: both paused.
 	moved, err := s.ListChatSchedules(ctx, to, convID, false)
-	if err != nil || len(moved) != 1 || moved[0].ID != patrolID || moved[0].Status != ChatScheduleStatusPaused {
-		t.Errorf("new owner's schedules = %+v (err %v), want the patrol, paused", moved, err)
+	if err != nil || len(moved) != 2 {
+		t.Fatalf("new owner's schedules = %+v (err %v), want the moved patrol and their own", moved, err)
+	}
+	for _, sc := range moved {
+		if (sc.ID != patrolID && sc.ID != ownPatrolID) || sc.Status != ChatScheduleStatusPaused {
+			t.Errorf("new owner's schedule %s is %q, want one of the two, paused", sc.ID, sc.Status)
+		}
 	}
 	if left, _ := s.ListChatSchedules(ctx, mate, convID, false); len(left) != 1 || left[0].ID != matePatrolID || left[0].Status != ChatScheduleStatusActive {
 		t.Errorf("the participant's schedule was touched: %+v", left)

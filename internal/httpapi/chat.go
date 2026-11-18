@@ -1608,6 +1608,49 @@ func (s *Server) appendTurnApprovalModeContext(ctx context.Context, injectedCont
 	return injectedContext + "\n\n" + note
 }
 
+// revalidateOwnerTurnAccess guards an owner's submission against a transfer
+// of the chat (docs/CHAT-TRANSFER.md) that lands between the moment the
+// conversation was loaded and the moment the turn registers. It records the
+// conversation's ownership epoch on the steer mailbox; registerTurnGated
+// refuses the turn if a transfer has bumped it since. A chat this process
+// has transferred before is also re-read, in case the transfer committed
+// before the epoch was recorded. A chat never transferred here costs one map
+// read.
+func (s *Server) revalidateOwnerTurnAccess(
+	ctx context.Context,
+	user string,
+	conv *store.Conversation,
+	steer *steerMailbox,
+	queued *queuedLaunch,
+	releaseSlot func(),
+	fail func(int, error),
+) bool {
+	epoch := s.currentOwnershipEpoch(conv.ID)
+	if steer != nil {
+		steer.ownerChecked, steer.ownerEpoch = true, epoch
+	}
+	if epoch == 0 {
+		return true
+	}
+	rechecked, err := s.getOwnedOrMultiplayerConversation(ctx, user, conv.ID)
+	if err != nil {
+		fail(http.StatusInternalServerError, err)
+		return false
+	}
+	if rechecked != nil && strings.EqualFold(rechecked.UserEmail, user) {
+		return true
+	}
+	if queued != nil {
+		if releaseSlot != nil {
+			releaseSlot()
+		}
+		s.terminalizeQueueRow(conv.ID, queued.rowID, queued.claimTurnID, store.InputStateCancelled)
+		return false
+	}
+	fail(http.StatusNotFound, errors.New("conversation not found"))
+	return false
+}
+
 // newTurnStager builds the approval stager for one chat turn. The post-turn
 // escalation check builds a second one with a fresh context, so both stage
 // cards on the same stream under the same timeouts.
@@ -1673,8 +1716,11 @@ func (s *Server) revalidateMultiplayerTurnAccess(
 	releaseSlot func(),
 	fail func(int, error),
 ) bool {
-	if conv == nil || conv.UserEmail == "" || strings.EqualFold(conv.UserEmail, user) {
+	if conv == nil || conv.UserEmail == "" {
 		return true
+	}
+	if strings.EqualFold(conv.UserEmail, user) {
+		return s.revalidateOwnerTurnAccess(ctx, user, conv, steer, queued, releaseSlot, fail)
 	}
 	steer.nonOwner = true
 	steer.mpEpoch = s.currentMultiplayerEpoch(conv.ID)

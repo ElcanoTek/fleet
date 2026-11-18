@@ -86,6 +86,27 @@ func TestConversationTransferRoute(t *testing.T) {
 	srv.inflightMu.Unlock()
 	stopTurn()
 
+	// A message the owner submitted just before the transfer was admitted
+	// while they still owned the chat, and has not registered its turn yet.
+	stale, _ := st.Get(ctx, owner, conv.ID)
+	admitted := &steerMailbox{store: st, user: owner, convID: conv.ID}
+	refused := func(int, error) { t.Error("the owner's own submission was refused before any transfer") }
+	if !srv.revalidateMultiplayerTurnAccess(ctx, owner, stale, admitted, nil, nil, refused) || !admitted.ownerChecked {
+		t.Fatal("the owner's submission was not admitted with its ownership epoch")
+	}
+	// The new owner uploaded a file while they were a participant.
+	stash, err := srv.privateWorkspaceStashDir(conv.ID)
+	if err != nil {
+		t.Fatalf("stash dir: %v", err)
+	}
+	theirs := filepath.Join(stash, "participants", participantDigest(next), uploadsDir)
+	if err := os.MkdirAll(theirs, 0o755); err != nil {
+		t.Fatalf("mkdir participant stash: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(theirs, "brief.csv"), []byte("a,b\n"), 0o600); err != nil {
+		t.Fatalf("write participant attachment: %v", err)
+	}
+
 	// The cleanup after the commit does not depend on the request: a client
 	// that has gone away by then still gets the previous audience reconciled.
 	gone, hangUp := context.WithCancel(asUser(ctx, owner))
@@ -106,6 +127,29 @@ func TestConversationTransferRoute(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Dir(skills)); !os.IsNotExist(err) {
 		t.Errorf("the previous owner's skills are still in the workspace (err %v)", err)
+	}
+	// The submission admitted before the transfer cannot start a turn now,
+	// and a new one from the previous owner is turned away.
+	_, stopLate := context.WithCancel(ctx)
+	defer stopLate()
+	if _, _, _, ok, swept := srv.registerTurnGated(conv.ID, stopLate, admitted, nil, ""); ok || !swept {
+		t.Errorf("a turn admitted before the transfer registered after it (ok=%v swept=%v)", ok, swept)
+	}
+	lateStatus := 0
+	late := &steerMailbox{store: st, user: owner, convID: conv.ID}
+	if srv.revalidateMultiplayerTurnAccess(ctx, owner, stale, late, nil, nil, func(code int, _ error) { lateStatus = code }) || lateStatus != http.StatusNotFound {
+		t.Errorf("the previous owner's later submission was admitted (status %d), want a 404", lateStatus)
+	}
+	// The new owner's own submission is admitted and registers.
+	fresh, _ := st.Get(ctx, next, conv.ID)
+	mine := &steerMailbox{store: st, user: next, convID: conv.ID}
+	if !srv.revalidateMultiplayerTurnAccess(ctx, next, fresh, mine, nil, nil, func(int, error) {}) {
+		t.Error("the new owner's submission was refused")
+	}
+	// Their participant attachment is now in the workspace, where an
+	// owner's attachments live.
+	if _, err := os.Stat(filepath.Join(tools.WorkspaceDirForConversation(conv.ID), uploadsDir, "brief.csv")); err != nil {
+		t.Errorf("the new owner's participant attachment was not moved into the workspace: %v", err)
 	}
 	// The previous owner no longer owns it, so asking again is a 404.
 	if rec := post(asUser(ctx, owner), `{"to_email":"`+mate+`"}`); rec.Code != http.StatusNotFound {

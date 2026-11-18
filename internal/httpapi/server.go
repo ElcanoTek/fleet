@@ -151,8 +151,13 @@ type Server struct {
 	activeWorkspaceUnlocks      map[string]func()
 	purgedParticipantWorkspaces map[string]bool
 	multiplayerEpochs           map[string]uint64
-	workspaceLocks              keyedLocks
-	workspaceSwapLocks          keyedLocks
+	// ownershipEpochs counts the transfers of each conversation this process
+	// has made (docs/CHAT-TRANSFER.md). Guarded by inflightMu, like the
+	// registration it gates: an owner's submission admitted before a
+	// transfer must not register its turn after it.
+	ownershipEpochs    map[string]uint64
+	workspaceLocks     keyedLocks
+	workspaceSwapLocks keyedLocks
 	// sharedFilesMu serializes shared-file-library staging (upload/rename/
 	// delete handlers) against the maintenance reconciler, so a Sync pass can
 	// never observe — and "repair" — a mutation's intermediate on-disk state.
@@ -875,6 +880,10 @@ func (s *Server) currentMultiplayerEpoch(convID string) uint64 {
 func (s *Server) registerTurnGated(convID string, cancel context.CancelFunc, steer *steerMailbox, queued *queuedLaunch, submissionID string) (buf *turnBuffer, turnID string, token uint64, ok, swept bool) {
 	s.inflightMu.Lock()
 	if steer != nil && steer.nonOwner && s.multiplayerEpochs[convID] != steer.mpEpoch {
+		s.inflightMu.Unlock()
+		return nil, "", 0, false, true
+	}
+	if steer != nil && steer.ownerChecked && s.ownershipEpochs[convID] != steer.ownerEpoch {
 		s.inflightMu.Unlock()
 		return nil, "", 0, false, true
 	}

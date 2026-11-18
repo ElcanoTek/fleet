@@ -36,23 +36,39 @@ when the turn puts them back.
 | Audience | The chat becomes private to the new owner: team sharing (`team_visible` and the team stamp), Multiplayer mode with its participant and exclusion lists, and the public link are cleared. Who can see a chat is its owner's decision, so the previous owner's audience does not carry over. |
 | Owner's arrangement | Pin, labels, project filing and connector account choices (`mcp_accounts`) are reset. |
 | Approval mode | Back to Manual (`auto_approve` off). Auto-approve and Autonomous are each owner's own choice, and Autonomous needs that person's acceptance. |
-| Patrols and timers | The previous owner's active and paused schedules in the chat move to the new owner and are **paused**; a fire in flight is revoked. A patrol runs with its owner's connectors, so it runs again only when the new owner resumes it. |
+| Patrols and timers | The previous owner's active and paused schedules in the chat move to the new owner and are **paused**, as are any the new owner already had in the chat as a participant; a fire in flight is revoked. A patrol runs with its owner's connectors, so it runs again only when the new owner resumes it. |
 | Queue | Every queued input in the chat is cancelled. |
 
 The transcript, the workspace files (attachments included), the persona, the
 model and the enabled optional connectors are untouched.
 
+**Before the transaction** the handler removes the previous owner's personal
+skills from the workspace (`user-skills/`) and from the stash a participant's
+turn moves them to. If that fails, the transfer does not happen: the skills
+must be gone before the chat is anyone else's. Nothing is lost if the transfer
+is then refused, because skills are written into the workspace again at the
+start of each of their owner's turns.
+
 **After the transaction** (on a context detached from the request, so a
-client that has gone away does not skip it) the handler reconciles the chat with its new,
-private audience the same way a removed Multiplayer participant is reconciled
-(`enforceMultiplayerRevocation`): a turn the previous owner or a participant
-still has running is stopped, their pending approvals, session approvals and
-their own patrols in the chat are cancelled, and their live streams are
-detached. Pending auto-submit countdowns are cancelled, and the previous
-owner's personal skills are removed from the workspace (`user-skills/`) and
-from the stash a participant's turn moves them to. The
-transfer is logged (`conversations: chat transferred`, with the actor, both
-owners and the patrol counts).
+client that has gone away does not skip it) the handler:
+
+- bumps the conversation's ownership epoch. A message the previous owner
+  submitted just before the transfer was admitted while they still owned the
+  chat; `registerTurnGated` compares the epoch under the lock the transfer
+  bumped it under and refuses to start that turn. A later submission from
+  them is re-checked against the store and turned away.
+- reconciles the chat with its new, private audience the same way a removed
+  Multiplayer participant is reconciled (`enforceMultiplayerRevocation`): a
+  turn the previous owner or a participant still has running is stopped, their
+  pending approvals, session approvals and their own patrols in the chat are
+  cancelled, and their live streams are detached.
+- cancels pending auto-submit countdowns.
+- moves the attachments the new owner uploaded while they were a participant
+  out of the participant stash and into the workspace, where an owner's
+  attachments live, so links from their earlier turns keep resolving.
+
+The transfer is logged (`conversations: chat transferred`, with the actor,
+both owners and the patrol counts).
 
 **Web.** `TransferChatDialog` (`web/src/app/chat/ui/TransferChatDialog.tsx`):
 **Transfer ownership…** on the owner's chat row menu, and on a Team chats row

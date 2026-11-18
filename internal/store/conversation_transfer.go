@@ -27,8 +27,9 @@ type ConversationTransfer struct {
 	FromEmail    string
 	ToEmail      string
 	// PatrolsMoved is how many of the previous owner's patrols and timers in
-	// the chat now belong to the new owner; PatrolsPaused is how many of them
-	// were running and are now paused.
+	// the chat now belong to the new owner; PatrolsPaused is how many of the
+	// new owner's patrols in the chat (moved, or theirs already) were running
+	// and are now paused.
 	PatrolsMoved  int
 	PatrolsPaused int
 }
@@ -44,7 +45,7 @@ type ConversationTransfer struct {
 //     project filing, connector account choices, and the approval mode (back
 //     to Manual — Auto-approve and Autonomous are each owner's own call).
 //   - The previous owner's patrols and timers in the chat move to the new
-//     owner and are PAUSED. A patrol runs with its owner's connectors, so it
+//     owner and are PAUSED, as are any the new owner already had in it. A patrol runs with its owner's connectors, so it
 //     starts again only when the new owner resumes it. A fire in flight is
 //     revoked and every queued input in the chat is cancelled.
 //
@@ -116,11 +117,13 @@ func (s *Store) TransferConversation(ctx context.Context, ownerEmail, convID, to
 	}
 
 	out := &ConversationTransfer{Conversation: &conv, FromEmail: from, ToEmail: to}
+	// Counted over both people: the new owner may already have patrols of
+	// their own in the chat from taking part in it, and those are paused too.
 	if err := tx.QueryRowContext(ctx,
-		`SELECT count(*), count(*) FILTER (WHERE status = $1)
+		`SELECT count(*) FILTER (WHERE user_email = $4), count(*) FILTER (WHERE status = $1)
 		   FROM `+chatSchedulesTable+`
-		  WHERE conversation_id = $3 AND user_email = $4 AND status IN ($1, $2)`,
-		ChatScheduleStatusActive, ChatScheduleStatusPaused, convID, from,
+		  WHERE conversation_id = $3 AND user_email IN ($4, $5) AND status IN ($1, $2)`,
+		ChatScheduleStatusActive, ChatScheduleStatusPaused, convID, from, to,
 	).Scan(&out.PatrolsMoved, &out.PatrolsPaused); err != nil {
 		return nil, err
 	}
@@ -133,7 +136,7 @@ func (s *Store) TransferConversation(ctx context.Context, ownerEmail, convID, to
 			lease_owner = NULL, lease_expires_at = NULL, fire_id = NULL,
 			fire_trigger = NULL, fire_run_number = NULL, fire_failures = 0,
 			updated_at = $4
-		WHERE conversation_id = $5 AND user_email = $6 AND status IN ($2, $3)`,
+		WHERE conversation_id = $5 AND user_email IN ($6, $1) AND status IN ($2, $3)`,
 		to, ChatScheduleStatusActive, ChatScheduleStatusPaused, now, convID, from,
 	); err != nil {
 		return nil, err
