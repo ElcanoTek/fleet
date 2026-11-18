@@ -21,8 +21,9 @@ import (
 
 // A multiplayer dashboard chat with a patrol: the owner's turn drew two
 // panels, a teammate's turn drew a third, and the patrol refreshed one. Each
-// of them must be able to update any of the cards, so the turns whose replay
-// lacks them are told which cards the chat is showing.
+// of them must be able to update any of the cards: the replay carries the
+// current cards whoever's turn drew them, and a patrol turn is also given the
+// list of the board's panels.
 
 func cardCall(id int64, callID, spec string) agent.HistoryEntry {
 	return agent.HistoryEntry{ID: id, Role: "assistant", Type: "tool_call", Content: fmt.Appendf(nil, `{"id":%q,"name":"show_ui","input":%q}`, callID, spec)}
@@ -61,7 +62,7 @@ func teamBoardHistory() []agent.HistoryEntry {
 func TestCurrentConversationCards(t *testing.T) {
 	t.Parallel()
 
-	got := currentConversationCards(teamBoardHistory())
+	got := currentBoardCards(conversationShownCards(teamBoardHistory()))
 	want := []dashboardBoardPanel{
 		{Title: "Pacing (06:30)", CardID: "c-pacing-2", Panel: "pacing"},
 		{Title: "Notes [draft]", CardID: "c-notes"},
@@ -75,7 +76,7 @@ func TestCurrentConversationCards(t *testing.T) {
 			t.Errorf("card %d = %+v, want %+v", i, got[i], want[i])
 		}
 	}
-	if currentConversationCards(nil) != nil {
+	if len(currentBoardCards(conversationShownCards(nil))) != 0 {
 		t.Error("an empty history lists cards")
 	}
 }
@@ -98,31 +99,37 @@ func TestCurrentConversationCardsReplacesAndReference(t *testing.T) {
 		// reference on the call.
 		cardCall(10, "r", `{"from_result":{"call_id":"q"},"panel":"recs"}`),
 		{ID: 11, Role: "tool", Type: "tool_result", Content: []byte(`{"id":"r","name":"show_ui","text":"UI_DISPLAYED card_id=r","card":"{\"title\":\"Recs\",\"components\":[]}"}`)},
-		// A form that replaces a card collapses it.
+		// A form that replaces a panel keeps the panel's slot and key, as on
+		// the web's board.
 		cardCall(12, "f", `{"title":"Edit B","replaces":"b","components":[],"actions":[{"id":"save","label":"Save"}]}`),
 		cardShown(13, "f"),
 		// Refining a card into a key another panel holds merges the two.
 		cardCall(14, "m", `{"title":"Recs merged","replaces":"a3","panel":"recs","components":[]}`),
 		cardShown(15, "m"),
 	}
-	got := currentConversationCards(history)
-	if len(got) != 1 || got[0] != (dashboardBoardPanel{Title: "Recs merged", CardID: "m", Panel: "recs"}) {
-		t.Fatalf("cards = %+v, want the one merged recs panel", got)
+	got := currentBoardCards(conversationShownCards(history))
+	want := []dashboardBoardPanel{
+		{Title: "Edit B", CardID: "f", Panel: "b"},
+		{Title: "Recs merged", CardID: "m", Panel: "recs"},
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("cards = %+v, want %+v", got, want)
 	}
 }
 
 func TestCurrentConversationCardsIsBounded(t *testing.T) {
 	t.Parallel()
 
-	history := []agent.HistoryEntry{userSaid(1, "owner@x.com", "go")}
 	const total = maxDashboardBoardPanels + 6
+	history := make([]agent.HistoryEntry, 0, 1+2*total+2)
+	history = append(history, userSaid(1, "owner@x.com", "go"))
 	for i := range total {
 		id := fmt.Sprintf("c%02d", i)
 		history = append(history, cardCall(int64(2*i+2), id, fmt.Sprintf(`{"title":"T%d","panel":"p%d","components":[]}`, i, i)), cardShown(int64(2*i+3), id))
 	}
 	// The oldest panel is refreshed last, so it stays; the next ones go.
 	history = append(history, cardCall(900, "fresh", `{"title":"T0 new","panel":"p0","components":[]}`), cardShown(901, "fresh"))
-	got := currentConversationCards(history)
+	got := currentBoardCards(conversationShownCards(history))
 	if len(got) != maxDashboardBoardPanels {
 		t.Fatalf("cards = %d, want %d", len(got), maxDashboardBoardPanels)
 	}
@@ -135,51 +142,117 @@ func TestAppendConversationCardsBlock(t *testing.T) {
 	t.Parallel()
 
 	history := teamBoardHistory()
-	team := &store.Conversation{UserEmail: "owner@x.com", Multiplayer: true}
-	solo := &store.Conversation{UserEmail: "owner@x.com"}
-
-	// A patrol turn is always told, in a team chat or the owner's own.
-	for _, conv := range []*store.Conversation{team, solo} {
-		got := appendConversationCardsBlock("base", conv, "owner@x.com", agent.InputKindChatPatrol, "", history)
-		for _, want := range []string{
-			"base\n\n[Cards in this chat:",
-			`1. "Pacing (06:30)" (card_id c-pacing-2): panel "pacing" — update with panel "pacing"`,
-			`2. "Notes draft" (card_id c-notes): no panel key — update with replaces="c-notes"`,
-			`3. "Margin" (card_id c-margin): panel "margin" — update with panel "margin"`,
-		} {
-			if !strings.Contains(got, want) {
-				t.Errorf("patrol note lacks %q:\n%s", want, got)
-			}
-		}
-		if !strings.HasSuffix(got, "]") || strings.Contains(got, "Refused") || strings.Contains(got, "Pick a deal") {
-			t.Errorf("patrol note is malformed or lists a card that is not on screen:\n%s", got)
+	got := appendConversationCardsBlock("base", agent.InputKindChatPatrol, history)
+	for _, want := range []string{
+		"base\n\n[Cards in this chat:",
+		`1. "Pacing (06:30)" (card_id c-pacing-2): panel "pacing" — update with panel "pacing"`,
+		`2. "Notes draft" (card_id c-notes): no panel key — update with replaces="c-notes"`,
+		`3. "Margin" (card_id c-margin): panel "margin" — update with panel "margin"`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("patrol note lacks %q:\n%s", want, got)
 		}
 	}
-
-	// A teammate's and the owner's message in a multiplayer chat are told
-	// too: each replay lacks the cards the other's turns drew.
-	for _, user := range []string{"mate@x.com", "owner@x.com"} {
-		if got := appendConversationCardsBlock("", team, user, "", "", history); !strings.Contains(got, `panel "margin"`) || !strings.Contains(got, `panel "pacing"`) {
-			t.Errorf("%s's turn is not told the chat's cards: %q", user, got)
-		}
-	}
-	// A participant of a chat they do not own counts as shared even before
-	// the flag is read.
-	if got := appendConversationCardsBlock("", solo, "mate@x.com", "", "", history); got == "" {
-		t.Error("a non-owner's turn is not told the chat's cards")
+	if !strings.HasSuffix(got, "]") || strings.Contains(got, "Refused") || strings.Contains(got, "Pick a deal") {
+		t.Errorf("patrol note is malformed or lists a card that is not on the board:\n%s", got)
 	}
 
-	// Unchanged: the owner's own chat, a dashboard-view turn (the browser
-	// sent its board), an approval-resume turn, and a chat with no cards.
+	// Unchanged: a person's message (its replay holds the cards), an
+	// approval-resume turn, and a patrol in a chat with no cards.
 	for name, got := range map[string]string{
-		"solo owner":     appendConversationCardsBlock("base", solo, "owner@x.com", "", "", history),
-		"dashboard view": appendConversationCardsBlock("base", team, "mate@x.com", "", chatViewDashboard, history),
-		"resume":         appendConversationCardsBlock("base", team, "owner@x.com", agent.InputKindApprovalResume, "", history),
-		"no cards":       appendConversationCardsBlock("base", team, "owner@x.com", agent.InputKindChatPatrol, "", history[:1]),
+		"user turn": appendConversationCardsBlock("base", "", history),
+		"resume":    appendConversationCardsBlock("base", agent.InputKindApprovalResume, history),
+		"no cards":  appendConversationCardsBlock("base", agent.InputKindChatPatrol, history[:1]),
 	} {
 		if got != "base" {
 			t.Errorf("%s: injected = %q, want it unchanged", name, got)
 		}
+	}
+}
+
+// Anyone in a team chat can ask for a card to be changed, and the assistant
+// must work from the card that is there. So the replay for one sender's turn
+// carries the current cards of every other sender's turn, contents included,
+// and nothing else of their working trace.
+func TestReplayKeepsOtherSendersCurrentCards(t *testing.T) {
+	t.Parallel()
+
+	history := []agent.HistoryEntry{
+		userSaid(1, "owner@x.com", "build the board"),
+		{ID: 2, Role: "assistant", Type: "reasoning", Content: []byte(`{"text":"owner thinking"}`)},
+		{ID: 3, Role: "assistant", Type: "tool_call", Content: []byte(`{"id":"q","name":"run_python","input":"{}"}`)},
+		{ID: 4, Role: "tool", Type: "tool_result", Content: []byte(`{"id":"q","name":"run_python","text":"owner connector rows","sender_email":"owner@x.com"}`)},
+		cardCall(5, "old", `{"title":"Pacing v1","panel":"pacing","components":[{"type":"text","text":"yesterday"}]}`),
+		cardShown(6, "old"),
+		cardCall(7, "ref", `{"from_result":{"call_id":"q"},"panel":"recs"}`),
+		{ID: 8, Role: "tool", Type: "tool_result", Content: []byte(`{"id":"ref","name":"show_ui","text":"UI_DISPLAYED card_id=ref","sender_email":"owner@x.com","card":"{\"title\":\"Recs\",\"panel\":\"recs\",\"components\":[{\"type\":\"text\",\"text\":\"three recs\"}]}"}`)},
+		cardCall(9, "bad", `{"title":"Refused","secret":"rows"}`),
+		{ID: 10, Role: "tool", Type: "tool_result", Content: []byte(`{"id":"bad","name":"show_ui","text":"UI_INVALID: no","is_err":true}`)},
+		cardCall(11, "new", `{"title":"Pacing v2","panel":"pacing","components":[{"type":"text","text":"today"}]}`),
+		cardShown(12, "new"),
+		{ID: 13, Role: "assistant", Type: "text", Content: []byte(`{"text":"Board is up."}`)},
+		userSaid(14, "mate@x.com", "add yesterday to the pacing chart"),
+	}
+
+	out := redactHistoryForSender(history, "mate@x.com", "owner@x.com")
+	ids := make([]int64, 0, len(out))
+	for _, e := range out {
+		ids = append(ids, e.ID)
+		for _, private := range []string{"owner thinking", "owner connector rows", "Refused", "sender_email\":\"owner", "yesterday\"}", `\"card\"`} {
+			if e.Role != "user" && strings.Contains(string(e.Content), private) {
+				t.Errorf("entry %d carries %q: %s", e.ID, private, e.Content)
+			}
+		}
+	}
+	// The owner's message, the by-reference card, the current pacing card,
+	// the reply and the teammate's message: not the reasoning, the script,
+	// the refused card or the pacing card that was replaced.
+	if want := []int64{1, 7, 8, 11, 12, 13, 14}; !slices.Equal(ids, want) {
+		t.Fatalf("replayed entries = %v, want %v", ids, want)
+	}
+	// The current card is replayed with its contents, and the by-reference
+	// card with the spec it was drawn from.
+	var call agent.ToolCallContent
+	if err := json.Unmarshal(out[3].Content, &call); err != nil || !strings.Contains(call.Input, `"text":"today"`) {
+		t.Errorf("the current card lost its contents: %s (err %v)", out[3].Content, err)
+	}
+	if err := json.Unmarshal(out[1].Content, &call); err != nil || !strings.Contains(call.Input, "three recs") || strings.Contains(call.Input, "from_result") {
+		t.Errorf("the by-reference card is not replayed with its spec: %s (err %v)", out[1].Content, err)
+	}
+
+	// The owner's own replay is untouched: every entry, as stored.
+	own := redactHistoryForSender(history, "owner@x.com", "owner@x.com")
+	if len(own) != len(history) || string(own[6].Content) != string(history[6].Content) {
+		t.Errorf("the owner's replay changed: %d entries", len(own))
+	}
+}
+
+func TestReplayOfOtherSendersCardsIsBounded(t *testing.T) {
+	t.Parallel()
+
+	const total = maxReplayedSharedCards + 5
+	history := make([]agent.HistoryEntry, 0, 2+2*total)
+	history = append(history, userSaid(1, "owner@x.com", "go"))
+	for i := range total {
+		id := fmt.Sprintf("k%02d", i)
+		history = append(history, cardCall(int64(2*i+2), id, fmt.Sprintf(`{"title":"One-off %d","components":[]}`, i)), cardShown(int64(2*i+3), id))
+	}
+	history = append(history, userSaid(999, "mate@x.com", "hi"))
+	calls := 0
+	first := ""
+	for _, e := range redactHistoryForSender(history, "mate@x.com", "owner@x.com") {
+		if e.Type != "tool_call" {
+			continue
+		}
+		var c agent.ToolCallContent
+		_ = json.Unmarshal(e.Content, &c)
+		if calls == 0 {
+			first = c.ID
+		}
+		calls++
+	}
+	if calls != maxReplayedSharedCards || first != "k05" {
+		t.Errorf("replayed %d cards starting at %q, want the %d most recent starting at k05", calls, first, maxReplayedSharedCards)
 	}
 }
 

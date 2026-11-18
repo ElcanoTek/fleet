@@ -97,14 +97,16 @@ When an allowed participant submits `POST /chat` on a multiplayer conversation:
   `UI_DISPLAYED` `tool.result` frame with the call's `input` copied onto it,
   and the web draws the card from that one frame. If the call frame is no
   longer in the replay window the card is not delivered live and arrives with
-  the next history read. The model replay for a participant's own turn
-  (`redactHistoryForSender`) still omits the whole trace, cards included.
-  So that a participant can still ask for a card someone else's turn drew to
-  be updated, a turn in a multiplayer chat is told which cards the chat is
-  showing: title, card id and panel key, never the contents
-  ([DASHBOARD-VIEW.md](DASHBOARD-VIEW.md), "Cards a turn did not draw"). An
-  in-chat patrol runs as the participant who created it and is told the same
-  list.
+  the next history read.
+- **The assistant sees the shown cards too.** The model replay for a
+  participant's own turn (`redactHistoryForSender`) omits every other
+  sender's reasoning, tool calls and tool results, but keeps the cards the
+  conversation is showing, contents included, so anyone in the chat can ask
+  for a card to be changed and the assistant works from the card that is
+  there ([DASHBOARD-VIEW.md](DASHBOARD-VIEW.md), "Cards a turn did not draw").
+  Turning Multiplayer mode on therefore shares what the cards show with every
+  participant's assistant as well as with the participants. An in-chat patrol
+  runs as the participant who created it and gets the same replay.
 
 ### Per-instance default (`team_chats_shared_by_default`)
 

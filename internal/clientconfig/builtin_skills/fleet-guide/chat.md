@@ -596,10 +596,10 @@ straight into this view.
   the panels"), and each run redraws the panels it has new figures for. In a
   [Multiplayer](#sharing-with-your-team) chat everyone sees the same panels,
   whoever's message or patrol drew them, and anyone in the chat can ask for a
-  panel to be updated or added. A patrol run, and a teammate's message, are
-  told which cards the chat is showing and how to update each one — its title,
-  not its contents, when the card was drawn on someone else's turn — so the
-  assistant updates the existing panel instead of adding a second one.
+  panel to be updated or added: the assistant sees the cards that are on
+  screen, whoever asked for them, so it changes the existing panel instead of
+  adding a second one. It does not see how a teammate's card was made (their
+  tool calls and connector results stay with them).
 - **Nothing changes about what the assistant can do.** You type, attach files,
   and answer approval cards in the chat rail exactly as before, and emails and
   other actions still wait for your approval. The status light at the top says

@@ -61,27 +61,29 @@ is skipped. Like every injected block it is persisted with the user message, so
 the transcript shows exactly what the model was told. Any `view` other than
 `"dashboard"` adds nothing, and `board` is ignored without it.
 
-**Cards a turn did not draw.** Two kinds of turn are told which cards the
-chat is showing, because their own replay may not hold the turns that drew
-them (`appendConversationCardsBlock`, `internal/httpapi/chat_cards_context.go`):
+**Cards a turn did not draw.** Anyone in a chat can ask for a card to be
+changed, and a patrol can refresh one, whoever's turn drew it. Two things make
+that work (`internal/httpapi/chat_cards_context.go`):
 
-- an [in-chat patrol](CHAT-PATROLS.md) turn. No browser sent it, so it has no
-  `board`, and a long-running patrol's earlier `show_ui` calls are often
-  compacted out of its replay.
-- a turn in a [multiplayer](MULTIPLAYER-CHAT.md) chat that was not sent from
-  dashboard view. The model replay omits another sender's working trace, cards
-  included, so a teammate's "update the pacing card" would otherwise have no
-  card to resolve to.
-
-The note lists the conversation's current cards, derived on the server from
-the full stored history with the web's slot rules reduced to what a note can
-name (`currentConversationCards`): the newest card of each `panel` key, and
-each keyless display card nothing has replaced, with the same update
-instruction per line as the board list above. Only shown cards count. It is
-bounded and sanitized like the board list (the 24 most recently updated), and
-nothing is added to a chat that shows no cards. A turn sent from dashboard
-view keeps the browser's `board` instead, which carries the sender's own order
-and pins.
+- **The model replay keeps the cards other senders' turns showed.** A
+  [multiplayer](MULTIPLAYER-CHAT.md) turn's replay still omits another
+  sender's reasoning, tool calls and tool results, but it carries the cards
+  the conversation is showing, contents included (`replayedSharedCards` in
+  `redactHistoryForSender`), so "add last week to the pacing chart" starts
+  from the chart that is there. Only a card that was shown and that nothing
+  has replaced is kept (`conversationShownCards` follows `replaces`, panel
+  keys and reused call ids by occurrence, as the web does), the most recent
+  ones up to 48. A card drawn by reference (`from_result`) is replayed with
+  the spec it was drawn from, because the tool result it named is the other
+  sender's and stays out.
+- **A patrol turn is given the board's panels.** No browser sent it, so it has
+  no `board`, and a long-running patrol's earlier `show_ui` calls are often
+  compacted out of its context. `appendConversationCardsBlock` lists the
+  current board cards derived on the server (the newest card of each `panel`
+  key, a card that replaced a board card, and each display-only card nothing
+  has replaced) with the same update instruction per line as the board list
+  above, bounded and sanitized the same way (the 24 most recently updated).
+  A patrol in a chat with no board cards gets no note.
 
 `show_ui` is on a patrol turn's roster, so a patrol that re-shows a panel
 updates the board for every participant. A patrol turn never arms the
@@ -145,6 +147,7 @@ key, a non-string key), `TestShowUIPanelCard`, `TestShowUIRef_Panel`, and
 `TestAppendDashboardViewBlock`, `TestDashboardBoardIsListed` (keys, pinned cards,
 sanitizing, the bound) and `TestChatRequestDecodesView`; for the card list,
 `TestCurrentConversationCards*`, `TestAppendConversationCardsBlock`,
+`TestReplayKeepsOtherSendersCurrentCards`, `TestReplayOfOtherSendersCardsIsBounded`,
 `TestPatrolTurnUpdatesDashboardCards` (a fired patrol turn is told the cards
 and `show_ui` draws on it) and `TestManagerRunTurn_PatrolTurnOffersShowUI`. Web: `board.test.ts`
 (slotting, lineage, pins, the slot moving to a new key, removal, order, width,
@@ -184,11 +187,15 @@ themes.
   dashboard view), and an approval-resume turn carries none either. A patrol
   turn carries the server-derived card list instead ("Cards a turn did not
   draw" above), which has no order or pins.
-- **A card another sender's turn drew is known by name only.** The card list
-  gives a patrol or a teammate's turn each card's title, id and panel key, not
-  its contents: the model replay still omits another sender's working trace.
-  Updating such a card means redrawing it from fresh data, not editing what is
-  there.
+- **Only the cards of another sender's turn are replayed, not how they were
+  made.** A teammate's turn sees the card, not the query, script or connector
+  response behind it, so changing what the card already shows works, while
+  refreshing its numbers means fetching them again with the teammate's own
+  connectors. Cards something has replaced, and all but the 48 most recent
+  cards of other senders, are not replayed.
+- **A patrol's list has no contents.** After a compaction the patrol knows
+  each panel's title, id and key from its list, not what the panel showed; it
+  redraws the panel from the run's fresh data.
 - **The board list is the sender's.** In a multiplayer chat each participant's
   board is their own arrangement, so "the second panel" means the second panel
   on the board of whoever sent the message.

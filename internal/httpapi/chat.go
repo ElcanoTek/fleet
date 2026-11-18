@@ -904,7 +904,7 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	// A patrol turn, or a turn in a multiplayer chat outside dashboard view,
 	// is told which cards the chat is showing: its own replay may not hold
 	// the turns that drew them.
-	injected = appendConversationCardsBlock(injected, conv, user, req.inputKind, req.View, fullHistory)
+	injected = appendConversationCardsBlock(injected, req.inputKind, fullHistory)
 
 	// Lockdown model migration, at the last moment before the client can be
 	// TOLD about it: every fallible preparation above (history, memories,

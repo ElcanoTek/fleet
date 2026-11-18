@@ -820,3 +820,22 @@ func CollectInitialSubmit(specJSON []byte) (actionID string, valuesJSON []byte, 
 
 	return actID, valBytes, true
 }
+
+// IsDisplayOnly reports whether a card spec only shows something: no footer
+// actions and no input component at any depth. It is the rule dashboard view
+// uses to put a card with no panel key on the board (isDisplayOnly in
+// web/src/app/chat/ui/dashboard/board.ts); a card that can send something is
+// a step in the conversation instead. A spec that does not parse is not
+// display-only.
+func IsDisplayOnly(specJSON []byte) bool {
+	var spec struct {
+		Components []map[string]any `json:"components"`
+		Actions    []any            `json:"actions"`
+	}
+	if json.Unmarshal(specJSON, &spec) != nil || len(spec.Actions) > 0 {
+		return false
+	}
+	hasInput := false
+	walkInputComponents(spec.Components, func(map[string]any) { hasInput = true })
+	return !hasInput
+}

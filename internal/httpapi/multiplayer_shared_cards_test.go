@@ -12,7 +12,7 @@ import (
 // owner's turns had built: the cards went out with the rest of those turns'
 // working trace. A show_ui card is what the assistant showed the conversation,
 // so every participant gets it; the rest of another sender's trace stays
-// private, and so does the model replay.
+// private.
 
 func sharedCardHistory() []agent.HistoryEntry {
 	return []agent.HistoryEntry{
@@ -68,14 +68,15 @@ func TestHistoryForParticipantSharesCardsFromAnotherSendersTurn(t *testing.T) {
 	}
 }
 
-// The model replay for another participant's turn is unchanged: no working
-// trace of the owner's turn, cards included, reaches the model.
-func TestRedactHistoryForSenderStillOmitsCards(t *testing.T) {
+// The model replay for another participant's turn keeps the shown cards too
+// (TestReplayKeepsOtherSendersCurrentCards), and still nothing else of the
+// owner's working trace.
+func TestRedactHistoryForSenderKeepsOnlyCards(t *testing.T) {
 	t.Parallel()
 
 	for _, e := range redactHistoryForSender(sharedCardHistory(), "mate@x.com", "owner@x.com") {
-		if e.Type == "tool_call" || e.Type == "tool_result" || e.Type == "reasoning" {
-			t.Errorf("replay kept a %s entry (id %d) of another sender's turn", e.Type, e.ID)
+		if e.Type == "reasoning" || strings.Contains(string(e.Content), "run_python") || strings.Contains(string(e.Content), "owner connector rows") {
+			t.Errorf("replay kept a private %s entry (id %d) of another sender's turn: %s", e.Type, e.ID, e.Content)
 		}
 	}
 }

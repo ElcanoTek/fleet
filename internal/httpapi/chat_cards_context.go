@@ -1,66 +1,93 @@
-// The cards a conversation is showing, as a note for turns whose model cannot
-// see them in its own replay (docs/DASHBOARD-VIEW.md, "Cards a turn did not
-// draw"): an in-chat patrol turn, and a turn in a multiplayer chat that was
-// not sent from dashboard view. Split out of chat.go.
+// The cards a conversation is showing, read from its stored history
+// (docs/DASHBOARD-VIEW.md, "Cards a turn did not draw"). Two things are built
+// on it: the cards of another sender's turn that the model replay keeps
+// (redactHistoryForSender), and the list an in-chat patrol turn is given.
+// Split out of chat.go.
 
 package httpapi
 
 import (
+	"cmp"
 	"encoding/json"
 	"slices"
 	"strings"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
-	"github.com/ElcanoTek/fleet/internal/store"
+	"github.com/ElcanoTek/fleet/internal/genui"
 )
 
-// conversationCardsNote opens the note. It is deliberately about updating:
-// the reader of a shared board is hurt most by a second panel for a topic
-// that already has one.
+// maxReplayedSharedCards bounds the cards of other senders' turns that one
+// replay carries: the most recently shown ones. A chat a patrol has been
+// redrawing for months must not grow every participant's context without
+// limit; older cards are still on screen, and the model can be asked to show
+// them again.
+const maxReplayedSharedCards = 48
+
+// conversationCardsNote opens the list a patrol turn is given. It is about
+// updating: the reader of a shared board is hurt most by a second panel for a
+// topic that already has one.
 const conversationCardsNote = "[Cards in this chat: these show_ui cards are on screen for everyone in the chat (in dashboard view they are the board's panels). " +
-	"Some were drawn on turns you cannot see — a teammate's, a patrol's, or one from before a summary — so trust this list over your memory of the conversation. " +
+	"Some were drawn on turns that are no longer in your context, so trust this list over your memory of the conversation. " +
 	"To update one, call show_ui with the SAME panel key, or with replaces=<its card_id> when it has no key; never draw a second card for a topic that already has one. " +
 	"Cards now, oldest first:\n"
 
-// shownCardSpec is what the note needs of a shown card's spec.
+// shownCard is one show_ui card the conversation displayed.
+type shownCard struct {
+	callIdx, resultIdx int // positions in the history it was read from
+	id                 string
+	title              string
+	// panel is the card's dashboard panel key: its own, or the one it
+	// inherited from the keyed card it replaced.
+	panel string
+	// spec is the card as drawn: the call's input, or for a card drawn by
+	// reference (from_result) the validated spec kept on its result.
+	spec string
+	// current is false once a later card took its place: one that names it in
+	// replaces, one with the same panel key, or one reusing its id.
+	current bool
+	// onBoard reports whether dashboard view draws the card as a panel
+	// rather than leaving it in the chat rail.
+	onBoard bool
+	// slot orders board cards by when their panel first appeared.
+	slot int
+}
+
+// shownCardSpec is what the derivation reads of a card's spec.
 type shownCardSpec struct {
 	Title    string `json:"title"`
 	Panel    string `json:"panel"`
 	Replaces string `json:"replaces"`
 }
 
-// cardSlot is one card on screen: the newest card of a panel key, or a
-// keyless card nothing has replaced.
-type cardSlot struct {
-	panel   string
-	cardID  string
-	title   string
-	updated int // position of the card that last took the slot
-}
-
-// currentConversationCards derives the cards a conversation is showing from
-// its FULL stored history, every sender's turns included: the same rule the
-// web applies to the transcript (deriveBoard in
-// web/src/app/chat/ui/dashboard/board.ts), reduced to what a note can name. A
-// later card with the same panel key takes the slot over; a card whose
-// replaces names a listed card takes that card's slot; a keyless form is a
-// step in the conversation, not something to keep on screen, so it is not
-// listed (and a card it replaces leaves the list).
+// conversationShownCards derives every card a conversation displayed from its
+// FULL stored history, every sender's turns included, in the order shown, and
+// marks the ones that are still current. The rules are the web's
+// (deriveGenUiState and deriveBoard in web/src/app/chat/ui), without the
+// per-browser layout: a later card with the same panel key, a card whose
+// replaces names a current card, and a later card reusing an id each take the
+// earlier card's place; a card is on the board when it has a panel key, when
+// it replaced a card on the board, or when it is display-only.
 //
 // Only cards that were shown count (sharedCardEntries): a refused or
-// unanswered call drew nothing. Titles, keys and ids of shown cards are
-// already delivered to every participant, so naming them to any participant's
-// turn discloses nothing new.
-func currentConversationCards(history []agent.HistoryEntry) []dashboardBoardPanel {
+// unanswered call drew nothing. Cards are followed by occurrence, never by
+// raw id alone, because a provider can reuse a tool-call id. One pass, with
+// map lookups, so a long history costs time linear in its length.
+func conversationShownCards(history []agent.HistoryEntry) []shownCard {
 	shown := sharedCardEntries(history)
 	if len(shown) == 0 {
 		return nil
 	}
-	var slots []cardSlot
-	find := func(match func(cardSlot) bool) int {
-		return slices.IndexFunc(slots, match)
+	cards := make([]shownCard, 0, len(shown)/2)
+	// call id → the shown calls still waiting for their result, oldest first
+	// (the pairing sharedCardEntries made).
+	type pendingCall struct {
+		idx   int
+		input string
 	}
-	inputs := make(map[string]string) // call id → the shown call's input
+	pending := make(map[string][]pendingCall)
+	live := make(map[string]int)       // card id → its latest occurrence
+	panelOwner := make(map[string]int) // panel key → the card showing it
+	slots := 0
 	for i, e := range history {
 		if !shown[i] {
 			continue
@@ -68,113 +95,135 @@ func currentConversationCards(history []agent.HistoryEntry) []dashboardBoardPane
 		if e.Type == "tool_call" {
 			var c agent.ToolCallContent
 			if json.Unmarshal(e.Content, &c) == nil {
-				inputs[c.ID] = c.Input
+				pending[c.ID] = append(pending[c.ID], pendingCall{idx: i, input: c.Input})
 			}
 			continue
 		}
 		var res agent.ToolResultContent
-		if json.Unmarshal(e.Content, &res) != nil {
+		if json.Unmarshal(e.Content, &res) != nil || len(pending[res.ID]) == 0 {
 			continue
 		}
+		call := pending[res.ID][0]
+		pending[res.ID] = pending[res.ID][1:]
+
 		// A card drawn by reference keeps its validated spec on the result;
 		// the call's input then holds only the reference and its overrides.
-		raw := inputs[res.ID]
-		delete(inputs, res.ID)
 		var spec, overrides shownCardSpec
-		_ = json.Unmarshal([]byte(raw), &overrides)
+		_ = json.Unmarshal([]byte(call.input), &overrides)
+		card := shownCard{callIdx: call.idx, resultIdx: i, id: res.ID, spec: call.input, current: true}
 		if res.Card != "" {
+			card.spec = res.Card
 			_ = json.Unmarshal([]byte(res.Card), &spec)
 		} else {
 			spec = overrides
 		}
-		if spec.Panel == "" {
-			spec.Panel = overrides.Panel
-		}
-		if spec.Replaces == "" {
-			spec.Replaces = overrides.Replaces
-		}
-		specJSON := []byte(raw)
-		if res.Card != "" {
-			specJSON = []byte(res.Card)
-		}
-		next := cardSlot{panel: strings.TrimSpace(spec.Panel), cardID: res.ID, title: spec.Title, updated: i}
+		card.title = spec.Title
+		card.panel = strings.TrimSpace(cmp.Or(spec.Panel, overrides.Panel))
+		replaces := strings.TrimSpace(cmp.Or(spec.Replaces, overrides.Replaces))
+
+		// The card this one refines, only while that card is still current: a
+		// card never refines itself or a version something already replaced.
 		replaced := -1
-		if rep := strings.TrimSpace(spec.Replaces); rep != "" {
-			replaced = find(func(s cardSlot) bool { return s.cardID == rep })
+		if r, ok := live[replaces]; ok && replaces != card.id && cards[r].current {
+			replaced = r
 		}
+		if prev, ok := live[card.id]; ok {
+			cards[prev].current = false
+		}
+		if replaced >= 0 {
+			cards[replaced].current = false
+		}
+		n := len(cards)
+		live[card.id] = n
 		switch {
-		case next.panel != "":
-			keyed := find(func(s cardSlot) bool { return s.panel == next.panel })
-			switch {
-			case keyed >= 0:
-				slots[keyed] = next
-				// The refined card's old slot merges into the panel it joined.
-				if replaced >= 0 && replaced != keyed {
-					slots = slices.Delete(slots, replaced, replaced+1)
-				}
-			case replaced >= 0:
-				slots[replaced] = next
-			default:
-				slots = append(slots, next)
+		case card.panel != "":
+			card.onBoard = true
+			if owner, ok := panelOwner[card.panel]; ok {
+				cards[owner].current = false
+				card.slot = cards[owner].slot
+			} else if replaced >= 0 && cards[replaced].onBoard {
+				// A refresh that gave the card a key: the slot moves to it.
+				card.slot = cards[replaced].slot
+			} else {
+				card.slot = slots
+				slots++
 			}
-		case replaced >= 0 && cardHasInteractiveAction(specJSON):
-			slots = slices.Delete(slots, replaced, replaced+1)
-		case replaced >= 0:
-			next.panel = slots[replaced].panel
-			slots[replaced] = next
-		case !cardHasInteractiveAction(specJSON):
-			slots = append(slots, next)
+		case replaced >= 0 && cards[replaced].onBoard:
+			// It inherits the replaced card's slot, and its key if it had one.
+			card.onBoard, card.slot, card.panel = true, cards[replaced].slot, cards[replaced].panel
+		case genui.IsDisplayOnly([]byte(card.spec)):
+			card.onBoard, card.slot = true, slots
+			slots++
+		}
+		if card.panel != "" {
+			panelOwner[card.panel] = n
+		}
+		cards = append(cards, card)
+	}
+	return cards
+}
+
+// currentBoardCards lists the cards dashboard view shows as panels now, in
+// the order their panels first appeared, bounded to the ones updated most
+// recently (a long-lived chat can hold more than a note should name).
+func currentBoardCards(cards []shownCard) []dashboardBoardPanel {
+	board := make([]shownCard, 0, len(cards))
+	for _, c := range cards {
+		if c.current && c.onBoard {
+			board = append(board, c)
 		}
 	}
-	// A long-lived chat can hold more cards than a note should name: keep the
-	// ones updated most recently, in the order they first appeared.
-	if len(slots) > maxDashboardBoardPanels {
-		byRecency := slices.Clone(slots)
-		slices.SortFunc(byRecency, func(a, b cardSlot) int { return b.updated - a.updated })
-		cutoff := byRecency[maxDashboardBoardPanels-1].updated
-		slots = slices.DeleteFunc(slots, func(s cardSlot) bool { return s.updated < cutoff })
+	// cards are in the order shown, so the tail is the most recently updated.
+	if len(board) > maxDashboardBoardPanels {
+		board = board[len(board)-maxDashboardBoardPanels:]
 	}
-	out := make([]dashboardBoardPanel, 0, len(slots))
-	for _, s := range slots {
-		out = append(out, dashboardBoardPanel{Title: s.title, CardID: s.cardID, Panel: s.panel})
+	slices.SortStableFunc(board, func(a, b shownCard) int { return a.slot - b.slot })
+	out := make([]dashboardBoardPanel, 0, len(board))
+	for _, c := range board {
+		out = append(out, dashboardBoardPanel{Title: c.title, CardID: c.id, Panel: c.panel})
 	}
 	return out
 }
 
-// appendConversationCardsBlock names the conversation's current cards on a
-// turn whose replay may not hold them:
+// replayedSharedCards returns, by history index, the entries of the cards a
+// replay keeps from turns its sender did not send: the current cards, most
+// recently shown first up to maxReplayedSharedCards. For a card drawn by
+// reference the map also carries the spec to replay as the call's input,
+// because the result it referred to is another sender's and is not replayed.
+func replayedSharedCards(history []agent.HistoryEntry) map[int]string {
+	cards := conversationShownCards(history)
+	keep := make(map[int]string)
+	kept := 0
+	for i := len(cards) - 1; i >= 0 && kept < maxReplayedSharedCards; i-- {
+		c := cards[i]
+		if !c.current {
+			continue
+		}
+		kept++
+		keep[c.callIdx] = c.spec
+		keep[c.resultIdx] = ""
+	}
+	return keep
+}
+
+// appendConversationCardsBlock names the conversation's current board cards
+// on an in-chat patrol turn. It runs unattended, often long after the turn
+// that drew a panel and after a compaction dropped that turn from its
+// context, and it carries no dashboard-view note because no browser sent it.
+// Other turns need no list: their replay holds the cards, other senders'
+// included (redactHistoryForSender), and a dashboard-view turn brings the
+// sender's own board.
 //
-//   - an in-chat patrol turn. It runs unattended, often long after the turn
-//     that drew a panel (and after a compaction dropped it from the replay),
-//     and it carries no dashboard-view note because no browser sent it.
-//   - a turn in a multiplayer chat that was not sent from dashboard view (that
-//     view sends the sender's own board, which already lists every card). The
-//     model replay omits another sender's working trace, cards included
-//     (redactHistoryForSender), so without the list a teammate's "update the
-//     pacing card" has no card to resolve to.
-//
-// Nothing is added when the chat shows no cards, so a chat that never used
-// them reads exactly as before. Titles are sanitized and the list bounded the
-// same way as the dashboard-view note (dashboardBoardLines).
-func appendConversationCardsBlock(injected string, conv *store.Conversation, user, inputKind, view string, fullHistory []agent.HistoryEntry) string {
-	switch {
-	case inputKind == agent.InputKindChatPatrol:
-	case inputKind == "" && view != chatViewDashboard && isSharedTurn(conv, user):
-	default:
+// Nothing is added when the chat shows no board cards, so a patrol in a chat
+// that never used them reads exactly as before. Titles are sanitized and the
+// list bounded the same way as the dashboard-view note (dashboardBoardLines).
+func appendConversationCardsBlock(injected, inputKind string, fullHistory []agent.HistoryEntry) string {
+	if inputKind != agent.InputKindChatPatrol {
 		return injected
 	}
-	lines := dashboardBoardLines(currentConversationCards(fullHistory))
+	lines := dashboardBoardLines(currentBoardCards(conversationShownCards(fullHistory)))
 	if len(lines) == 0 {
 		return injected
 	}
 	return injected + "\n\n" + conversationCardsNote + strings.Join(lines, "\n") + "]"
-}
-
-// isSharedTurn reports whether a turn runs in a conversation more than one
-// person sends to: a multiplayer chat, or any chat the sender does not own.
-func isSharedTurn(conv *store.Conversation, user string) bool {
-	if conv == nil {
-		return false
-	}
-	return conv.Multiplayer || (conv.UserEmail != "" && !strings.EqualFold(conv.UserEmail, user))
 }
