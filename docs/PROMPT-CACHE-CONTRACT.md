@@ -283,7 +283,27 @@ model that reports any cache write fails the check: it has gained explicit
 caching, and the list must be updated. The response stream is teed, not
 buffered, so the first-chunk watchdog behaves as in production, and each turn
 replays the previous turn's text, tool calls and tool results the way
-`replayHistory` does. `FLEET_CACHE_LIVE_TURN_GAP`
+`replayHistory` does.
+
+A run that OpenRouter served from more than one upstream is inconclusive, not
+a failure. Fleet's pins allow fallback (an Anthropic model may be served by
+Google Vertex or Claude Platform on AWS when Anthropic is busy), and a prompt
+cache belongs to one upstream. So the request that lands on another upstream
+is cold, and so is the next one back on the first, whatever fleet's
+breakpoints do. Both live tests check every request's served provider, and
+when the providers differ (`liveMixedUpstreams`) they re-run the whole
+conversation against a fresh cache (a new nonce), up to three attempts
+(`liveRoutingAttempts`). Every threshold above applies unchanged to the run
+served by a single upstream. When all three attempts are split, the test
+fails and names the upstreams, rather than passing on a measurement it could
+not make. The log keeps each inconclusive attempt's served providers.
+Each attempt runs under an equal share of the time the test binary has left
+before its `go test -timeout`. CI and the nightly canary run the suite with
+`-timeout 25m`, so three attempts fit. When too little time remains for
+another attempt, the test fails and says so, rather than letting the binary
+panic at its deadline.
+
+`FLEET_CACHE_LIVE_TURN_GAP`
 sets the pause between turns (default 5s); `FLEET_CACHE_LIVE_DUMP=<dir>` writes
 each request body for inspection. Run it after any change to the prompt layout,
 the breakpoints, or the upstream pins.
