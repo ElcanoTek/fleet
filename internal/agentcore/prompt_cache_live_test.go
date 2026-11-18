@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -381,7 +382,96 @@ func extraTopLevelFields(body []byte) map[string]json.RawMessage {
 	return m
 }
 
+// liveRoutingAttempts bounds how often a live trajectory is re-run when
+// OpenRouter served it from more than one upstream (see liveMixedUpstreams).
+const liveRoutingAttempts = 3
+
+// liveMixedUpstreams reports the upstreams that served a trajectory when there
+// was more than one, and "" otherwise.
+//
+// A provider's prompt cache is its own: Anthropic's cache is not Google
+// Vertex's or Bedrock's. Fleet's production pins allow OpenRouter to fall back
+// to another upstream when the preferred one is busy, and the request that
+// lands there is cold however correct fleet's breakpoints are — as is the
+// next one back on the first upstream, whose rolling tail it never cached. A
+// trajectory served by two upstreams therefore says nothing about fleet's
+// caching either way: it is inconclusive, not a pass and not a regression, so
+// the live tests run it again with a fresh nonce rather than loosen any
+// threshold. Requests with no reported provider are not counted.
+func liveMixedUpstreams(records []liveCacheRecord) string {
+	var seen []string
+	for _, r := range records {
+		if r.Provider == "" || slices.Contains(seen, r.Provider) {
+			continue
+		}
+		seen = append(seen, r.Provider)
+	}
+	if len(seen) < 2 {
+		return ""
+	}
+	return strings.Join(seen, ", ")
+}
+
+func TestLiveMixedUpstreams(t *testing.T) {
+	rec := func(providers ...string) []liveCacheRecord {
+		out := make([]liveCacheRecord, len(providers))
+		for i, p := range providers {
+			out[i].Provider = p
+		}
+		return out
+	}
+	for _, tc := range []struct {
+		name string
+		in   []liveCacheRecord
+		want string
+	}{
+		{"none", nil, ""},
+		{"one upstream", rec("Anthropic", "Anthropic", "Anthropic"), ""},
+		{"unreported provider is not a second upstream", rec("Anthropic", "", "Anthropic"), ""},
+		{"fallback mid-trajectory", rec("Anthropic", "Google", "Anthropic", "Claude Platform on AWS"), "Anthropic, Google, Claude Platform on AWS"},
+	} {
+		if got := liveMixedUpstreams(tc.in); got != tc.want {
+			t.Errorf("%s: liveMixedUpstreams = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+// runLiveUntilOneUpstream runs a live trajectory until OpenRouter serves one
+// from a single upstream, up to liveRoutingAttempts times, and returns that
+// run's records. Every attempt starts a fresh cache (a new nonce), so a retry
+// is never warmed by the attempt before it. It fails — never passes vacuously —
+// when every attempt was split across upstreams.
+func runLiveUntilOneUpstream(t *testing.T, label string, run func(attempt int) []liveCacheRecord) []liveCacheRecord {
+	t.Helper()
+	var splits []string
+	for attempt := 1; attempt <= liveRoutingAttempts; attempt++ {
+		records := run(attempt)
+		mixed := liveMixedUpstreams(records)
+		if mixed == "" {
+			return records
+		}
+		t.Logf("%s attempt %d/%d inconclusive: OpenRouter served it from %s, and a prompt cache does not carry between upstreams; re-running with a fresh cache",
+			label, attempt, liveRoutingAttempts, mixed)
+		splits = append(splits, mixed)
+	}
+	t.Fatalf("%s: every one of %d attempts was served by more than one upstream (%s), so fleet's caching could not be measured; OpenRouter is falling back persistently — retry later",
+		label, liveRoutingAttempts, strings.Join(splits, " | "))
+	return nil
+}
+
 func runPromptCacheLive(t *testing.T, key, slug string) {
+	var fleetCached, fleetWrite int
+	records := runLiveUntilOneUpstream(t, slug, func(attempt int) []liveCacheRecord {
+		var recs []liveCacheRecord
+		recs, fleetCached, fleetWrite = runPromptCacheTrajectory(t, key, slug, attempt)
+		return recs
+	})
+	assertPromptCacheLive(t, slug, records, fleetCached, fleetWrite)
+}
+
+// runPromptCacheTrajectory runs the 3-turn conversation once against a fresh
+// cache and returns the wire records with fleet's own cache accounting.
+func runPromptCacheTrajectory(t *testing.T, key, slug string, attempt int) ([]liveCacheRecord, int, int) {
 	transport := &liveCacheTransport{}
 	provider, err := openrouter.New(
 		openrouter.WithAPIKey(key),
@@ -399,7 +489,7 @@ func runPromptCacheLive(t *testing.T, key, slug string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	system := liveCacheSystemPrompt(fmt.Sprintf("%s-%d", slug, time.Now().UnixNano()))
+	system := liveCacheSystemPrompt(fmt.Sprintf("%s-%d-%d", slug, attempt, time.Now().UnixNano()))
 	tools := buildLiveCacheToolRoster()
 
 	userTurns := []string{
@@ -444,10 +534,16 @@ func runPromptCacheLive(t *testing.T, key, slug string) {
 		fleetWrite += session.CacheCreationTokens
 		history = append(history, liveReplayEntries(res.Entries)...)
 	}
+	transport.mu.Lock()
+	defer transport.mu.Unlock()
+	return append([]liveCacheRecord(nil), transport.records...), fleetCached, fleetWrite
+}
 
+func assertPromptCacheLive(t *testing.T, slug string, records []liveCacheRecord, fleetCached, fleetWrite int) {
+	t.Helper()
 	var wireCached, wireWrite, wirePrompt, laterPrompt, laterCached, reads, laterReqs int
 	var cost float64
-	for i, r := range transport.records {
+	for i, r := range records {
 		hitPct := 0.0
 		if r.PromptTokens > 0 {
 			hitPct = float64(r.CachedTokens) / float64(r.PromptTokens) * 100.0
@@ -472,15 +568,15 @@ func runPromptCacheLive(t *testing.T, key, slug string) {
 		warmHitPct = float64(laterCached) / float64(laterPrompt) * 100.0
 	}
 	t.Logf("%s SUMMARY requests=%d later-requests-with-cache-read=%d/%d warm-hit-rate=%.1f%% (%d/%d) wire cached=%d write=%d | fleet-recorded cached=%d write=%d | cost=$%.4f",
-		slug, len(transport.records), reads, laterReqs, warmHitPct, laterCached, laterPrompt, wireCached, wireWrite, fleetCached, fleetWrite, cost)
+		slug, len(records), reads, laterReqs, warmHitPct, laterCached, laterPrompt, wireCached, wireWrite, fleetCached, fleetWrite, cost)
 	if fleetCached != wireCached {
 		t.Errorf("%s: fleet recorded %d cached tokens, the wire reported %d", slug, fleetCached, wireCached)
 	}
 	if fleetWrite != wireWrite {
 		t.Logf("%s: fleet recorded %d cache-write tokens, the wire reported %d (fantasy does not parse cache_write_tokens)", slug, fleetWrite, wireWrite)
 	}
-	if len(transport.records) < 5 {
-		t.Fatalf("%s: expected at least 5 LLM requests across the 3-turn multi-tool trajectory, got %d", slug, len(transport.records))
+	if len(records) < 5 {
+		t.Fatalf("%s: expected at least 5 LLM requests across the 3-turn multi-tool trajectory, got %d", slug, len(records))
 	}
 
 	explicit := supportsExplicitBreakpoints(slug)
@@ -497,7 +593,7 @@ func runPromptCacheLive(t *testing.T, key, slug string) {
 		explicit = false
 	}
 	implicitMisses := 0
-	for i, r := range transport.records {
+	for i, r := range records {
 		if i == 0 || r.CachedTokens > 0 {
 			continue
 		}
@@ -514,7 +610,7 @@ func runPromptCacheLive(t *testing.T, key, slug string) {
 	// For explicit rolling-window families (Anthropic), verify both intra-turn
 	// tool-step cache growth AND cross-turn history cache preservation.
 	if explicit && !stablePrefixOnly(slug) {
-		assertLiveExplicitRollingCacheGrowth(t, slug, transport.records, warmHitPct)
+		assertLiveExplicitRollingCacheGrowth(t, slug, records, warmHitPct)
 	}
 }
 
@@ -596,6 +692,15 @@ func TestPromptCacheLive_LongToolChainCrossTurn(t *testing.T) {
 		slug = v
 	}
 
+	records := runLiveUntilOneUpstream(t, "long-chain "+slug, func(attempt int) []liveCacheRecord {
+		return runLongToolChainTrajectory(t, key, slug, attempt)
+	})
+	assertLongToolChainCache(t, slug, records)
+}
+
+// runLongToolChainTrajectory runs the 10-step chain and its follow-up turn once
+// against a fresh cache and returns the wire records.
+func runLongToolChainTrajectory(t *testing.T, key, slug string, attempt int) []liveCacheRecord {
 	transport := &liveCacheTransport{}
 	provider, err := openrouter.New(
 		openrouter.WithAPIKey(key),
@@ -613,7 +718,7 @@ func TestPromptCacheLive_LongToolChainCrossTurn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	system := liveCacheSystemPrompt(fmt.Sprintf("long-chain-%s-%d", slug, time.Now().UnixNano()))
+	system := liveCacheSystemPrompt(fmt.Sprintf("long-chain-%s-%d-%d", slug, attempt, time.Now().UnixNano()))
 
 	const totalPages = 10
 	fetchPage := fantasy.NewAgentTool(
@@ -683,9 +788,15 @@ func TestPromptCacheLive_LongToolChainCrossTurn(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Turn 2 follow-up failed: %v", err)
 	}
+	transport.mu.Lock()
+	defer transport.mu.Unlock()
+	return append([]liveCacheRecord(nil), transport.records...)
+}
 
+func assertLongToolChainCache(t *testing.T, slug string, records []liveCacheRecord) {
+	t.Helper()
 	var turn1Reqs, turn2Reqs []liveCacheRecord
-	for i, r := range transport.records {
+	for i, r := range records {
 		hitPct := 0.0
 		if r.PromptTokens > 0 {
 			hitPct = float64(r.CachedTokens) / float64(r.PromptTokens) * 100.0
