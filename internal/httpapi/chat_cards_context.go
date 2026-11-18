@@ -1,7 +1,8 @@
 // The cards a conversation is showing, read from its stored history
 // (docs/DASHBOARD-VIEW.md, "Cards a turn did not draw"). Two things are built
 // on it: the cards of another sender's turn that the model replay keeps
-// (redactHistoryForSender), and the list an in-chat patrol turn is given.
+// (redactHistoryForSender), and the list of current board panels an in-chat
+// patrol turn is given.
 // Split out of chat.go.
 
 package httpapi
@@ -15,13 +16,6 @@ import (
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/genui"
 )
-
-// maxReplayedSharedCards bounds the cards of other senders' turns that one
-// replay carries: the most recently shown ones. A chat a patrol has been
-// redrawing for months must not grow every participant's context without
-// limit; older cards are still on screen, and the model can be asked to show
-// them again.
-const maxReplayedSharedCards = 48
 
 // conversationCardsNote opens the list a patrol turn is given. It is about
 // updating: the reader of a shared board is hurt most by a second panel for a
@@ -191,26 +185,28 @@ func currentBoardCards(cards []shownCard) []dashboardBoardPanel {
 	return out
 }
 
-// sharedCardRef names one current card by its position among the shown cards
-// (later is more recent), with the spec to replay as its call's input.
+// sharedCardRef names one shown card, with the spec to replay as its call's
+// input.
 type sharedCardRef struct {
 	ordinal int
 	id      string
 	spec    string
 }
 
-// currentSharedCardEntries maps the history index of each current card's call
-// and result to the card. A replay keeps these entries on turns its sender
-// did not send (redactHistoryForSender). The spec is the card as drawn: for a
-// card drawn by reference it replaces the call's input, because the result
-// the reference named is another sender's and is not replayed.
-func currentSharedCardEntries(history []agent.HistoryEntry) map[int]sharedCardRef {
+// shownCardEntries maps the history index of each shown card's call and
+// result to the card. A replay keeps these entries on turns its sender did
+// not send (redactHistoryForSender). Every shown card is kept, replaced ones
+// included, exactly as a sender's replay keeps all of their own cards: the
+// replay must only ever grow at its end. The compaction records a turn
+// persists are positions in that turn's replay (agent.replayHistory), so a
+// card that dropped out of an earlier position later would make them cut in
+// the wrong place. The spec is the card as drawn: for a card drawn by
+// reference it replaces the call's input, because the result the reference
+// named is another sender's and is not replayed.
+func shownCardEntries(history []agent.HistoryEntry) map[int]sharedCardRef {
 	cards := conversationShownCards(history)
 	out := make(map[int]sharedCardRef, 2*len(cards))
 	for n, c := range cards {
-		if !c.current {
-			continue
-		}
 		ref := sharedCardRef{ordinal: n, id: c.id, spec: c.spec}
 		out[c.callIdx], out[c.resultIdx] = ref, ref
 	}
@@ -224,19 +220,17 @@ type replayedCardEntry struct {
 	card sharedCardRef
 }
 
-// keepReplayedSharedCards settles which of another sender's cards a replay
-// carries, and removes the rest from out:
-//
-//   - A card whose call id is also the id of a tool call the replay holds
-//     from the sender's own turns (since the latest summary) is dropped. The replay pairs calls with
-//     results by id alone (agent.replayHistory), so keeping both would hand
-//     one of them the other's result. The card stays on screen; only the
-//     model's copy is withheld. Its id cannot be rewritten instead, because
-//     the id is what the model passes back in replaces.
-//   - Of what is left, the maxReplayedSharedCards most recently shown are
-//     kept. The bound counts other senders' cards only: the sender's own
-//     cards are in the replay regardless and use none of it.
-func keepReplayedSharedCards(out []agent.HistoryEntry, kept []replayedCardEntry) []agent.HistoryEntry {
+// dropCollidingSharedCards removes from out another sender's card whose call
+// id is also the id of a tool call the replay holds from the sender's own
+// turns since the latest summary. The replay pairs calls with results by id
+// alone (agent.replayHistory), so keeping both would hand one of them the
+// other's result. The card stays on screen; only the model's copy is
+// withheld. Its id cannot be rewritten instead, because the id is what the
+// model passes back in replaces. Withholding is the safe side of the choice:
+// the scan reads the entries before per-turn compaction is applied, so it can
+// withhold a card whose rival call a compaction later removes, and never the
+// reverse.
+func dropCollidingSharedCards(out []agent.HistoryEntry, kept []replayedCardEntry) []agent.HistoryEntry {
 	if len(kept) == 0 {
 		return out
 	}
@@ -245,8 +239,7 @@ func keepReplayedSharedCards(out []agent.HistoryEntry, kept []replayedCardEntry)
 		foreign[k.pos] = true
 	}
 	// Only calls the model will actually be sent can collide: the replay
-	// starts at the latest summary (agent.replayHistory), so a call before it
-	// pairs with nothing.
+	// starts at the latest summary, so a call before it pairs with nothing.
 	start := 0
 	for pos := len(out) - 1; pos >= 0; pos-- {
 		if out[pos].Type == "summary" {
@@ -265,21 +258,9 @@ func keepReplayedSharedCards(out []agent.HistoryEntry, kept []replayedCardEntry)
 			ownCallIDs[c.ID] = true
 		}
 	}
-	// kept is in history order, so its tail holds the most recent cards.
-	allowed := make(map[int]bool)
-	for i := len(kept) - 1; i >= 0; i-- {
-		card := kept[i].card
-		if ownCallIDs[card.id] || allowed[card.ordinal] {
-			continue
-		}
-		if len(allowed) == maxReplayedSharedCards {
-			break
-		}
-		allowed[card.ordinal] = true
-	}
 	drop := make(map[int]bool)
 	for _, k := range kept {
-		if !allowed[k.card.ordinal] {
+		if ownCallIDs[k.card.id] {
 			drop[k.pos] = true
 		}
 	}

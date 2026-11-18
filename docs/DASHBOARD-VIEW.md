@@ -70,14 +70,14 @@ that work (`internal/httpapi/chat_cards_context.go`):
   sender's reasoning, tool calls and tool results, but it carries the cards
   the conversation is showing, contents included (`replayedSharedCards` in
   `redactHistoryForSender`), so "add last week to the pacing chart" starts
-  from the chart that is there. Only a card that was shown and that nothing
-  has replaced is kept (`conversationShownCards` follows `replaces`, panel
-  keys and reused call ids by occurrence, as the web does), the most recent
-  ones up to 48, counting other senders' cards only. A card whose call id one
-  of the sender's own tool calls also has is left out, because the replay
-  pairs calls with results by id. A card drawn by reference (`from_result`) is replayed with
-  the spec it was drawn from, because the tool result it named is the other
-  sender's and stays out.
+  from the chart that is there. Every card that was shown is kept, replaced
+  ones included, as a sender's replay keeps all of their own cards: the
+  replay then only grows at its end, which the compaction records a turn
+  persists (positions in its replay) depend on. A card drawn by reference
+  (`from_result`) is replayed with the spec it was drawn from, because the
+  tool result it named is the other sender's and stays out. A card whose call
+  id one of the sender's own tool calls also has is left out, because the
+  replay pairs calls with results by id.
 - **A patrol turn is given the board's panels.** No browser sent it, so it has
   no `board`, and a long-running patrol's earlier `show_ui` calls are often
   compacted out of its context. `appendConversationCardsBlock` lists the
@@ -149,7 +149,7 @@ key, a non-string key), `TestShowUIPanelCard`, `TestShowUIRef_Panel`, and
 `TestAppendDashboardViewBlock`, `TestDashboardBoardIsListed` (keys, pinned cards,
 sanitizing, the bound) and `TestChatRequestDecodesView`; for the card list,
 `TestCurrentConversationCards*`, `TestAppendConversationCardsBlock`,
-`TestReplayKeepsOtherSendersCurrentCards`, `TestReplayOfOtherSendersCardsIsBounded`,
+`TestReplayKeepsOtherSendersCards`, `TestReplayOfOtherSendersCardsIsAppendOnly`,
 `TestPatrolTurnUpdatesDashboardCards` (a fired patrol turn is told the cards
 and `show_ui` draws on it) and `TestManagerRunTurn_PatrolTurnOffersShowUI`. Web: `board.test.ts`
 (slotting, lineage, pins, the slot moving to a new key, removal, order, width,
@@ -193,8 +193,8 @@ themes.
   made.** A teammate's turn sees the card, not the query, script or connector
   response behind it, so changing what the card already shows works, while
   refreshing its numbers means fetching them again with the teammate's own
-  connectors. Cards something has replaced, and all but the 48 most recent
-  cards of other senders, are not replayed.
+  connectors. A long-lived chat's cards add to every participant's context,
+  as they already do to the owner's, and are compacted with the rest of it.
 - **A patrol's list has no contents.** After a compaction the patrol knows
   each panel's title, id and key from its list, not what the panel showed; it
   redraws the panel from the run's fresh data.

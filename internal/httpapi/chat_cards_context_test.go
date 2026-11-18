@@ -22,7 +22,7 @@ import (
 // A multiplayer dashboard chat with a patrol: the owner's turn drew two
 // panels, a teammate's turn drew a third, and the patrol refreshed one. Each
 // of them must be able to update any of the cards: the replay carries the
-// current cards whoever's turn drew them, and a patrol turn is also given the
+// cards whoever's turn drew them, and a patrol turn is also given the
 // list of the board's panels.
 
 func cardCall(id int64, callID, spec string) agent.HistoryEntry {
@@ -172,9 +172,9 @@ func TestAppendConversationCardsBlock(t *testing.T) {
 
 // Anyone in a team chat can ask for a card to be changed, and the assistant
 // must work from the card that is there. So the replay for one sender's turn
-// carries the current cards of every other sender's turn, contents included,
+// carries the cards of every other sender's turn, contents included,
 // and nothing else of their working trace.
-func TestReplayKeepsOtherSendersCurrentCards(t *testing.T) {
+func TestReplayKeepsOtherSendersCards(t *testing.T) {
 	t.Parallel()
 
 	history := []agent.HistoryEntry{
@@ -198,25 +198,25 @@ func TestReplayKeepsOtherSendersCurrentCards(t *testing.T) {
 	ids := make([]int64, 0, len(out))
 	for _, e := range out {
 		ids = append(ids, e.ID)
-		for _, private := range []string{"owner thinking", "owner connector rows", "Refused", "sender_email\":\"owner", "yesterday\"}", `\"card\"`} {
+		for _, private := range []string{"owner thinking", "owner connector rows", "Refused", "sender_email\":\"owner", `\"card\"`} {
 			if e.Role != "user" && strings.Contains(string(e.Content), private) {
 				t.Errorf("entry %d carries %q: %s", e.ID, private, e.Content)
 			}
 		}
 	}
-	// The owner's message, the by-reference card, the current pacing card,
-	// the reply and the teammate's message: not the reasoning, the script,
-	// the refused card or the pacing card that was replaced.
-	if want := []int64{1, 7, 8, 11, 12, 13, 14}; !slices.Equal(ids, want) {
+	// The owner's message, every card that was shown (the replaced pacing
+	// card too, as in the owner's own replay), the reply and the teammate's
+	// message: not the reasoning, the script or the refused card.
+	if want := []int64{1, 5, 6, 7, 8, 11, 12, 13, 14}; !slices.Equal(ids, want) {
 		t.Fatalf("replayed entries = %v, want %v", ids, want)
 	}
 	// The current card is replayed with its contents, and the by-reference
 	// card with the spec it was drawn from.
 	var call agent.ToolCallContent
-	if err := json.Unmarshal(out[3].Content, &call); err != nil || !strings.Contains(call.Input, `"text":"today"`) {
+	if err := json.Unmarshal(out[5].Content, &call); err != nil || !strings.Contains(call.Input, `"text":"today"`) {
 		t.Errorf("the current card lost its contents: %s (err %v)", out[3].Content, err)
 	}
-	if err := json.Unmarshal(out[1].Content, &call); err != nil || !strings.Contains(call.Input, "three recs") || strings.Contains(call.Input, "from_result") {
+	if err := json.Unmarshal(out[3].Content, &call); err != nil || !strings.Contains(call.Input, "three recs") || strings.Contains(call.Input, "from_result") {
 		t.Errorf("the by-reference card is not replayed with its spec: %s (err %v)", out[1].Content, err)
 	}
 
@@ -227,32 +227,39 @@ func TestReplayKeepsOtherSendersCurrentCards(t *testing.T) {
 	}
 }
 
-func TestReplayOfOtherSendersCardsIsBounded(t *testing.T) {
+// The replay for one sender only ever grows at its end: a later card that
+// replaces an earlier one removes nothing from the earlier part. The
+// compaction records a turn persists are positions in that turn's replay, so
+// a card dropping out later would make them cut in the wrong place.
+func TestReplayOfOtherSendersCardsIsAppendOnly(t *testing.T) {
 	t.Parallel()
 
-	const total = maxReplayedSharedCards + 5
-	history := make([]agent.HistoryEntry, 0, 2+2*total)
-	history = append(history, userSaid(1, "owner@x.com", "go"))
-	for i := range total {
-		id := fmt.Sprintf("k%02d", i)
-		history = append(history, cardCall(int64(2*i+2), id, fmt.Sprintf(`{"title":"One-off %d","components":[]}`, i)), cardShown(int64(2*i+3), id))
+	history := make([]agent.HistoryEntry, 0, 12)
+	history = append(history,
+		userSaid(1, "owner@x.com", "build the board"),
+		cardCall(2, "v1", `{"title":"Pacing v1","panel":"pacing","components":[]}`),
+		cardShown(3, "v1"),
+		cardCall(4, "note", `{"title":"Note","components":[]}`),
+		cardShown(5, "note"),
+		userSaid(6, "mate@x.com", "what changed?"),
+		agent.HistoryEntry{ID: 7, Role: "assistant", Type: "text", Content: []byte(`{"text":"Nothing yet."}`)},
+	)
+	before := redactHistoryForSender(history, "mate@x.com", "owner@x.com")
+	history = append(history,
+		userSaid(8, "owner@x.com", "refresh"),
+		cardCall(9, "v2", `{"title":"Pacing v2","panel":"pacing","components":[]}`),
+		cardShown(10, "v2"),
+		cardCall(11, "note2", `{"title":"Note 2","replaces":"note","components":[]}`),
+		cardShown(12, "note2"),
+	)
+	after := redactHistoryForSender(history, "mate@x.com", "owner@x.com")
+	if len(after) != len(before)+5 {
+		t.Fatalf("replay grew from %d to %d entries, want %d", len(before), len(after), len(before)+5)
 	}
-	history = append(history, userSaid(999, "mate@x.com", "hi"))
-	calls := 0
-	first := ""
-	for _, e := range redactHistoryForSender(history, "mate@x.com", "owner@x.com") {
-		if e.Type != "tool_call" {
-			continue
+	for i := range before {
+		if after[i].ID != before[i].ID || string(after[i].Content) != string(before[i].Content) {
+			t.Fatalf("entry %d of the earlier replay changed: %d -> %d", i, before[i].ID, after[i].ID)
 		}
-		var c agent.ToolCallContent
-		_ = json.Unmarshal(e.Content, &c)
-		if calls == 0 {
-			first = c.ID
-		}
-		calls++
-	}
-	if calls != maxReplayedSharedCards || first != "k05" {
-		t.Errorf("replayed %d cards starting at %q, want the %d most recent starting at k05", calls, first, maxReplayedSharedCards)
 	}
 }
 
@@ -387,34 +394,6 @@ func TestCurrentConversationCardsRetiresAMovedKey(t *testing.T) {
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("cards = %+v, want %+v", got, want)
-	}
-}
-
-// The bound on replayed cards counts other senders' cards only: the sender's
-// own cards are in their replay anyway and must not push a teammate's out.
-func TestReplayBoundCountsOnlyOtherSendersCards(t *testing.T) {
-	t.Parallel()
-
-	const own = maxReplayedSharedCards + 4
-	history := make([]agent.HistoryEntry, 0, 4+2*own)
-	history = append(history,
-		userSaid(1, "mate@x.com", "add a margin panel"),
-		cardCall(2, "margin", `{"title":"Margin","panel":"margin","components":[]}`),
-		cardShown(3, "margin"),
-		userSaid(4, "owner@x.com", "lots of one-off cards"),
-	)
-	for i := range own {
-		id := fmt.Sprintf("own%02d", i)
-		history = append(history, cardCall(int64(10+2*i), id, fmt.Sprintf(`{"title":"Own %d","components":[]}`, i)), cardShown(int64(11+2*i), id))
-	}
-	found := false
-	for _, e := range redactHistoryForSender(history, "owner@x.com", "owner@x.com") {
-		if e.ID == 2 {
-			found = true
-		}
-	}
-	if !found {
-		t.Error("the owner's own cards used up the bound and the teammate's card was dropped")
 	}
 }
 

@@ -65,7 +65,7 @@ func isPrivateTurnTraceEntry(e agent.HistoryEntry) bool {
 // participant's transcript carries it, whoever sent the turn. A call the
 // server refused (UI_INVALID) or never answered was not shown and stays with
 // its sender, raw input included. The model replay (redactHistoryForSender)
-// keeps the ones that are still current (replayedSharedCards).
+// keeps them too (shownCardEntries).
 func sharedCardEntries(entries []agent.HistoryEntry) map[int]bool {
 	var shared map[int]bool
 	// call id → indexes of the show_ui calls still waiting for a result, oldest
@@ -143,12 +143,12 @@ func isShownCardResult(text string, isErr bool) bool {
 // API responses to the model.
 //
 // The one part of another sender's trace the replay keeps is the cards the
-// conversation is showing (replayedSharedCards): the participant sees them on
+// conversation showed (shownCardEntries): the participant sees them on
 // screen, and "update that chart" has to work from the chart that is there,
-// not rebuild it. Only a card that was shown and that nothing has replaced is
-// kept, the most recent ones up to a bound; a card drawn by reference is
-// replayed with the spec it was drawn from, since the result it named is the
-// other sender's and stays out.
+// not rebuild it. Every card that was shown is kept, as the sender's own
+// cards are, so the replay only grows at its end; a card drawn by reference
+// is replayed with the spec it was drawn from, since the result it named is
+// the other sender's and stays out.
 func redactHistoryForSender(entries []agent.HistoryEntry, callerEmail, convOwnerEmail string) []agent.HistoryEntry {
 	if callerEmail == "" || len(entries) == 0 {
 		return entries
@@ -156,10 +156,10 @@ func redactHistoryForSender(entries []agent.HistoryEntry, callerEmail, convOwner
 	out := make([]agent.HistoryEntry, 0, len(entries))
 	currentTurnSender := strings.TrimSpace(convOwnerEmail)
 	toolCallSenders := make(map[string]string)
-	// Another sender's current cards are appended as they are met and trimmed
-	// afterwards (keepReplayedSharedCards): which ones stay depends on what
-	// else the replay holds, known only once it is built.
-	currentCards := currentSharedCardEntries(entries)
+	// Another sender's shown cards are appended as they are met; one whose id
+	// collides with a call of the sender's own is removed afterwards
+	// (dropCollidingSharedCards), once the replay is built.
+	currentCards := shownCardEntries(entries)
 	var kept []replayedCardEntry
 	for i, e := range entries {
 		if e.Type == "summary" && convOwnerEmail != "" && !strings.EqualFold(callerEmail, convOwnerEmail) {
@@ -235,7 +235,7 @@ func redactHistoryForSender(entries []agent.HistoryEntry, callerEmail, convOwner
 		}
 		out = append(out, e)
 	}
-	return keepReplayedSharedCards(out, kept)
+	return dropCollidingSharedCards(out, kept)
 }
 
 // replayedSharedCardEntry is another sender's shown-card entry as the replay
