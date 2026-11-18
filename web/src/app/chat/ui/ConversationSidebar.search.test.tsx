@@ -76,7 +76,15 @@ type Spies = {
 
 // The parent owns the query and the filtered list; this stand-in does what
 // ChatExperience does, so typing in the real field drives the real rail.
-function Harness({ spies, initialQuery = "" }: { spies: Spies; initialQuery?: string }) {
+function Harness({
+  spies,
+  initialQuery = "",
+  overrides = {},
+}: {
+  spies: Spies;
+  initialQuery?: string;
+  overrides?: Record<string, unknown>;
+}) {
   const [query, setQuery] = useState(initialQuery);
   const searchRef = { current: null as HTMLInputElement | null };
   const props = {
@@ -136,6 +144,7 @@ function Harness({ spies, initialQuery = "" }: { spies: Spies; initialQuery?: st
     projectsLoaded: true,
     teamSharedLoaded: true,
     archivedLoaded: true,
+    ...overrides,
   } as unknown as Parameters<typeof ConversationSidebar>[0];
   return <ConversationSidebar {...props} />;
 }
@@ -176,13 +185,16 @@ function stubFetch(layout: unknown, messageHits: unknown[] = []) {
   return calls;
 }
 
-async function renderRail(layout: unknown, opts: { query?: string; messageHits?: unknown[] } = {}) {
+async function renderRail(
+  layout: unknown,
+  opts: { query?: string; messageHits?: unknown[]; overrides?: Record<string, unknown> } = {},
+) {
   const calls = stubFetch(layout, opts.messageHits);
   const spies = newSpies();
   await act(async () => {
     await loadSidebar();
   });
-  render(<Harness spies={spies} initialQuery={opts.query} />);
+  render(<Harness spies={spies} initialQuery={opts.query} overrides={opts.overrides} />);
   return { calls, spies };
 }
 
@@ -335,6 +347,43 @@ describe("ConversationSidebar — search looks everywhere", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("drops the previous query's message hits until the new answer arrives", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      await renderRail(null, {
+        messageHits: [{ conversation_id: "x-1", title: "Elsewhere", match_preview: "a hit", matched_at: 1 }],
+      });
+      type("first");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(350);
+      });
+      expect(screen.getAllByTestId("search-result")).toHaveLength(1);
+      // A new query: the old hit is not shown, counted or opened by Enter.
+      type("second");
+      expect(screen.queryByTestId("search-result")).toBeNull();
+      expect(screen.getByRole("status").textContent).toBe("Searching…");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(350);
+      });
+      expect(screen.getAllByTestId("search-result")).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("says which lists it could not search while they have not loaded", async () => {
+    await renderRail(null, { overrides: { teamSharedConversations: [], teamSharedLoaded: false, archivedLoaded: false } });
+    type("zzzz");
+    const empty = await screen.findByTestId("search-empty", undefined, { timeout: 2000 });
+    // No claim to have looked everywhere.
+    expect(empty.textContent).not.toContain("including hidden and folded sections");
+    expect(screen.getByTestId("search-incomplete").textContent).toContain("Team chats, Archived");
+    // With results too: a match may still be missing from the list.
+    type("pacing");
+    expect(within(group("chats")).getByTitle("Budget pacing review")).toBeTruthy();
+    expect(screen.getByTestId("search-incomplete")).toBeTruthy();
   });
 
   it("explains an empty search and clears it", async () => {

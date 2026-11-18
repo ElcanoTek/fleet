@@ -5957,5 +5957,7 @@
   "1 result": "1 resultado",
   "{0} results": "{0} resultados",
   "Search looked through all your chats with the chosen labels, plus team chats and projects, including hidden and folded sections. Try fewer words, or clear the label filter.": "A pesquisa percorreu todos os seus chats com as etiquetas escolhidas, além dos chats da equipa e dos projetos, incluindo as secções ocultas e recolhidas. Experimente menos palavras ou remova o filtro de etiquetas.",
-  "Search looked through all your chats, team chats, projects and archived chats, including hidden and folded sections. Try fewer or different words.": "A pesquisa percorreu todos os seus chats, os chats da equipa, os projetos e os chats arquivados, incluindo as secções ocultas e recolhidas. Experimente menos palavras ou palavras diferentes."
+  "Search looked through all your chats, team chats, projects and archived chats, including hidden and folded sections. Try fewer or different words.": "A pesquisa percorreu todos os seus chats, os chats da equipa, os projetos e os chats arquivados, incluindo as secções ocultas e recolhidas. Experimente menos palavras ou palavras diferentes.",
+  "Try fewer or different words.": "Experimente menos palavras ou palavras diferentes.",
+  "Not searched, because it has not loaded: {0}. If this stays, reload the page.": "Não foi pesquisado o que ainda não carregou: {0}. Se continuar assim, recarregue a página."
 }

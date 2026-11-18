@@ -51,7 +51,14 @@ This note records what shipped to fix that, and what was left out.
   Postgres full text over the person's own chats, archived ones included)
   and is deduplicated against chats already listed by title. While that
   answer is on its way, an otherwise empty list says "Searching…" rather than
-  "Nothing matches".
+  "Nothing matches". Hits belong to the query typed now: the previous
+  query's hits are dropped as soon as the text changes.
+- **Search says what it could not see.** Team chats, projects and archived
+  chats are each read on their own after the page boots. Until a list has
+  loaded (or if its read failed), the results end with "Not searched, because
+  it has not loaded: …" naming it, and the empty state does not claim to have
+  looked everywhere. The archived list is not read when the page boots, so
+  the first search reads it (`chat-experience.tsx`).
 - **The empty state says where search looked** (all chats, team chats,
   projects, archived, hidden and folded sections included) and has a
   **Clear search** button that returns focus to the field.

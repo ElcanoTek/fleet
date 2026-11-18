@@ -1713,9 +1713,12 @@ export function ConversationSidebar({
     ...filteredConversations.map((c) => c.id),
     ...archivedMatches.map((c) => c.id),
   ]);
-  const messageHits = searching
-    ? (contentResults ?? []).filter((r) => !shownIds.has(r.conversation_id))
-    : [];
+  // Only the answer to what is typed now: while a new query's answer is on
+  // its way, the previous query's hits are not shown, counted or opened.
+  const messageHits =
+    searching && contentFor === sidebarQuery.trim()
+      ? (contentResults ?? []).filter((r) => !shownIds.has(r.conversation_id))
+      : [];
 
   const selecting = selectMode;
   const largeSelection = selectedIds.size > 50;
@@ -2430,6 +2433,15 @@ visibleProjectTree.map(({ project, chats }) => {
     matchingProjects.length +
     archivedMatches.length +
     messageHits.length;
+  // The lists search could not look in: each is read on its own after the
+  // boot, and a read still on its way (or one that failed) leaves its flag
+  // down. Search then says which lists it did not see, instead of claiming
+  // it looked everywhere.
+  const unreadLists = [
+    teamSharedLoaded ? null : sectionLabel("team", tr("Team chats")),
+    projectsLoaded ? null : sectionLabel("projects", tr("Projects")),
+    archivedLoaded ? null : tr("Archived"),
+  ].filter((x): x is string => x !== null);
   const openMessageHit = (id: string) => {
     const team = teamSharedConversations.find((c) => c.id === id);
     if (team && onSelectTeamSharedConversation) onSelectTeamSharedConversation(team);
@@ -2455,7 +2467,9 @@ visibleProjectTree.map(({ project, chats }) => {
               {tr("Nothing matches “{0}”.", [trimmedQuery])}
             </p>
             <p className="m-0 mt-1 text-[0.78rem] leading-[1.5]">
-              {filterLabels.length > 0
+              {unreadLists.length > 0
+                ? tr("Try fewer or different words.")
+                : filterLabels.length > 0
                 ? tr("Search looked through all your chats with the chosen labels, plus team chats and projects, including hidden and folded sections. Try fewer words, or clear the label filter.")
                 : tr("Search looked through all your chats, team chats, projects and archived chats, including hidden and folded sections. Try fewer or different words.")}
             </p>
@@ -2543,6 +2557,14 @@ visibleProjectTree.map(({ project, chats }) => {
             );
           })}
         </SearchGroup>
+      ) : null}
+      {unreadLists.length > 0 ? (
+        <p
+          data-testid="search-incomplete"
+          className="mx-2 mt-1 rounded-md bg-[var(--color-overlay-soft)] px-2 py-1 text-[0.72rem] leading-[1.5] text-[var(--color-text-secondary)]"
+        >
+          {tr("Not searched, because it has not loaded: {0}. If this stays, reload the page.", [unreadLists.join(", ")])}
+        </p>
       ) : null}
     </div>
   );
