@@ -354,6 +354,21 @@ test("a Team chats row has a menu: pin it, or copy the link that opens it", asyn
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(`${origin}/chat?team=t1`);
 });
 
+test("copying a Team chats link from the keyboard returns focus to the row's menu button", async ({ page, context }) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await setupTeamChats(page);
+  await page.goto("/chat");
+  const row = page.getByTestId("team-shared-conv-row").filter({ hasText: "Q4 planning" }).locator("..");
+  const kebab = row.getByTestId("team-chat-options");
+  await kebab.focus();
+  await page.keyboard.press("Enter");
+  const menu = page.getByRole("menu", { name: "Options for Q4 planning" });
+  await menu.getByRole("menuitem", { name: "Copy link" }).focus();
+  await page.keyboard.press("Enter");
+  await expect(menu).toBeHidden();
+  await expect(kebab).toBeFocused();
+});
+
 test("when the clipboard refuses, a Team chats row's menu shows the link to copy by hand", async ({ page }) => {
   await page.addInitScript(() => {
     Object.defineProperty(navigator, "clipboard", {

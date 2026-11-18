@@ -910,7 +910,14 @@ function TeamChatKebab({ conversation }: { conversation: ConversationSummary }) 
               void copyText(link).then((ok) => {
                 if (mine !== attempt.current) return;
                 setCopy(ok ? "copied" : "failed");
-                if (ok) closeTimer.current = window.setTimeout(close, 900);
+                if (!ok) return;
+                closeTimer.current = window.setTimeout(() => {
+                  // As Escape does: a keyboard user still on the menu goes
+                  // back to the ⋯ button, not to the page body when the
+                  // menu unmounts. Focus moved elsewhere meanwhile stays.
+                  if (document.activeElement?.closest('[role="menu"]')) anchorRef.current?.focus();
+                  close();
+                }, 900);
               });
             }}
           >
