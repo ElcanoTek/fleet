@@ -843,6 +843,12 @@ function TeamChatKebab({ conversation }: { conversation: ConversationSummary }) 
   // browser asking for permission) must not write its result into, or
   // close, a later opening of the menu.
   const attempt = useRef(0);
+  const fallbackRef = useRef<HTMLInputElement | null>(null);
+  useEffect(() => {
+    if (copy !== "failed") return;
+    fallbackRef.current?.focus();
+    fallbackRef.current?.select();
+  }, [copy]);
   useEffect(
     () => () => {
       if (closeTimer.current !== null) window.clearTimeout(closeTimer.current);
@@ -926,14 +932,22 @@ function TeamChatKebab({ conversation }: { conversation: ConversationSummary }) 
         ) : null}
         {link && copy === "failed" ? (
           // The clipboard refused (no permission, an insecure page): the
-          // link is shown to select and copy by hand, as Share does.
-          <p
-            role="status"
-            data-testid="team-chat-link-fallback"
-            className="m-0 max-w-[16rem] select-all break-all px-3 py-1.5 text-[0.72rem] text-[var(--color-text-secondary)]"
-          >
-            {tr("Couldn’t copy the link. Copy it from here: {0}", [link])}
-          </p>
+          // link is shown to copy by hand, as Share does. It sits in a
+          // read-only field, focused and selected, so a keyboard user can
+          // copy it too (Tab reaches it inside the menu's focus trap).
+          <div data-testid="team-chat-link-fallback" className="max-w-[16rem] px-3 py-1.5">
+            <p role="status" className="m-0 text-[0.72rem] text-[var(--color-text-secondary)]">
+              {tr("Couldn’t copy the link. Copy it from here: {0}", [""]).trim()}
+            </p>
+            <input
+              ref={fallbackRef}
+              readOnly
+              value={link}
+              aria-label={tr("Copy link")}
+              onFocus={(e) => e.currentTarget.select()}
+              className="mt-1 w-full rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-transparent px-1.5 py-1 text-[0.72rem] text-[var(--color-text-primary)] focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none any-pointer-coarse:min-h-11"
+            />
+          </div>
         ) : null}
       </Menu>
     </>

@@ -385,7 +385,10 @@ test("when the clipboard refuses, a Team chats row's menu shows the link to copy
   await menu.getByRole("menuitem", { name: "Copy link" }).click();
   await expect(menu.getByRole("menuitem", { name: "Copy failed" })).toBeVisible();
   const origin = new URL(page.url()).origin;
-  await expect(page.getByTestId("team-chat-link-fallback")).toContainText(`${origin}/chat?team=t1`);
+  // The link sits in a read-only field, focused, so the keyboard can copy it too.
+  const field = page.getByTestId("team-chat-link-fallback").getByRole("textbox", { name: "Copy link" });
+  await expect(field).toHaveValue(`${origin}/chat?team=t1`);
+  await expect(field).toBeFocused();
   // It stays open, so the link can be selected.
   await expect(menu).toBeVisible();
 });
@@ -433,6 +436,13 @@ test.describe("on a touch screen", () => {
     // A finger-sized row (44px), so each row's tap box stays its own.
     const height = await team.getByTestId("team-shared-conv-row").evaluate((el) => el.getBoundingClientRect().height);
     expect(height).toBeGreaterThanOrEqual(44);
+    // ...and so are the items of the menu it opens.
+    await team.getByTestId("team-chat-options").tap();
+    const items = page.getByRole("menu", { name: "Options for Incident room" }).getByRole("menuitem");
+    await expect(items).toHaveCount(2);
+    for (const item of await items.all()) {
+      expect((await item.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(44);
+    }
   });
 });
 
