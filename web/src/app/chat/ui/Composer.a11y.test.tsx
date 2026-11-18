@@ -519,13 +519,54 @@ describe("Composer — per-chat Auto-approve toggle", () => {
 
     fireEvent.click(screen.getByTestId("composer-more-button"));
     const menu = screen.getByTestId("composer-more-popover");
+    const group = within(menu).getByTestId("composer-approval-mode-group");
+    expect(group.className).toContain("linear-gradient");
     const autoRadio = within(menu).getByTestId("composer-approval-mode-auto");
     const autonomousRadio = within(menu).getByTestId(
       "composer-approval-mode-autonomous",
     );
     expect(autonomousRadio).toHaveAttribute("aria-checked", "true");
+    expect(autonomousRadio.className).toContain("linear-gradient");
     fireEvent.click(autoRadio);
     expect(onChangeApprovalMode).toHaveBeenCalledWith("auto");
+
+    const infoBtn = within(menu).getByTestId("composer-approval-mode-info");
+    expect(infoBtn).toHaveAttribute("title", "More info");
+    // It is one of the menu's items, so the arrow keys reach it.
+    expect(infoBtn).toHaveAttribute("role", "menuitem");
+    within(menu).getByTestId("composer-approval-mode-manual").focus();
+    fireEvent.keyDown(menu, { key: "ArrowUp" });
+    expect(infoBtn).toHaveFocus();
+    fireEvent.click(infoBtn);
+    const infoModal = screen.getByTestId("approval-modes-info-modal");
+    expect(infoModal).toHaveTextContent("Approval modes");
+    expect(infoModal).toHaveTextContent("Manual");
+    expect(infoModal).toHaveTextContent("Auto-approve");
+    expect(infoModal).toHaveTextContent("Autonomous");
+    expect(infoModal).toHaveTextContent("destructive storage or permission changes");
+    fireEvent.click(screen.getByTestId("approval-modes-info-close"));
+    expect(screen.queryByTestId("approval-modes-info-modal")).toBeNull();
+    expect(document.activeElement).toBe(screen.getByTestId("composer-more-button"));
+  });
+
+  it("closes More options and preserves focus on the More trigger when switching into Autonomous", () => {
+    const onChangeApprovalMode = vi.fn();
+    render(
+      <Host
+        overrides={{
+          approvalMode: "manual",
+          isAutoApprove: false,
+          onChangeApprovalMode,
+        }}
+      />,
+    );
+    const moreBtn = screen.getByTestId("composer-more-button");
+    fireEvent.click(moreBtn);
+    const menu = screen.getByTestId("composer-more-popover");
+    fireEvent.click(within(menu).getByTestId("composer-approval-mode-autonomous"));
+    expect(screen.queryByTestId("composer-more-popover")).toBeNull();
+    expect(onChangeApprovalMode).toHaveBeenCalledWith("autonomous");
+    expect(document.activeElement).toBe(moreBtn);
   });
 });
 

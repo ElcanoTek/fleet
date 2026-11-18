@@ -60,6 +60,9 @@ describe("fetchMe", () => {
   it("normalises missing fields", async () => {
     stubFetch(async () => Response.json({ email: "a@example.com" }));
     expect(await fetchMe()).toEqual({ email: "a@example.com", role: "", team_id: "", admin: false });
+    invalidateMe();
+    stubFetch(async () => Response.json({ ...ME, autonomous_accepted: true }));
+    expect(await fetchMe()).toEqual({ ...ME, autonomous_accepted: true });
   });
 
   it("does not let a read in flight across invalidateMe repopulate the cache", async () => {

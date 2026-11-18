@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -216,7 +216,6 @@ function renderDialog(overrides: Partial<Parameters<typeof PatrolsDialog>[0]> = 
     schedules: [sampleSchedule, timerSchedule],
     approvalMode: "auto" as const,
     canChangeApprovalMode: true,
-    autonomousAccepted: true,
     onRequireAutonomousAccept: vi.fn(),
     onChangeApprovalMode: vi.fn(),
     barShown: true,
@@ -323,14 +322,18 @@ describe("PatrolsDialog", () => {
     expect(props.onChangeApprovalMode).toHaveBeenCalledWith("autonomous");
   });
 
-  it("asks before the edit form picks Autonomous while a patrol runs", () => {
-    renderDialog();
+  it("asks before the edit form picks Autonomous while a patrol runs, then shows the risk prompt", () => {
+    const props = renderDialog();
     fireEvent.click(cardToggle(0));
     fireEvent.click(screen.getByRole("button", { name: "Edit schedule & task" }));
     const form = screen.getByTestId("patrol-form-edit");
     fireEvent.click(within(form).getByRole("radio", { name: "Autonomous" }));
     expect(within(form).getByRole("radio", { name: "Autonomous" })).toHaveAttribute("aria-checked", "false");
     fireEvent.click(within(form).getByRole("button", { name: "Switch to Autonomous" }));
+    // Entering Autonomous always shows the risk prompt; only its acceptance picks it.
+    expect(props.onRequireAutonomousAccept).toHaveBeenCalledTimes(1);
+    expect(within(form).getByRole("radio", { name: "Autonomous" })).toHaveAttribute("aria-checked", "false");
+    act(() => vi.mocked(props.onRequireAutonomousAccept).mock.calls[0][0]());
     expect(within(form).getByRole("radio", { name: "Autonomous" })).toHaveAttribute("aria-checked", "true");
   });
 
@@ -403,8 +406,8 @@ describe("PatrolsDialog with no patrols (first patrol)", () => {
     expect(vi.mocked(props.onStart).mock.calls[0][0]).toMatchObject({ durationSeconds: 168 * 3600 });
   });
 
-  it("asks for the one-time Autonomous notice before picking Autonomous", () => {
-    const props = renderDialog({ schedules: [], autonomousAccepted: false });
+  it("asks for the Autonomous risk prompt before picking Autonomous, every time", () => {
+    const props = renderDialog({ schedules: [] });
     fireEvent.click(screen.getByRole("radio", { name: "Autonomous" }));
     expect(props.onRequireAutonomousAccept).toHaveBeenCalledTimes(1);
     expect(screen.getByRole("radio", { name: "Autonomous" })).toHaveAttribute("aria-checked", "false");

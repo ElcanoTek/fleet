@@ -273,9 +273,17 @@ func TestTeamLinkOwnLinkWinsAndInvalidParkedValueIsDropped(t *testing.T) {
 	if res.StatusCode != http.StatusOK || !strings.Contains(setCookies(res), "Max-Age=0") {
 		t.Fatalf("invalid parked: %d %q", res.StatusCode, setCookies(res))
 	}
+	// Another page the visitor opens signed in is their newer choice: it opens
+	// as usual and drops the parked link, so a later /chat does not jump back
+	// to the team chat (returnto.go). A request that is not a page visit
+	// leaves it alone.
 	res = e.do(withCookie(signedIn(t, req("GET", "/orchestrator", "")), "fleet_team_link", testTeamLinkID))
-	if res.StatusCode != http.StatusOK || strings.Contains(setCookies(res), "fleet_team_link") {
-		t.Fatalf("other page touched the parked link: %q", setCookies(res))
+	if res.StatusCode != http.StatusOK || !regexp.MustCompile(`fleet_team_link=;.*Max-Age=0`).MatchString(setCookies(res)) {
+		t.Fatalf("other page kept the parked link: %q", setCookies(res))
+	}
+	res = e.do(withCookie(signedIn(t, req("GET", "/api/session", "")), "fleet_team_link", testTeamLinkID))
+	if strings.Contains(setCookies(res), "fleet_team_link") {
+		t.Fatalf("an API call touched the parked link: %q", setCookies(res))
 	}
 	if c := setCookies(e.do(signedIn(t, req("GET", "/chat", "")))); strings.Contains(c, "fleet_team_link") {
 		t.Fatalf("no parked link, yet %q", c)

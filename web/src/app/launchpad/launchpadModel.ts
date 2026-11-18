@@ -18,7 +18,7 @@ export type LaunchpadConnector = {
   status?: "available" | "needs_setup" | "unavailable";
 };
 
-export type PatrolMode = "report" | "suggest" | "act";
+export type PatrolMode = "report" | "suggest" | "act" | "autonomous";
 
 export type PatrolGoal = {
   id: string;
@@ -183,6 +183,11 @@ export const MODE_OPTIONS: { id: PatrolMode; title: string; blurb: string }[] = 
     title: tr("Act for me"),
     blurb: tr("Handles routine, reversible fixes itself (auto-approve on) and lists everything it did."),
   },
+  {
+    id: "autonomous",
+    title: tr("Autonomous"),
+    blurb: tr("Executes live platform actions without approval cards and logs a receipt for each. External messages, schedules, destructive changes, and blocked actions still ask."),
+  },
 ];
 
 /** Suggested non-negotiables: tap to add, edit before saving. */
@@ -235,6 +240,8 @@ const MODE_RULES: Record<PatrolMode, string> = {
     tr("Recommend specific fixes and stage each one for my approval. Do not make changes yourself."),
   act:
     tr("You may take routine, reversible actions yourself; list every action you took in the report. Ask me first for anything costly, irreversible or outside these checks."),
+  autonomous:
+    tr("Autonomous mode is on: execute live actions directly without waiting for approval cards, and list every change you made in the report. External messages, calendar invites, schedule changes, destructive storage or permission changes, git push, and deployment-blocked actions still pause for my approval."),
 };
 
 /**

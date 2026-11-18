@@ -388,8 +388,9 @@ not open new tabs from notifications, so there, after a moment, the record opens
 in the Fleet tab you used last instead, which reloads the same way; with no
 Fleet tab open, the click opens nothing, so open Fleet yourself. If the task has
 been deleted, or your account cannot see it, a message says so instead. Signed
-out, you sign in first and land on your usual start page, so open the task from
-the board from there.
+out, you sign in first and the link then opens the record, as long as you sign
+in within 30 minutes in the same browser; after that you land on your usual
+start page, so open the task from the board from there.
 
 The transcript reads as a timeline. Each tool call is one row with its result
 folded in. The row shows a step number, an icon and colour for the kind of tool

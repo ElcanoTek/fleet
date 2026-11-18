@@ -56,6 +56,7 @@ import { conversationApiPath, conversationApprovalApiUrl } from "@/app/lib/conve
 import { Segmented } from "@/app/shared/ui/Segmented";
 import { StatusChip } from "@/app/shared/ui/StatusChip";
 import { errorMessage } from "@/app/shared/lib/errorMessage";
+import { redirectToLogin } from "@/app/settings/lib/getGated";
 import { cn } from "@/lib/utils";
 
 // Preview viewport presets for the inline email preview. These mirror the
@@ -270,11 +271,26 @@ export function ApprovalCountdown({
 // way to answer it while the agent kept waiting, and the countdown eventually
 // auto-denied an action the user had already tried to approve. Only a
 // server-reported terminal status moves the card out of pending.
+// SESSION_EXPIRED_TEXT is what a card shows for the moment between a 401 and
+// the sign-in page loading.
+const SESSION_EXPIRED_TEXT = () =>
+  tr("Your sign-in expired — taking you to sign in. Nothing was lost.");
+
 // describeSubmitFailure turns a non-2xx approval POST into the one line the
 // card shows. The status is always there; the body is included when it is a
 // short plain sentence (the API's error strings), skipped when it is empty or
 // a page of HTML from a proxy.
+//
+// A 401 is the one failure a retry can never fix: the browser session lapsed
+// (ADR-0064 — one day absolute, twelve hours idle) while the card sat open, so
+// every click answered "Unauthorized … Try again". It starts the sign-in
+// navigation instead; the approval is still pending server-side and waits for
+// the user to come back.
 export async function describeSubmitFailure(response: Response): Promise<string> {
+  if (response.status === 401) {
+    redirectToLogin();
+    return SESSION_EXPIRED_TEXT();
+  }
   let body = "";
   try {
     body = (await response.text()).trim();
@@ -2893,6 +2909,11 @@ export function MemoryProposalCard({
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(toProject ? { project_id: project?.id } : {}),
         });
+        if (response.status === 401) {
+          redirectToLogin();
+          setError(SESSION_EXPIRED_TEXT());
+          return;
+        }
         if (!response.ok) {
           // A failed save is NOT a dismissal. Reporting "Dismissed." told the
           // user they had thrown the memory away when in fact nothing was
@@ -2926,6 +2947,11 @@ export function MemoryProposalCard({
         const response = await fetch(`/api/memories/${encodeURIComponent(proposal.id)}`, {
           method: "DELETE",
         });
+        if (response.status === 401) {
+          redirectToLogin();
+          setError(SESSION_EXPIRED_TEXT());
+          return;
+        }
         if (!response.ok) {
           setError(tr("Couldn't dismiss this memory (HTTP {0}).", [response.status]));
           return;

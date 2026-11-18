@@ -50,16 +50,16 @@ User-facing description: the Chat guide's "Patrol Launchpad" section
 | Plan | Lists the five steps ahead; shows how many tools are ready and memories saved. | `GET /api/mcp-servers`, `GET /api/memories` |
 | Tools | Lists usable connectors (pre-ticked = on by default for a new chat; always-on rows shown locked), connectors that need setup with a **Set up** link, and **Connect another tool**. Both links open Settings → Connections in a new tab; the list refetches on window focus. | `GET /api/mcp-servers` |
 | Ground rules | **Who's on watch**: workspace personas and the person's own (`GET /api/personas`). **Non-negotiables**: each is saved immediately as a memory of kind `constraint`, then pinned. | `POST /api/memories`, `PATCH /api/memories/{id}` |
-| Watch list | Seven goal cards (`PATROL_GOALS` in `launchpadModel.ts`), free text, and the autonomy mode: report / suggest (default) / act. | — |
-| Schedule | Six presets (weekday mornings by default) or the shared `PatrolSchedulePicker`; browser time zone by default. | — |
+| Watch list | Seven goal cards (`PATROL_GOALS` in `launchpadModel.ts`), free text, and the autonomy mode: report / suggest (default) / act / autonomous (gated behind `AutonomousRiskModal`). | - |
+| Schedule | Six presets (weekday mornings by default) or the shared `PatrolSchedulePicker`; browser time zone by default. | - |
 | Launch | Summary, editable name and instructions (a template draft from the answers), optional **Draft it with AI**, then **Launch patrol**. | see below |
 
-**Launch** uses exactly the endpoints Settings → Personas' "Start patrol"
-uses, in order: `POST /api/conversations` (title, model, persona if chosen) →
+**Launch** uses the same endpoints Settings -> Personas' "Start patrol"
+uses, in order: `POST /api/conversations` (title, model, persona if chosen) ->
 `POST /api/conversations/{id}/mcp-servers` (`enabled_optional` = the ticked
-optional, usable connectors; always-on rows are never sent) →
+optional, usable connectors; always-on rows are never sent) ->
 `POST /api/conversations/{id}/schedules` (title, prompt, cron, time zone,
-`auto_approve` = mode is "act") → `POST …/schedules/{id}/run-now`. A failed
+`auto_approve` = mode is "act" or "autonomous", and `approval_mode: "autonomous"` when mode is "autonomous") -> `POST .../schedules/{id}/run-now`. A failed
 run-now leaves the patrol armed. Every patrol rule (five-minute floor,
 ownership, auto-approve semantics, retention exemption) stays the server's.
 

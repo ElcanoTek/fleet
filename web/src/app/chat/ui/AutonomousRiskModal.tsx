@@ -2,10 +2,12 @@ import { t as tr } from "@/app/lib/i18n";
 import { useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { CloseButton } from "@/app/shared/ui/CloseButton";
+import { DialogShell } from "@/app/shared/ui/DialogShell";
 import { Icon } from "@/app/shared/ui/Icon";
-import { useDialogA11y } from "@/app/shared/ui/useDialogA11y";
 import { errorMessage } from "@/app/shared/lib/errorMessage";
 import { Button } from "@/components/ui/button";
+
+export const AUTONOMOUS_ACCEPTED_EVENT = "fleet:autonomous-accepted";
 
 export type AutonomousRiskModalProps = {
   open: boolean;
@@ -22,14 +24,13 @@ export function AutonomousRiskModal({
   const [error, setError] = useState<string | null>(null);
   const titleId = useId();
   const descId = useId();
-  const modalRef = useRef<HTMLDivElement | null>(null);
   const acceptBtnRef = useRef<HTMLButtonElement | null>(null);
 
-  useDialogA11y(open, modalRef, onClose, {
-    initialFocusRef: acceptBtnRef,
-  });
-
   if (!open) return null;
+
+  const dismiss = () => {
+    if (!submitting) onClose();
+  };
 
   const handleAccept = async () => {
     setSubmitting(true);
@@ -42,6 +43,9 @@ export function AutonomousRiskModal({
       });
       if (!res.ok) {
         throw new Error(tr("HTTP {0}", [res.status]));
+      }
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent(AUTONOMOUS_ACCEPTED_EVENT));
       }
       onAccepted();
     } catch (err) {
@@ -57,24 +61,17 @@ export function AutonomousRiskModal({
   };
 
   const modal = (
-    <div className="scrim fixed inset-0 z-[1300] flex items-center justify-center p-4">
-      <button
-        type="button"
-        tabIndex={-1}
-        aria-label={tr("Close Autonomous mode confirmation")}
-        onClick={onClose}
-        className="absolute inset-0 cursor-default"
-      />
-      <div
-        ref={modalRef}
-        tabIndex={-1}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={titleId}
-        aria-describedby={descId}
-        data-testid="autonomous-risk-modal"
-        className="motion-safe:animate-pop-up-base relative z-10 flex w-full max-w-[32rem] flex-col overflow-hidden rounded-[1.25rem] border border-[var(--color-border-strong)] bg-[var(--color-surface-1)] shadow-[var(--shadow-lg)] outline-none"
-      >
+    <DialogShell
+      labelledBy={titleId}
+      describedBy={descId}
+      scrimLabel={tr("Close Autonomous mode confirmation")}
+      onDismiss={dismiss}
+      layer="topmost"
+      initialFocusRef={acceptBtnRef}
+      testId="autonomous-risk-modal"
+      className="flex max-w-[32rem] flex-col overflow-hidden"
+    >
+      <div>
         <header className="flex items-start gap-3 border-b border-[var(--color-border)] bg-[var(--gradient-surface-panel)] px-5 py-4">
           <span
             aria-hidden="true"
@@ -100,7 +97,7 @@ export function AutonomousRiskModal({
           </div>
           <CloseButton
             label={tr("Close Autonomous mode confirmation")}
-            onClick={onClose}
+            onClick={dismiss}
           />
         </header>
 
@@ -124,14 +121,14 @@ export function AutonomousRiskModal({
             </div>
             <p className="m-0 mt-1 text-xs leading-relaxed text-[var(--color-text-secondary)]">
               {tr(
-                "Built-in external emails, Microsoft 365 messages and calendar invites, recurring task and patrol schedules, git push, and any connector actions your deployment marks as blocked still require approval.",
+                "Built-in external emails, Microsoft 365 messages and calendar invites, recurring task and patrol schedules, destructive storage or permission changes, git push, and any connector actions your deployment marks as blocked still require approval.",
               )}
             </p>
           </div>
 
-          <p className="m-0 text-xs text-[var(--color-text-muted)]">
+          <p className="m-0 text-xs font-medium text-[var(--color-text-primary)]">
             {tr(
-              "You can return to Manual in one click at any time using the amber Autonomous pill in the composer.",
+              "Are you sure you want to use Autonomous mode? You can return to Manual in one click at any time using the amber Autonomous pill in the composer.",
             )}
           </p>
 
@@ -153,7 +150,7 @@ export function AutonomousRiskModal({
             size="sm"
             disabled={submitting}
             data-testid="autonomous-risk-cancel"
-            onClick={onClose}
+            onClick={dismiss}
           >
             {tr("Cancel")}
           </Button>
@@ -172,7 +169,7 @@ export function AutonomousRiskModal({
           </Button>
         </footer>
       </div>
-    </div>
+    </DialogShell>
   );
 
   if (typeof document === "undefined") {

@@ -151,9 +151,13 @@ take them:
    Each card shows which of your ticked tools fit it (**Uses …**) or what kind
    of connector it would need. Then choose how hands-on it is: **Just report**
    (never changes anything), **Suggest & ask** (stages approval cards for you;
-   the default) or **Act for me** (turns the chat's **⚡ Auto-approve** on and
-   lists everything it did). A note under the choice suggests starting at
-   **Suggest & ask** and switching on **⚡ Auto-approve** later.
+   the default), **Act for me** (turns the chat's **⚡ Auto-approve** on and
+   lists everything it did), or **Autonomous** (executes live platform actions
+   with receipt cards after you accept the Autonomous risk prompt, while
+   external messages, calendar invites, schedule changes, destructive storage
+   or permission changes, `git push`, and deployment-blocked actions still
+   ask). A note under the choice suggests starting at
+   **Suggest & ask** and stepping up later.
 4. **Choose a rhythm.** **Weekday mornings** (8:00, Monday–Friday; the
    default), **Twice a workday**, **Every 2 hours**, **Every hour**, **Every
    morning** or **Monday kickoff**, or **Custom schedule** for the full
@@ -166,7 +170,7 @@ take them:
 
 Launching creates a new chat with your chosen persona and tools, attaches the
 patrol, and runs the first check straight away; **Watch it work** opens that
-chat; unless you chose **Act for me**, the success screen also suggests
+chat; unless you chose **Act for me** or **Autonomous**, the success screen also suggests
 turning on **⚡ Auto-approve** once its calls keep being right. From then on it
 is an ordinary in-chat patrol (below): pause it from the Patrol bar, change
 or stop it in **Patrols & timers** (the clock on the composer toolbar), or ask
@@ -227,14 +231,14 @@ it applies to every patrol in it, and switching a running patrol to
 **Autonomous** from the bar asks you to confirm first.
 Choosing **⚡ Auto-approve** (in Patrols & timers, the Patrol bar, or **Approval
 mode** under **More options** in the composer) lets session-approvable tool
-calls run hands-free while you are away, while **Autonomous** (after you accept
-the one-time risk notice) runs bundle-configured live platform actions, optional
+calls run hands-free while you are away, while **Autonomous** (after you confirm
+the Autonomous risk prompt) runs bundle-configured live platform actions, optional
 connector activations, and self-addressed owner emails without pausing and
 leaves durable receipt cards in the transcript (external emails/chats/invites,
-scheduled-task and patrol schedule changes, bundle-blocked destructive actions
-in `agent_policy.critical_tool_autonomous_blocked`, and `git push` still ask,
-and only turns triggered by the conversation owner use Auto-approve or
-Autonomous).
+scheduled-task and patrol schedule changes, destructive storage or permission
+changes, bundle-blocked actions in `agent_policy.critical_tool_autonomous_blocked`,
+and `git push` still ask, and only turns triggered by the conversation owner use
+Auto-approve or Autonomous).
 If a patrol turn does stage an approval card, the card stays open for 24 hours
 and automatically resumes the patrol turn as soon as you approve it.
 Conversations with an active or paused patrol are exempt from retention sweeps
@@ -368,6 +372,17 @@ guides) and **Context & Connections**; administrators also find **Admin
 Settings** and **Analytics** there. Its **Sign out** asks you to
 confirm first, because it also signs you out of every app that shares your
 sign-in.
+
+A link to a Fleet page (a chat, a new chat with a message already in the
+composer, a task) that you open while signed out, or after your session has
+expired, takes you to sign in first and then on to where it pointed. That
+works for 30 minutes after you open the link, in the same browser. After that,
+or in another browser (a sign-in email opened somewhere else, say), you land
+on your usual start page. If you open another such link before you sign in,
+or a Fleet page once you are signed in, it replaces the earlier one. A link
+longer than about 2,000 characters also lands on the start page, except the
+link for your team, which still opens its chat without the rest of the link.
+A message a link puts in the composer is never sent until you press Send.
 
 **Settings → General → Language** selects **English**, **Español**, or
 **Português** for the interface and these guides. Your choice is saved in this
@@ -1105,15 +1120,15 @@ can also set the conversation's **Approval mode** under **More options** (`•�
 in the composer toolbar (even while a reply is streaming): **Manual** asks on
 every critical tool, **Auto-approve** shows a lightning-bolt badge on the
 toolbar and runs session-approvable connector actions and shell commands without
-stopping on a card, and **Autonomous** (after accepting the one-time risk
-notice) shows an amber **Autonomous** badge and runs live platform actions,
+stopping on a card, and **Autonomous** (after confirming the Autonomous risk
+prompt) shows an amber **Autonomous** badge and runs live platform actions,
 optional connector activations, self-addressed owner emails, and eligible
 prefilled forms (after a 10-second countdown you can pause) without pausing
 while recording durable receipt and result cards in the chat (external
-messages/invites, scheduled-task and patrol schedule changes, bundle-blocked
-destructive actions in `agent_policy.critical_tool_autonomous_blocked`, and
-`git push` still ask, and only turns sent by the conversation owner use
-Auto-approve or Autonomous). Cards are not for exploring what an action would change; ask the assistant to
+messages/invites, scheduled-task and patrol schedule changes, destructive
+storage or permission changes, bundle-blocked actions in
+`agent_policy.critical_tool_autonomous_blocked`, and `git push` still ask, and
+only turns sent by the conversation owner use Auto-approve or Autonomous). Cards are not for exploring what an action would change; ask the assistant to
 describe the change first, then approve the card once you agree with it.
 
 Which tools are gated and which merely report is set per deployment, not by the

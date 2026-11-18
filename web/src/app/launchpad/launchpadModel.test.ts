@@ -69,6 +69,7 @@ describe("launchpadModel", () => {
     const base = { goals: ["inbox"], notes: "", connectors: [gmail], selected: ["gmail"], cadenceLabel: "" };
     expect(draftPrompt({ ...base, mode: "report" })).toContain("Never change anything");
     expect(draftPrompt({ ...base, mode: "act" })).toContain("list every action you took");
+    expect(draftPrompt({ ...base, mode: "autonomous" })).toContain("Autonomous mode is on");
   });
 
   it("offers only cadences that read in words and sit well above the server's five-minute floor", () => {

@@ -36,7 +36,9 @@ import (
 const BuildIDHeader = "X-App-Version"
 
 // Team links (`/chat?team=<id>`, docs/TEAM-SHARING.md) survive sign-in through
-// a short-lived cookie: no sign-in path carries a return URL.
+// a short-lived cookie: no sign-in path carries a return URL. Every other page
+// link (and a team link's whole query) is parked the same way in the return
+// cookie (returnto.go), which a landing redeems before this one.
 const (
 	teamLinkCookie        = "fleet_team_link"
 	teamLinkMaxAgeSeconds = 1800
@@ -207,13 +209,10 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if path == "/login" {
 		g.decorate(w, path)
 		if sess != nil {
-			if parked := parkedTeamLink(r); parked != "" {
-				g.redirectToParkedTeamLink(w, r, parked)
-				return
-			}
-			temporaryRedirect(w, g.redirectURL(r, requestLanguagePath(r, "/chat")))
+			g.signedInLogin(w, r)
 			return
 		}
+		g.parkLoginReturnParam(w, r)
 		g.servePage(w, r, nil)
 		return
 	}
@@ -230,12 +229,11 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			unauthorized(w)
 			return
 		}
-		if path == "/chat" {
-			if id := r.URL.Query().Get("team"); teamLinkID.MatchString(id) {
-				setCookie(w, teamLinkCookie, id, teamLinkMaxAgeSeconds, g.secureRequest(r), "")
-				temporaryRedirect(w, g.redirectURL(r, requestLanguagePath(r, "/login?team_link=1")))
-				return
-			}
+		g.parkBouncedPage(w, r)
+		if teamLinkRequest(r) {
+			setCookie(w, teamLinkCookie, r.URL.Query().Get("team"), teamLinkMaxAgeSeconds, g.secureRequest(r), "")
+			temporaryRedirect(w, g.redirectURL(r, requestLanguagePath(r, "/login?team_link=1")))
+			return
 		}
 		temporaryRedirect(w, g.redirectURL(r, requestLanguagePath(r, "/login")))
 		return
@@ -243,14 +241,21 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Signed in and landing home with a team link parked: every sign-in path
 	// ends at / (or /chat), so this is where the visitor is sent on to the chat
-	// they opened. A request naming its own team link wins and just clears the
+	// they opened — on a bare landing (startPageLanding: nothing but the
+	// optional lang hint). A request naming its own page (its own team link,
+	// a ?c= or ?draft= link) is the visitor's newer choice and just clears the
 	// parked one; so does a parked value that is not a valid id.
 	landing := path == "/" || path == "/chat"
 	_, cookieErr := r.Cookie(teamLinkCookie)
 	hasParked := cookieErr == nil
 	g.decorate(w, path)
+	// A parked deep link (returnto.go) is redeemed first: it carries the
+	// whole query, a team link's ?team= included.
+	if sess != nil && g.redeemReturnPath(w, r) {
+		return
+	}
 	if sess != nil && landing && hasParked {
-		if parked := parkedTeamLink(r); parked != "" && !r.URL.Query().Has("team") {
+		if parked := parkedTeamLink(r); parked != "" && startPageLanding(r) {
 			g.redirectToParkedTeamLink(w, r, parked)
 			return
 		}
@@ -269,6 +274,11 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	g.servePage(w, r, sess)
+}
+
+// teamLinkRequest reports whether r opens a team link: /chat?team=<valid id>.
+func teamLinkRequest(r *http.Request) bool {
+	return r.URL.Path == "/chat" && teamLinkID.MatchString(r.URL.Query().Get("team"))
 }
 
 func parkedTeamLink(r *http.Request) string {

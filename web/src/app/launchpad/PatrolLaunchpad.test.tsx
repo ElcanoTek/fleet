@@ -5,6 +5,7 @@ const navigateMock = vi.fn();
 vi.mock("@/app/lib/navigation", () => ({ navigate: (href: string) => navigateMock(href) }));
 
 import { activeMemories, LAUNCHPAD_LAUNCHED_ITEM, PatrolLaunchpad, progressItem, recoveryItem, withMemory } from "./PatrolLaunchpad";
+import { invalidateMe } from "@/app/shared/lib/account";
 import { jsonResponse, textResponse } from "@/test/fetch";
 
 // The Patrol Launchpad end to end against a stubbed API
@@ -40,6 +41,7 @@ type Opts = {
   // The memory save commits but its reply is lost.
   memoryReplyLost?: boolean;
   role?: string;
+  autonomousAccepted?: boolean;
   // Holds the memory POST until this resolves.
   memoryPostGate?: Promise<void>;
 };
@@ -96,7 +98,17 @@ function mockApi(opts: Opts = {}) {
       if (opts.memoryPostGate) await opts.memoryPostGate;
       return json({ id: "m1", content: "x" });
     }
-    if (url === "/api/me") return json({ email: "e2e@example.com", role: opts.role ?? "member" });
+    if (url === "/api/me") {
+      return json({
+        email: "e2e@example.com",
+        role: opts.role ?? "member",
+        autonomous_accepted: opts.autonomousAccepted === true,
+      });
+    }
+    if (url === "/api/chat/autonomous-accept" && method === "POST") {
+      opts.autonomousAccepted = true;
+      return json({ autonomous_accepted: true, autonomous_policy_version: 1 });
+    }
     if (url === "/api/personas") {
       return json({ personas: ["assistant", "trader"], default: "assistant", user_personas: opts.userPersonasNull ? null : [] });
     }
@@ -140,6 +152,7 @@ const next = () => fireEvent.click(screen.getByTestId("launchpad-next"));
 beforeEach(() => {
   window.sessionStorage.clear();
   window.localStorage.clear();
+  invalidateMe();
 });
 
 afterEach(() => {
@@ -698,6 +711,83 @@ describe("PatrolLaunchpad", () => {
     expect(done.parentElement?.textContent).toContain("My patrol");
     const create = calls.find((c) => c.url === "/api/conversations" && c.method === "POST");
     expect((create?.body as { title?: string } | undefined)?.title).toBe("My patrol");
+  });
+
+  it("asks again before launching an Autonomous patrol restored from saved progress, even after an earlier acceptance", async () => {
+    window.sessionStorage.setItem(
+      progressItem(),
+      JSON.stringify({ step: "launch", mode: "autonomous", goals: ["deals"], cron: "0 * * * *" }),
+    );
+    const calls = mockApi({ autonomousAccepted: true });
+    render(<PatrolLaunchpad onClose={() => {}} />);
+    await screen.findByTestId("launchpad-step-launch");
+    fireEvent.click(screen.getByTestId("launchpad-launch"));
+    expect(await screen.findByTestId("autonomous-risk-modal")).toBeTruthy();
+    // Nothing is created until the person confirms.
+    expect(calls.some((c) => c.url === "/api/conversations" && c.method === "POST")).toBe(false);
+    fireEvent.click(screen.getByTestId("autonomous-risk-accept"));
+    await screen.findByTestId("launchpad-done");
+    const sched = calls.find((c) => c.url === "/api/conversations/conv-9/schedules" && c.method === "POST");
+    expect(sched?.body).toMatchObject({ approval_mode: "autonomous" });
+  });
+
+  it("gates Autonomous mode behind risk acceptance and launches with approval_mode autonomous", async () => {
+    const calls = mockApi({ autonomousAccepted: false });
+    const onClose = vi.fn();
+    render(<PatrolLaunchpad onClose={onClose} />);
+    expect(screen.getByTestId("launchpad-trust-path").textContent).toContain("Autonomous");
+
+    next();
+    await screen.findByTestId("launchpad-readiness");
+    next();
+    await screen.findByTestId("launchpad-step-tools");
+    next();
+    await screen.findByTestId("launchpad-step-rules");
+    next();
+    await screen.findByTestId("launchpad-step-watch");
+
+    fireEvent.click(screen.getByTestId("launchpad-goal-deals"));
+    expect((screen.getByTestId("launchpad-mode-suggest") as HTMLInputElement).checked).toBe(true);
+
+    // Selecting Autonomous without prior acceptance opens the risk confirmation modal.
+    fireEvent.click(screen.getByTestId("launchpad-mode-autonomous"));
+    expect(await screen.findByTestId("autonomous-risk-modal")).toBeTruthy();
+    expect((screen.getByTestId("launchpad-mode-suggest") as HTMLInputElement).checked).toBe(true);
+
+    // Pressing Escape dismisses only the stacked risk modal, leaving the Launchpad open.
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByTestId("autonomous-risk-modal")).toBeNull());
+    expect(onClose).not.toHaveBeenCalled();
+    expect((screen.getByTestId("launchpad-mode-suggest") as HTMLInputElement).checked).toBe(true);
+
+    // Selecting Autonomous again and accepting records acceptance and selects Autonomous.
+    fireEvent.click(screen.getByTestId("launchpad-mode-autonomous"));
+    fireEvent.click(await screen.findByTestId("autonomous-risk-accept"));
+    await waitFor(() =>
+      expect((screen.getByTestId("launchpad-mode-autonomous") as HTMLInputElement).checked).toBe(true),
+    );
+    expect(calls.some((c) => c.url === "/api/chat/autonomous-accept" && c.method === "POST")).toBe(true);
+    expect(screen.getByTestId("launchpad-mode-nudge").textContent).toContain("Full autonomy is on.");
+
+    next();
+    fireEvent.click(screen.getByTestId("launchpad-cadence-hourly"));
+    next();
+    await screen.findByTestId("launchpad-step-launch");
+
+    expect(screen.getByTestId("launchpad-summary").textContent).toContain("Autonomous");
+    const prompt = (screen.getByTestId("launchpad-prompt") as HTMLTextAreaElement).value;
+    expect(prompt).toContain("Autonomous mode is on:");
+
+    fireEvent.click(screen.getByTestId("launchpad-launch"));
+    await screen.findByTestId("launchpad-done");
+    expect(screen.queryByText(/Next rung of the ladder/)).toBeNull();
+
+    const sched = calls.find((c) => c.url === "/api/conversations/conv-9/schedules" && c.method === "POST");
+    expect(sched?.body).toMatchObject({
+      cron: "0 * * * *",
+      auto_approve: true,
+      approval_mode: "autonomous",
+    });
   });
 });
 

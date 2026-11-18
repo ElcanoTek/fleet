@@ -190,7 +190,6 @@ export function PatrolForm({
   initialPrompt,
   approvalMode,
   showApprovalMode = true,
-  autonomousAccepted,
   onRequireAutonomousAccept,
   canCancel,
   onCancel,
@@ -205,7 +204,6 @@ export function PatrolForm({
   initialPrompt?: string;
   approvalMode: ConversationApprovalMode;
   showApprovalMode?: boolean;
-  autonomousAccepted?: boolean;
   onRequireAutonomousAccept?: (onAccepted: () => void) => void;
   canCancel: boolean;
   onCancel?: () => void;
@@ -431,7 +429,7 @@ export function PatrolForm({
                 setConfirmingAutonomous(true);
                 return;
               }
-              if (next === "autonomous" && autonomousAccepted === false && onRequireAutonomousAccept) {
+              if (next === "autonomous" && onRequireAutonomousAccept) {
                 onRequireAutonomousAccept(() => setApproval("autonomous"));
                 return;
               }
@@ -443,7 +441,7 @@ export function PatrolForm({
               onKeep={() => setConfirmingAutonomous(false)}
               onConfirm={() => {
                 setConfirmingAutonomous(false);
-                if (autonomousAccepted === false && onRequireAutonomousAccept) {
+                if (onRequireAutonomousAccept) {
                   onRequireAutonomousAccept(() => setApproval("autonomous"));
                   return;
                 }
@@ -556,7 +554,6 @@ export function PatrolsDialog({
   schedules,
   approvalMode,
   canChangeApprovalMode,
-  autonomousAccepted,
   onRequireAutonomousAccept,
   onChangeApprovalMode,
   barShown,
@@ -577,7 +574,6 @@ export function PatrolsDialog({
   schedules: ChatSchedule[];
   approvalMode: ConversationApprovalMode;
   canChangeApprovalMode: boolean;
-  autonomousAccepted?: boolean;
   onRequireAutonomousAccept?: (onAccepted: () => void) => void;
   onChangeApprovalMode?: (mode: ConversationApprovalMode) => void;
   barShown: boolean;
@@ -908,7 +904,6 @@ export function PatrolsDialog({
                             schedule={sc}
                             approvalMode={approvalMode}
                             showApprovalMode={canChangeApprovalMode}
-                            autonomousAccepted={autonomousAccepted}
                             onRequireAutonomousAccept={onRequireAutonomousAccept}
                             confirmAutonomous={anyArmed}
                             canCancel
@@ -956,7 +951,6 @@ export function PatrolsDialog({
               mode="new"
               initialPrompt={initialPrompt}
               approvalMode={approvalMode}
-              autonomousAccepted={autonomousAccepted}
               onRequireAutonomousAccept={onRequireAutonomousAccept}
               confirmAutonomous={anyArmed}
               canCancel={hasPatrols}
