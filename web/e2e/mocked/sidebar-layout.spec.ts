@@ -304,6 +304,7 @@ async function setupTeamChats(page: Page) {
     conversations: [
       { id: "c1", title: "My own notes" },
       { id: "m1", title: "Incident room", multiplayer: true, user_email: "ops@example.com" },
+      { id: "t1", title: "Q4 planning", team_visible: true, user_email: "pm@example.com" },
     ],
   });
   await page.route("**/api/me", (r: Route) => r.fulfill({ json: { email: "e2e@example.com", role: "member" } }));
@@ -322,7 +323,7 @@ async function setupTeamChats(page: Page) {
   return { puts };
 }
 
-test("a Team chats row has a menu: pin it, or copy its team link", async ({ page, context }) => {
+test("a Team chats row has a menu: pin it, or copy the link that opens it", async ({ page, context }) => {
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
   const { puts } = await setupTeamChats(page);
   await page.goto("/chat");
@@ -336,12 +337,42 @@ test("a Team chats row has a menu: pin it, or copy its team link", async ({ page
   await expect(page.getByTestId("rail-shortcut")).toContainText("Incident room");
   await expect.poll(() => puts.length).toBeGreaterThan(0);
 
+  // A chat reached only through Multiplayer copies its chat link (a team
+  // link would refuse it)...
+  const origin = new URL(page.url()).origin;
   await row.getByTestId("team-chat-options").click();
   await menu.getByRole("menuitem", { name: "Copy link" }).click();
   await expect(menu.getByRole("menuitem", { name: "Copied ✓" })).toBeVisible();
-  const origin = new URL(page.url()).origin;
-  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(`${origin}/chat?team=m1`);
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(`${origin}/chat?c=m1`);
   await expect(menu).toBeHidden();
+
+  // ...and a chat shared with the team copies the team link.
+  const shared = page.getByTestId("team-shared-conv-row").filter({ hasText: "Q4 planning" }).locator("..");
+  await shared.hover();
+  await shared.getByTestId("team-chat-options").click();
+  await page.getByRole("menu", { name: "Options for Q4 planning" }).getByRole("menuitem", { name: "Copy link" }).click();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(`${origin}/chat?team=t1`);
+});
+
+test("when the clipboard refuses, a Team chats row's menu shows the link to copy by hand", async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: () => Promise.reject(new Error("denied")) },
+    });
+  });
+  await setupTeamChats(page);
+  await page.goto("/chat");
+  const row = page.getByTestId("team-shared-conv-row").filter({ hasText: "Q4 planning" }).locator("..");
+  await row.hover();
+  await row.getByTestId("team-chat-options").click();
+  const menu = page.getByRole("menu", { name: "Options for Q4 planning" });
+  await menu.getByRole("menuitem", { name: "Copy link" }).click();
+  await expect(menu.getByRole("menuitem", { name: "Copy failed" })).toBeVisible();
+  const origin = new URL(page.url()).origin;
+  await expect(page.getByTestId("team-chat-link-fallback")).toContainText(`${origin}/chat?team=t1`);
+  // It stays open, so the link can be selected.
+  await expect(menu).toBeVisible();
 });
 
 test.describe("on a touch screen", () => {
@@ -357,6 +388,9 @@ test.describe("on a touch screen", () => {
     await expect
       .poll(() => opacity(page.getByRole("button", { name: "Conversation options for My own notes" })))
       .toBe("1");
+    // A finger-sized row (44px), so each row's tap box stays its own.
+    const height = await team.getByTestId("team-shared-conv-row").evaluate((el) => el.getBoundingClientRect().height);
+    expect(height).toBeGreaterThanOrEqual(44);
   });
 });
 

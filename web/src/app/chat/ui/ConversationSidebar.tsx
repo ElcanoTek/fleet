@@ -363,7 +363,7 @@ function ProjectKebab({
         }}
         onBlur={tip.hide}
         className={[
-          "hit-area pointer-events-auto inline-flex size-[1.8rem] items-center justify-center rounded-[var(--radius-md)] text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:opacity-100 focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none",
+          "hit-area hit-area-touch pointer-events-auto inline-flex size-[1.8rem] items-center justify-center rounded-[var(--radius-md)] text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:opacity-100 focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none",
           open
             ? "opacity-100"
             : ROW_ACTIONS_REVEAL,
@@ -640,7 +640,7 @@ function ConversationKebab({
           // Fixed, centered, padded square (~1.8rem) per the handoff .conv-kebab —
           // a rounded hover highlight around the centered icon, not hugging it.
           // hit-area extends the clickable box to ~2rem without growing the fill.
-          "hit-area pointer-events-auto inline-flex size-[1.8rem] items-center justify-center rounded-[var(--radius-md)] text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:opacity-100 focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none",
+          "hit-area hit-area-touch pointer-events-auto inline-flex size-[1.8rem] items-center justify-center rounded-[var(--radius-md)] text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:opacity-100 focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none",
           open
             ? "opacity-100"
             : ROW_ACTIONS_REVEAL,
@@ -821,9 +821,19 @@ function ConversationKebab({
 
 // ── Team chats row options ──────────────────────────────────────────────────
 // A teammate's chat is not the viewer's to rename, file, archive or delete, so
-// its menu holds what any member can do with it: pin it to their own sidebar
-// and copy the team link (/chat?team=<id>, the link Share hands out), which
-// opens it for anyone on the team.
+// its menu holds what any member can do with it: pin it to their own sidebar,
+// and copy a link that opens it. The link is the one that works for this row:
+// the team link (/chat?team=<id>, the link Share hands out) for a chat shared
+// with the team, the chat link (/chat?c=<id>) for one reached only through
+// Multiplayer (a team link refuses it), and none otherwise.
+function teamChatLink(c: ConversationSummary): string | null {
+  if (c.team_visible) return teamLinkUrl(c.id);
+  if (c.multiplayer && typeof window !== "undefined") {
+    return `${window.location.origin}/chat?c=${encodeURIComponent(c.id)}`;
+  }
+  return null;
+}
+
 function TeamChatKebab({ conversation }: { conversation: ConversationSummary }) {
   const [open, setOpen] = useState(false);
   const [copy, setCopy] = useState<"idle" | "copied" | "failed">("idle");
@@ -842,6 +852,7 @@ function TeamChatKebab({ conversation }: { conversation: ConversationSummary }) 
     setCopy("idle");
   };
   const tip = usePortalTip(tr("Options"));
+  const link = teamChatLink(conversation);
   return (
     <>
       <button
@@ -860,7 +871,7 @@ function TeamChatKebab({ conversation }: { conversation: ConversationSummary }) 
         }}
         onBlur={tip.hide}
         className={[
-          "hit-area pointer-events-auto inline-flex size-[1.8rem] items-center justify-center rounded-[var(--radius-md)] text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:opacity-100 focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none",
+          "hit-area hit-area-touch pointer-events-auto inline-flex size-[1.8rem] items-center justify-center rounded-[var(--radius-md)] text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:opacity-100 focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none",
           open ? "opacity-100" : ROW_ACTIONS_REVEAL,
         ].join(" ")}
         onClick={(e) => {
@@ -885,18 +896,31 @@ function TeamChatKebab({ conversation }: { conversation: ConversationSummary }) 
           target={{ kind: "chat", ref: conversation.id, title: conversation.title }}
           onDone={close}
         />
-        <MenuItem
-          icon={<ShareGlyph className="size-4" />}
-          onClick={() => {
-            // The menu stays open long enough to say whether it worked.
-            void copyText(teamLinkUrl(conversation.id)).then((ok) => {
-              setCopy(ok ? "copied" : "failed");
-              if (ok) closeTimer.current = window.setTimeout(close, 900);
-            });
-          }}
-        >
-          {copy === "copied" ? tr("Copied ✓") : copy === "failed" ? tr("Copy failed") : tr("Copy link")}
-        </MenuItem>
+        {link ? (
+          <MenuItem
+            icon={<ShareGlyph className="size-4" />}
+            onClick={() => {
+              // The menu stays open long enough to say whether it worked.
+              void copyText(link).then((ok) => {
+                setCopy(ok ? "copied" : "failed");
+                if (ok) closeTimer.current = window.setTimeout(close, 900);
+              });
+            }}
+          >
+            {copy === "copied" ? tr("Copied ✓") : copy === "failed" ? tr("Copy failed") : tr("Copy link")}
+          </MenuItem>
+        ) : null}
+        {link && copy === "failed" ? (
+          // The clipboard refused (no permission, an insecure page): the
+          // link is shown to select and copy by hand, as Share does.
+          <p
+            role="status"
+            data-testid="team-chat-link-fallback"
+            className="m-0 max-w-[16rem] select-all break-all px-3 py-1.5 text-[0.72rem] text-[var(--color-text-secondary)]"
+          >
+            {tr("Couldn’t copy the link. Copy it from here: {0}", [link])}
+          </p>
+        ) : null}
       </Menu>
     </>
   );
@@ -994,7 +1018,7 @@ function ConvRow({
           type="button"
           aria-pressed={selecting ? checked : undefined}
           className={[
-            "block w-full min-w-0 rounded-md py-2 pl-[0.55rem] pr-9 text-left text-[0.875rem] transition",
+            "block w-full min-w-0 rounded-md py-2 pl-[0.55rem] pr-9 text-left text-[0.875rem] transition any-pointer-coarse:min-h-11",
             selecting && checked
               ? "text-[var(--color-text-primary)]"
               : active
@@ -1735,7 +1759,7 @@ export function ConversationSidebar({
                         each does one thing and says so. The chevron keeps
                         the row's "Project <name> (N chats)" name and its
                         aria-expanded — it is the disclosure control. */}
-                    <div className="flex w-full items-center rounded-md pr-9">
+                    <div className="flex w-full items-center rounded-md pr-9 any-pointer-coarse:min-h-11">
                       <button
                         type="button"
                         aria-expanded={expanded}
@@ -2082,7 +2106,7 @@ export function ConversationSidebar({
                             type="button"
                             data-testid="team-shared-conv-row"
                             className={[
-                              "flex w-full min-w-0 items-center gap-1.5 rounded-md py-1.5 pl-2 pr-9 text-left text-[0.84rem] transition",
+                              "flex w-full min-w-0 items-center gap-1.5 rounded-md py-1.5 pl-2 pr-9 text-left text-[0.84rem] transition any-pointer-coarse:min-h-11",
                               active
                                 ? "bg-[var(--rail-active)] text-[var(--color-text-primary)]"
                                 : "text-[var(--color-text-secondary)] hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)]",
