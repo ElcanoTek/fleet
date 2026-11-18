@@ -123,6 +123,10 @@ export type ChatTranscriptProps = {
   // FLEET_LOCKDOWN_ONLY: the server treats every chat as lockdown, including
   // ones created before it was turned on, whose own flag is still false.
   lockdownOnly?: boolean;
+  // The Patrol bar's "Review": bring a waiting approval card into view, by
+  // the same row-level jump the dashboard's approvals light uses (the card's
+  // message may not be mounted). The dashboard's own request wins in that view.
+  approvalJumpRequest?: { messageId: number; approvalId: string; nonce: number } | null;
   messages: Message[];
 
   // Empty-state protocol pills
@@ -318,6 +322,7 @@ export function ChatTranscript({
   uiAutoSubmits,
   onPauseAutoSubmit,
   onAutoSubmitDue,
+  approvalJumpRequest = null,
 }: ChatTranscriptProps) {
   "use no memo";
   const { setModelPickerOpen, setModelSearchQuery, loadRankedModels, loadCatalogModels } = modelCatalog;
@@ -543,16 +548,20 @@ export function ChatTranscript({
   // not be mounted (virtualized): scroll its row in, then centre the card.
   // A message folded into compacted history has no row of its own: expand
   // the history first, then jump once its row exists.
-  const dashboardJump = dashboard?.jumpRequest;
-  const handledJump = useRef(0);
+  // The two sources keep their own nonces, so the handled key names which.
+  const dashboardJump = dashboard?.jumpRequest ?? approvalJumpRequest;
+  const jumpKey = dashboardJump
+    ? `${dashboard?.jumpRequest ? "dashboard" : "approval"}:${dashboardJump.nonce}`
+    : "";
+  const handledJump = useRef("");
   useEffect(() => {
-    if (!dashboardJump || handledJump.current === dashboardJump.nonce) return;
+    if (!dashboardJump || handledJump.current === jumpKey) return;
     const rowIndex = rows.findIndex((r) => r.kind === "message" && r.message.id === dashboardJump.messageId);
     if (rowIndex < 0 && summaryIndex >= 0 && !summaryExpanded) {
       setSummaryExpanded(true);
       return;
     }
-    handledJump.current = dashboardJump.nonce;
+    handledJump.current = jumpKey;
     // Below lg this arrives together with the chat pane being shown again:
     // tell the follow rule the reader is being placed here, or its "back to
     // where you were" would run over the jump.

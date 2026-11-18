@@ -14,6 +14,7 @@ import { mockChatBoot } from "./_mocks";
 //   3. Stopping lives only in the dialog, and the DELETE goes out on the
 //      second, confirming click — not the first.
 //   4. A pending approval brings a hidden bar back with Review.
+//   5. Review reaches a waiting card far up a long (virtualised) chat.
 
 test.beforeEach(async ({ context }) => {
   await loginViaCookie(context);
@@ -36,7 +37,7 @@ const PATROL = {
   last_run_at: nowSec - 600,
 };
 
-async function mockPatrolChat(page: Page, opts: { pending?: boolean } = {}) {
+async function mockPatrolChat(page: Page, opts: { pending?: boolean; padding?: number } = {}) {
   const calls: string[] = [];
   let schedules = [PATROL];
   await page.clock.setFixedTime(NOW);
@@ -68,9 +69,17 @@ async function mockPatrolChat(page: Page, opts: { pending?: boolean } = {}) {
             id: 2,
             type: "tool_call",
             role: "assistant",
-            content: { tool_calls: [{ id: "tc-1", name: "dealdesk__update_deal", input: "{}" }] },
+            content: { id: "tc-1", name: "dealdesk__update_deal", input: "{}" },
           },
           { id: 3, type: "text", role: "assistant", content: { text: "One change is staged." } },
+          // Later turns that push the approval's message out of the
+          // virtualised window.
+          ...Array.from({ length: opts.padding ?? 0 }, (_, i) => ({
+            id: 4 + i,
+            type: "text",
+            role: i % 2 === 0 ? "user" : "assistant",
+            content: { text: `Pacing check ${i + 1}: delivery is on plan.\n\n${"Detail line. ".repeat(40)}` },
+          })),
         ],
         pending_approvals: opts.pending
           ? [
@@ -152,4 +161,21 @@ test("a waiting approval brings a hidden bar back with Review", async ({ page })
     "An action is waiting for your approval",
   );
   await expect(bar.getByRole("button", { name: "Review" })).toBeVisible();
+});
+
+test("Review reaches a waiting card that is far up a long chat", async ({ page }) => {
+  await mockPatrolChat(page, { pending: true, padding: 80 });
+  const bar = page.getByTestId("patrol-banner");
+  await expect(bar).toBeVisible({ timeout: 15_000 });
+  const card = page.locator('[data-approval-id="ap-1"]');
+  // The chat opens at its end, so the card's message is not mounted.
+  await expect(page.getByText(/Pacing check 80:/)).toBeVisible({ timeout: 15_000 });
+  await expect(card).toHaveCount(0);
+  // A loaded history is put at its end once more, 80 ms after the first
+  // frame (chat-experience.tsx). A person can't click inside that window;
+  // let it pass so the test doesn't either.
+  await page.waitForTimeout(300);
+
+  await bar.getByRole("button", { name: "Review" }).click();
+  await expect(card).toBeInViewport({ timeout: 5_000 });
 });

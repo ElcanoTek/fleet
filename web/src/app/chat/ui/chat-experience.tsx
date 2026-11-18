@@ -6002,19 +6002,27 @@ export function ChatExperience({
     clearPatrolHideHint();
     if (id && !isPendingKey(id)) setPatrolBarHidden(id, false);
   }, [activeConversationId, clearPatrolHideHint, setPatrolBarHidden]);
-  // "Review": bring the first waiting approval card into view (the
-  // transcript is virtualised, so fall back to the latest message, where a
-  // patrol run's card lands).
+  // "Review": bring the first waiting approval card into view. The
+  // transcript is virtualised, so the card's message may not be mounted:
+  // ChatTranscript scrolls its row in first, then centres the card.
+  const [approvalJumpRequest, setApprovalJumpRequest] = useState<
+    { messageId: number; approvalId: string; nonce: number } | null
+  >(null);
+  useEffect(() => setApprovalJumpRequest(null), [activeConversationId]);
   const reviewPendingApproval = () => {
     setPatrolsOpen(false);
-    const first = messages
-      .flatMap((m) => m.approvals ?? [])
-      .find((a) => a.status === "pending");
-    const el = first
-      ? document.querySelector(`[data-approval-id="${CSS.escape(first.id)}"]`)
-      : null;
-    if (el) el.scrollIntoView({ block: "center", behavior: prefersReducedMotion() ? "auto" : "smooth" });
-    else jumpToLatest();
+    for (const m of messages) {
+      const pending = m.approvals?.find((a) => a.status === "pending");
+      if (pending) {
+        setApprovalJumpRequest((prev) => ({
+          messageId: m.id,
+          approvalId: pending.id,
+          nonce: (prev?.nonce ?? 0) + 1,
+        }));
+        return;
+      }
+    }
+    jumpToLatest();
   };
   // The clock's label carries a countdown, so it re-reads the time on a
   // tick while the chat has a patrol (as the bar's countdown does).
@@ -8120,6 +8128,7 @@ export function ChatExperience({
               isLoadingHistory={isLoadingHistory}
               isLockdown={isLockdown}
               messages={messages}
+              approvalJumpRequest={approvalJumpRequest}
               pills={pills}
               activePillId={activePillId}
               setActivePillId={(id) => {
