@@ -93,6 +93,13 @@ func TestConversationTransferRoute(t *testing.T) {
 		t.Fatalf("write participant attachment: %v", err)
 	}
 
+	// A process that died during a participant's turn left the workspace
+	// marked as swapped; the transfer puts it back before it moves anything.
+	interrupted := filepath.Join(stash, "active-participant")
+	if err := os.WriteFile(interrupted, []byte(mate), 0o600); err != nil {
+		t.Fatalf("write the interrupted-swap marker: %v", err)
+	}
+
 	// The cleanup after the commit does not depend on the request: a client
 	// that has gone away by then still gets the previous audience reconciled.
 	gone, hangUp := context.WithCancel(asUser(ctx, owner))
@@ -131,6 +138,9 @@ func TestConversationTransferRoute(t *testing.T) {
 	mine := &steerMailbox{store: st, user: next, convID: conv.ID}
 	if !srv.revalidateMultiplayerTurnAccess(ctx, next, fresh, mine, nil, nil, func(int, error) {}) {
 		t.Error("the new owner's submission was refused")
+	}
+	if _, err := os.Stat(interrupted); !os.IsNotExist(err) {
+		t.Errorf("the interrupted participant swap was not recovered before the transfer (err %v)", err)
 	}
 	// Their participant attachment is now in the workspace, where an
 	// owner's attachments live.

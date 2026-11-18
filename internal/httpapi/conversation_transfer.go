@@ -57,16 +57,25 @@ func (s *Server) handleConversationTransfer(w http.ResponseWriter, r *http.Reque
 	//     finished, and nothing else touches the workspace meanwhile.
 	endTransfer, idle := s.beginTransfer(convID)
 	if !idle {
-		http.Error(w, store.ErrTransferBusy.Error(), http.StatusConflict)
+		http.Error(w, "a turn is running in this chat; stop it or wait for it to finish, then transfer", http.StatusConflict)
 		return
 	}
 	defer endTransfer()
 	unlockWorkspace, ok := s.lockWorkspaceWithin(convID, transferWorkspaceWait)
 	if !ok {
-		http.Error(w, store.ErrTransferBusy.Error(), http.StatusConflict)
+		http.Error(w, "a turn is running in this chat; stop it or wait for it to finish, then transfer", http.StatusConflict)
 		return
 	}
 	defer unlockWorkspace()
+	// A process that died during a participant's turn leaves the workspace
+	// half-swapped, with nothing holding the lock after the restart. Put it
+	// back the way every turn does before it starts, so what is purged and
+	// moved below is the real layout; if that cannot be done, nothing moves.
+	if err := s.recoverWorkspaceForTransfer(convID); err != nil {
+		logging.From(ctx).Error("conversations: transfer could not recover the workspace", "conv_id", safe.LogSafe(convID), "err", safe.LogSafe(err.Error()))
+		http.Error(w, "transfer failed", http.StatusInternalServerError)
+		return
+	}
 	// The previous owner's personal skills are theirs, not part of the chat,
 	// and must be gone before the chat is anyone else's: they are removed
 	// first, and a failure stops the transfer. Nothing is lost if the
@@ -93,10 +102,12 @@ func (s *Server) handleConversationTransfer(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	case errors.Is(err, store.ErrTransferTarget):
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		// Written out, like the other refusals here, so the browser's
+		// catalog of known errors has them and shows them translated.
+		http.Error(w, "that person can't take this chat: they need an active Fleet account that can chat", http.StatusBadRequest)
 		return
 	case errors.Is(err, store.ErrTransferNotAllowed):
-		http.Error(w, err.Error(), http.StatusConflict)
+		http.Error(w, "an archived or Lockdown chat can't be transferred", http.StatusConflict)
 		return
 	case err != nil:
 		logging.From(ctx).Error("conversations: transfer failed", "conv_id", safe.LogSafe(convID), "err", safe.LogSafe(err.Error()))
@@ -245,4 +256,16 @@ func (s *Server) promoteParticipantAttachments(ctx context.Context, convID, newO
 			logging.From(ctx).Warn("conversations: transfer could not move an attachment of the new owner", "conv_id", safe.LogSafe(convID), "err", safe.LogSafe(err.Error()))
 		}
 	}
+}
+
+// recoverWorkspaceForTransfer finishes a participant workspace swap that a
+// crashed process left behind (recoverInterruptedParticipantWorkspace), under
+// the swap lock. The caller holds the conversation's workspace lock.
+func (s *Server) recoverWorkspaceForTransfer(convID string) error {
+	defer s.workspaceSwapLocks.lock(convID)()
+	stash, err := s.privateWorkspaceStashDir(convID)
+	if err != nil {
+		return err
+	}
+	return recoverInterruptedParticipantWorkspace(tools.WorkspaceDirForConversation(convID), stash)
 }

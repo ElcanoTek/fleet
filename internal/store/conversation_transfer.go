@@ -17,8 +17,6 @@ var (
 	// ErrTransferNotAllowed is returned for a chat that cannot change hands:
 	// an archived one or a Lockdown one.
 	ErrTransferNotAllowed = errors.New("an archived or Lockdown chat can't be transferred")
-	// ErrTransferBusy is returned while a turn is running in the chat.
-	ErrTransferBusy = errors.New("a turn is running in this chat; stop it or wait for it to finish, then transfer")
 )
 
 // ConversationTransfer reports what TransferConversation did.

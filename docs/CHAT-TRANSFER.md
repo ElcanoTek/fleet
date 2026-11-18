@@ -35,6 +35,9 @@ made to hold for the whole transfer:
 - The handler then takes the conversation's workspace lock, the one a turn or
   an approval being executed holds from preparing the workspace until it has
   put it back, waiting up to 10 seconds for it.
+- Under that lock it first finishes any participant workspace swap a crashed
+  process left behind (`recoverInterruptedParticipantWorkspace`, as every turn
+  does before it starts). If that fails, the transfer does not happen.
 
 **What `store.TransferConversation` does, in one transaction:**
 

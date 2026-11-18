@@ -5992,5 +5992,8 @@
   "It becomes private to them: team sharing, Multiplayer and any public link are turned off, and approval mode goes back to Manual.": "Pasa a ser privado para esa persona: se desactivan el uso compartido con el equipo, el chat colaborativo y cualquier enlace público, y el modo de aprobación vuelve a Manual.",
   "You lose access to it, unless they share it with you.": "Pierdes el acceso, salvo que esa persona lo comparta contigo.",
   "Its patrols and timers are paused until the new owner resumes them.": "Sus patrullas y temporizadores quedan en pausa hasta que el nuevo propietario los reanude.",
-  "It has no patrols or timers.": "No tiene patrullas ni temporizadores."
+  "It has no patrols or timers.": "No tiene patrullas ni temporizadores.",
+  "a turn is running in this chat; stop it or wait for it to finish, then transfer": "hay un turno en curso en este chat; detenlo o espera a que termine y vuelve a transferirlo",
+  "an archived or Lockdown chat can't be transferred": "un chat archivado o en modo Lockdown no se puede transferir",
+  "that person can't take this chat: they need an active Fleet account that can chat": "esa persona no puede recibir este chat: necesita una cuenta de Fleet activa que pueda chatear"
 }
