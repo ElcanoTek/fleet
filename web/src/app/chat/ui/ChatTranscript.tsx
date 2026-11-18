@@ -548,21 +548,34 @@ export function ChatTranscript({
   // not be mounted (virtualized): scroll its row in, then centre the card.
   // A message folded into compacted history has no row of its own: expand
   // the history first, then jump once its row exists.
-  // The two sources keep their own nonces, so the handled key names which.
-  // The approval nonce never resets across chats (chat-experience.tsx).
-  const dashboardJump = dashboard?.jumpRequest ?? approvalJumpRequest;
-  const jumpKey = dashboardJump
-    ? `${dashboard?.jumpRequest ? "dashboard" : "approval"}:${dashboardJump.nonce}`
-    : "";
-  const handledJump = useRef("");
+  // The Patrol bar's Review asks the same (approvalJumpRequest). The two
+  // sources keep their own nonces and stay set after they are handled, so
+  // each is tracked apart and the newer unhandled one wins; handling either
+  // marks both as seen, so one click never jumps twice. The approval nonce
+  // never resets across chats (chat-experience.tsx).
+  const dashboardRequest = dashboard?.jumpRequest ?? null;
+  const handledJump = useRef<{ dashboard: number | null; approval: number | null }>({
+    dashboard: null,
+    approval: null,
+  });
   useEffect(() => {
-    if (!dashboardJump || handledJump.current === jumpKey) return;
+    const handled = handledJump.current;
+    const dashboardJump =
+      approvalJumpRequest && handled.approval !== approvalJumpRequest.nonce
+        ? approvalJumpRequest
+        : dashboardRequest && handled.dashboard !== dashboardRequest.nonce
+          ? dashboardRequest
+          : null;
+    if (!dashboardJump) return;
     const rowIndex = rows.findIndex((r) => r.kind === "message" && r.message.id === dashboardJump.messageId);
     if (rowIndex < 0 && summaryIndex >= 0 && !summaryExpanded) {
       setSummaryExpanded(true);
       return;
     }
-    handledJump.current = jumpKey;
+    handledJump.current = {
+      dashboard: dashboardRequest?.nonce ?? null,
+      approval: approvalJumpRequest?.nonce ?? null,
+    };
     // Below lg this arrives together with the chat pane being shown again:
     // tell the follow rule the reader is being placed here, or its "back to
     // where you were" would run over the jump.
@@ -582,7 +595,7 @@ export function ChatTranscript({
     // Re-run when rows change (the expanded history); the virtualizer is
     // read live.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dashboardJump, rows]);
+  }, [dashboardRequest, approvalJumpRequest, rows]);
 
   const jumpToMessage = (id: number) => {
     const entry = minimapEntries.find((e) => e.id === id);

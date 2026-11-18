@@ -327,3 +327,24 @@ test("Save keeps the edit form open when the server refuses the new mode", async
   await expect(dialog.getByTestId("patrols-error")).toContainText("Couldn't change the approval mode");
   await expect(form).toBeVisible();
 });
+
+test("Review still jumps after the dashboard's approvals light was used", async ({ page }) => {
+  await mockPatrolChat(page, { pending: true, padding: 80 });
+  const bar = page.getByTestId("patrol-banner");
+  await expect(bar).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText(/Pacing check 80:/)).toBeVisible({ timeout: 15_000 });
+  await page.waitForTimeout(300); // the loaded history's second scroll to the end
+  const card = page.locator('[data-approval-id="ap-1"]');
+
+  await page.getByTestId("dashboard-enter").click();
+  await page.getByTestId("dashboard-status").click();
+  await expect(card).toBeInViewport({ timeout: 5_000 });
+
+  // Back to the end of the chat, then Review from the bar.
+  await page.getByRole("region", { name: "Conversation" }).evaluate((el) => {
+    el.scrollTop = el.scrollHeight;
+  });
+  await expect(card).toHaveCount(0);
+  await bar.getByRole("button", { name: "Review" }).click();
+  await expect(card).toBeInViewport({ timeout: 5_000 });
+});

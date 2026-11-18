@@ -371,6 +371,22 @@ describe("PatrolsDialog", () => {
     expect(pauseB).toBeDisabled();
   });
 
+  it("keeps a card's Run now and Pause off while its edit is saving", async () => {
+    let finish!: (ok: boolean) => void;
+    renderDialog({ onSave: vi.fn(() => new Promise<boolean>((r) => (finish = r))) });
+    fireEvent.click(cardToggle(0));
+    fireEvent.click(screen.getByRole("button", { name: "Edit schedule & task" }));
+    const form = screen.getByTestId("patrol-form-edit");
+    fireEvent.change(within(form).getByRole("textbox", { name: "What to check & do each run" }), {
+      target: { value: "Check margin only." },
+    });
+    fireEvent.click(within(form).getByRole("button", { name: "Save changes" }));
+    const pause = screen.getByRole("button", { name: `Pause ${sampleSchedule.title}` });
+    await waitFor(() => expect(pause).toBeDisabled());
+    await act(async () => finish(true));
+    expect(pause).toBeEnabled();
+  });
+
   it("shows an action's failure inside the dialog, above its scrim", () => {
     const props = renderDialog({ error: "Patrol not found", onDismissError: vi.fn() });
     expect(screen.getByTestId("patrols-error")).toHaveTextContent("Patrol not found");

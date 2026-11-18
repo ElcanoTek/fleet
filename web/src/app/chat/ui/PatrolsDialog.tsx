@@ -948,7 +948,11 @@ export function PatrolsDialog({
                             canCancel
                             onCancel={() => setEditingId(null)}
                             onSubmit={async (v) => {
-                              const ok = await onSave(sc.id, editBody(sc, v), v.approvalMode);
+                              // Busy like the card's other actions: Run now
+                              // or Pause during the save would race it.
+                              const ok = (await runBusy(sc.id, () =>
+                                onSave(sc.id, editBody(sc, v), v.approvalMode),
+                              )) as boolean | void;
                               if (ok !== false) setEditingId(null);
                               return ok;
                             }}
