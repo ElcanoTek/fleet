@@ -1613,6 +1613,21 @@ export function applyToolResult(calls: ToolCall[], id: string, apply: (t: ToolCa
 }
 
 /**
+ * The calls a live tool.result applies to. A result that carries its call's
+ * `input` is a card another participant's turn showed: that turn's tool.call
+ * frames never reach this viewer, so when no call is waiting for the result
+ * the call is added here, pending, for applyToolResult to settle.
+ */
+export function cardCallFromResult(
+  calls: ToolCall[],
+  p: { id: string; name: string; input?: string },
+): ToolCall[] {
+  if (typeof p.input !== "string") return calls;
+  if (calls.some((t) => t.id === p.id && t.resultText === undefined)) return calls;
+  return [...calls, { id: p.id, name: p.name, input: p.input, state: "pending" }];
+}
+
+/**
  * A tool call with its persisted result applied: the text, the state, and a
  * by-reference show_ui card's validated spec when the row carries one.
  */

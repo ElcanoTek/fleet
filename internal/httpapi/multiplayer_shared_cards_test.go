@@ -80,34 +80,85 @@ func TestRedactHistoryForSenderStillOmitsCards(t *testing.T) {
 	}
 }
 
-func TestSanitizeTurnEventSharesLiveCards(t *testing.T) {
+// A card the server refused (UI_INVALID) or never answered was not shown: its
+// raw input and the refusal stay with the sender.
+func TestHistoryForParticipantKeepsRefusedCardsPrivate(t *testing.T) {
 	t.Parallel()
 
-	cases := []struct {
-		event, data string
-		keep        bool
-	}{
-		{"tool.call", `{"id":"ui1","name":"show_ui","input":"{}","user_email":"owner@x.com"}`, true},
-		{"tool.result", `{"id":"ui1","name":"show_ui","text":"UI_DISPLAYED card_id=ui1","card":"{}","user_email":"owner@x.com"}`, true},
-		{"tool.call", `{"id":"q1","name":"run_python","input":"{}","user_email":"owner@x.com"}`, false},
-		{"tool.result", `{"id":"q1","name":"run_python","text":"rows","user_email":"owner@x.com"}`, false},
-		// Only the card events are shared: another event that happens to carry
-		// the tool's name is still the sender's.
-		{"tool.approval_required", `{"name":"show_ui","user_email":"owner@x.com"}`, false},
-		{"reasoning.delta", `{"text":"hm","user_email":"owner@x.com"}`, false},
+	entries := []agent.HistoryEntry{
+		{ID: 1, Role: "user", Type: "text", Content: []byte(`{"text":"go","sender_email":"owner@x.com"}`)},
+		{ID: 2, Role: "assistant", Type: "tool_call", Content: []byte(`{"id":"bad","name":"show_ui","input":"{\"secret\":\"rows\"}"}`)},
+		{ID: 3, Role: "tool", Type: "tool_result", Content: []byte(`{"id":"bad","name":"show_ui","text":"UI_INVALID: nope","is_err":true}`)},
+		// The retry reuses the id and is shown: only this pair is shared.
+		{ID: 4, Role: "assistant", Type: "tool_call", Content: []byte(`{"id":"bad","name":"show_ui","input":"{\"title\":\"ok\",\"components\":[]}"}`)},
+		{ID: 5, Role: "tool", Type: "tool_result", Content: []byte(`{"id":"bad","name":"show_ui","text":"UI_DISPLAYED card_id=bad"}`)},
+		// Cancelled before its result.
+		{ID: 6, Role: "assistant", Type: "tool_call", Content: []byte(`{"id":"open","name":"show_ui","input":"{}"}`)},
+		// A result with no call of its own.
+		{ID: 7, Role: "tool", Type: "tool_result", Content: []byte(`{"id":"stray","name":"show_ui","text":"UI_DISPLAYED card_id=stray"}`)},
 	}
-	for _, tc := range cases {
-		got, keep := sanitizeTurnEventForViewer(tc.event, []byte(tc.data), "mate@x.com", "owner@x.com")
-		if keep != tc.keep {
-			t.Errorf("%s %s: keep = %v, want %v", tc.event, tc.data, keep, tc.keep)
-			continue
-		}
-		if keep && strings.Contains(string(got), "user_email") {
-			t.Errorf("%s: delivered frame still carries user_email: %s", tc.event, got)
+	out := historyForParticipant(entries, "mate@x.com", "owner@x.com")
+	ids := make([]int64, 0, len(out))
+	for _, e := range out {
+		ids = append(ids, e.ID)
+		if strings.Contains(string(e.Content), "secret") || strings.Contains(string(e.Content), "UI_INVALID") {
+			t.Errorf("entry %d leaks a refused card: %s", e.ID, e.Content)
 		}
 	}
-	// The sender's own frames are untouched by the rule.
-	if _, keep := sanitizeTurnEventForViewer("tool.call", []byte(`{"id":"q1","name":"run_python","user_email":"owner@x.com"}`), "owner@x.com", "owner@x.com"); !keep {
-		t.Error("the sender lost their own tool.call")
+	if want := []int64{1, 4, 5}; len(ids) != len(want) || ids[0] != want[0] || ids[1] != want[1] || ids[2] != want[2] {
+		t.Fatalf("entries = %v, want %v", ids, want)
+	}
+}
+
+// Live, another sender's call frame is never delivered (the card may yet be
+// refused); the UI_DISPLAYED result is, carrying the call's input.
+func TestSanitizeTurnEventSharesShownCardsLive(t *testing.T) {
+	t.Parallel()
+
+	events := []bufferedEvent{
+		{ID: 1, Name: "tool.call", Data: []byte(`{"id":"q1","name":"run_python","input":"{}","user_email":"owner@x.com"}`)},
+		{ID: 2, Name: "tool.call", Data: []byte(`{"id":"ui1","name":"show_ui","input":"{\"title\":\"v1\"}","user_email":"owner@x.com"}`)},
+		{ID: 3, Name: "tool.result", Data: []byte(`{"id":"ui1","name":"show_ui","text":"UI_INVALID: nope","is_err":true,"user_email":"owner@x.com"}`)},
+		{ID: 4, Name: "tool.call", Data: []byte(`{"id":"ui1","name":"show_ui","input":"{\"title\":\"v2\"}","user_email":"owner@x.com"}`)},
+		{ID: 5, Name: "tool.result", Data: []byte(`{"id":"ui1","name":"show_ui","text":"UI_DISPLAYED card_id=ui1","is_err":false,"user_email":"owner@x.com"}`)},
+		{ID: 6, Name: "tool.result", Data: []byte(`{"id":"q1","name":"run_python","text":"rows","is_err":false,"user_email":"owner@x.com"}`)},
+		{ID: 7, Name: "reasoning.delta", Data: []byte(`{"text":"hm","user_email":"owner@x.com"}`)},
+	}
+	deliver := func(viewer string, withLookup bool) map[uint64]string {
+		got := map[uint64]string{}
+		for _, e := range events {
+			var lookup func(string) (string, bool)
+			if withLookup {
+				lookup = func(id string) (string, bool) { return showUICallInput(events, id, e.ID) }
+			}
+			if data, keep := sanitizeTurnEventForViewerWithCards(e.Name, e.Data, viewer, "owner@x.com", lookup); keep {
+				got[e.ID] = string(data)
+			}
+		}
+		return got
+	}
+
+	mate := deliver("mate@x.com", true)
+	if len(mate) != 1 {
+		t.Fatalf("participant got frames %v, want only the shown card's result", mate)
+	}
+	var res map[string]any
+	if err := json.Unmarshal([]byte(mate[5]), &res); err != nil {
+		t.Fatal(err)
+	}
+	// The input of the call this result answers (the retry), not the refused one.
+	if res["input"] != `{"title":"v2"}` || res["user_email"] != nil {
+		t.Errorf("shown card frame = %s", mate[5])
+	}
+
+	// Without the earlier frames (evicted, or a caller with no lookup) the card
+	// is not delivered live; the history read still carries it.
+	if got := deliver("mate@x.com", false); len(got) != 0 {
+		t.Errorf("no lookup: got %v, want nothing", got)
+	}
+	// The sender gets every frame, and no input copied onto the result.
+	owner := deliver("owner@x.com", true)
+	if len(owner) != len(events) || strings.Contains(owner[5], `"input"`) {
+		t.Errorf("sender frames = %v", owner)
 	}
 }

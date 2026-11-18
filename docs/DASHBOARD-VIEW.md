@@ -18,8 +18,8 @@ view"), which `/help` renders.
 event or endpoint. The board is derived from the transcript, the same way card
 state already is (`web/src/app/chat/ui/dashboard/board.ts`), so a reload, a
 second tab and a teammate's multiplayer view all build the same panels (a
-`show_ui` call and its result reach every participant, unlike the rest of
-another sender's working trace: [MULTIPLAYER-CHAT.md](MULTIPLAYER-CHAT.md)). A card
+card that was shown reaches every participant, unlike the rest of another
+sender's working trace: [MULTIPLAYER-CHAT.md](MULTIPLAYER-CHAT.md)). A card
 lands in a slot as follows:
 
 1. A card with a `panel` key (below) lives in slot `p:<key>`. A later card with

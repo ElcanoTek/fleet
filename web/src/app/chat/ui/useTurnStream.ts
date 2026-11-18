@@ -8,6 +8,7 @@ import {
   applyModelRequired,
   applyRetryNotice,
   applyToolResult,
+  cardCallFromResult,
   applyTurnOutcome,
   APPROVAL_RESUME_KIND,
   CHAT_PATROL_KIND,
@@ -2642,11 +2643,16 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         is_err: boolean;
         // A show_ui card drawn by reference: its validated spec (JSON text).
         card?: string;
+        // A card another participant's turn showed (docs/MULTIPLAYER-CHAT.md):
+        // that turn's tool.call frames are not delivered to this viewer, so
+        // the result carries the call's input and stands for both.
+        input?: string;
       };
       patchAssistantMessage(ctx.target, ctx.assistantId, (m) => {
+        const calls = cardCallFromResult(m.toolCalls ?? [], p);
         // A reused call id: the result answers the first call still
         // waiting for one (applyToolResult), so each occurrence keeps its own.
-        const toolCalls = applyToolResult(m.toolCalls ?? [], p.id, (tc) => ({
+        const toolCalls = applyToolResult(calls, p.id, (tc) => ({
           ...tc,
           resultText: p.text,
           state: (p.is_err ? "error" : "done") as ToolCallState,

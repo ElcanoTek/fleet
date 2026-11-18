@@ -57,22 +57,50 @@ func isPrivateTurnTraceEntry(e agent.HistoryEntry) bool {
 	return e.Type != "text" && e.Type != "summary" && e.Type != agent.EntryTypeSummaryBoundary
 }
 
-// isSharedCardEntry reports whether e is a show_ui call or its result: a card
-// the assistant drew for the conversation (docs/GENERATIVE-UI.md). Unlike the
-// rest of the working trace it is rendered output, like the reply text, and
+// sharedCardEntries returns the indexes of the entries that draw a card the
+// assistant showed the conversation (docs/GENERATIVE-UI.md): a show_ui call
+// together with the UI_DISPLAYED result that answers it. Unlike the rest of
+// the working trace a shown card is rendered output, like the reply text, and
 // dashboard view builds its panels from it (docs/DASHBOARD-VIEW.md) — so every
-// participant's transcript carries it, whoever sent the turn. The model replay
-// (redactHistoryForSender) still omits it with the rest of the trace.
-func isSharedCardEntry(e agent.HistoryEntry) bool {
-	switch e.Type {
-	case "tool_call":
-		var c agent.ToolCallContent
-		return json.Unmarshal(e.Content, &c) == nil && c.Name == tools.ShowUIToolName
-	case "tool_result":
-		var c agent.ToolResultContent
-		return json.Unmarshal(e.Content, &c) == nil && c.Name == tools.ShowUIToolName
+// participant's transcript carries it, whoever sent the turn. A call the
+// server refused (UI_INVALID) or never answered was not shown and stays with
+// its sender, raw input included. The model replay (redactHistoryForSender)
+// omits cards with the rest of the trace.
+func sharedCardEntries(entries []agent.HistoryEntry) map[int]bool {
+	var shared map[int]bool
+	// call id → index of the show_ui call still waiting for its result (a
+	// provider can reuse an id, so a result answers the latest open call).
+	open := make(map[string]int)
+	for i, e := range entries {
+		switch e.Type {
+		case "tool_call":
+			var c agent.ToolCallContent
+			if json.Unmarshal(e.Content, &c) == nil && c.Name == tools.ShowUIToolName {
+				open[c.ID] = i
+			}
+		case "tool_result":
+			var c agent.ToolResultContent
+			if json.Unmarshal(e.Content, &c) != nil || c.Name != tools.ShowUIToolName {
+				continue
+			}
+			call, ok := open[c.ID]
+			delete(open, c.ID)
+			if !ok || !isShownCardResult(c.Text, c.IsErr) {
+				continue
+			}
+			if shared == nil {
+				shared = make(map[int]bool)
+			}
+			shared[call], shared[i] = true, true
+		}
 	}
-	return false
+	return shared
+}
+
+// isShownCardResult reports whether a show_ui result says the card was drawn:
+// the same test the web applies before rendering one (isRenderableCardCall).
+func isShownCardResult(text string, isErr bool) bool {
+	return !isErr && strings.HasPrefix(text, "UI_DISPLAYED")
 }
 
 // redactHistoryForSender returns a shallow copy of entries with
@@ -194,14 +222,18 @@ func redactTurnSummaryForOtherParticipant(raw json.RawMessage) (json.RawMessage,
 // the sender of that entry (or the conversation owner for unattributed
 // entries) so another user's private attachment paths or library listings are
 // never exposed. Another sender's working trace is dropped, except the cards
-// the assistant showed (isSharedCardEntry). For the owner's own single-user chat every entry is theirs,
+// the assistant showed (sharedCardEntries). For the owner's own single-user chat every entry is theirs,
 // so the projection carries every field. Always returns a non-nil slice so the
 // JSON carries `[]`, not `null`, for an empty conversation.
 func historyForParticipant(entries []agent.HistoryEntry, viewerEmail, convOwnerEmail string) []historyEntryResponse {
 	out := make([]historyEntryResponse, 0, len(entries))
 	currentTurnSender := strings.TrimSpace(convOwnerEmail)
 	toolCallSenders := make(map[string]string)
-	for _, e := range entries {
+	var sharedCards map[int]bool
+	if viewerEmail != "" {
+		sharedCards = sharedCardEntries(entries)
+	}
+	for i, e := range entries {
 		if viewerEmail != "" && e.Type == "summary" && convOwnerEmail != "" && !strings.EqualFold(viewerEmail, convOwnerEmail) {
 			out = append(out, historyEntryResponse{
 				ID:      e.ID,
@@ -261,7 +293,7 @@ func historyForParticipant(entries []agent.HistoryEntry, viewerEmail, convOwnerE
 					}
 					content = redacted
 					injected = ""
-				case isSharedCardEntry(e):
+				case sharedCards[i]:
 					injected = ""
 				case isPrivateTurnTraceEntry(e):
 					continue
