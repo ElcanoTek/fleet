@@ -330,7 +330,8 @@ checks every one of those and prints each accepted advisory in the job log.
 Every other advisory fails exactly as before. Upgrading or replacing the
 dependency is always the first answer; an entry is for a build-time-only
 package with no patched release, and its expiry is short so the decision is
-made again.
+made again. The picomatch advisory was withdrawn upstream on 2026-11-18 and
+its entry removed, so the register is currently empty.
 
 ## Findings are readable from the job log, on purpose
 
