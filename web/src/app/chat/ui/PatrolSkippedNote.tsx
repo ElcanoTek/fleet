@@ -1,5 +1,5 @@
 import { formatDate, getLanguage, t as tr } from "@/app/lib/i18n";
-import type { ChatSchedule, ChatScheduleSkipped } from "./history";
+import type { Approval, ChatSchedule, ChatScheduleSkipped } from "./history";
 import { Icon } from "./Icon";
 
 // A scheduled patrol run is skipped, by design, while an approval card waits
@@ -7,6 +7,24 @@ import { Icon } from "./Icon";
 // card. The server reports the skipped slots on the schedule (`skipped`);
 // this note on the Patrol bar tells the owner, so a patrol that has quietly
 // stopped running is never a surprise.
+
+// The pending cards that do NOT hold a patrol: an email preview and a model
+// suggestion (the server's patrolNonBlockingApprovalTools).
+const NON_BLOCKING_TOOLS: ReadonlySet<string> = new Set(["preview_email", "suggest_advanced_model"]);
+
+/** How many pending cards hold the chat's patrols. When this drops, the chat
+ *  re-reads its schedules so a settled hold's note goes. */
+export function countPatrolBlockingApprovals(
+  messages: ReadonlyArray<{ approvals?: ReadonlyArray<Pick<Approval, "status" | "tool">> }>,
+): number {
+  let n = 0;
+  for (const m of messages) {
+    for (const a of m.approvals ?? []) {
+      if (a.status === "pending" && !NON_BLOCKING_TOOLS.has(a.tool)) n += 1;
+    }
+  }
+  return n;
+}
 
 function sameLocalDay(a: Date, b: Date): boolean {
   return (

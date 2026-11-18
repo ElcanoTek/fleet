@@ -90,4 +90,5 @@ describe("Patrol on hold", () => {
       fetchMock.mock.calls.some(([u]) => String(u) === "/api/conversations/conv-a/schedules"),
     ).toBe(true);
   });
+
 });

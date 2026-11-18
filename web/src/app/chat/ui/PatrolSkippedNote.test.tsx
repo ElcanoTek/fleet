@@ -2,6 +2,7 @@ import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { PatrolBanner } from "./PatrolBanner";
 import {
+  countPatrolBlockingApprovals,
   formatSkippedSlot,
   PatrolSkippedNote,
   skippedForApprovalText,
@@ -68,6 +69,32 @@ describe("skippedForApprovalText", () => {
     expect(skippedForApprovalText(undefined, now)).toBeNull();
     expect(skippedForApprovalText({ reason: "approval_pending", count: 0, slots: [] }, now)).toBeNull();
     expect(skippedForApprovalText({ reason: "queue_full", count: 2, slots: [slot(12)] }, now)).toBeNull();
+  });
+});
+
+describe("countPatrolBlockingApprovals", () => {
+  it("counts pending cards that hold a patrol, not previews or model suggestions", () => {
+    expect(
+      countPatrolBlockingApprovals([
+        {
+          approvals: [
+            { status: "pending", tool: "update_deal" },
+            { status: "pending", tool: "preview_email" },
+            { status: "pending", tool: "suggest_advanced_model" },
+            { status: "approved", tool: "update_deal" },
+          ],
+        },
+        {},
+        { approvals: [{ status: "pending", tool: "send_email" }] },
+      ]),
+    ).toBe(2);
+    // The holding card answered with a model suggestion left: the count
+    // drops to 0, so the chat re-reads its schedules.
+    expect(
+      countPatrolBlockingApprovals([
+        { approvals: [{ status: "rejected", tool: "update_deal" }, { status: "pending", tool: "suggest_advanced_model" }] },
+      ]),
+    ).toBe(0);
   });
 });
 

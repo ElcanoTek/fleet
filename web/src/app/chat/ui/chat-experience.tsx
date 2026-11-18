@@ -110,6 +110,7 @@ import {
   formatCountdown,
   liveSchedules,
 } from "./PatrolBanner";
+import { countPatrolBlockingApprovals } from "./PatrolSkippedNote";
 import { PatrolsDialog, type CreatePatrolInput } from "./PatrolsDialog";
 import { readPatrolBarHidden, writePatrolBarHidden } from "./patrolBarPrefs";
 import { ProjectsModal, type Project } from "./ProjectsModal";
@@ -6579,19 +6580,27 @@ export function ChatExperience({
     );
     return () => window.clearTimeout(id);
   }, [activeConversationId, nextPatrolSlotAt, scheduleRefreshTick, refreshSchedules]);
-  const prevPendingApprovalsRef = useRef(pendingApprovalCount);
+  // Only the cards that hold a patrol count here: an email preview and a
+  // model suggestion never do (store.patrolNonBlockingApprovalTools), so one
+  // left pending must not keep a settled hold's note on screen.
+  const pendingBlockingApprovalCount = useMemo(
+    () => countPatrolBlockingApprovals(messages),
+    [messages],
+  );
+  const prevBlockingApprovalsRef = useRef(pendingBlockingApprovalCount);
   const anySkipped = activeSchedules.some((s) => s.skipped);
   useEffect(() => {
-    const prev = prevPendingApprovalsRef.current;
-    prevPendingApprovalsRef.current = pendingApprovalCount;
+    const prev = prevBlockingApprovalsRef.current;
+    prevBlockingApprovalsRef.current = pendingBlockingApprovalCount;
     const convId = activeConversationId;
     if (!convId || isPendingKey(convId) || !anySkipped) return;
-    if (!(prev > 0 && pendingApprovalCount === 0)) return;
+    // Any blocking card answered: the server decides whether a hold remains.
+    if (!(pendingBlockingApprovalCount < prev)) return;
     // A short delay lets the server record the decision first. Not cleared
     // on a re-render: the transition happens once, and a late re-read of a
     // chat's schedules is harmless.
     window.setTimeout(() => refreshSchedules(convId), 1500);
-  }, [activeConversationId, pendingApprovalCount, anySkipped, refreshSchedules]);
+  }, [activeConversationId, pendingBlockingApprovalCount, anySkipped, refreshSchedules]);
 
   // Latest-callback refs for the two mount-once effects below. reattachToConv
   // and loadConversation are mutually recursive, so neither can be expressed
