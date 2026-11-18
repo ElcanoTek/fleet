@@ -255,10 +255,32 @@ describe("ConversationSidebar — search looks everywhere", () => {
     expect(within(group("team")).getByText("Launch checklist")).toBeTruthy();
   });
 
-  it("tags a patrol chat once the patrols are known", async () => {
+  it("marks a patrol chat, in the lists and in the results, once the patrols are known", async () => {
     await renderRail(null);
+    // In the ordinary list, before any search.
+    await waitFor(() => expect(screen.getAllByTestId("patrol-mark")).toHaveLength(1));
+    expect(screen.getByTestId("patrol-mark").closest("[data-rail-row]")?.getAttribute("title")).toBe(
+      "Morning pacing patrol",
+    );
+    expect(screen.getByLabelText("Patrol chat").getAttribute("title")).toContain("schedule");
     type("morning");
-    await waitFor(() => expect(within(group("chats")).getByText("Patrol")).toBeTruthy());
+    expect(within(group("chats")).getByTestId("patrol-mark")).toBeTruthy();
+  });
+
+  it("what the page knows of a chat's schedules wins over the patrols list", async () => {
+    await renderRail(null, {
+      overrides: {
+        // own-patrol's patrol was just ended here; own-1 just got one.
+        scheduleKindByConv: new Map([
+          ["own-patrol", "none"],
+          ["own-1", "patrol"],
+        ]),
+      },
+    });
+    await waitFor(() => expect(screen.getAllByTestId("patrol-mark")).toHaveLength(1));
+    expect(screen.getByTestId("patrol-mark").closest("[data-rail-row]")?.getAttribute("title")).toBe(
+      "Budget pacing review",
+    );
   });
 
   it("shows results when every section is folded", async () => {
@@ -487,12 +509,32 @@ describe("ConversationSidebar — one list for all chats", () => {
   });
 
   it("marks the person's temporary chats, and only those", async () => {
-    await renderRail(unifiedLayout(), { overrides });
+    const mine = [
+      ...own,
+      // Kept by the server's sweep, so not temporary: shared by link, shared
+      // with the team, Multiplayer.
+      conv({ id: "own-link", title: "Shared by link", share_token: "tok", updated_at: 90 }),
+      conv({ id: "own-team", title: "Shared with team", team_visible: true, updated_at: 80 }),
+      conv({ id: "own-live", title: "My multiplayer", multiplayer: true, updated_at: 70 }),
+      conv({ id: "own-timer", title: "Has a timer", updated_at: 60 }),
+    ];
+    await renderRail(unifiedLayout(), {
+      overrides: {
+        ...overrides,
+        conversations: mine,
+        filteredConversations: mine,
+        scheduleKindByConv: new Map([["own-timer", "timer"]]),
+      },
+    });
     const list = screen.getByTestId("unified-chat-list");
-    const marked = Array.from(list.querySelectorAll('[data-testid="temporary-mark"]')).map(
-      (m) => m.closest("[data-rail-row]")?.getAttribute("title"),
-    );
-    expect(marked).toEqual(["Budget pacing review", "Morning pacing patrol"]);
+    const titlesOf = (testId: string) =>
+      Array.from(list.querySelectorAll(`[data-testid="${testId}"]`)).map((m) =>
+        m.closest("[data-rail-row]")?.getAttribute("title"),
+      );
+    // A patrol chat is kept while its patrol is armed or paused: it carries
+    // the patrol mark, never the hourglass.
+    await waitFor(() => expect(titlesOf("patrol-mark")).toEqual(["Morning pacing patrol"]));
+    expect(titlesOf("temporary-mark")).toEqual(["Budget pacing review"]);
     expect(within(list).getAllByLabelText("Temporary chat")[0].getAttribute("title")).toContain("14 days");
     // Pinned chats are kept, so they carry no mark.
     expect(screen.getByTestId("pinned-section").querySelector('[data-testid="temporary-mark"]')).toBeNull();

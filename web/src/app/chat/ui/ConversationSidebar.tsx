@@ -54,12 +54,12 @@ import type {
 } from "./chat-experience";
 import type { Project } from "./ProjectsModal";
 import { previewNodes, type SearchResult } from "./SearchBar";
-import { ShareGlyph, TeamGlyph } from "./ShareGlyphs";
+import { HourglassGlyph, ShareGlyph, TeamGlyph } from "./ShareGlyphs";
 import { teamLinkUrl } from "./teamSharing";
 import { copyText } from "@/app/shared/lib/clipboard";
 import { ChatReorderList } from "./ChatReorderList";
 import { AddToSidebarItem } from "@/app/shared/sidebar/AddToSidebarItem";
-import { sectionOf, updateSection, type SectionId } from "@/app/shared/sidebar/layout";
+import { defaultIcon, sectionOf, updateSection, type SectionId } from "@/app/shared/sidebar/layout";
 import { updateSidebarLayout, useSidebar } from "@/app/shared/sidebar/store";
 import { SidebarTargetsContext, usePatrolIds, type SidebarTargets } from "@/app/shared/sidebar/targets";
 import { useCanCustomize } from "@/app/shared/sidebar/useCanCustomize";
@@ -175,7 +175,19 @@ const RECENT_INFO_TEXT =
 // rows: there the clock on a row is what marks a temporary chat, and the
 // explainer says what the clock means.
 const UNIFIED_INFO_TEXT =
-  tr("Chats marked with a clock are temporary: they are deleted after 14 days of inactivity. Pin a chat or move it into a project to keep it. A teammate's chat is theirs to keep.");
+  tr("Chats marked with an hourglass are temporary: they are deleted after 14 days of inactivity. Pin a chat or move it into a project to keep it. A teammate's chat is theirs to keep.");
+// A patrol chat's mark: the icon a patrol has when it is pinned to the rail
+// (layout.defaultIcon), so a patrol looks the same wherever it is listed.
+const PATROL_ICON = defaultIcon({ id: "", kind: "chat" }, true);
+const PATROL_ROW_TEXT = tr("Patrol — this chat checks in on a schedule");
+
+function PatrolMark() {
+  return (
+    <span data-testid="patrol-mark" aria-label={tr("Patrol chat")} title={PATROL_ROW_TEXT}>
+      <Icon name={PATROL_ICON} className="size-3 shrink-0 text-[var(--color-accent)]" />
+    </span>
+  );
+}
 const TEMPORARY_ROW_TEXT =
   tr("Temporary — deleted after 14 days of inactivity. Pin it or move it into a project to keep it.");
 
@@ -989,19 +1001,20 @@ function ConvRow({
   onDragStart,
   titleNode,
   context,
-  tag,
+  patrol,
   temporary,
 }: {
   conversation: ConversationSummary;
-  // The one-list view only: this chat is temporary (unpinned, in no project),
-  // marked with a clock that says so and how to keep it.
+  // The one-list view only: this chat is temporary (the retention sweep
+  // would delete it), marked with an hourglass that says so and how to keep it.
   temporary?: boolean;
   // Search results only: the title with the matched words marked, the place
-  // the chat lives (its project's name) and a kind tag ("Patrol"). A result
-  // is shown out of its section, so the row says where it belongs.
+  // the chat lives (its project's name). A result is shown out of its
+  // section, so the row says where it belongs.
   titleNode?: ReactNode;
   context?: string;
-  tag?: string;
+  // The chat has a patrol (armed or paused): marked wherever it is listed.
+  patrol?: boolean;
   active: boolean;
   // focused = the keyboard j/k cursor is on this row (distinct from active =
   // the open conversation). Renders a ring so the cursor is visible.
@@ -1119,9 +1132,10 @@ function ConvRow({
                 aria-label={tr("Temporary chat")}
                 title={TEMPORARY_ROW_TEXT}
               >
-                <Icon name="clock" className="size-3 shrink-0 text-[var(--color-text-muted)]" />
+                <HourglassGlyph className="size-3 shrink-0 text-[var(--color-text-muted)]" />
               </span>
             ) : null}
+            {patrol ? <PatrolMark /> : null}
             {/* Two audiences, two marks, each labeled (ADR-0057). A single
                 unlabeled chain link stood for "shared" and, inside a
                 team-shared project, read as "my team can see this" — which it
@@ -1156,7 +1170,6 @@ function ConvRow({
               ) : null}
               {titleNode ?? conversation.title}
             </span>
-            {tag ? <ResultTag>{tag}</ResultTag> : null}
             {conversation.lockdown ? (
               <span
                 aria-label={tr("Sealed chat")}
@@ -1378,6 +1391,7 @@ export function ConversationSidebar({
   teamSharedLoaded = false,
   archivedLoaded = false,
   onSetDashboardView,
+  scheduleKindByConv,
 }: {
   sidebarOpen: boolean;
   setSidebarOpen: Dispatch<SetStateAction<boolean>>;
@@ -1515,6 +1529,11 @@ export function ConversationSidebar({
   // shortcut clicked while its chat is already open applies the view it
   // names, whichever view the chat is in.
   onSetDashboardView?: (dashboard: boolean) => void;
+  // What this page knows of each chat's schedules, for the chats it has read
+  // them for: "patrol" (an armed or paused recurring patrol), "timer" (only
+  // one-shot timers), or "none". A chat missing from the map is not known
+  // here; the rail then goes by the person's patrols list.
+  scheduleKindByConv?: ReadonlyMap<string, "patrol" | "timer" | "none">;
 }) {
   const [editingId, setEditingId] = useState<string | null>(null);
   // The person's sidebar layout (docs/SIDEBAR.md): the order, names and
@@ -1732,9 +1751,24 @@ export function ConversationSidebar({
     () => (searching ? filterConversations(archivedConversations, { labels: filterLabels, query: trimmedQuery }) : []),
     [searching, archivedConversations, filterLabels, trimmedQuery],
   );
-  // Which chats are patrols, read once the first search starts, so a result
-  // can say so.
-  const patrolIds = usePatrolIds(searching);
+  // Which chats have a schedule. Patrols come from one read of the person's
+  // patrols per page; the page's own knowledge of a chat's schedules (read
+  // when the chat is opened, updated as a patrol is made, paused or ended)
+  // wins over it, so a patrol made a minute ago is marked without a reload.
+  const patrolIds = usePatrolIds(true);
+  const scheduleKind = (id: string): "patrol" | "timer" | "none" =>
+    scheduleKindByConv?.get(id) ?? (patrolIds.has(id) ? "patrol" : "none");
+  const isPatrol = (id: string) => scheduleKind(id) === "patrol";
+  // Temporary is exactly what the retention sweep deletes (store.SweepExpired):
+  // unpinned, in no project, not shared by link or with the team, not
+  // Multiplayer, and with no armed or paused patrol or timer.
+  const isTemporary = (c: ConversationSummary) =>
+    !c.pinned &&
+    !c.project_id &&
+    !c.share_token &&
+    !c.team_visible &&
+    !c.multiplayer &&
+    scheduleKind(c.id) === "none";
   const canCustomize = useCanCustomize();
   const showSection = (id: SectionId) =>
     canCustomize ? () => updateSidebarLayout((l) => updateSection(l, id, { hidden: false })) : undefined;
@@ -1808,18 +1842,18 @@ export function ConversationSidebar({
     />
   );
 
-  const renderRowIn = (conversation: ConversationSummary, inResults: boolean, temporary = false) => (
+  const renderRowIn = (conversation: ConversationSummary, inResults: boolean, markTemporary = false) => (
     <ConvRow
       key={conversation.id}
       conversation={conversation}
-      temporary={temporary}
+      temporary={markTemporary && isTemporary(conversation)}
       titleNode={inResults ? markMatches(conversation.title, tokens) : undefined}
       context={
         inResults && conversation.project_id
           ? projects.find((p) => p.id === conversation.project_id)?.name
           : undefined
       }
-      tag={inResults && patrolIds.has(conversation.id) ? tr("Patrol") : undefined}
+      patrol={isPatrol(conversation.id)}
       active={activeConversationId === conversation.id}
       focused={focusedConversationId === conversation.id}
       streaming={streamingConvs.has(conversation.id)}
@@ -2397,6 +2431,7 @@ visibleProjectTree.map(({ project, chats }) => {
                             }
                           >
                             <TeamGlyph className="size-3 shrink-0 text-[var(--color-accent)]" />
+                            {isPatrol(c.id) ? <PatrolMark /> : null}
                             <span className="min-w-0 flex-1 truncate">
                               {inResults ? markMatches(c.title, tokens) : c.title}
                             </span>
@@ -2615,7 +2650,7 @@ visibleProjectTree.map(({ project, chats }) => {
                     {r.title || tr("Untitled")}
                   </span>
                   {archived ? <ResultTag>{tr("Archived")}</ResultTag> : null}
-                  {patrolIds.has(r.conversation_id) ? <ResultTag>{tr("Patrol")}</ResultTag> : null}
+                  {isPatrol(r.conversation_id) ? <PatrolMark /> : null}
                   {r.user_email ? (
                     // Whose chat it is, as on a Team chats row.
                     <span className="max-w-[45%] min-w-0 shrink truncate font-[family-name:var(--font-code)] text-[0.66rem] text-[var(--color-text-muted)]">
@@ -2947,10 +2982,11 @@ visibleProjectTree.map(({ project, chats }) => {
                     reciente" do not fit one row; the control then takes the
                     next row whole instead of being cut off. */}
                 <div className="flex items-center gap-1.5 px-2 pb-1 pt-2 text-[0.68rem] font-semibold uppercase tracking-[0.08em] text-[var(--color-text-muted)] any-pointer-coarse:flex-wrap">
-                  <Icon
-                    name={unified ? "message" : "clock"}
-                    className="size-3 shrink-0 text-[var(--color-accent)]"
-                  />
+                  {unified ? (
+                    <Icon name="message" className="size-3 shrink-0 text-[var(--color-accent)]" />
+                  ) : (
+                    <HourglassGlyph className="size-3 shrink-0 text-[var(--color-accent)]" />
+                  )}
                   {unified ? tr("Recent") : tr("Temporary")}
                   {unified ? (
                     <RecentInfoButton text={UNIFIED_INFO_TEXT} label={tr("About this list")} />

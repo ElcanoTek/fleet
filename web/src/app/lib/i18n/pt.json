@@ -5961,11 +5961,13 @@
   "Try fewer or different words.": "Experimente menos palavras ou palavras diferentes.",
   "Not searched, because it has not loaded: {0}. If this stays, reload the page.": "Não foi pesquisado o que ainda não carregou: {0}. Se continuar assim, recarregue a página.",
   "About this list": "Acerca desta lista",
-  "Chats marked with a clock are temporary: they are deleted after 14 days of inactivity. Pin a chat or move it into a project to keep it. A teammate's chat is theirs to keep.": "Os chats marcados com um relógio são temporários: são eliminados após 14 dias de inatividade. Fixe um chat ou mova-o para um projeto para o manter. O chat de um colega é mantido pelo respetivo proprietário.",
-  "List your teammates' shared chats together with your own, in one list, instead of in a list of their own. Chats of yours that are temporary are marked with a clock.": "Mostra os chats partilhados pelos seus colegas juntamente com os seus, numa única lista, em vez de numa lista à parte. Os seus chats temporários ficam marcados com um relógio.",
   "One list for all chats": "Uma única lista para todos os chats",
   "Recent": "Recentes",
   "Sort chats": "Ordenar chats",
   "Temporary chat": "Chat temporário",
-  "Temporary — deleted after 14 days of inactivity. Pin it or move it into a project to keep it.": "Temporário: é eliminado após 14 dias de inatividade. Fixe-o ou mova-o para um projeto para o manter."
+  "Temporary — deleted after 14 days of inactivity. Pin it or move it into a project to keep it.": "Temporário: é eliminado após 14 dias de inatividade. Fixe-o ou mova-o para um projeto para o manter.",
+  "List your teammates' shared chats together with your own, in one list, instead of in a list of their own. Chats of yours that are temporary are marked with an hourglass.": "Mostra os chats partilhados pelos seus colegas juntamente com os seus, numa única lista, em vez de numa lista à parte. Os seus chats temporários ficam marcados com uma ampulheta.",
+  "Chats marked with an hourglass are temporary: they are deleted after 14 days of inactivity. Pin a chat or move it into a project to keep it. A teammate's chat is theirs to keep.": "Os chats marcados com uma ampulheta são temporários: são eliminados após 14 dias de inatividade. Fixe um chat ou mova-o para um projeto para o manter. O chat de um colega é mantido pelo respetivo proprietário.",
+  "Patrol chat": "Chat de patrulha",
+  "Patrol — this chat checks in on a schedule": "Patrulha: este chat ativa-se de acordo com um horário"
 }

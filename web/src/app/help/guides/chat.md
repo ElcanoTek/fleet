@@ -369,8 +369,8 @@ Clear the field and the rail returns exactly as you left it.
   accents do not matter. The matched words are highlighted.
 - Results are grouped by where they live — **Chats**, **Team chats**,
   **Projects**, **Archived** — each with a count. A chat in a project shows
-  the project's name before its title, and a patrol chat is tagged
-  **Patrol**.
+  the project's name before its title, and a patrol chat carries its patrol
+  mark.
 - A teammate's chat is also found by its owner: type a colleague's name to
   see the chats they shared.
 - **In messages** lists chats where the words appear in the conversation
@@ -387,9 +387,13 @@ Clear the field and the rail returns exactly as you left it.
 - When nothing matches, the rail says so and **Clear search** empties the
   field.
 
-A chat row can carry two small badges, each labeled with its audience when you
-hover: one means it is shared by link, the other that it is shared with your
-team. Click a project's name to open its home (and expand it); the chevron only
+A chat row can carry small marks, each labeled when you hover. Two say who
+can see it: one means it is shared by link, the other that it is shared with
+your team. A pulse line marks a **patrol** chat, one with a patrol that is
+running or paused, wherever the chat is listed; a chat with a patrol is kept,
+not deleted for inactivity. The hourglass means the opposite: the chat is
+temporary (it appears beside the **Temporary** heading, and on each temporary
+chat when you use **One list for all chats**). Click a project's name to open its home (and expand it); the chevron only
 folds it. Hovering a project shows its menu: **Open project**, **New chat**,
 **Reorder chats** (when it holds two or more of your chats), and, for the
 owner, **Share…** and **Project settings…**. See [Keeping, shaping, and sharing conversations](#8-keeping-shaping-and-sharing-conversations).
@@ -505,7 +509,7 @@ A read-only **Viewer** account can open the panel but not change anything.
   below them, one **Recent** list holds the rest of your chats and your
   teammates', sorted together (most recently active first, or by the sort
   you pick beside the heading). A teammate's row keeps its team mark and the
-  owner's name. Each chat of yours that is temporary carries a small clock:
+  owner's name. Each chat of yours that is temporary carries a small hourglass:
   it is deleted after a period of inactivity (14 days on a default
   deployment) unless you pin it or move it into a project. Chats in a
   project stay under their project. Off by default; switch it off again to

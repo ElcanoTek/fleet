@@ -817,7 +817,7 @@ function SectionsSection({ layout, onChange }: { layout: SidebarLayout; onChange
             {tr("One list for all chats")}
           </label>
           <span className="text-[0.72rem] leading-snug text-[var(--color-text-muted)]">
-            {tr("List your teammates' shared chats together with your own, in one list, instead of in a list of their own. Chats of yours that are temporary are marked with a clock.")}
+            {tr("List your teammates' shared chats together with your own, in one list, instead of in a list of their own. Chats of yours that are temporary are marked with an hourglass.")}
           </span>
         </span>
         <Switch

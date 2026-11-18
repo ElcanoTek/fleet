@@ -44,8 +44,8 @@ This note records what shipped to fix that, and what was left out.
   The matched words are marked in each title. The same rule now backs the
   label-plus-title filter (`filterConversations`).
 - **A result says where it lives.** An own chat filed in a project shows
-  `Project ›` before its title; a patrol chat carries a **Patrol** tag (read
-  once from `/api/patrols` when the first search starts); an archived message
+  `Project ›` before its title; a patrol chat carries its patrol mark (as it
+  does in every list: [SIDEBAR.md](SIDEBAR.md), "Row marks"); an archived message
   hit carries **Archived**.
 - **In messages** (`GET /api/search`, Postgres full text) covers the
   person's own chats, archived ones included, and the chats shared with them

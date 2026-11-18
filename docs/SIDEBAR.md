@@ -48,15 +48,33 @@ sidebar"), which `/help` renders.
   reorder mode. Below it, one **Recent** list holds the person's unpinned,
   unfiled chats and teammates' chats under one sort (the Temporary sort
   control). Because that list is no longer only temporary chats, each of the
-  person's chats that is temporary carries a clock that says it is deleted
-  after 14 days of inactivity unless pinned or filed, and the heading's
-  explainer says what the clock means. A teammate's row is the Team chats row
+  person's chats that is temporary carries an hourglass that says it is
+  deleted after 14 days of inactivity unless pinned or filed, and the
+  heading's explainer says what the hourglass means. Temporary here is
+  exactly what the retention sweep deletes (`store.SweepExpired`): unpinned,
+  in no project, not shared by link or with the team, not Multiplayer, and
+  with no armed or paused patrol or timer. A teammate's row is the Team chats row
   (team glyph, **Live**, owner, its own `⋯` menu). Folding or hiding Chats
   folds or hides teammates' chats with it; search still finds them
   ([SIDEBAR-SEARCH.md](SIDEBAR-SEARCH.md)). Presets keep the choice, like
   shortcuts. Deliberately unchanged: a project's chats stay under their
   project (in the rail a project chat lives only there), `j`/`k` walk the
   person's own rows, and select mode selects only their own.
+- **Row marks: patrol and temporary.** A chat with an armed or paused patrol
+  carries a patrol mark (the `activity` icon a pinned patrol has in the rail)
+  on its row in every list: Pinned, Temporary, a project, Team chats, the one
+  list, and search results. Which chats are patrols comes from one read of
+  `GET /api/patrols` per page; what the page itself knows of a chat's
+  schedules (read when the chat is opened, updated as a patrol is made,
+  paused or ended) wins over it, so a new patrol is marked without a reload.
+  Temporary is an hourglass (`HourglassGlyph`), on the Temporary heading and
+  on the one list's temporary rows. It is not a clock because the clock is
+  the patrol control in the chat's toolbar: a clock on a row read as "runs on
+  a schedule". Flag's sprite has no hourglass, so this glyph is drawn beside
+  `TeamGlyph` and is to be upstreamed to Flag. Not done: a mark for a chat
+  that has a populated dashboard. The board is derived from the transcript
+  ([DASHBOARD-VIEW.md](DASHBOARD-VIEW.md)), which the chat list does not
+  carry, so it needs a server-side flag on the conversation first.
 - **Compact** hides the one-line subtitles.
 - **The Customize panel** (`SidebarCustomizer.tsx`, `SidebarEditor.tsx`) is a
   *non-modal* sheet: the rail stays visible and usable beside it, so every edit

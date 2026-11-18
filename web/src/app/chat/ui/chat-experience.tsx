@@ -1408,6 +1408,16 @@ export function ChatExperience({
   const [schedulesByConv, setSchedulesByConv] = useState<
     Map<string, ChatSchedule[]>
   >(() => new Map());
+  // For the rail's patrol and temporary marks: what each chat's schedules,
+  // where this page has read them, amount to.
+  const scheduleKindByConv = useMemo(() => {
+    const kinds = new Map<string, "patrol" | "timer" | "none">();
+    for (const [id, schedules] of schedulesByConv) {
+      const live = liveSchedules(schedules);
+      kinds.set(id, live.some((sc) => sc.kind !== "timer") ? "patrol" : live.length > 0 ? "timer" : "none");
+    }
+    return kinds;
+  }, [schedulesByConv]);
   // The memory manager's state and actions (useChatMemories, #2008).
   const memories = useChatMemories();
   // Projects modal state: null = closed; {} = open on the list; create opens
@@ -7480,6 +7490,7 @@ export function ChatExperience({
           projectsLoaded={projectsLoaded}
           teamSharedLoaded={teamSharedLoaded}
           archivedLoaded={archivedLoaded}
+          scheduleKindByConv={scheduleKindByConv}
           onSetDashboardView={(dashboard) => {
             if (dashboard !== dashboardActive) toggleDashboardView();
             setSidebarOpen(false);
