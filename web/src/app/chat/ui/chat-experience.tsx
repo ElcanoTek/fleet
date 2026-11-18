@@ -6303,14 +6303,20 @@ export function ChatExperience({
     }
   };
 
-  const handleStartPatrol = async (input: CreatePatrolInput): Promise<boolean> => {
+  // `accepted`: the risk prompt was just accepted. Its retry runs this
+  // render's closure, whose `autonomousAccepted` is still false, so without
+  // the flag the precheck would reopen the prompt forever.
+  const handleStartPatrol = async (
+    input: CreatePatrolInput,
+    opts: { accepted?: boolean } = {},
+  ): Promise<boolean> => {
     const requestedMode = resolveApprovalMode(
       input.approvalMode,
       input.autoApprove,
     );
-    if (requestedMode === "autonomous" && !autonomousAccepted) {
+    if (requestedMode === "autonomous" && !autonomousAccepted && !opts.accepted) {
       requireAutonomousAccept(() => {
-        void handleStartPatrol(input);
+        void handleStartPatrol(input, { accepted: true });
       });
       return false;
     }
@@ -6349,7 +6355,7 @@ export function ChatExperience({
       if (e instanceof PatrolApiError && e.status === 409) {
         applyLocalAutonomousAccepted(false);
         requireAutonomousAccept(() => {
-          void handleStartPatrol(input);
+          void handleStartPatrol(input, { accepted: true });
         });
         return false;
       }

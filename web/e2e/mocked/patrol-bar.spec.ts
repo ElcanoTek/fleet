@@ -179,3 +179,66 @@ test("Review reaches a waiting card that is far up a long chat", async ({ page }
   await bar.getByRole("button", { name: "Review" }).click();
   await expect(card).toBeInViewport({ timeout: 5_000 });
 });
+
+test("starting a patrol in an Autonomous chat asks once, then creates it", async ({ page }) => {
+  // The owner already chose Autonomous; this viewer has not accepted the
+  // risk. Accepting must create the patrol, not reopen the prompt.
+  const creates: unknown[] = [];
+  let accepts = 0;
+  await page.clock.setFixedTime(NOW);
+  await mockChatBoot(page, {
+    conversations: [{ id: "conv-patrol", title: "Northpeak Campaign Watch" }],
+  });
+  await page.route("**/api/chat/autonomous-accept", (r: Route) => {
+    accepts += 1;
+    return r.fulfill({ json: { ok: true } });
+  });
+  await page.route("**/api/conversations/conv-patrol/schedules", (r: Route) => {
+    if (r.request().method() !== "POST") return r.fulfill({ json: { schedules: [] } });
+    creates.push(r.request().postDataJSON());
+    return r.fulfill({
+      json: {
+        schedule: { ...PATROL, approval_mode: "autonomous" },
+        schedules: [PATROL],
+        auto_approve: true,
+        approval_mode: "autonomous",
+      },
+    });
+  });
+  await page.route("**/api/conversations/conv-patrol", (r: Route) => {
+    if (r.request().method() !== "GET") return r.fulfill({ json: {} });
+    return r.fulfill({
+      json: {
+        conversation: {
+          id: "conv-patrol",
+          title: "Northpeak Campaign Watch",
+          persona: "default",
+          auto_approve: true,
+          approval_mode: "autonomous",
+        },
+        autonomous_accepted: false,
+        schedules: [],
+        history: [{ id: 1, type: "text", role: "user", content: { text: "Watch Northpeak pacing." } }],
+        pending_approvals: [],
+      },
+    });
+  });
+  await page.goto("/chat");
+  await page.getByText("Northpeak Campaign Watch").first().click();
+  await expect(page.getByText("Watch Northpeak pacing.")).toBeVisible({ timeout: 15_000 });
+
+  // No patrols yet: the dialog opens from the composer's More menu.
+  await page.getByTestId("composer-more-button").click();
+  await page.getByTestId("composer-more-popover").getByTestId("chat-patrol-button").click();
+  const dialog = page.getByRole("dialog", { name: "Patrols & timers" });
+  await dialog.getByRole("button", { name: "Start patrol" }).click();
+  const risk = page.getByTestId("autonomous-risk-modal");
+  await expect(risk).toBeVisible();
+  expect(creates).toHaveLength(0);
+
+  await page.getByTestId("autonomous-risk-accept").click();
+  await expect.poll(() => creates.length).toBe(1);
+  await expect(risk).toBeHidden();
+  expect(accepts).toBe(1);
+  expect(creates[0]).toMatchObject({ approval_mode: "autonomous" });
+});
