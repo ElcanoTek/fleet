@@ -464,9 +464,17 @@ func TestLiveMixedUpstreams(t *testing.T) {
 // little time remains for another attempt the test fails, saying so.
 func runLiveUntilOneUpstream(t *testing.T, label string, run func(attempt int, budget time.Duration) []liveCacheRecord) (records []liveCacheRecord, ok bool) {
 	t.Helper()
+	return runUntilOneUpstream(t, label, func(attemptsLeft int) time.Duration { return liveAttemptBudget(t, attemptsLeft) }, run)
+}
+
+// runUntilOneUpstream is runLiveUntilOneUpstream with the time each attempt
+// may take supplied by the caller, so the retry rule can be tested without
+// the test binary's own deadline deciding the outcome.
+func runUntilOneUpstream(t *testing.T, label string, budgetFor func(attemptsLeft int) time.Duration, run func(attempt int, budget time.Duration) []liveCacheRecord) (records []liveCacheRecord, ok bool) {
+	t.Helper()
 	var splits []string
 	for attempt := 1; attempt <= liveRoutingAttempts; attempt++ {
-		budget := liveAttemptBudget(t, liveRoutingAttempts-attempt+1)
+		budget := budgetFor(liveRoutingAttempts - attempt + 1)
 		if budget < liveMinAttemptBudget {
 			t.Fatalf("%s: %d/%d attempts were served by more than one upstream (%s) and only %s remains before the test deadline, too little for another attempt; raise go test -timeout",
 				label, attempt-1, liveRoutingAttempts, strings.Join(splits, " | "), budget.Round(time.Second))
@@ -495,12 +503,15 @@ const (
 // A trajectory split across upstreams on every attempt is reported as
 // inconclusive (ok=false) without failing the test, each attempt having run
 // with a fresh cache; one clean attempt ends the retries.
-func TestRunLiveUntilOneUpstream(t *testing.T) {
+func TestRunUntilOneUpstream(t *testing.T) {
 	split := []liveCacheRecord{{Provider: "Anthropic"}, {Provider: "Google"}}
 	clean := []liveCacheRecord{{Provider: "Anthropic"}, {Provider: "Anthropic"}}
+	// A fixed budget: how much of the test binary's -timeout is left when
+	// this runs (little, under -race) must not decide the outcome.
+	budget := func(int) time.Duration { return liveMinAttemptBudget }
 
 	attempts := 0
-	records, ok := runLiveUntilOneUpstream(t, "always-split", func(int, time.Duration) []liveCacheRecord {
+	records, ok := runUntilOneUpstream(t, "always-split", budget, func(int, time.Duration) []liveCacheRecord {
 		attempts++
 		return split
 	})
@@ -509,7 +520,7 @@ func TestRunLiveUntilOneUpstream(t *testing.T) {
 	}
 
 	attempts = 0
-	records, ok = runLiveUntilOneUpstream(t, "second-clean", func(attempt int, _ time.Duration) []liveCacheRecord {
+	records, ok = runUntilOneUpstream(t, "second-clean", budget, func(attempt int, _ time.Duration) []liveCacheRecord {
 		attempts++
 		if attempt == 1 {
 			return split
