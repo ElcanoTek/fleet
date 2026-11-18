@@ -15,6 +15,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
+	"github.com/ElcanoTek/fleet/internal/tools"
 )
 
 // eventSinkPersister is the subset of *store.Store the buffer needs
@@ -564,6 +565,9 @@ func inferTerminalStatus(events []bufferedEvent) store.TurnStatus {
 // turn event before it is delivered to viewerEmail:
 //   - user.message: strips injected_context when viewerEmail is not the message
 //     sender (defaulting to convOwnerEmail when sender_email is absent).
+//   - tool and reasoning events: skipped when user_email is another user (a
+//     turn's working trace is private to its sender), except a show_ui call
+//     and its result, which every participant draws.
 //   - queue.updated: skips the event when user_email is set to another user so
 //     one multiplayer participant's queue updates never overwrite another
 //     participant's visible queue, and strips the internal user_email tag when
@@ -615,7 +619,12 @@ func sanitizeTurnEventForViewer(name string, data []byte, viewerEmail, convOwner
 			return data, true
 		}
 		if viewerEmail != "" && !strings.EqualFold(viewerEmail, uEmail) {
-			return nil, false
+			// A card the assistant shows is rendered output for the whole
+			// conversation, like its text (isSharedCardEntry): the other
+			// participants' live transcripts and boards get it too.
+			if n, _ := m["name"].(string); (name != "tool.call" && name != "tool.result") || n != tools.ShowUIToolName {
+				return nil, false
+			}
 		}
 		delete(m, "user_email")
 		if b, err := json.Marshal(m); err == nil {

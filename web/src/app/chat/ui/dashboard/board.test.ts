@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { Message } from "../history";
+import { historyToMessages, type HistoryEntry, type Message } from "../history";
 import { deriveGenUiState } from "../genui/transcript";
 import { panelDomId } from "./context";
 import { boardManifest, boardStatus, cardRef, deriveBoard, MAX_MANIFEST_PANELS, MAX_MANIFEST_TITLE, dropKey, EMPTY_BOARD_PREFS, moveKey, prefersWide, type BoardPrefs } from "./board";
@@ -312,5 +312,24 @@ describe("slot aliases on panels", () => {
       { ...EMPTY_BOARD_PREFS, pinned: ["f"] },
     );
     expect(b.panels[0]).toMatchObject({ key: "p:follow", aliases: ["c:f"] });
+  });
+});
+
+// A multiplayer participant's history read carries another sender's turn as
+// its text and its show_ui cards only (docs/MULTIPLAYER-CHAT.md): no
+// reasoning, no other tool calls. That is enough to build the same board.
+describe("a participant's projected history", () => {
+  it("builds the panels another sender's turn showed", () => {
+    const entries = [
+      { id: 1, role: "user", type: "text", content: { text: "show the board", sender_email: "owner@x.com" } },
+      { id: 5, role: "assistant", type: "tool_call", content: { id: "ui1", name: "show_ui", input: display("Inbox", { panel: "inbox" }) } },
+      { id: 6, role: "tool", type: "tool_result", content: { id: "ui1", name: "show_ui", text: "UI_DISPLAYED card_id=ui1", is_err: false } },
+      { id: 7, role: "assistant", type: "tool_call", content: { id: "ui2", name: "show_ui", input: JSON.stringify({ from_result: { call_id: "q1" } }) } },
+      { id: 8, role: "tool", type: "tool_result", content: { id: "ui2", name: "show_ui", text: "UI_DISPLAYED card_id=ui2", is_err: false, card: display("Recs", { panel: "recs" }) } },
+      { id: 9, role: "assistant", type: "text", content: { text: "Here is the board." } },
+    ] as unknown as HistoryEntry[];
+    const board = boardOf(historyToMessages(entries));
+    expect(board.panels.map((p) => p.key)).toEqual(["p:inbox", "p:recs"]);
+    expect(board.panels.map((p) => p.spec.title)).toEqual(["Inbox", "Recs"]);
   });
 });

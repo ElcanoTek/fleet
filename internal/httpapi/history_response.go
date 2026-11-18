@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
+	"github.com/ElcanoTek/fleet/internal/tools"
 )
 
 // The OWNER-facing history wire shape.
@@ -54,6 +55,24 @@ func isPrivateTurnTraceEntry(e agent.HistoryEntry) bool {
 		}
 	}
 	return e.Type != "text" && e.Type != "summary" && e.Type != agent.EntryTypeSummaryBoundary
+}
+
+// isSharedCardEntry reports whether e is a show_ui call or its result: a card
+// the assistant drew for the conversation (docs/GENERATIVE-UI.md). Unlike the
+// rest of the working trace it is rendered output, like the reply text, and
+// dashboard view builds its panels from it (docs/DASHBOARD-VIEW.md) — so every
+// participant's transcript carries it, whoever sent the turn. The model replay
+// (redactHistoryForSender) still omits it with the rest of the trace.
+func isSharedCardEntry(e agent.HistoryEntry) bool {
+	switch e.Type {
+	case "tool_call":
+		var c agent.ToolCallContent
+		return json.Unmarshal(e.Content, &c) == nil && c.Name == tools.ShowUIToolName
+	case "tool_result":
+		var c agent.ToolResultContent
+		return json.Unmarshal(e.Content, &c) == nil && c.Name == tools.ShowUIToolName
+	}
+	return false
 }
 
 // redactHistoryForSender returns a shallow copy of entries with
@@ -174,7 +193,8 @@ func redactTurnSummaryForOtherParticipant(raw json.RawMessage) (json.RawMessage,
 // viewerEmail, retaining each entry's InjectedContext only when viewerEmail is
 // the sender of that entry (or the conversation owner for unattributed
 // entries) so another user's private attachment paths or library listings are
-// never exposed. For the owner's own single-user chat every entry is theirs,
+// never exposed. Another sender's working trace is dropped, except the cards
+// the assistant showed (isSharedCardEntry). For the owner's own single-user chat every entry is theirs,
 // so the projection carries every field. Always returns a non-nil slice so the
 // JSON carries `[]`, not `null`, for an empty conversation.
 func historyForParticipant(entries []agent.HistoryEntry, viewerEmail, convOwnerEmail string) []historyEntryResponse {
@@ -240,6 +260,8 @@ func historyForParticipant(entries []agent.HistoryEntry, viewerEmail, convOwnerE
 						continue
 					}
 					content = redacted
+					injected = ""
+				case isSharedCardEntry(e):
 					injected = ""
 				case isPrivateTurnTraceEntry(e):
 					continue
