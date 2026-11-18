@@ -228,7 +228,7 @@ type replayedCardEntry struct {
 // carries, and removes the rest from out:
 //
 //   - A card whose call id is also the id of a tool call the replay holds
-//     from the sender's own turns is dropped. The replay pairs calls with
+//     from the sender's own turns (since the latest summary) is dropped. The replay pairs calls with
 //     results by id alone (agent.replayHistory), so keeping both would hand
 //     one of them the other's result. The card stays on screen; only the
 //     model's copy is withheld. Its id cannot be rewritten instead, because
@@ -244,8 +244,19 @@ func keepReplayedSharedCards(out []agent.HistoryEntry, kept []replayedCardEntry)
 	for _, k := range kept {
 		foreign[k.pos] = true
 	}
+	// Only calls the model will actually be sent can collide: the replay
+	// starts at the latest summary (agent.replayHistory), so a call before it
+	// pairs with nothing.
+	start := 0
+	for pos := len(out) - 1; pos >= 0; pos-- {
+		if out[pos].Type == "summary" {
+			start = pos
+			break
+		}
+	}
 	ownCallIDs := make(map[string]bool)
-	for pos, e := range out {
+	for pos := start; pos < len(out); pos++ {
+		e := out[pos]
 		if foreign[pos] || e.Type != "tool_call" {
 			continue
 		}

@@ -442,3 +442,26 @@ func TestReplayDropsACardWhoseIDCollidesWithTheSendersCall(t *testing.T) {
 		t.Fatalf("replayed entries = %v, want %v (the colliding card dropped, the other kept)", ids, want)
 	}
 }
+
+// A call from before the latest summary is not sent to the model, so it
+// cannot collide with a card drawn after it.
+func TestReplayKeepsACardWhoseIDOnlyCollidesBeforeTheSummary(t *testing.T) {
+	t.Parallel()
+
+	history := []agent.HistoryEntry{
+		userSaid(1, "owner@x.com", "run the numbers"),
+		{ID: 2, Role: "assistant", Type: "tool_call", Content: []byte(`{"id":"call_1","name":"run_python","input":"{}"}`)},
+		{ID: 3, Role: "tool", Type: "tool_result", Content: []byte(`{"id":"call_1","name":"run_python","text":"42"}`)},
+		{ID: 4, Role: "assistant", Type: "summary", Content: []byte(`{"text":"so far"}`)},
+		userSaid(5, "mate@x.com", "add a pacing panel"),
+		cardCall(6, "call_1", `{"title":"Pacing","panel":"pacing","components":[]}`),
+		cardShown(7, "call_1"),
+	}
+	kept := false
+	for _, e := range redactHistoryForSender(history, "owner@x.com", "owner@x.com") {
+		kept = kept || e.ID == 6
+	}
+	if !kept {
+		t.Error("a call from before the summary made the replay drop a teammate's later card")
+	}
+}
