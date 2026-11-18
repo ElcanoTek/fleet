@@ -1,7 +1,8 @@
 import { t as tr } from "@/app/lib/i18n";
 // patrolApi — the in-chat patrol (schedule) routes, one typed wrapper each:
 // POST /api/conversations/<id>/schedules, POST …/schedules/<sid>/run-now,
-// PATCH …/schedules/<sid> {action}, DELETE …/schedules/<sid>.
+// PATCH …/schedules/<sid> {action} or {title, prompt, cron, …},
+// DELETE …/schedules/<sid>.
 //
 // Chat's Patrol bar, the Patrol Launchpad and Settings → Personas all arm and
 // steer patrols; they share these so every id goes through the
@@ -36,9 +37,23 @@ export type CreateScheduleBody = {
   duration_seconds?: number;
   auto_approve?: boolean;
   approval_mode?: ConversationApprovalMode;
+  /** Add another recurring patrol instead of updating the chat's latest one
+   *  in place (the server's default for a create). */
+  allow_multiple?: boolean;
 };
 
 export type ScheduleAction = "pause" | "resume" | "cancel";
+
+/** The fields an edit may change; an omitted field keeps its value. A cron
+ *  turns the schedule into a recurring patrol and a duration into a one-shot
+ *  timer (the server clears the other). */
+export type UpdateScheduleBody = {
+  title?: string;
+  prompt?: string;
+  cron?: string;
+  timezone?: string;
+  duration_seconds?: number;
+};
 
 export class PatrolApiError extends Error {
   status: number;
@@ -96,6 +111,19 @@ export function setScheduleAction(
   return send(
     conversationApiPath(conversationId, "schedules", scheduleId),
     { method: "PATCH", headers: JSON_HEADERS, body: JSON.stringify({ action }) },
+    fallback,
+  );
+}
+
+export function updateSchedule(
+  conversationId: string,
+  scheduleId: string,
+  body: UpdateScheduleBody,
+  fallback = tr("Couldn't save patrol"),
+): Promise<PatrolResponse> {
+  return send(
+    conversationApiPath(conversationId, "schedules", scheduleId),
+    { method: "PATCH", headers: JSON_HEADERS, body: JSON.stringify(body) },
     fallback,
   );
 }

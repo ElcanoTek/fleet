@@ -720,6 +720,20 @@ describe("Composer — share button and overflow options menu", () => {
     expect(screen.getByTestId("composer-share-link-badge")).toBeInTheDocument();
   });
 
+  it("keeps the patrol clock in a sealed chat that has a patrol, and only then", () => {
+    const onOpenPatrols = vi.fn();
+    const { unmount } = render(
+      <Host overrides={{ sealed: true, onOpenPatrols, activePatrolCount: 0 }} />,
+    );
+    expect(screen.queryByTestId("chat-patrol-button")).toBeNull();
+    unmount();
+    render(
+      <Host overrides={{ sealed: true, onOpenPatrols, activePatrolCount: 1, patrolBarHidden: true }} />,
+    );
+    fireEvent.click(screen.getByTestId("chat-patrol-button"));
+    expect(onOpenPatrols).toHaveBeenCalledTimes(1);
+  });
+
   it("groups secondary controls in More options and closes on Escape", () => {
     const toggleAutoApprove = vi.fn();
     const onOpenMemories = vi.fn();
@@ -729,7 +743,7 @@ describe("Composer — share button and overflow options menu", () => {
         overrides={{
           isAutoApprove: false,
           toggleAutoApprove,
-          onStartPatrol: vi.fn(),
+          onOpenPatrols: vi.fn(),
           onOpenMemories,
           showDetails: false,
           onToggleShowDetails,

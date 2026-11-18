@@ -11,7 +11,7 @@
        - **Memories** — opens the Memory Manager (`My memory`, `Team learnings`, and `Graph`).
      - **Sharing, Schedule & Automation:**
        - **Share this chat** — opens the Share dialog to share with your team, copy a public link, or toggle Multiplayer mode.
-       - **Patrol & schedule** — opens the recurring patrol / one-shot timer popover.
+       - **Patrol & schedule** — opens the **Patrols & timers** dialog (the composer's clock opens it too once the chat has a patrol).
        - **Auto-approve tools** — toggles per-conversation auto-approve for session-approvable tools.
        - **Summarize earlier messages** — summarizes earlier turns to free context window space once a conversation has messages.
      - **View & Input Preferences:**

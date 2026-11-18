@@ -22,6 +22,7 @@ import { PENDING_CONV_KEY } from "./workspaceHref";
 import { conversationApiUrl } from "@/app/lib/conversationApiUrl";
 import { menuPeekHeight, menuShiftLeft } from "./menuPeek";
 import { Icon } from "./Icon";
+import { PatrolHiddenHint } from "./PatrolBanner";
 import { ShareGlyph, TeamGlyph } from "./ShareGlyphs";
 import {
   ModelValidationBadge,
@@ -57,7 +58,6 @@ import { PromptLibrary } from "@/app/shared/ui/PromptLibrary";
 import { EmailTemplateLibrary, useHasEmailTemplates } from "@/app/shared/ui/EmailTemplateLibrary";
 import { ToolsLibrary } from "./ToolsLibrary";
 import { ToolsPopover } from "./ToolsPopover";
-import { PatrolPopover, type CreatePatrolInput } from "./PatrolBanner";
 import { ApprovalModesInfoModal } from "./ApprovalModesInfoModal";
 import { countOn, orderedCategories, type PickerCategory } from "./toolsPicker";
 import { StatusChip } from "@/app/shared/ui/StatusChip";
@@ -184,8 +184,6 @@ export type ComposerProps = {
   toggleAutoApprove?: () => void;
   approvalMode?: ConversationApprovalMode;
   onChangeApprovalMode?: (mode: ConversationApprovalMode) => void;
-  autonomousAccepted?: boolean;
-  onRequireAutonomousAccept?: (onAccepted: () => void) => void;
   isConversationOwner?: boolean;
 
   // Turn / upload gating
@@ -294,9 +292,24 @@ export type ComposerProps = {
   isPendingKey: (key: string | null) => boolean;
   onStopPressed?: (convKey: string) => void;
 
-  // In-chat recurring patrols & one-shot timers
-  onStartPatrol?: (input: CreatePatrolInput) => boolean | void | Promise<boolean | void>;
+  // In-chat recurring patrols & one-shot timers. The clock opens the
+  // Patrols & timers dialog (rendered by the chat page); when the Patrol bar
+  // is hidden the clock is where the patrol lives, so it is ringed, carries
+  // the "bar hidden · Undo" hint right after a hide, and turns amber while an
+  // approval waits.
+  onOpenPatrols?: () => void;
+  /** Armed or paused patrols and timers in this chat. */
   activePatrolCount?: number;
+  /** Of those, the ones armed (not paused). */
+  armedPatrolCount?: number;
+  patrolsOpen?: boolean;
+  patrolBarHidden?: boolean;
+  patrolAttention?: boolean;
+  /** The clock's tooltip / accessible name while patrols exist. */
+  patrolChipLabel?: string;
+  /** Show the "Patrol bar hidden" hint with Undo above the clock. */
+  patrolHiddenHint?: boolean;
+  onUndoHidePatrolBar?: () => void;
 
   // Sharing entry point right in the composer from the start of the chat.
   onOpenShare?: () => void;
@@ -327,8 +340,6 @@ export function Composer({
   toggleAutoApprove,
   approvalMode,
   onChangeApprovalMode,
-  autonomousAccepted,
-  onRequireAutonomousAccept,
   isConversationOwner = true,
   isStreaming,
   isUploadingAttachments,
@@ -384,8 +395,15 @@ export function Composer({
   abortControllersRef,
   isPendingKey,
   onStopPressed,
-  onStartPatrol,
+  onOpenPatrols,
   activePatrolCount = 0,
+  armedPatrolCount = 0,
+  patrolsOpen = false,
+  patrolBarHidden = false,
+  patrolAttention = false,
+  patrolChipLabel,
+  patrolHiddenHint = false,
+  onUndoHidePatrolBar,
   onOpenShare,
   shareConversation,
   shareBusy = false,
@@ -451,9 +469,6 @@ export function Composer({
   const modelChipRef = useRef<HTMLButtonElement | null>(null);
   const personaButtonRef = useRef<HTMLButtonElement | null>(null);
   const mcpButtonRef = useRef<HTMLButtonElement | null>(null);
-  const patrolButtonRef = useRef<HTMLButtonElement | null>(null);
-  const patrolPopoverRef = useRef<HTMLDivElement | null>(null);
-  const [patrolPopoverOpen, setPatrolPopoverOpen] = useState(false);
   const moreMenuRef = useRef<HTMLDivElement | null>(null);
   const moreButtonRef = useRef<HTMLButtonElement | null>(null);
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
@@ -1446,13 +1461,16 @@ export function Composer({
                 setToolsLibrary(null);
                 setPersonaPickerOpen(false);
                 setModelPickerOpen(false);
-                setPatrolPopoverOpen(false);
                 onOpenShare?.();
               };
               const effectiveApprovalMode = resolveApprovalMode(
                 approvalMode,
                 isAutoApprove,
               );
+              // A sealed (lockdown) chat cannot start a patrol here, but one the
+              // assistant armed must stay manageable — above all once its bar
+              // is hidden — so the clock and the menu row still open the dialog.
+              const canOpenPatrols = Boolean(onOpenPatrols) && (!sealed || activePatrolCount > 0);
               const hasActiveSecondary =
                 effectiveApprovalMode !== "manual" ||
                 activePatrolCount > 0 ||
@@ -1689,7 +1707,7 @@ export function Composer({
                           </button>
                         ) : null}
 
-                        {onOpenShare || (onStartPatrol && !sealed) || onChangeApprovalMode || toggleAutoApprove || canCompact ? (
+                        {onOpenShare || canOpenPatrols || onChangeApprovalMode || toggleAutoApprove || canCompact ? (
                           <div aria-hidden="true" className="my-0.5 h-px bg-[var(--color-border)]" />
                         ) : null}
 
@@ -1755,7 +1773,7 @@ export function Composer({
                           </button>
                         ) : null}
 
-                        {onStartPatrol && !sealed ? (
+                        {canOpenPatrols && onOpenPatrols ? (
                           <button
                             type="button"
                             role="menuitem"
@@ -1765,7 +1783,7 @@ export function Composer({
                             onClick={() => {
                               setMoreMenuOpen(false);
                               moreButtonRef.current?.focus();
-                              setPatrolPopoverOpen(true);
+                              onOpenPatrols();
                             }}
                           >
                             <span className="flex min-w-0 items-center gap-2.5">
@@ -1776,13 +1794,19 @@ export function Composer({
                                 <span className={POP_TITLE}>{tr("Patrol & schedule")}</span>
                                 <span className="truncate text-[0.7rem] text-[var(--color-text-muted)]">
                                   {activePatrolCount > 0
-                                    ? tr("{0} recurring schedule active", [activePatrolCount])
+                                    ? activePatrolCount === 1
+                                      ? tr("1 patrol or timer in this chat")
+                                      : tr("{0} patrols or timers in this chat", [activePatrolCount])
                                     : tr("Run this chat on a recurring schedule")}
                                 </span>
                               </span>
                             </span>
                             <span className="inline-flex shrink-0 items-center gap-1 text-[0.7rem] font-medium text-[var(--color-text-muted)]">
-                              {activePatrolCount > 0 ? tr("{0} active", [activePatrolCount]) : tr("Set up")}
+                              {armedPatrolCount > 0
+                                ? tr("{0} active", [armedPatrolCount])
+                                : activePatrolCount > 0
+                                  ? tr("Paused")
+                                  : tr("Set up")}
                               <Icon name="chevron-right" className="size-3.5" />
                             </span>
                           </button>
@@ -2216,66 +2240,51 @@ export function Composer({
                     </div>
                   ) : null}
 
-                  {/* Contextual Patrol indicator + popover: rendered on the bar when
-                      at least one patrol schedule is active or while the popover is open. */}
-                  {onStartPatrol && !sealed && (activePatrolCount > 0 || patrolPopoverOpen) ? (
+                  {/* Patrol clock: on the bar while the chat has a patrol or timer
+                      (and while the dialog is open); it opens Patrols & timers. On
+                      phones it shows only once the Patrol bar is hidden, since the
+                      clock is then the patrol's one visible handle. */}
+                  {canOpenPatrols && (activePatrolCount > 0 || patrolsOpen) ? (
                     <div
-                      ref={patrolPopoverRef}
                       role="presentation"
                       className={`relative ${
-                        patrolPopoverOpen ? "inline-flex" : "hidden sm:inline-flex"
+                        patrolsOpen || patrolBarHidden ? "inline-flex" : "hidden sm:inline-flex"
                       }`}
                     >
                       <button
-                        ref={patrolButtonRef}
                         type="button"
-                        aria-label={tr("Patrol & recurring schedule")}
-                        aria-haspopup="true"
-                        aria-expanded={patrolPopoverOpen}
+                        aria-label={patrolChipLabel ?? tr("Patrols & timers")}
+                        aria-haspopup="dialog"
+                        aria-expanded={patrolsOpen}
                         disabled={shareBusy}
                         data-testid="chat-patrol-button"
-                        data-tip-top={
-                          patrolPopoverOpen
-                            ? undefined
-                            : activePatrolCount > 0
-                              ? `Patrols (${activePatrolCount} active)`
-                              : "Start recurring patrol or timer"
-                        }
-                        className={`${TOOL_BTN} ${
-                          patrolPopoverOpen ? TOOLS_BTN_OPEN : TOOL_BTN_ACTIVE
+                        data-patrol-bar-hidden={patrolBarHidden ? "true" : undefined}
+                        data-tip-top={patrolsOpen || patrolHiddenHint ? undefined : patrolChipLabel}
+                        className={`${TOOL_BTN} ${patrolsOpen ? TOOLS_BTN_OPEN : TOOL_BTN_ACTIVE} ${
+                          patrolBarHidden
+                            ? patrolAttention
+                              ? "text-[var(--color-warning-text)] shadow-[0_0_0_1px_var(--color-warning),0_0_0_5px_var(--color-warning-tint)]"
+                              : "shadow-[0_0_0_1px_var(--color-accent)]"
+                            : ""
                         }`}
-                        onClick={() => setPatrolPopoverOpen((v) => !v)}
+                        onClick={onOpenPatrols}
                       >
                         <Icon name="clock" className="size-3.5" />
                         {activePatrolCount > 0 ? (
                           <span
                             data-testid="chat-patrol-badge"
-                            className="pointer-events-none absolute -right-[5px] -top-[7px] inline-flex h-[15px] min-w-[15px] items-center justify-center rounded-[var(--radius-pill)] bg-[var(--color-accent-strong)] px-[3px] text-[0.6rem] font-semibold tabular-nums text-[var(--color-on-accent-strong)]"
+                            className={`pointer-events-none absolute -right-[5px] -top-[7px] inline-flex h-[15px] min-w-[15px] items-center justify-center rounded-[var(--radius-pill)] px-[3px] text-[0.6rem] font-semibold tabular-nums ${
+                              patrolAttention
+                                ? "bg-[var(--color-warning)] text-[var(--color-surface-1)]"
+                                : "bg-[var(--color-accent-strong)] text-[var(--color-on-accent-strong)]"
+                            }`}
                           >
                             {activePatrolCount}
                           </span>
                         ) : null}
                       </button>
-                      {patrolPopoverOpen && !shareBusy ? (
-                        <PatrolPopover
-                          initialPrompt={prompt}
-                          autonomousAccepted={autonomousAccepted}
-                          onRequireAutonomousAccept={onRequireAutonomousAccept}
-                          onStartPatrol={async (input) => {
-                            const ok = await onStartPatrol(input);
-                            if (ok !== false && prompt.trim() && input.prompt === prompt.trim()) {
-                              setPrompt("");
-                            }
-                            return ok;
-                          }}
-                          onClose={() => {
-                            setPatrolPopoverOpen(false);
-                            (activePatrolCount > 0
-                              ? patrolButtonRef.current
-                              : moreButtonRef.current
-                            )?.focus();
-                          }}
-                        />
+                      {patrolHiddenHint && !patrolsOpen ? (
+                        <PatrolHiddenHint onUndo={onUndoHidePatrolBar} />
                       ) : null}
                     </div>
                   ) : null}

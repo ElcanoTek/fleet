@@ -1,6 +1,6 @@
 // dialogStack — shared open-dialog stack across DialogShell and useDialogA11y.
 //
-// In-chat popovers/dialogs (such as PatrolPopover via useDialogA11y) and
+// In-chat popovers/dialogs (such as PatrolsDialog via useDialogA11y) and
 // DialogShell modals (such as AutonomousRiskModal, ApprovalModesInfoModal, and
 // PatrolLaunchpad) both install document-level Escape and Tab listeners. Sharing
 // one stack ensures that when a confirmation or info modal opens on top of
