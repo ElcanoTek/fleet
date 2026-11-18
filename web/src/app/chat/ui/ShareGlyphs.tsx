@@ -41,23 +41,6 @@ export function ShareGlyph({ className, off }: { className?: string; off?: boole
   );
 }
 
-// HourglassGlyph marks a TEMPORARY chat: one that is deleted after a period
-// of inactivity. It is an hourglass and not a clock on purpose: the clock is
-// the patrol control in the chat header, so a clock on a row read as "this
-// chat runs on a schedule" — the opposite of "this chat is running out".
-// Flag's sprite has no hourglass yet; this one is drawn to the sprite's spec
-// (GLYPH above) and is to be offered to Flag.
-export function HourglassGlyph({ className }: { className?: string }) {
-  return (
-    <svg {...GLYPH} className={className}>
-      <path d="M6 3h12" />
-      <path d="M6 21h12" />
-      <path d="M7 3v3.5a5 5 0 0 0 2 4L12 12l3-1.5a5 5 0 0 0 2-4V3" />
-      <path d="M7 21v-3.5a5 5 0 0 1 2-4L12 12l3 1.5a5 5 0 0 1 2 4V21" />
-    </svg>
-  );
-}
-
 // TeamGlyph is two people: sharing with the team. Deliberately nothing like a
 // chain link — the point of the pair is that they cannot be mistaken for each
 // other at 12px.

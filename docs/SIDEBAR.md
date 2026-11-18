@@ -91,11 +91,11 @@ sidebar"), which `/help` renders.
   `GET /api/patrols` per page; what the page itself knows of a chat's
   schedules (read when the chat is opened, updated as a patrol is made,
   paused or ended) wins over it, so a new patrol is marked without a reload.
-  Temporary is an hourglass (`HourglassGlyph`), on the Temporary heading and
+  Temporary is an hourglass (Flag's `hourglass` sprite icon), on the Temporary heading and
   on the one list's temporary rows. It is not a clock because the clock is
   the patrol control in the chat's toolbar: a clock on a row read as "runs on
-  a schedule". Flag's sprite has no hourglass, so this glyph is drawn beside
-  `TeamGlyph` and is to be upstreamed to Flag. Not done: a mark for a chat
+  a schedule". The glyph was drawn in fleet first and then added to Flag
+  (ElcanoTek/flag#32), so it is a sprite icon like the rest. Not done: a mark for a chat
   that has a populated dashboard. The board is derived from the transcript
   ([DASHBOARD-VIEW.md](DASHBOARD-VIEW.md)), which the chat list does not
   carry, so it needs a server-side flag on the conversation first.
