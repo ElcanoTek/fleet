@@ -54,6 +54,7 @@ import type {
 } from "./chat-experience";
 import type { Project } from "./ProjectsModal";
 import { previewNodes, type SearchResult } from "./SearchBar";
+import { isTemporaryChat } from "./deleteAllUnpinnedScope";
 import { HourglassGlyph, ShareGlyph, TeamGlyph } from "./ShareGlyphs";
 import { teamLinkUrl } from "./teamSharing";
 import { copyText } from "@/app/shared/lib/clipboard";
@@ -164,18 +165,20 @@ function SealedNewChatButton({ onClick }: { onClick: () => void }) {
 // hover and keyboard focus, on the shared .conv-tooltip surface (portaled to
 // <body> like the sealed tooltip above, and for the same reason). On touch —
 // no hover — the focus a tap gives the button is what shows it. The copy
-// states the server's default TTL (CONVERSATION_TTL_DAYS, default 14) and the
-// two keep actions — pinning and filing into a project both exempt a chat
+// states this deployment's retention period (CONVERSATION_TTL_DAYS, read from
+// the server config; the default, 14, when an older server does not say) and
+// the two keep actions — pinning and filing into a project both exempt a chat
 // from the sweep.
-const RECENT_INFO_TEXT =
-  tr("Chats here are deleted after 14 days of inactivity. Pin a chat or move it into a project to keep it.");
+const DEFAULT_TTL_DAYS = 14;
+const recentInfoText = (days: number) =>
+  tr("Chats here are deleted after {0} days of inactivity. Pin a chat or move it into a project to keep it.", [days]);
 
 // The one-list view (docs/SIDEBAR.md) mixes the person's temporary chats with
 // teammates' chats, so "chats here are deleted" would be wrong for half the
-// rows: there the clock on a row is what marks a temporary chat, and the
-// explainer says what the clock means.
-const UNIFIED_INFO_TEXT =
-  tr("Chats marked with an hourglass are temporary: they are deleted after 14 days of inactivity. Pin a chat or move it into a project to keep it. A teammate's chat is theirs to keep.");
+// rows: there the hourglass on a row is what marks a temporary chat, and the
+// explainer says what the hourglass means.
+const unifiedInfoText = (days: number) =>
+  tr("Chats marked with an hourglass are temporary: they are deleted after {0} days of inactivity. Pin a chat or move it into a project to keep it. A teammate's chat is theirs to keep.", [days]);
 // A patrol chat's mark: the icon a patrol has when it is pinned to the rail
 // (layout.defaultIcon), so a patrol looks the same wherever it is listed.
 const PATROL_ICON = defaultIcon({ id: "", kind: "chat" }, true);
@@ -195,10 +198,10 @@ function PatrolMark() {
     </span>
   );
 }
-const TEMPORARY_ROW_TEXT =
-  tr("Temporary — deleted after 14 days of inactivity. Pin it or move it into a project to keep it.");
+const temporaryRowText = (days: number) =>
+  tr("Temporary — deleted after {0} days of inactivity. Pin it or move it into a project to keep it.", [days]);
 
-function RecentInfoButton({ text = RECENT_INFO_TEXT, label = tr("About temporary chats") }: { text?: string; label?: string }) {
+function RecentInfoButton({ text, label = tr("About temporary chats") }: { text: string; label?: string }) {
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
   // Hover AND keyboard focus show the explainer (the sealed-lock tooltip's
   // exact mechanics — was click-toggle, which read as a broken button). The
@@ -1013,8 +1016,9 @@ function ConvRow({
 }: {
   conversation: ConversationSummary;
   // The one-list view only: this chat is temporary (the retention sweep
-  // would delete it), marked with an hourglass that says so and how to keep it.
-  temporary?: boolean;
+  // would delete it), marked with an hourglass whose tooltip is this text:
+  // that it is temporary, after how long it goes, and how to keep it.
+  temporary?: string;
   // Search results only: the title with the matched words marked, the place
   // the chat lives (its project's name). A result is shown out of its
   // section, so the row says where it belongs.
@@ -1137,7 +1141,7 @@ function ConvRow({
               />
             ) : null}
             {temporary ? (
-              <span data-testid="temporary-mark" aria-hidden="true" title={TEMPORARY_ROW_TEXT}>
+              <span data-testid="temporary-mark" aria-hidden="true" title={temporary}>
                 <HourglassGlyph className="size-3 shrink-0 text-[var(--color-text-muted)]" />
               </span>
             ) : null}
@@ -1767,16 +1771,14 @@ export function ConversationSidebar({
   const scheduleKind = (id: string): "patrol" | "timer" | "none" =>
     scheduleKindByConv?.get(id) ?? (patrolIds.has(id) ? "patrol" : "none");
   const isPatrol = (id: string) => scheduleKind(id) === "patrol";
-  // Temporary is exactly what the retention sweep deletes (store.SweepExpired):
-  // unpinned, in no project, not shared by link or with the team, not
-  // Multiplayer, and with no armed or paused patrol or timer.
+  // Temporary is exactly what the server deletes — for inactivity, and by
+  // "Delete temporary chats" (isTemporaryChat mirrors the server's one
+  // definition). The server's listing says which chats a patrol or timer
+  // keeps; the patrols list and what this page knows fill in what changed
+  // since.
   const isTemporary = (c: ConversationSummary) =>
-    !c.pinned &&
-    !c.project_id &&
-    !c.share_token &&
-    !c.team_visible &&
-    !c.multiplayer &&
-    scheduleKind(c.id) === "none";
+    isTemporaryChat({ ...c, has_schedule: c.has_schedule || patrolIds.has(c.id) }, scheduleKindByConv);
+  const ttlDays = serverConfig.conversationTtlDays ?? DEFAULT_TTL_DAYS;
   const canCustomize = useCanCustomize();
   const showSection = (id: SectionId) =>
     canCustomize ? () => updateSidebarLayout((l) => updateSection(l, id, { hidden: false })) : undefined;
@@ -1854,7 +1856,7 @@ export function ConversationSidebar({
     <ConvRow
       key={conversation.id}
       conversation={conversation}
-      temporary={markTemporary && isTemporary(conversation)}
+      temporary={markTemporary && isTemporary(conversation) ? temporaryRowText(ttlDays) : undefined}
       titleNode={inResults ? markMatches(conversation.title, tokens) : undefined}
       context={
         inResults && conversation.project_id
@@ -2738,14 +2740,14 @@ visibleProjectTree.map(({ project, chats }) => {
             " ",
           )}
         >
-          {conversations.some((c) => !c.pinned) ? (
+          {conversations.some(isTemporary) ? (
             <button
               type="button"
               // Red at rest, not only on hover: this deletes many chats at
               // once, so it must not read like the rail's ordinary rows.
               className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[0.75rem] font-medium text-[var(--color-danger-text)] transition hover:bg-[color-mix(in_srgb,var(--color-danger)_12%,transparent)]"
               onClick={() => setConfirmBulkDelete(true)}
-              title={tr("Delete every chat in Temporary")}
+              title={tr("Delete every temporary chat")}
             >
               <Icon name="trash" className="size-3.5 shrink-0" />
               {tr("Delete temporary chats")}
@@ -2798,7 +2800,7 @@ visibleProjectTree.map(({ project, chats }) => {
         {PATROL_ROW_TEXT}
       </span>
       <span id={TEMPORARY_DESC_ID} hidden>
-        {TEMPORARY_ROW_TEXT}
+        {temporaryRowText(ttlDays)}
       </span>
 
       {teamFirst && teamAboveProjects ? teamTop : null}
@@ -3008,9 +3010,9 @@ visibleProjectTree.map(({ project, chats }) => {
                   )}
                   {unified ? tr("Recent") : tr("Temporary")}
                   {unified ? (
-                    <RecentInfoButton text={UNIFIED_INFO_TEXT} label={tr("About this list")} />
+                    <RecentInfoButton text={unifiedInfoText(ttlDays)} label={tr("About this list")} />
                   ) : (
-                    <RecentInfoButton />
+                    <RecentInfoButton text={recentInfoText(ttlDays)} />
                   )}
                   {onRecentSortChange && allRecent.length > 1 ? (
                     // On a touch screen every select is forced to 16px text

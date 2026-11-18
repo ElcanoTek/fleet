@@ -95,7 +95,9 @@ func insertSearchContent(ctx context.Context, tx *sql.Tx, convID string, now int
 //     sealed or deleted). Search asks that function and searches inside its
 //     answer, so the two cannot drift: a chat the Team chats list would not
 //     show can never be found, and revoking a share removes it from search on
-//     the next query.
+//     the next query. Shared results are checked against it a second time
+//     after the search has run, so a share revoked while a query was in
+//     flight is not returned either.
 //
 // Inside a shared conversation only what a teammate may read is matched: its
 // title, and user/assistant text — the rows teamTranscriptEntry passes. A
@@ -190,7 +192,40 @@ LIMIT $4 OFFSET $5`
 	if err := rows.Err(); err != nil {
 		return nil, 0, fmt.Errorf("search rows: %w", err)
 	}
-	return results, total, nil
+
+	// The shared set was read before the search ran. If an owner stopped
+	// sharing in between, the id was still in the list this query trusted, so
+	// before a shared result leaves here its access is checked again, against
+	// the same function: a result is returned only if the chat is shared with
+	// the caller AFTER its content was read. (The caller's own results need
+	// no second look; ownership does not change.)
+	hasShared := false
+	for _, r := range results {
+		if r.OwnerEmail != "" {
+			hasShared = true
+			break
+		}
+	}
+	if !hasShared {
+		return results, total, nil
+	}
+	still, err := s.ListSharedAndMultiplayerConversations(ctx, userEmail)
+	if err != nil {
+		return nil, 0, fmt.Errorf("search shared recheck: %w", err)
+	}
+	allowed := make(map[string]bool, len(still))
+	for i := range still {
+		allowed[still[i].ID] = true
+	}
+	kept := results[:0]
+	for _, r := range results {
+		if r.OwnerEmail != "" && !allowed[r.ConversationID] {
+			total--
+			continue
+		}
+		kept = append(kept, r)
+	}
+	return kept, total, nil
 }
 
 // backfillBatchSize bounds each backfill pass so the index build never holds a

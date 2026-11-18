@@ -61,10 +61,23 @@ sidebar"), which `/help` renders.
   control). Because that list is no longer only temporary chats, each of the
   person's chats that is temporary carries an hourglass that says it is
   deleted after 14 days of inactivity unless pinned or filed, and the
-  heading's explainer says what the hourglass means. Temporary here is
-  exactly what the retention sweep deletes (`store.SweepExpired`): unpinned,
-  in no project, not shared by link or with the team, not Multiplayer, and
-  with no armed or paused patrol or timer. A teammate's row is the Team chats row
+  heading's explainer says what the hourglass means.
+- **Temporary has one definition.** `store.temporaryConversationClause` is
+  what the retention sweep deletes for inactivity, what the per-user cap
+  evicts, and what **Delete temporary chats** removes: unpinned, in no
+  project, not archived, not shared by link or with the team, not
+  Multiplayer, and with no armed or paused patrol or timer. The web client
+  mirrors it in one predicate (`isTemporaryChat`,
+  `deleteAllUnpinnedScope.ts`) used for the hourglass, the confirm dialog's
+  count and the local update after the delete. Two things changed to get
+  there. **Delete temporary chats used to delete every unpinned, unfiled
+  chat**, including a chat shared with the team, a Multiplayer chat other
+  people are in, and a chat with a patrol; it now keeps those, as the sweep
+  always did, and its confirmation says so. And the owner's chat listing
+  carries `has_schedule` (an armed or paused patrol or timer), so a chat
+  with a timer that was never opened on this page is not marked temporary.
+  The period quoted in the rail is the deployment's (`conversation_ttl_days`
+  in `GET /api/config`, from `CONVERSATION_TTL_DAYS`), not a fixed 14. A teammate's row is the Team chats row
   (team glyph, **Live**, owner, its own `⋯` menu). Folding or hiding Chats
   folds or hides teammates' chats with it; search still finds them
   ([SIDEBAR-SEARCH.md](SIDEBAR-SEARCH.md)). Presets keep the choice, like

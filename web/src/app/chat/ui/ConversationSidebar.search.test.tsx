@@ -554,6 +554,26 @@ describe("ConversationSidebar — one list for all chats", () => {
     expect(screen.getByRole("button", { name: "About this list" })).toBeTruthy();
   });
 
+  it("goes by the server's listing for schedules, and quotes this deployment's retention period", async () => {
+    const mine = [
+      conv({ id: "a", title: "Plain chat", updated_at: 30 }),
+      // Never opened on this page: only the listing knows a timer keeps it.
+      conv({ id: "b", title: "Timer from last week", updated_at: 20, has_schedule: true }),
+    ];
+    await renderRail(unifiedLayout(), {
+      overrides: {
+        ...overrides,
+        conversations: mine,
+        filteredConversations: mine,
+        serverConfig: { ...SERVER_CONFIG, conversationTtlDays: 30 },
+      },
+    });
+    const marks = screen.getAllByTestId("temporary-mark");
+    expect(marks.map((m) => m.closest("[data-rail-row]")?.getAttribute("title"))).toEqual(["Plain chat"]);
+    expect(marks[0].getAttribute("title")).toContain("30 days");
+    expect(marks[0].getAttribute("title")).not.toContain("14 days");
+  });
+
   it("is the default, with no saved layout at all", async () => {
     await renderRail(null, { overrides });
     expect(screen.getByTestId("unified-chat-list")).toBeTruthy();

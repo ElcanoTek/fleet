@@ -82,7 +82,10 @@ searches the conversations other people shared with the caller
   caller may take part in; never archived, sealed or deleted. There is no
   second copy of that rule in the search query, so the two cannot drift: a
   chat the Team chats list would not show cannot be found, and a share that
-  is revoked is gone from search on the next query.
+  is revoked is gone from search on the next query. Because the list is read
+  before the query runs, every shared result is checked against it a second
+  time before it is returned: a share revoked while a query is in flight is
+  dropped, not returned.
 - **Only what a teammate may read is matched.** In a shared conversation the
   query matches the title and user/assistant text, the rows
   `teamTranscriptEntry` passes. Tool calls and reasoning were never indexed.

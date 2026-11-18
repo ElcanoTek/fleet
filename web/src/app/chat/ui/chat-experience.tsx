@@ -248,6 +248,9 @@ export type ConversationSummary = {
   // share_token — a chat can be link-shared, team-shared, both, or neither,
   // and the rail badges them distinctly because the audiences differ.
   team_visible?: boolean;
+  // has_schedule: an armed or paused patrol or timer keeps this chat from the
+  // retention sweep (the owner's own listing only).
+  has_schedule?: boolean;
   // multiplayer opts this chat into live collaborative multiplayer mode where
   // teammates and explicitly added participants can send messages directly.
   multiplayer?: boolean;
@@ -277,6 +280,10 @@ export type ServerConfig = {
   // it so oversize files are refused immediately with an explanation
   // instead of failing after a full upload round-trip.
   uploadMaxBytes: number;
+  // conversationTtlDays: days of inactivity before a temporary chat is
+  // deleted (CONVERSATION_TTL_DAYS), for the rail's wording. Absent on an
+  // older server, where the rail states the default.
+  conversationTtlDays?: number;
   teamChatsSharedByDefault?: boolean;
   autonomousAccepted?: boolean;
   autonomousPolicyVersion?: number;
@@ -290,6 +297,7 @@ export function parseServerConfigPayload(cfg: {
   lockdown_only?: boolean;
   lockdown_allowed_models?: string[] | null;
   upload_max_bytes?: number;
+  conversation_ttl_days?: number;
   team_chats_shared_by_default?: boolean;
   autonomous_accepted?: boolean;
   autonomous_policy_version?: number;
@@ -298,6 +306,10 @@ export function parseServerConfigPayload(cfg: {
     lockdownAvailable: cfg.lockdown_available === true,
     lockdownOnly: cfg.lockdown_only === true,
     lockdownAllowedModels: cfg.lockdown_allowed_models ?? [],
+    conversationTtlDays:
+      typeof cfg.conversation_ttl_days === "number" && cfg.conversation_ttl_days > 0
+        ? cfg.conversation_ttl_days
+        : undefined,
     // Older servers don't advertise the cap — keep the client-side default
     // rather than treating it as 0.
     uploadMaxBytes:
@@ -3264,7 +3276,7 @@ export function ChatExperience({
     // the moment a user would panic. The predicate lives in one module shared
     // with the confirm dialog's count, so the two cannot disagree.
     deleteAllUnpinnedSeqRef.current += 1;
-    const remaining = afterDeleteAllUnpinned(conversations);
+    const remaining = afterDeleteAllUnpinned(conversations, scheduleKindByConv);
     setConversations(remaining);
     const active = activeConversationId
       ? remaining.find((c) => c.id === activeConversationId)
@@ -7522,7 +7534,7 @@ export function ChatExperience({
                   clears, and the server exempts it (store.DeleteAllUnpinned)
                   — so counting one here would over-promise a deletion that
                   never happens. */}
-              {tr(countDeletedByDeleteAllUnpinned(conversations) === 1 ? "{0} conversation in Temporary will be deleted. Pinned chats and chats in a project are kept. This can't be undone." : "{0} conversations in Temporary will be deleted. Pinned chats and chats in a project are kept. This can't be undone.", [countDeletedByDeleteAllUnpinned(conversations)])}
+              {tr(countDeletedByDeleteAllUnpinned(conversations, scheduleKindByConv) === 1 ? "{0} temporary conversation will be deleted. Pinned chats, chats in a project, shared chats and chats with a patrol or timer are kept. This can't be undone." : "{0} temporary conversations will be deleted. Pinned chats, chats in a project, shared chats and chats with a patrol or timer are kept. This can't be undone.", [countDeletedByDeleteAllUnpinned(conversations, scheduleKindByConv)])}
             </p>
             <div className="flex items-center justify-end gap-2">
               <button

@@ -3,6 +3,7 @@ import {
   afterDeleteAllUnpinned,
   countDeletedByDeleteAllUnpinned,
   deletedByDeleteAllUnpinned,
+  isTemporaryChat,
   survivesDeleteAllUnpinned,
 } from "./deleteAllUnpinnedScope";
 
@@ -27,6 +28,34 @@ describe("deleteAllUnpinnedScope", () => {
     expect(deletedByDeleteAllUnpinned(unpinnedFiled)).toBe(false);
     expect(deletedByDeleteAllUnpinned(pinnedUnfiled)).toBe(false);
     expect(deletedByDeleteAllUnpinned(pinnedFiled)).toBe(false);
+  });
+
+  it("keeps whatever the server's sweep keeps: shared, Multiplayer and scheduled chats", () => {
+    // store.temporaryConversationClause: none of these is temporary, so
+    // "Delete temporary chats" must not count or drop them.
+    expect(isTemporaryChat({ pinned: false, share_token: "tok" })).toBe(false);
+    expect(isTemporaryChat({ pinned: false, team_visible: true })).toBe(false);
+    expect(isTemporaryChat({ pinned: false, multiplayer: true })).toBe(false);
+    expect(isTemporaryChat({ pinned: false, has_schedule: true })).toBe(false);
+    expect(isTemporaryChat({ pinned: false, share_token: "" })).toBe(true);
+    expect(countDeletedByDeleteAllUnpinned([
+      { id: "a", pinned: false },
+      { id: "b", pinned: false, team_visible: true },
+      { id: "c", pinned: false, has_schedule: true },
+    ])).toBe(1);
+  });
+
+  it("what the page knows of a chat's schedules wins over the listing", () => {
+    const listed = { id: "c1", pinned: false, has_schedule: true };
+    const unlisted = { id: "c2", pinned: false };
+    // The patrol was just ended here; a timer was just set there.
+    const kinds = new Map([
+      ["c1", "none"],
+      ["c2", "timer"],
+    ] as const);
+    expect(isTemporaryChat(listed, kinds)).toBe(true);
+    expect(isTemporaryChat(unlisted, kinds)).toBe(false);
+    expect(afterDeleteAllUnpinned([listed, unlisted], kinds).map((c) => c.id)).toEqual(["c2"]);
   });
 
   it("survives is the exact complement of deleted", () => {

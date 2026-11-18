@@ -50,8 +50,12 @@ type serverConfigResponse struct {
 	// non-lockdown chats created by team members automatically start shared
 	// with their team and unfiled chats can be shared directly with the team.
 	TeamChatsSharedByDefault bool `json:"team_chats_shared_by_default"`
-	AutonomousAccepted       bool `json:"autonomous_accepted"`
-	AutonomousPolicyVersion  int  `json:"autonomous_policy_version"`
+	// ConversationTTLDays: how many days of inactivity before a temporary
+	// chat is deleted (CONVERSATION_TTL_DAYS), so the rail quotes this
+	// deployment's period instead of the default.
+	ConversationTTLDays     int  `json:"conversation_ttl_days"`
+	AutonomousAccepted      bool `json:"autonomous_accepted"`
+	AutonomousPolicyVersion int  `json:"autonomous_policy_version"`
 }
 
 func (s *Server) serverConfig(w http.ResponseWriter, r *http.Request) {
@@ -65,6 +69,7 @@ func (s *Server) serverConfig(w http.ResponseWriter, r *http.Request) {
 		LockdownOnly:             s.cfg.LockdownOnly,
 		UploadMaxBytes:           s.cfg.UploadMaxBytes,
 		TeamChatsSharedByDefault: s.cfg.LiveTeamChatsSharedByDefault(),
+		ConversationTTLDays:      s.cfg.ConversationTTL,
 		AutonomousAccepted:       accepted,
 		AutonomousPolicyVersion:  store.CurrentAutonomousPolicyVersion,
 	}
