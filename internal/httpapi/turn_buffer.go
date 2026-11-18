@@ -15,6 +15,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
+	"github.com/ElcanoTek/fleet/internal/tools"
 )
 
 // eventSinkPersister is the subset of *store.Store the buffer needs
@@ -564,11 +565,26 @@ func inferTerminalStatus(events []bufferedEvent) store.TurnStatus {
 // turn event before it is delivered to viewerEmail:
 //   - user.message: strips injected_context when viewerEmail is not the message
 //     sender (defaulting to convOwnerEmail when sender_email is absent).
+//   - tool and reasoning events: skipped when user_email is another user (a
+//     turn's working trace is private to its sender). The one exception is a
+//     card the assistant showed (sharedCardEntries): its UI_DISPLAYED result
+//     is delivered carrying the call's input, looked up with cardInput, so
+//     the viewer draws the card from that one frame. The call frame itself
+//     is never delivered — whether the card would be shown is not known yet —
+//     so a refused card's raw input stays with its sender.
 //   - queue.updated: skips the event when user_email is set to another user so
 //     one multiplayer participant's queue updates never overwrite another
 //     participant's visible queue, and strips the internal user_email tag when
 //     delivering to the matching user.
 func sanitizeTurnEventForViewer(name string, data []byte, viewerEmail, convOwnerEmail string) ([]byte, bool) {
+	return sanitizeTurnEventForViewerWithCards(name, data, viewerEmail, convOwnerEmail, nil)
+}
+
+// sanitizeTurnEventForViewerWithCards is sanitizeTurnEventForViewer with
+// cardInput: the input of the show_ui call a result answers, from the events
+// that came before it (nil, or not found: the card is not delivered live and
+// the viewer gets it from the history read).
+func sanitizeTurnEventForViewerWithCards(name string, data []byte, viewerEmail, convOwnerEmail string, cardInput func(callID string) (string, bool)) ([]byte, bool) {
 	switch name {
 	case "conversation":
 		return sanitizeConversationEvent(data, viewerEmail, convOwnerEmail)
@@ -615,7 +631,21 @@ func sanitizeTurnEventForViewer(name string, data []byte, viewerEmail, convOwner
 			return data, true
 		}
 		if viewerEmail != "" && !strings.EqualFold(viewerEmail, uEmail) {
-			return nil, false
+			if name != "tool.result" || cardInput == nil {
+				return nil, false
+			}
+			toolName, _ := m["name"].(string)
+			text, _ := m["text"].(string)
+			isErr, _ := m["is_err"].(bool)
+			id, _ := m["id"].(string)
+			if toolName != tools.ShowUIToolName || !isShownCardResult(text, isErr) {
+				return nil, false
+			}
+			input, ok := cardInput(id)
+			if !ok {
+				return nil, false
+			}
+			m["input"] = input
 		}
 		delete(m, "user_email")
 		if b, err := json.Marshal(m); err == nil {
@@ -883,7 +913,7 @@ func (b *turnBuffer) AttachForViewerChecked(ctx context.Context, lastEventID uin
 		if !shouldEmit(caps, e.Name) {
 			continue
 		}
-		sanitizedData, keep := sanitizeTurnEventForViewer(e.Name, e.Data, viewerEmail, convOwnerEmail)
+		sanitizedData, keep := sanitizeTurnEventForViewerWithCards(e.Name, e.Data, viewerEmail, convOwnerEmail, b.cardInputBefore(e.ID))
 		if !keep {
 			continue
 		}
@@ -931,7 +961,7 @@ func (b *turnBuffer) AttachForViewerChecked(ctx context.Context, lastEventID uin
 			if !shouldEmit(caps, ev.Name) {
 				continue
 			}
-			sanitizedData, keep := sanitizeTurnEventForViewer(ev.Name, ev.Data, viewerEmail, convOwnerEmail)
+			sanitizedData, keep := sanitizeTurnEventForViewerWithCards(ev.Name, ev.Data, viewerEmail, convOwnerEmail, b.cardInputBefore(ev.ID))
 			if !keep {
 				continue
 			}
@@ -949,6 +979,46 @@ func (b *turnBuffer) AttachForViewerChecked(ctx context.Context, lastEventID uin
 				return err
 			}
 		}
+	}
+}
+
+// showUICallInput returns the input of the show_ui call that the tool.result
+// frame with id `before` answers: among the earlier frames, the first call
+// with callID that no earlier result has answered (the pairing
+// sharedCardEntries and the web's applyToolResult use for a reused id).
+func showUICallInput(events []bufferedEvent, callID string, before uint64) (string, bool) {
+	var waiting []string
+	for _, e := range events {
+		if e.ID >= before || (e.Name != "tool.call" && e.Name != "tool.result") {
+			continue
+		}
+		var c struct {
+			ID    string `json:"id"`
+			Name  string `json:"name"`
+			Input string `json:"input"`
+		}
+		if json.Unmarshal(e.Data, &c) != nil || c.ID != callID || c.Name != tools.ShowUIToolName {
+			continue
+		}
+		if e.Name == "tool.call" {
+			waiting = append(waiting, c.Input)
+		} else if len(waiting) > 0 {
+			waiting = waiting[1:]
+		}
+	}
+	if len(waiting) == 0 {
+		return "", false
+	}
+	return waiting[0], true
+}
+
+// cardInputBefore is the cardInput lookup for an event of this buffer: the
+// show_ui call a result with id `before` answers, if the window still holds it.
+func (b *turnBuffer) cardInputBefore(before uint64) func(string) (string, bool) {
+	return func(callID string) (string, bool) {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		return showUICallInput(b.events, callID, before)
 	}
 }
 

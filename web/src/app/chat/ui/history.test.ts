@@ -5,6 +5,7 @@ import {
   applyModelRequired,
   applyRetryNotice,
   applyToolResult,
+  cardCallFromResult,
   applyTurnOutcome,
   cachedPercent,
   clearRetryNotice,
@@ -21,6 +22,7 @@ import {
   type HistoryEntry,
   type Message,
   type ModelRequiredEventPayload,
+  type ToolCall,
   type TurnSummary,
 } from "./history";
 import { showsEmptyReplyNotice } from "./transcriptRows";
@@ -209,6 +211,20 @@ describe("historyToMessages", () => {
     const [first, second] = msgs[1].toolCalls ?? [];
     expect(JSON.parse(first.card ?? "{}").title).toBe("First");
     expect(JSON.parse(second.card ?? "{}").title).toBe("Second");
+  });
+
+  it("cardCallFromResult: a result carrying its call's input adds the call once", () => {
+    const shown = { id: "ui1", name: "show_ui", input: "{}" };
+    // Another participant's card: no call frame came first.
+    expect(cardCallFromResult([], shown)).toEqual([{ ...shown, state: "pending" }]);
+    // A call already waiting for this result is the one it answers.
+    const waiting: ToolCall[] = [{ id: "ui1", name: "show_ui", input: "{}", state: "pending" }];
+    expect(cardCallFromResult(waiting, shown)).toBe(waiting);
+    // A settled call with a reused id is an earlier card: this one is new.
+    const settled: ToolCall[] = [{ ...waiting[0], state: "done", resultText: "UI_DISPLAYED" }];
+    expect(cardCallFromResult(settled, shown)).toHaveLength(2);
+    // An ordinary result (no input) never adds a call.
+    expect(cardCallFromResult([], { id: "q1", name: "run_python" })).toEqual([]);
   });
 
   it("applyToolResult: first waiting occurrence, else every call with the id", () => {

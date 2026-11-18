@@ -82,6 +82,23 @@ When an allowed participant submits `POST /chat` on a multiplayer conversation:
   `GET /conversations/{id}/events`. Live and replayed `queue.updated` SSE frames
   are filtered per viewer so one participant's queued drafts never overwrite
   another participant's visible queue.
+- **Working trace is the sender's, shown cards are everyone's:** another
+  sender's tool calls, tool results and reasoning are dropped from a
+  participant's history read and live stream (`isPrivateTurnTraceEntry`,
+  `sanitizeTurnEventForViewer`), so connector responses stay with the person
+  whose credentials fetched them. The one exception is a card the assistant
+  showed: a `show_ui` call paired with its `UI_DISPLAYED` result
+  (`sharedCardEntries`). A shown card is rendered output, like the reply text,
+  and [dashboard view](DASHBOARD-VIEW.md) builds its panels from it; without
+  it a participant's board is empty on a chat whose panels another person's
+  turns built. A card the server refused (`UI_INVALID`) or never answered was
+  not shown, so its raw input stays private. Live, the other participants never
+  receive the `tool.call` frame (the card may yet be refused); they receive the
+  `UI_DISPLAYED` `tool.result` frame with the call's `input` copied onto it,
+  and the web draws the card from that one frame. If the call frame is no
+  longer in the replay window the card is not delivered live and arrives with
+  the next history read. The model replay for a participant's own turn
+  (`redactHistoryForSender`) still omits the whole trace, cards included.
 
 ### Per-instance default (`team_chats_shared_by_default`)
 

@@ -146,11 +146,18 @@ func replayEventsFromDB(w http.ResponseWriter, events []store.TurnEvent, caps ma
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 	_ = writeCapabilitiesFrame(w, flusher)
+	// The replayed events that came before each one, for a shown card's input
+	// (sanitizeTurnEventForViewerWithCards).
+	seen := make([]bufferedEvent, 0, len(events))
 	for _, e := range events {
+		before := seen
+		seen = append(seen, bufferedEvent{ID: e.EventID, Name: e.Name, Data: e.Data})
 		if !shouldEmit(caps, e.Name) {
 			continue
 		}
-		sanitizedData, keep := sanitizeTurnEventForViewer(e.Name, e.Data, viewerEmail, convOwnerEmail)
+		sanitizedData, keep := sanitizeTurnEventForViewerWithCards(e.Name, e.Data, viewerEmail, convOwnerEmail, func(callID string) (string, bool) {
+			return showUICallInput(before, callID, e.EventID)
+		})
 		if !keep {
 			continue
 		}
