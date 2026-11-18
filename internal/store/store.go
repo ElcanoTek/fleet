@@ -207,7 +207,12 @@ type Conversation struct {
 	// Multiplayer is true when teammates / workspace members can jump into this
 	// conversation directly and send messages with their own account and MCP
 	// connectors (migration 093).
-	Multiplayer             bool     `json:"multiplayer,omitempty"`
+	Multiplayer bool `json:"multiplayer,omitempty"`
+	// HasSchedule is true when the conversation has an armed or paused
+	// patrol or timer, which exempts it from the retention sweep. Set only on
+	// the owner's own listing (ListFiltered), so the rail can tell a
+	// temporary chat from one a schedule keeps; never stored.
+	HasSchedule             bool     `json:"has_schedule,omitempty"`
 	MultiplayerParticipants []string `json:"multiplayer_participants,omitempty"`
 	MultiplayerExcluded     []string `json:"multiplayer_excluded,omitempty"`
 	// ParticipantOptionalMCPServers preserves the conversation's optional
@@ -1564,11 +1569,28 @@ func (s *Store) Delete(ctx context.Context, userEmail, convID string) error {
 	return nil
 }
 
-// DeleteAllUnpinned removes every unpinned conversation for a user. Pinned
-// conversations — and archived ones (#282), which the user can't see when
-// triggering this from the sidebar and which represent an intentional "keep"
-// state — are untouched. Returns the count removed. In soft-delete mode it
-// tombstones instead of hard-deleting.
+// temporaryConversationClause is the ONE definition of a temporary
+// conversation: what the retention sweep deletes for inactivity, what the cap
+// evicts, and what "Delete temporary chats" (DeleteAllUnpinned) removes. A
+// chat is temporary unless something keeps it: a pin, the archive, a project,
+// a public link, team visibility, Multiplayer, or an armed or paused patrol
+// or timer. One constant, so the three paths cannot disagree — and so a chat
+// the rail does not mark as temporary is never one of them. The web client
+// mirrors it (web/src/app/chat/ui/deleteAllUnpinnedScope.ts).
+const temporaryConversationClause = `pinned = FALSE AND archived_at IS NULL AND deleted_at IS NULL AND share_token IS NULL AND project_id IS NULL` +
+	` AND COALESCE(multiplayer, FALSE) = FALSE AND COALESCE(team_visible, FALSE) = FALSE` +
+	` AND NOT EXISTS (SELECT 1 FROM ` + chatSchedulesTable + ` cs WHERE cs.conversation_id = conversations.id AND cs.status IN ('active', 'paused'))`
+
+// DeleteAllUnpinned removes every TEMPORARY conversation of a user
+// (temporaryConversationClause) — the sidebar's "Delete temporary chats".
+// Pinned conversations — and archived ones (#282), which the user can't see
+// when triggering this from the sidebar and which represent an intentional
+// "keep" state — are untouched, and so is every chat something else keeps: a
+// chat shared by link or with the team, a Multiplayer chat other people are
+// in, and a chat with an armed or paused patrol or timer. It used to delete
+// those too, which made "delete temporary chats" remove chats the retention
+// sweep itself would never touch. Returns the count removed. In soft-delete
+// mode it tombstones instead of hard-deleting.
 //
 // Project conversations are exempt too (#509), keying the same way the rail's
 // Temporary section and the retention sweep already do: filing a chat into a
@@ -1580,7 +1602,7 @@ func (s *Store) DeleteAllUnpinned(ctx context.Context, userEmail string) (int, e
 	if s.softDelete {
 		res, err := s.db.ExecContext(ctx,
 			`UPDATE conversations SET deleted_at = NOW(), updated_at = $1
-			 WHERE user_email = $2 AND pinned = FALSE AND archived_at IS NULL AND deleted_at IS NULL AND project_id IS NULL`,
+			 WHERE user_email = $2 AND `+temporaryConversationClause+``,
 			time.Now().Unix(), userEmail,
 		)
 		if err != nil {
@@ -1590,7 +1612,7 @@ func (s *Store) DeleteAllUnpinned(ctx context.Context, userEmail string) (int, e
 		return int(n), nil
 	}
 	res, err := s.db.ExecContext(ctx,
-		`DELETE FROM conversations WHERE user_email = $1 AND pinned = FALSE AND archived_at IS NULL AND project_id IS NULL`,
+		`DELETE FROM conversations WHERE user_email = $1 AND `+temporaryConversationClause+``,
 		userEmail,
 	)
 	if err != nil {
@@ -1770,7 +1792,47 @@ func (s *Store) ListFiltered(ctx context.Context, userEmail string, f ListFilter
 		return nil, err
 	}
 	defer rows.Close()
-	return scanConversationRows(rows)
+	list, err := scanConversationRows(rows)
+	if err != nil {
+		return nil, err
+	}
+	// Which of them an armed or paused patrol or timer keeps. One extra
+	// read for the listing, so the rail never marks a scheduled chat as
+	// temporary (and never counts it for "Delete temporary chats").
+	scheduled, err := s.conversationsWithLiveSchedule(ctx, userEmail)
+	if err != nil {
+		return nil, err
+	}
+	for i := range list {
+		list[i].HasSchedule = scheduled[list[i].ID]
+	}
+	return list, nil
+}
+
+// conversationsWithLiveSchedule returns the ids of userEmail's conversations
+// that have an armed or paused patrol or timer — the schedule clause of
+// temporaryConversationClause, read for a whole listing at once.
+func (s *Store) conversationsWithLiveSchedule(ctx context.Context, userEmail string) (map[string]bool, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT DISTINCT cs.conversation_id
+		   FROM `+chatSchedulesTable+` cs
+		   JOIN conversations c ON c.id = cs.conversation_id
+		  WHERE c.user_email = $1 AND c.deleted_at IS NULL AND cs.status IN ('active', 'paused')`,
+		userEmail,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]bool{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out[id] = true
+	}
+	return out, rows.Err()
 }
 
 // conversationColumns is the SELECT list (in scan order) every conversation query
@@ -2772,16 +2834,14 @@ func (s *Store) SweepExpired(ctx context.Context, ttl time.Duration, unpinnedCap
 
 	// 1. TTL sweep. Conversations with an active or paused patrol/timer schedule
 	//    are exempt just like pinned/project conversations so a scheduled patrol
-	//    is never reaped between runs.
-	const noActiveScheduleClause = `NOT EXISTS (SELECT 1 FROM ` + chatSchedulesTable + ` cs WHERE cs.conversation_id = conversations.id AND cs.status IN ('active', 'paused'))`
-	const notSharedOrMultiplayerClause = `COALESCE(multiplayer, FALSE) = FALSE AND COALESCE(team_visible, FALSE) = FALSE`
+	//    is never reaped between runs (temporaryConversationClause).
 	if s.softDelete {
 		// Tombstone instead of hard-delete: the row survives for the 30-day
 		// restore window. Only touches live rows (deleted_at IS NULL) so a
 		// re-sweep never re-tombstones.
 		res, err := s.db.ExecContext(ctx,
 			`UPDATE conversations SET deleted_at = NOW(), updated_at = $1
-			 WHERE pinned = FALSE AND archived_at IS NULL AND deleted_at IS NULL AND share_token IS NULL AND project_id IS NULL AND `+notSharedOrMultiplayerClause+` AND `+noActiveScheduleClause+` AND updated_at < $2`,
+			 WHERE `+temporaryConversationClause+` AND updated_at < $2`,
 			time.Now().Unix(), cutoff,
 		)
 		if err != nil {
@@ -2791,7 +2851,7 @@ func (s *Store) SweepExpired(ctx context.Context, ttl time.Duration, unpinnedCap
 		expired += int(n)
 	} else {
 		res, err := s.db.ExecContext(ctx,
-			`DELETE FROM conversations WHERE pinned = FALSE AND archived_at IS NULL AND deleted_at IS NULL AND share_token IS NULL AND project_id IS NULL AND `+notSharedOrMultiplayerClause+` AND `+noActiveScheduleClause+` AND updated_at < $1`,
+			`DELETE FROM conversations WHERE `+temporaryConversationClause+` AND updated_at < $1`,
 			cutoff,
 		)
 		if err != nil {
@@ -2818,7 +2878,7 @@ func (s *Store) SweepExpired(ctx context.Context, ttl time.Duration, unpinnedCap
 		            PARTITION BY user_email ORDER BY updated_at DESC, id DESC
 		        ) AS rn
 		        FROM conversations
-		        WHERE pinned = FALSE AND archived_at IS NULL AND deleted_at IS NULL AND share_token IS NULL AND project_id IS NULL AND `+notSharedOrMultiplayerClause+` AND `+noActiveScheduleClause+`
+		        WHERE `+temporaryConversationClause+`
 		    ) ranked
 		    WHERE rn > $1
 		 )`,

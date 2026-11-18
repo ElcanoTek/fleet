@@ -11,10 +11,12 @@ sidebar"), which `/help` renders.
 
 ## What shipped
 
-- **The default is unchanged.** With no saved layout the rail renders exactly
-  what it did: Chat, Patrols and Background tasks with their subtitles and
-  test ids, then Projects, Chats and Team chats. Nobody's rail moves until
-  they (or an admin) change it.
+- **The default.** With no saved layout the rail renders Chat, Patrols and
+  Background tasks with their subtitles and test ids, then Projects and
+  Chats. Until one list for all chats (below) the default also had a Team
+  chats section; that is now a choice, and the one change the default has
+  seen: every other part of a rail stays as it was until its owner (or an
+  admin) changes it.
 - **Destinations and shortcuts in one ordered list** (`RailNav.tsx`). The
   three built-in destinations can be moved, renamed, given another icon, or
   hidden. Next to them a person pins shortcuts: a chat, a patrol (a chat), a
@@ -40,6 +42,63 @@ sidebar"), which `/help` renders.
   None of this affects search: while the search field holds text the
   sections step aside for one list of results drawn from all of them, hidden
   and folded ones included ([SIDEBAR-SEARCH.md](SIDEBAR-SEARCH.md)).
+- **One list for all chats** is the default. Teammates' shared and
+  multiplayer chats are listed inside the Chats section with the person's
+  own, and Team chats has no section of its own. The layout stores the
+  opposite choice, `separate_lists: true`, so a layout that says nothing —
+  the built-in one, a workspace default, and every layout saved before the
+  choice existed — is one list. That is deliberate: the separate, foldable
+  Team chats section is where people lost their teammates' chats
+  ([SIDEBAR-SEARCH.md](SIDEBAR-SEARCH.md)), so the fix reaches the people
+  who already had it folded. **One list for all chats** in the Customize
+  panel switches it off, which restores the Team chats section and the
+  Temporary group exactly as they were. In one list the Team chats entry of
+  the panel shows "In Chats"; its order, name and fold are kept but not
+  used, and its show/hide switch still works: a person who hid Team chats
+  sees no teammates' chats in the list. Pinned chats keep their group at the top, with its
+  reorder mode. Below it, one **Recent** list holds the person's unpinned,
+  unfiled chats and teammates' chats under one sort (the Temporary sort
+  control). Because that list is no longer only temporary chats, each of the
+  person's chats that is temporary carries an hourglass that says it is
+  deleted after 14 days of inactivity unless pinned or filed, and the
+  heading's explainer says what the hourglass means.
+- **Temporary has one definition.** `store.temporaryConversationClause` is
+  what the retention sweep deletes for inactivity, what the per-user cap
+  evicts, and what **Delete temporary chats** removes: unpinned, in no
+  project, not archived, not shared by link or with the team, not
+  Multiplayer, and with no armed or paused patrol or timer. The web client
+  mirrors it in one predicate (`isTemporaryChat`,
+  `deleteAllUnpinnedScope.ts`) used for the hourglass, the confirm dialog's
+  count and the local update after the delete. Two things changed to get
+  there. **Delete temporary chats used to delete every unpinned, unfiled
+  chat**, including a chat shared with the team, a Multiplayer chat other
+  people are in, and a chat with a patrol; it now keeps those, as the sweep
+  always did, and its confirmation says so. And the owner's chat listing
+  carries `has_schedule` (an armed or paused patrol or timer), so a chat
+  with a timer that was never opened on this page is not marked temporary.
+  The period quoted in the rail is the deployment's (`conversation_ttl_days`
+  in `GET /api/config`, from `CONVERSATION_TTL_DAYS`), not a fixed 14. A teammate's row is the Team chats row
+  (team glyph, **Live**, owner, its own `⋯` menu). Folding or hiding Chats
+  folds or hides teammates' chats with it; search still finds them
+  ([SIDEBAR-SEARCH.md](SIDEBAR-SEARCH.md)). Presets keep the choice, like
+  shortcuts. Deliberately unchanged: a project's chats stay under their
+  project (in the rail a project chat lives only there), `j`/`k` walk the
+  person's own rows, and select mode selects only their own.
+- **Row marks: patrol and temporary.** A chat with an armed or paused patrol
+  carries a patrol mark (the `activity` icon a pinned patrol has in the rail)
+  on its row in every list: Pinned, Temporary, a project, Team chats, the one
+  list, and search results. Which chats are patrols comes from one read of
+  `GET /api/patrols` per page; what the page itself knows of a chat's
+  schedules (read when the chat is opened, updated as a patrol is made,
+  paused or ended) wins over it, so a new patrol is marked without a reload.
+  Temporary is an hourglass (`HourglassGlyph`), on the Temporary heading and
+  on the one list's temporary rows. It is not a clock because the clock is
+  the patrol control in the chat's toolbar: a clock on a row read as "runs on
+  a schedule". Flag's sprite has no hourglass, so this glyph is drawn beside
+  `TeamGlyph` and is to be upstreamed to Flag. Not done: a mark for a chat
+  that has a populated dashboard. The board is derived from the transcript
+  ([DASHBOARD-VIEW.md](DASHBOARD-VIEW.md)), which the chat list does not
+  carry, so it needs a server-side flag on the conversation first.
 - **Compact** hides the one-line subtitles.
 - **The Customize panel** (`SidebarCustomizer.tsx`, `SidebarEditor.tsx`) is a
   *non-modal* sheet: the rail stays visible and usable beside it, so every edit

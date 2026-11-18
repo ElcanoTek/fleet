@@ -55,6 +55,30 @@ func TestParseContractExample(t *testing.T) {
 	}
 }
 
+// SeparateLists (a Team chats section of its own, instead of one list for all
+// chats) is a plain view flag: kept when set, omitted when not — so a layout
+// saved before the field existed reads as one list — and stable under
+// re-normalizing.
+func TestNormalizeKeepsSeparateLists(t *testing.T) {
+	t.Parallel()
+	l, err := Parse([]byte(`{"version":1,"items":[],"sections":[],"separate_lists":true}`))
+	if err != nil || !l.SeparateLists {
+		t.Fatalf("Parse = %+v, %v; want separate lists", l, err)
+	}
+	got, _ := json.Marshal(l)
+	if !strings.Contains(string(got), `"separate_lists":true`) {
+		t.Errorf("normalized layout dropped separate_lists: %s", got)
+	}
+	again, err := Parse(got)
+	if err != nil || !reflect.DeepEqual(again, l) {
+		t.Errorf("re-normalize = %+v, %v; want %+v", again, err, l)
+	}
+	off, _ := Normalize(Layout{Version: 1})
+	if raw, _ := json.Marshal(off); strings.Contains(string(raw), "separate_lists") {
+		t.Errorf("a layout without separate_lists serializes it: %s", raw)
+	}
+}
+
 func TestNormalizeFillsDefaults(t *testing.T) {
 	t.Parallel()
 	l, err := Normalize(Layout{Version: 1})

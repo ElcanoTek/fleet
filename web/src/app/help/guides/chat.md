@@ -353,10 +353,10 @@ the rail**, below the table). Below that, conversations are grouped:
 | Group | What it holds |
 | --- | --- |
 | **Projects** | Workspaces with standing instructions, shared learnings, and their own conversations. A project shared with your team carries a team glyph. See [Memory and projects](#7-memory-and-projects). |
-| **Team chats** | Conversations shared with you or open in **Multiplayer mode** from teammates, with the owner's short name and a **Live** badge when multiplayer is on. Each row's `⋮` menu holds **Add to sidebar** (not on a read-only **Viewer** account) and **Copy link**: for a chat shared with your team, the team link, which opens it for anyone on your team; for a chat you were added to in Multiplayer, its chat link, which opens it for the people in it. |
+| **Team chats** | Conversations shared with you or open in **Multiplayer mode** from teammates. By default they are listed in **Recent**, among your own chats, each with a team mark, the owner's short name and a **Live** badge when multiplayer is on; with **One list for all chats** switched off they have a **Team chats** list of their own. Each row's `⋮` menu holds **Add to sidebar** (not on a read-only **Viewer** account) and **Copy link**: for a chat shared with your team, the team link, which opens it for anyone on your team; for a chat you were added to in Multiplayer, its chat link, which opens it for the people in it. |
 | **Pinned** | Conversations you have chosen to keep. Pinned conversations never expire. With two or more, **Reorder** in the heading lets you put them in your own order (see [Ordering your chats](#ordering-your-chats)). |
 | **Labels** | Your labels, each a filter. Click one to show only conversations carrying it; click several to narrow further. |
-| **Temporary** | Everything else, most recently active first; the menu beside the heading can sort it by **Newest first** or **Title A–Z** instead. Chats here are deleted after a period of inactivity (14 days on a default deployment); the ⓘ beside the heading says so. Pin a chat or move it into a project to keep it. **Delete temporary chats**, in red at the bottom of the sidebar, deletes them all at once after you confirm. |
+| **Recent** | Your other chats and your teammates' shared chats, in one list, most recently active first; the menu beside the heading can sort it by **Newest first** or **Title A–Z** instead. Each chat of yours that is temporary carries an hourglass: it is deleted after a period of inactivity (14 days on a default deployment), and the ⓘ beside the heading says so. Pin a chat or move it into a project to keep it; a chat with a patrol, and a chat you have shared, is kept too. **Delete temporary chats**, in red at the bottom of the sidebar, deletes them all at once after you confirm. With **One list for all chats** switched off, this group is headed **Temporary** and holds only your own chats. |
 | **Archived** | Collapsed by default. Conversations you have put away but not deleted; open the group to bring one back. |
 
 **Searching the rail.** Type in the search field and the groups above step aside for one list of
@@ -369,15 +369,16 @@ Clear the field and the rail returns exactly as you left it.
   accents do not matter. The matched words are highlighted.
 - Results are grouped by where they live — **Chats**, **Team chats**,
   **Projects**, **Archived** — each with a count. A chat in a project shows
-  the project's name before its title, and a patrol chat is tagged
-  **Patrol**.
+  the project's name before its title, and a patrol chat carries its patrol
+  mark.
 - A teammate's chat is also found by its owner: type a colleague's name to
   see the chats they shared.
 - **In messages** lists chats where the words appear in the conversation
   itself, with the matching line beneath. This covers your own chats,
-  archived ones included (tagged **Archived**); teammates' chats are found by
-  title and owner only. A deployment can switch message search off, in which
-  case this group does not appear.
+  archived ones included (tagged **Archived**), and the chats shared with
+  you: the ones in **Team chats**, shown with their owner's name. In a shared
+  chat it searches what was asked and answered. A deployment can switch
+  message search off, in which case this group does not appear.
 - If a result comes from a list you have hidden, the group says **Hidden in
   your sidebar** and offers **Show it**, which puts that list back in your
   sidebar (not offered on a read-only **Viewer** account).
@@ -386,9 +387,13 @@ Clear the field and the rail returns exactly as you left it.
 - When nothing matches, the rail says so and **Clear search** empties the
   field.
 
-A chat row can carry two small badges, each labeled with its audience when you
-hover: one means it is shared by link, the other that it is shared with your
-team. Click a project's name to open its home (and expand it); the chevron only
+A chat row can carry small marks, each labeled when you hover. Two say who
+can see it: one means it is shared by link, the other that it is shared with
+your team. A pulse line marks a **patrol** chat, one with a patrol that is
+running or paused, wherever the chat is listed; a chat with a patrol is kept,
+not deleted for inactivity. The hourglass means the opposite: the chat is
+temporary (it is on each temporary chat in **Recent**, and beside the
+**Temporary** heading when you use separate lists). Click a project's name to open its home (and expand it); the chevron only
 folds it. Hovering a project shows its menu: **Open project**, **New chat**,
 **Reorder chats** (when it holds two or more of your chats), and, for the
 owner, **Share…** and **Project settings…**. See [Keeping, shaping, and sharing conversations](#8-keeping-shaping-and-sharing-conversations).
@@ -498,6 +503,19 @@ A read-only **Viewer** account can open the panel but not change anything.
   **Chats** and **Team chats** lists. Search still finds what is in a hidden
   or folded list. A hidden Chats list still leaves the
   **+** for a new chat.
+- **One list for all chats**, in the same part of the panel, lists your
+  teammates' shared chats together with your own instead of in a **Team
+  chats** list of their own. Your pinned chats stay in **Pinned** at the top;
+  below them, one **Recent** list holds the rest of your chats and your
+  teammates', sorted together (most recently active first, or by the sort
+  you pick beside the heading). A teammate's row keeps its team mark and the
+  owner's name. Each chat of yours that is temporary carries a small hourglass:
+  it is deleted after a period of inactivity (14 days on a default
+  deployment) unless you pin it or move it into a project. Chats in a
+  project stay under their project. On by default; switch it off to give
+  your teammates' chats a **Team chats** list of their own, with **Temporary**
+  holding only your own chats. Hiding **Team chats** in this panel keeps
+  teammates' chats out of the list either way.
 - **Compact** shows one line per item, without the descriptions.
 
 **Add to sidebar** in a chat's menu, or in a project's menu, pins it without
@@ -1400,7 +1418,8 @@ up to 500 chats at a time, and not to a read-only (viewer) account, which
 cannot save an order. In a project you order your own chats; each teammate
 orders theirs.
 
-**Temporary** chats have a sort instead, in the menu beside the heading:
+The **Recent** list (headed **Temporary** with separate lists) has a sort
+instead, in the menu beside the heading:
 **Recent activity** (the default), **Newest first** (by when the chat was
 started) or **Title A–Z**. The choice is remembered on this device. Temporary
 chats expire when left alone, so they are sorted rather than hand-placed; to

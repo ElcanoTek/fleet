@@ -161,6 +161,12 @@ function layoutWith(patches: Partial<Record<SectionId, { hidden?: boolean; colla
   return layout;
 }
 
+// The same, for a person who chose separate lists: Team chats is a section of
+// its own, with its own fold.
+function separateLayout(patches: Parameters<typeof layoutWith>[0] = {}) {
+  return { ...layoutWith(patches), separate_lists: true };
+}
+
 function stubFetch(layout: unknown, messageHits: unknown[] = []) {
   const calls: { url: string; method: string; body?: string }[] = [];
   vi.stubGlobal(
@@ -255,15 +261,41 @@ describe("ConversationSidebar — search looks everywhere", () => {
     expect(within(group("team")).getByText("Launch checklist")).toBeTruthy();
   });
 
-  it("tags a patrol chat once the patrols are known", async () => {
+  it("marks a patrol chat, in the lists and in the results, once the patrols are known", async () => {
     await renderRail(null);
+    // In the ordinary list, before any search.
+    await waitFor(() => expect(screen.getAllByTestId("patrol-mark")).toHaveLength(1));
+    expect(screen.getByTestId("patrol-mark").closest("[data-rail-row]")?.getAttribute("title")).toBe(
+      "Morning pacing patrol",
+    );
+    const mark = screen.getByTestId("patrol-mark");
+    expect(mark.getAttribute("title")).toContain("schedule");
+    // The mark does not rename the row: it is the row's description.
+    const row = screen.getByRole("button", { name: "Morning pacing patrol" });
+    expect(document.getElementById(row.getAttribute("aria-describedby") ?? "")?.textContent).toContain("schedule");
     type("morning");
-    await waitFor(() => expect(within(group("chats")).getByText("Patrol")).toBeTruthy());
+    expect(within(group("chats")).getByTestId("patrol-mark")).toBeTruthy();
+  });
+
+  it("what the page knows of a chat's schedules wins over the patrols list", async () => {
+    await renderRail(null, {
+      overrides: {
+        // own-patrol's patrol was just ended here; own-1 just got one.
+        scheduleKindByConv: new Map([
+          ["own-patrol", "none"],
+          ["own-1", "patrol"],
+        ]),
+      },
+    });
+    await waitFor(() => expect(screen.getAllByTestId("patrol-mark")).toHaveLength(1));
+    expect(screen.getByTestId("patrol-mark").closest("[data-rail-row]")?.getAttribute("title")).toBe(
+      "Budget pacing review",
+    );
   });
 
   it("shows results when every section is folded", async () => {
     await renderRail(
-      layoutWith({ chats: { collapsed: true }, team: { collapsed: true }, projects: { collapsed: true } }),
+      separateLayout({ chats: { collapsed: true }, team: { collapsed: true }, projects: { collapsed: true } }),
     );
     // Folded: nothing listed until the search.
     expect(screen.queryByTestId("team-shared-conv-row")).toBeNull();
@@ -277,7 +309,7 @@ describe("ConversationSidebar — search looks everywhere", () => {
 
   it("finds chats in hidden sections, says they are hidden, and brings a section back", async () => {
     const { calls } = await renderRail(
-      layoutWith({ chats: { hidden: true }, team: { hidden: true }, projects: { hidden: true } }),
+      separateLayout({ chats: { hidden: true }, team: { hidden: true }, projects: { hidden: true } }),
     );
     expect(screen.queryByTestId("team-chats-section")).toBeNull();
     type("pacing");
@@ -397,6 +429,186 @@ describe("ConversationSidebar — search looks everywhere", () => {
     fireEvent.click(within(empty).getByRole("button", { name: "Clear search" }));
     expect((search() as HTMLInputElement).value).toBe("");
     expect(screen.queryByTestId("search-results")).toBeNull();
-    expect(screen.getByTestId("team-chats-section")).toBeTruthy();
+    expect(screen.getByTestId("unified-chat-list")).toBeTruthy();
   });
 });
+
+describe("ConversationSidebar — shared chats in message search", () => {
+  it("shows whose chat a shared hit is and opens it through the shared door", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const { spies } = await renderRail(null, {
+        messageHits: [
+          // In the loaded Team chats list, but matched by its text only.
+          { conversation_id: "team-2", title: "Launch checklist", match_preview: "the <mark>rollback</mark> plan", matched_at: 1, user_email: "lee@example.com" },
+          // Shared, but not in the list this page holds.
+          { conversation_id: "team-9", title: "Postmortem", match_preview: "a <mark>rollback</mark>", matched_at: 7, user_email: "kim@example.com" },
+        ],
+      });
+      type("rollback");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(350);
+      });
+      const hits = within(group("messages")).getAllByTestId("search-result");
+      expect(hits.map((h) => h.textContent)).toEqual(["Launch checklistleethe rollback plan", "Postmortemkima rollback"]);
+
+      fireEvent.click(hits[0]);
+      expect(spies.onSelectTeamSharedConversation).toHaveBeenLastCalledWith(TEAM[1]);
+      fireEvent.click(hits[1]);
+      expect(spies.onSelectTeamSharedConversation).toHaveBeenLastCalledWith(
+        expect.objectContaining({ id: "team-9", title: "Postmortem", user_email: "kim@example.com" }),
+      );
+      expect(spies.loadConversation).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not repeat a shared chat already listed by its title", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      await renderRail(null, {
+        messageHits: [
+          { conversation_id: "team-1", title: "Quarterly pacing plan", match_preview: "<mark>pacing</mark>", matched_at: 1, user_email: "dana@example.com" },
+        ],
+      });
+      type("pacing");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(350);
+      });
+      expect(within(group("team")).getAllByTestId("team-shared-conv-row")).toHaveLength(1);
+      expect(screen.queryByTestId("search-group-messages")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("ConversationSidebar — one list for all chats", () => {
+  // One list is the default: a layout that says nothing about it.
+  const unifiedLayout = (patches: Parameters<typeof layoutWith>[0] = {}) => layoutWith(patches);
+  // Activity order across own and team chats: team-2, own-1, team-1, own-patrol.
+  const own = [
+    conv({ id: "own-1", title: "Budget pacing review", updated_at: 300 }),
+    conv({ id: "own-2", title: "Résumé notes", pinned: true, updated_at: 900 }),
+    conv({ id: "own-3", title: "Pacing in the project", project_id: "p-1", updated_at: 800 }),
+    conv({ id: "own-patrol", title: "Morning pacing patrol", updated_at: 100 }),
+  ];
+  const team = [
+    conv({ id: "team-1", title: "Quarterly pacing plan", user_email: "dana@example.com", team_visible: true, updated_at: 200 }),
+    conv({ id: "team-2", title: "Launch checklist", user_email: "lee@example.com", multiplayer: true, updated_at: 400 }),
+  ];
+  const overrides = { conversations: own, filteredConversations: own, teamSharedConversations: team };
+
+  it("lists own and teammates' chats together, by activity, with no Team chats section", async () => {
+    const { spies } = await renderRail(unifiedLayout(), { overrides });
+    expect(screen.queryByTestId("team-chats-section")).toBeNull();
+    const list = screen.getByTestId("unified-chat-list");
+    const titles = Array.from(list.querySelectorAll("[data-rail-row]")).map((b) => b.getAttribute("title"));
+    expect(titles).toEqual([
+      "Launch checklist (lee@example.com)",
+      "Budget pacing review",
+      "Quarterly pacing plan (dana@example.com)",
+      "Morning pacing patrol",
+    ]);
+    // Pinned chats keep their own group; a project's chats stay in the project.
+    expect(within(screen.getByTestId("pinned-section")).getByTitle("Résumé notes")).toBeTruthy();
+    expect(within(list).queryByTitle("Pacing in the project")).toBeNull();
+    // A teammate's row still opens as a team chat.
+    fireEvent.click(within(list).getByTitle("Launch checklist (lee@example.com)"));
+    expect(spies.onSelectTeamSharedConversation).toHaveBeenCalledWith(team[1]);
+  });
+
+  it("marks the person's temporary chats, and only those", async () => {
+    const mine = [
+      ...own,
+      // Kept by the server's sweep, so not temporary: shared by link, shared
+      // with the team, Multiplayer.
+      conv({ id: "own-link", title: "Shared by link", share_token: "tok", updated_at: 90 }),
+      conv({ id: "own-team", title: "Shared with team", team_visible: true, updated_at: 80 }),
+      conv({ id: "own-live", title: "My multiplayer", multiplayer: true, updated_at: 70 }),
+      conv({ id: "own-timer", title: "Has a timer", updated_at: 60 }),
+    ];
+    await renderRail(unifiedLayout(), {
+      overrides: {
+        ...overrides,
+        conversations: mine,
+        filteredConversations: mine,
+        scheduleKindByConv: new Map([["own-timer", "timer"]]),
+      },
+    });
+    const list = screen.getByTestId("unified-chat-list");
+    const titlesOf = (testId: string) =>
+      Array.from(list.querySelectorAll(`[data-testid="${testId}"]`)).map((m) =>
+        m.closest("[data-rail-row]")?.getAttribute("title"),
+      );
+    // A patrol chat is kept while its patrol is armed or paused: it carries
+    // the patrol mark, never the hourglass.
+    await waitFor(() => expect(titlesOf("patrol-mark")).toEqual(["Morning pacing patrol"]));
+    expect(titlesOf("temporary-mark")).toEqual(["Budget pacing review"]);
+    expect(within(list).getAllByTestId("temporary-mark")[0].getAttribute("title")).toContain("14 days");
+    const row = screen.getByRole("button", { name: "Budget pacing review" });
+    expect(document.getElementById(row.getAttribute("aria-describedby") ?? "")?.textContent).toContain("14 days");
+    // Pinned chats are kept, so they carry no mark.
+    expect(screen.getByTestId("pinned-section").querySelector('[data-testid="temporary-mark"]')).toBeNull();
+    expect(screen.getByRole("button", { name: "About this list" })).toBeTruthy();
+  });
+
+  it("goes by the server's listing for schedules, and quotes this deployment's retention period", async () => {
+    const mine = [
+      conv({ id: "a", title: "Plain chat", updated_at: 30 }),
+      // Never opened on this page: only the listing knows a timer keeps it.
+      conv({ id: "b", title: "Timer from last week", updated_at: 20, has_schedule: true }),
+    ];
+    await renderRail(unifiedLayout(), {
+      overrides: {
+        ...overrides,
+        conversations: mine,
+        filteredConversations: mine,
+        serverConfig: { ...SERVER_CONFIG, conversationTtlDays: 30 },
+      },
+    });
+    const marks = screen.getAllByTestId("temporary-mark");
+    expect(marks.map((m) => m.closest("[data-rail-row]")?.getAttribute("title"))).toEqual(["Plain chat"]);
+    expect(marks[0].getAttribute("title")).toContain("30 days");
+    expect(marks[0].getAttribute("title")).not.toContain("14 days");
+  });
+
+  it("is the default, with no saved layout at all", async () => {
+    await renderRail(null, { overrides });
+    expect(screen.getByTestId("unified-chat-list")).toBeTruthy();
+    expect(screen.queryByTestId("team-chats-section")).toBeNull();
+  });
+
+  it("a person who hid Team chats sees none of them in the list, and search still finds them", async () => {
+    await renderRail(unifiedLayout({ team: { hidden: true } }), { overrides });
+    const list = screen.getByTestId("unified-chat-list");
+    expect(within(list).queryByTestId("team-shared-conv-row")).toBeNull();
+    expect(within(list).getByTitle("Budget pacing review")).toBeTruthy();
+    type("launch");
+    fireEvent.click(await within(group("team")).findByRole("button", { name: "Show Team chats in the sidebar" }));
+    expect(getSidebarState().layout.sections.find((x) => x.id === "team")?.hidden).toBeFalsy();
+    type("");
+    expect(within(screen.getByTestId("unified-chat-list")).getAllByTestId("team-shared-conv-row")).toHaveLength(2);
+  });
+
+  it("separate lists are one switch away: no marks, a Temporary group, a Team chats section", async () => {
+    await renderRail(separateLayout(), { overrides });
+    expect(screen.queryByTestId("unified-chat-list")).toBeNull();
+    expect(screen.queryByTestId("temporary-mark")).toBeNull();
+    expect(screen.getByTestId("team-chats-section")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "About temporary chats" })).toBeTruthy();
+  });
+
+  it("a hidden Chats list is what hides teammates' chats, and search says so", async () => {
+    await renderRail(unifiedLayout({ chats: { hidden: true } }), { overrides });
+    expect(screen.queryByTestId("unified-chat-list")).toBeNull();
+    type("launch");
+    expect(within(group("team")).getByText("Launch", { exact: false })).toBeTruthy();
+    expect(await within(group("team")).findByRole("button", { name: "Show Team chats in the sidebar" })).toBeTruthy();
+    fireEvent.click(within(group("team")).getByRole("button", { name: "Show Team chats in the sidebar" }));
+    expect(getSidebarState().layout.sections.find((x) => x.id === "chats")?.hidden).toBeFalsy();
+    expect(getSidebarState().layout.separate_lists).toBeUndefined();
+  });
+});
+

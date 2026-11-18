@@ -23,8 +23,12 @@ const (
 )
 
 // search handles GET /search?q=…&type=conversations&limit=20&offset=0 — ranked
-// full-text matches across the authenticated user's conversation titles and
-// message content. Returns 404 when FLEET_SEARCH_ENABLED=false.
+// full-text matches across the conversations the authenticated user may read:
+// their own (titles and message content), and the ones shared with them
+// (team-visible or Multiplayer; titles and user/assistant text), which carry
+// the owner's email. The store decides the shared set with the Team chats
+// list's own rule (store.SearchConversations). Returns 404 when
+// FLEET_SEARCH_ENABLED=false.
 //
 // Paging follows the scheduler's contract (sched/handlers/paging.go): absent
 // limit/offset take their defaults; a present value that is not an integer,

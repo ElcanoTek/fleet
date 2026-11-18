@@ -54,12 +54,13 @@ import type {
 } from "./chat-experience";
 import type { Project } from "./ProjectsModal";
 import { previewNodes, type SearchResult } from "./SearchBar";
-import { ShareGlyph, TeamGlyph } from "./ShareGlyphs";
+import { isTemporaryChat } from "./deleteAllUnpinnedScope";
+import { HourglassGlyph, ShareGlyph, TeamGlyph, UnarchiveGlyph } from "./ShareGlyphs";
 import { teamLinkUrl } from "./teamSharing";
 import { copyText } from "@/app/shared/lib/clipboard";
 import { ChatReorderList } from "./ChatReorderList";
 import { AddToSidebarItem } from "@/app/shared/sidebar/AddToSidebarItem";
-import { sectionOf, updateSection, type SectionId } from "@/app/shared/sidebar/layout";
+import { defaultIcon, sectionOf, updateSection, type SectionId } from "@/app/shared/sidebar/layout";
 import { updateSidebarLayout, useSidebar } from "@/app/shared/sidebar/store";
 import { SidebarTargetsContext, usePatrolIds, type SidebarTargets } from "@/app/shared/sidebar/targets";
 import { useCanCustomize } from "@/app/shared/sidebar/useCanCustomize";
@@ -164,13 +165,43 @@ function SealedNewChatButton({ onClick }: { onClick: () => void }) {
 // hover and keyboard focus, on the shared .conv-tooltip surface (portaled to
 // <body> like the sealed tooltip above, and for the same reason). On touch —
 // no hover — the focus a tap gives the button is what shows it. The copy
-// states the server's default TTL (CONVERSATION_TTL_DAYS, default 14) and the
-// two keep actions — pinning and filing into a project both exempt a chat
+// states this deployment's retention period (CONVERSATION_TTL_DAYS, read from
+// the server config; the default, 14, when an older server does not say) and
+// the two keep actions — pinning and filing into a project both exempt a chat
 // from the sweep.
-const RECENT_INFO_TEXT =
-  tr("Chats here are deleted after 14 days of inactivity. Pin a chat or move it into a project to keep it.");
+const DEFAULT_TTL_DAYS = 14;
+const recentInfoText = (days: number) =>
+  tr("Chats here are deleted after {0} days of inactivity. Pin a chat or move it into a project to keep it.", [days]);
 
-function RecentInfoButton() {
+// The one-list view (docs/SIDEBAR.md) mixes the person's temporary chats with
+// teammates' chats, so "chats here are deleted" would be wrong for half the
+// rows: there the hourglass on a row is what marks a temporary chat, and the
+// explainer says what the hourglass means.
+const unifiedInfoText = (days: number) =>
+  tr("Chats marked with an hourglass are temporary: they are deleted after {0} days of inactivity. Pin a chat or move it into a project to keep it. A teammate's chat is theirs to keep.", [days]);
+// A patrol chat's mark: the icon a patrol has when it is pinned to the rail
+// (layout.defaultIcon), so a patrol looks the same wherever it is listed.
+const PATROL_ICON = defaultIcon({ id: "", kind: "chat" }, true);
+const PATROL_ROW_TEXT = tr("Patrol — this chat checks in on a schedule");
+
+// The row marks below (patrol, temporary) never change a row's accessible
+// name: the row is still found, and read, by its title. The mark is a
+// tooltip for sighted users, and the same sentence reaches a screen reader
+// as the row's description (aria-describedby to one hidden copy per rail).
+const PATROL_DESC_ID = "rail-row-desc-patrol";
+const TEMPORARY_DESC_ID = "rail-row-desc-temporary";
+
+function PatrolMark() {
+  return (
+    <span data-testid="patrol-mark" aria-hidden="true" title={PATROL_ROW_TEXT}>
+      <Icon name={PATROL_ICON} className="size-3 shrink-0 text-[var(--color-accent)]" />
+    </span>
+  );
+}
+const temporaryRowText = (days: number) =>
+  tr("Temporary — deleted after {0} days of inactivity. Pin it or move it into a project to keep it.", [days]);
+
+function RecentInfoButton({ text, label = tr("About temporary chats") }: { text: string; label?: string }) {
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
   // Hover AND keyboard focus show the explainer (the sealed-lock tooltip's
   // exact mechanics — was click-toggle, which read as a broken button). The
@@ -190,7 +221,7 @@ function RecentInfoButton() {
     <span className="relative inline-flex">
       <button
         type="button"
-        aria-label={tr("About temporary chats")}
+        aria-label={label}
         className="hit-area inline-flex items-center justify-center rounded-full text-[var(--color-text-muted)] transition hover:text-[var(--color-text-secondary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
         onMouseEnter={show}
         onMouseLeave={hide}
@@ -206,7 +237,7 @@ function RecentInfoButton() {
               className="conv-tooltip"
               style={{ top: pos.top, left: pos.left }}
             >
-              {RECENT_INFO_TEXT}
+              {text}
             </span>,
             document.body,
           )
@@ -786,22 +817,7 @@ function ConversationKebab({
         </MenuItem>
         <MenuSeparator />
         <MenuItem
-          icon={
-            <svg
-              aria-hidden="true"
-              viewBox="0 0 24 24"
-              className="size-4"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth={1.8}
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <rect x="3" y="4" width="18" height="4" rx="1" />
-              <path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8" />
-              <path d="M10 12h4" />
-            </svg>
-          }
+          icon={<Icon name="archive" className="size-4" />}
           onClick={() => {
             onArchive();
             close();
@@ -980,15 +996,21 @@ function ConvRow({
   onDragStart,
   titleNode,
   context,
-  tag,
+  patrol,
+  temporary,
 }: {
   conversation: ConversationSummary;
+  // The one-list view only: this chat is temporary (the retention sweep
+  // would delete it), marked with an hourglass whose tooltip is this text:
+  // that it is temporary, after how long it goes, and how to keep it.
+  temporary?: string;
   // Search results only: the title with the matched words marked, the place
-  // the chat lives (its project's name) and a kind tag ("Patrol"). A result
-  // is shown out of its section, so the row says where it belongs.
+  // the chat lives (its project's name). A result is shown out of its
+  // section, so the row says where it belongs.
   titleNode?: ReactNode;
   context?: string;
-  tag?: string;
+  // The chat has a patrol (armed or paused): marked wherever it is listed.
+  patrol?: boolean;
   active: boolean;
   // focused = the keyboard j/k cursor is on this row (distinct from active =
   // the open conversation). Renders a ring so the cursor is visible.
@@ -1063,6 +1085,9 @@ function ConvRow({
         <button
           type="button"
           aria-pressed={selecting ? checked : undefined}
+          aria-describedby={
+            [temporary ? TEMPORARY_DESC_ID : "", patrol ? PATROL_DESC_ID : ""].filter(Boolean).join(" ") || undefined
+          }
           data-rail-row=""
           className={[
             "block w-full min-w-0 rounded-md py-2 pl-[0.55rem] pr-9 text-left text-[0.875rem] transition any-pointer-coarse:min-h-11",
@@ -1100,6 +1125,12 @@ function ConvRow({
                 className="inline-block size-1.5 shrink-0 animate-pulse rounded-full bg-[var(--color-accent)]"
               />
             ) : null}
+            {temporary ? (
+              <span data-testid="temporary-mark" aria-hidden="true" title={temporary}>
+                <HourglassGlyph className="size-3 shrink-0 text-[var(--color-text-muted)]" />
+              </span>
+            ) : null}
+            {patrol ? <PatrolMark /> : null}
             {/* Two audiences, two marks, each labeled (ADR-0057). A single
                 unlabeled chain link stood for "shared" and, inside a
                 team-shared project, read as "my team can see this" — which it
@@ -1134,7 +1165,6 @@ function ConvRow({
               ) : null}
               {titleNode ?? conversation.title}
             </span>
-            {tag ? <ResultTag>{tag}</ResultTag> : null}
             {conversation.lockdown ? (
               <span
                 aria-label={tr("Sealed chat")}
@@ -1356,6 +1386,7 @@ export function ConversationSidebar({
   teamSharedLoaded = false,
   archivedLoaded = false,
   onSetDashboardView,
+  scheduleKindByConv,
 }: {
   sidebarOpen: boolean;
   setSidebarOpen: Dispatch<SetStateAction<boolean>>;
@@ -1493,6 +1524,11 @@ export function ConversationSidebar({
   // shortcut clicked while its chat is already open applies the view it
   // names, whichever view the chat is in.
   onSetDashboardView?: (dashboard: boolean) => void;
+  // What this page knows of each chat's schedules, for the chats it has read
+  // them for: "patrol" (an armed or paused recurring patrol), "timer" (only
+  // one-shot timers), or "none". A chat missing from the map is not known
+  // here; the rail then goes by the person's patrols list.
+  scheduleKindByConv?: ReadonlyMap<string, "patrol" | "timer" | "none">;
 }) {
   const [editingId, setEditingId] = useState<string | null>(null);
   // The person's sidebar layout (docs/SIDEBAR.md): the order, names and
@@ -1505,6 +1541,11 @@ export function ConversationSidebar({
   const sectionIndex = (id: SectionId) => railLayout.sections.findIndex((x) => x.id === id);
   const projectsFirst = sectionIndex("projects") < sectionIndex("chats");
   const teamFirst = sectionIndex("team") < sectionIndex("chats");
+  // One list for all chats, the default (docs/SIDEBAR.md): teammates' chats
+  // are listed in the Chats section with the person's own, and Team chats
+  // has no section of its own. A person who hid Team chats still sees none
+  // of them here; search finds them all the same.
+  const unified = !railLayout.separate_lists;
   // Projects section (#509 follow-up): the section itself starts open (its
   // presence is the affordance) unless the layout folds it; each project
   // starts collapsed and remembers its expansion for the session only, like
@@ -1665,6 +1706,22 @@ export function ConversationSidebar({
     setReorderScope(null);
   };
   const recent = sortRecent(recentUnfiled(conversations, knownProjectIds), recentSort);
+  // The one-list view: the person's unpinned, unfiled chats and teammates'
+  // chats in one list under one sort. The person's own rows keep the relative
+  // order they have on their own (sortRecent breaks ties by input order, and
+  // theirs come first), so j/k — which walks only their own — still matches.
+  // A chat is listed once: a teammate's row wins over a copy in the own list.
+  const listedTeamChats = teamSec.hidden ? [] : teamSharedConversations;
+  const teamRowIds = new Set(listedTeamChats.map((c) => c.id));
+  const allRecent = unified
+    ? sortRecent(
+        [
+          ...recentUnfiled(conversations, knownProjectIds).filter((c) => !teamRowIds.has(c.id)),
+          ...listedTeamChats,
+        ],
+        recentSort,
+      )
+    : recent;
   const filtering = computeIsFiltering({
     labels: filterLabels,
     query: sidebarQuery,
@@ -1691,9 +1748,22 @@ export function ConversationSidebar({
     () => (searching ? filterConversations(archivedConversations, { labels: filterLabels, query: trimmedQuery }) : []),
     [searching, archivedConversations, filterLabels, trimmedQuery],
   );
-  // Which chats are patrols, read once the first search starts, so a result
-  // can say so.
-  const patrolIds = usePatrolIds(searching);
+  // Which chats have a schedule. Patrols come from one read of the person's
+  // patrols per page; the page's own knowledge of a chat's schedules (read
+  // when the chat is opened, updated as a patrol is made, paused or ended)
+  // wins over it, so a patrol made a minute ago is marked without a reload.
+  const patrolIds = usePatrolIds(true);
+  const scheduleKind = (id: string): "patrol" | "timer" | "none" =>
+    scheduleKindByConv?.get(id) ?? (patrolIds.has(id) ? "patrol" : "none");
+  const isPatrol = (id: string) => scheduleKind(id) === "patrol";
+  // Temporary is exactly what the server deletes — for inactivity, and by
+  // "Delete temporary chats" (isTemporaryChat mirrors the server's one
+  // definition). The server's listing says which chats a patrol or timer
+  // keeps; the patrols list and what this page knows fill in what changed
+  // since.
+  const isTemporary = (c: ConversationSummary) =>
+    isTemporaryChat({ ...c, has_schedule: c.has_schedule || patrolIds.has(c.id) }, scheduleKindByConv);
+  const ttlDays = serverConfig.conversationTtlDays ?? DEFAULT_TTL_DAYS;
   const canCustomize = useCanCustomize();
   const showSection = (id: SectionId) =>
     canCustomize ? () => updateSidebarLayout((l) => updateSection(l, id, { hidden: false })) : undefined;
@@ -1712,6 +1782,7 @@ export function ConversationSidebar({
   const shownIds = new Set([
     ...filteredConversations.map((c) => c.id),
     ...archivedMatches.map((c) => c.id),
+    ...teamMatches.map((c) => c.id),
   ]);
   // Only the answer to what is typed now: while a new query's answer is on
   // its way, the previous query's hits are not shown, counted or opened.
@@ -1766,17 +1837,18 @@ export function ConversationSidebar({
     />
   );
 
-  const renderRowIn = (conversation: ConversationSummary, inResults: boolean) => (
+  const renderRowIn = (conversation: ConversationSummary, inResults: boolean, markTemporary = false) => (
     <ConvRow
       key={conversation.id}
       conversation={conversation}
+      temporary={markTemporary && isTemporary(conversation) ? temporaryRowText(ttlDays) : undefined}
       titleNode={inResults ? markMatches(conversation.title, tokens) : undefined}
       context={
         inResults && conversation.project_id
           ? projects.find((p) => p.id === conversation.project_id)?.name
           : undefined
       }
-      tag={inResults && patrolIds.has(conversation.id) ? tr("Patrol") : undefined}
+      patrol={isPatrol(conversation.id)}
       active={activeConversationId === conversation.id}
       focused={focusedConversationId === conversation.id}
       streaming={streamingConvs.has(conversation.id)}
@@ -2283,21 +2355,7 @@ visibleProjectTree.map(({ project, chats }) => {
                             void toggleArchive(conversation, false)
                           }
                         >
-                          <svg
-                            aria-hidden="true"
-                            viewBox="0 0 24 24"
-                            className="size-3.5"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeWidth={1.8}
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                          >
-                            <rect x="3" y="4" width="18" height="4" rx="1" />
-                            <path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8" />
-                            <path d="M12 18v-6" />
-                            <path d="M9.5 14.5 12 12l2.5 2.5" />
-                          </svg>
+                          <UnarchiveGlyph className="size-3.5" />
                         </button>
                         <button
                           type="button"
@@ -2319,7 +2377,7 @@ visibleProjectTree.map(({ project, chats }) => {
 
   // One Team chats row: in the section, and in the search results (where the
   // title's matched words are marked).
-  const renderTeamRow = (c: ConversationSummary, inResults: boolean) => {
+  const renderTeamRow = (c: ConversationSummary, inResults: boolean, merged = false) => {
                         const active = activeConversationId === c.id;
                         const ownerShort = c.user_email
                           ? c.user_email.split("@")[0]
@@ -2330,8 +2388,12 @@ visibleProjectTree.map(({ project, chats }) => {
                             type="button"
                             data-testid="team-shared-conv-row"
                             data-rail-row=""
+                            aria-describedby={isPatrol(c.id) ? PATROL_DESC_ID : undefined}
                             className={[
-                              "flex w-full min-w-0 items-center gap-1.5 rounded-md py-1.5 pl-2 pr-10 text-left text-[0.84rem] transition any-pointer-coarse:min-h-11 any-pointer-coarse:pr-12",
+                              "flex w-full min-w-0 items-center gap-1.5 rounded-md pr-10 text-left transition any-pointer-coarse:min-h-11 any-pointer-coarse:pr-12",
+                              // In the one-list view a teammate's row sits
+                              // between the person's own, so it takes their size.
+                              merged ? "py-2 pl-[0.55rem] text-[0.875rem]" : "py-1.5 pl-2 text-[0.84rem]",
                               active
                                 ? "bg-[var(--rail-active)] text-[var(--color-text-primary)]"
                                 : "text-[var(--color-text-secondary)] hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)]",
@@ -2351,6 +2413,7 @@ visibleProjectTree.map(({ project, chats }) => {
                             }
                           >
                             <TeamGlyph className="size-3 shrink-0 text-[var(--color-accent)]" />
+                            {isPatrol(c.id) ? <PatrolMark /> : null}
                             <span className="min-w-0 flex-1 truncate">
                               {inResults ? markMatches(c.title, tokens) : c.title}
                             </span>
@@ -2377,7 +2440,7 @@ visibleProjectTree.map(({ project, chats }) => {
   // Teammates' shared and multiplayer chats, above or below the person's own
   // chats as their layout orders the sections.
   const teamBlock =
-    !teamSec.hidden && teamSharedConversations.length > 0 ? (
+    !unified && !teamSec.hidden && teamSharedConversations.length > 0 ? (
                 <div
                   data-testid="team-chats-section"
                   className={
@@ -2442,10 +2505,26 @@ visibleProjectTree.map(({ project, chats }) => {
     projectsLoaded ? null : sectionLabel("projects", tr("Projects")),
     archivedLoaded ? null : tr("Archived"),
   ].filter((x): x is string => x !== null);
-  const openMessageHit = (id: string) => {
-    const team = teamSharedConversations.find((c) => c.id === id);
+  // A hit in a chat someone shared with the person (it carries the owner's
+  // email) opens through the shared door, as its Team chats row does. If the
+  // shared list has not loaded, the hit itself stands in for the row: the
+  // page tries it as a chat the person takes part in, then as a read-only
+  // team chat.
+  const openMessageHit = (r: SearchResult) => {
+    const team = teamSharedConversations.find((c) => c.id === r.conversation_id);
     if (team && onSelectTeamSharedConversation) onSelectTeamSharedConversation(team);
-    else void loadConversation(id);
+    else if (r.user_email && onSelectTeamSharedConversation) {
+      onSelectTeamSharedConversation({
+        id: r.conversation_id,
+        title: r.title,
+        persona: "",
+        model: "",
+        pinned: false,
+        updated_at: r.matched_at,
+        user_email: r.user_email,
+        multiplayer: true,
+      });
+    } else void loadConversation(r.conversation_id);
   };
   const searchResults = (
     <div data-testid="search-results" role="region" aria-label={tr("Search results")}>
@@ -2502,8 +2581,10 @@ visibleProjectTree.map(({ project, chats }) => {
           testId="search-group-team"
           title={sectionLabel("team", tr("Team chats"))}
           count={teamMatches.length}
-          hidden={teamSec.hidden}
-          onShow={showSection("team")}
+          // In the one-list view teammates' chats live in the Chats section,
+          // so hiding either one hides them.
+          hidden={teamSec.hidden || (unified && chatsSec.hidden)}
+          onShow={showSection(teamSec.hidden ? "team" : "chats")}
         >
           {teamMatches.map((c) => renderTeamRow(c, true))}
         </SearchGroup>
@@ -2539,16 +2620,27 @@ visibleProjectTree.map(({ project, chats }) => {
                 type="button"
                 data-testid="search-result"
                 data-rail-row=""
+                aria-describedby={isPatrol(r.conversation_id) ? PATROL_DESC_ID : undefined}
                 className="block w-full rounded-md px-2 py-1.5 text-left transition hover:bg-[var(--rail-hover)] any-pointer-coarse:min-h-11"
-                onClick={() => openMessageHit(r.conversation_id)}
+                onClick={() => {
+                  if (r.user_email) setSidebarOpen(false);
+                  openMessageHit(r);
+                }}
               >
                 <span className="flex min-w-0 items-center gap-1.5 text-[0.85rem] text-[var(--color-text-secondary)]">
-                  <span className="min-w-0 truncate">
+                  {r.user_email ? <TeamGlyph className="size-3 shrink-0 text-[var(--color-accent)]" /> : null}
+                  <span className="min-w-0 flex-1 truncate">
                     {proj ? <span className="text-[var(--color-text-muted)]">{proj.name} › </span> : null}
                     {r.title || tr("Untitled")}
                   </span>
                   {archived ? <ResultTag>{tr("Archived")}</ResultTag> : null}
-                  {patrolIds.has(r.conversation_id) ? <ResultTag>{tr("Patrol")}</ResultTag> : null}
+                  {isPatrol(r.conversation_id) ? <PatrolMark /> : null}
+                  {r.user_email ? (
+                    // Whose chat it is, as on a Team chats row.
+                    <span className="max-w-[45%] min-w-0 shrink truncate font-[family-name:var(--font-code)] text-[0.66rem] text-[var(--color-text-muted)]">
+                      {r.user_email.split("@")[0]}
+                    </span>
+                  ) : null}
                 </span>
                 <span className="block truncate text-[0.75rem] text-[var(--color-text-muted)] [&_mark]:rounded-[2px] [&_mark]:bg-[var(--color-accent)]/25 [&_mark]:text-[var(--color-text-primary)]">
                   {previewNodes(r.match_preview)}
@@ -2619,14 +2711,14 @@ visibleProjectTree.map(({ project, chats }) => {
             " ",
           )}
         >
-          {conversations.some((c) => !c.pinned) ? (
+          {conversations.some(isTemporary) ? (
             <button
               type="button"
               // Red at rest, not only on hover: this deletes many chats at
               // once, so it must not read like the rail's ordinary rows.
               className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[0.75rem] font-medium text-[var(--color-danger-text)] transition hover:bg-[color-mix(in_srgb,var(--color-danger)_12%,transparent)]"
               onClick={() => setConfirmBulkDelete(true)}
-              title={tr("Delete every chat in Temporary")}
+              title={tr("Delete every temporary chat")}
             >
               <Icon name="trash" className="size-3.5 shrink-0" />
               {tr("Delete temporary chats")}
@@ -2673,6 +2765,14 @@ visibleProjectTree.map(({ project, chats }) => {
           </button>
         ) : null}
       </div>
+
+      {/* What a row's mark means, once, for the rows that point here. */}
+      <span id={PATROL_DESC_ID} hidden>
+        {PATROL_ROW_TEXT}
+      </span>
+      <span id={TEMPORARY_DESC_ID} hidden>
+        {temporaryRowText(ttlDays)}
+      </span>
 
       {teamFirst && teamAboveProjects ? teamTop : null}
       {projectsFirst ? projectsBlock : null}
@@ -2874,13 +2974,18 @@ visibleProjectTree.map(({ project, chats }) => {
                     reciente" do not fit one row; the control then takes the
                     next row whole instead of being cut off. */}
                 <div className="flex items-center gap-1.5 px-2 pb-1 pt-2 text-[0.68rem] font-semibold uppercase tracking-[0.08em] text-[var(--color-text-muted)] any-pointer-coarse:flex-wrap">
-                  <Icon
-                    name="clock"
-                    className="size-3 shrink-0 text-[var(--color-accent)]"
-                  />
-                  {tr("Temporary")}
-                  <RecentInfoButton />
-                  {onRecentSortChange && recent.length > 1 ? (
+                  {unified ? (
+                    <Icon name="message" className="size-3 shrink-0 text-[var(--color-accent)]" />
+                  ) : (
+                    <HourglassGlyph className="size-3 shrink-0 text-[var(--color-accent)]" />
+                  )}
+                  {unified ? tr("Recent") : tr("Temporary")}
+                  {unified ? (
+                    <RecentInfoButton text={unifiedInfoText(ttlDays)} label={tr("About this list")} />
+                  ) : (
+                    <RecentInfoButton text={recentInfoText(ttlDays)} />
+                  )}
+                  {onRecentSortChange && allRecent.length > 1 ? (
                     // On a touch screen every select is forced to 16px text
                     // (so iOS does not zoom on focus); the width cap below is
                     // sized for the 11px desktop label and cut the value off
@@ -2890,7 +2995,7 @@ visibleProjectTree.map(({ project, chats }) => {
                     // (field-sizing) and may shrink (min-w-0), so a longer
                     // translation no longer pushes it past the sidebar.
                     <select
-                      aria-label={tr("Sort temporary chats")}
+                      aria-label={unified ? tr("Sort chats") : tr("Sort temporary chats")}
                       data-testid="recent-sort"
                       value={recentSort}
                       onChange={(e) => {
@@ -2906,10 +3011,16 @@ visibleProjectTree.map(({ project, chats }) => {
                     </select>
                   ) : null}
                 </div>
-                {recent.length === 0 ? (
+                {allRecent.length === 0 ? (
                   <p className="px-2 py-1.5 text-[0.82rem] text-[var(--color-text-muted)]">
                     {tr("No saved chats yet.")}
                   </p>
+                ) : unified ? (
+                  <div data-testid="unified-chat-list">
+                    {allRecent.map((c) =>
+                      teamRowIds.has(c.id) ? renderTeamRow(c, false, true) : renderRowIn(c, false, true),
+                    )}
+                  </div>
                 ) : (
                   recent.map(renderRow)
                 )}

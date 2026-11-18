@@ -177,14 +177,16 @@ const SEARCH_CHATS = [
   { id: "m1", title: "Launch checklist", multiplayer: true, user_email: "lee@example.com" },
 ];
 
-async function mockSearchRail(page: Page, sections: Record<string, unknown>[]) {
+// `separate` is the layout of a person who chose separate lists (Team chats
+// as a section of its own, with its own fold); the default is one list.
+async function mockSearchRail(page: Page, sections: Record<string, unknown>[], separate = false) {
   const puts: Record<string, unknown>[] = [];
   await mockChatBoot(page, { conversations: SEARCH_CHATS });
   await page.route("**/api/me", (r: Route) => r.fulfill({ json: { email: "e2e@example.com", role: "member" } }));
   await page.route("**/api/projects", (r: Route) => r.fulfill({ json: { projects: [] } }));
   await page.route("**/api/patrols", (r: Route) => r.fulfill({ json: { patrols: [] } }));
   await page.route("**/api/search**", (r: Route) => r.fulfill({ json: { results: [], total: 0 } }));
-  let own: Record<string, unknown> | null = { version: 1, items: [], sections };
+  let own: Record<string, unknown> | null = { version: 1, items: [], sections, ...(separate ? { separate_lists: true } : {}) };
   await page.route("**/api/sidebar", (r: Route) => {
     if (r.request().method() === "PUT") {
       own = r.request().postDataJSON() as Record<string, unknown>;
@@ -203,7 +205,7 @@ test("a search finds a teammate's chat while every section is folded", async ({ 
     { id: "team", collapsed: true },
     { id: "projects", collapsed: true },
     { id: "chats", collapsed: true },
-  ]);
+  ], true);
   // Folded: the rail lists no chats at all.
   await expect(page.getByTestId("team-shared-conv-row")).toHaveCount(0);
 
@@ -234,7 +236,7 @@ test("a search finds chats in a hidden section, says so, and can bring it back",
     { id: "projects" },
     { id: "chats" },
     { id: "team", hidden: true },
-  ]);
+  ], true);
   await expect(page.getByTestId("team-chats-section")).toHaveCount(0);
 
   // By whose chat it is, too.
@@ -263,4 +265,13 @@ test("a search with no match says where it looked and offers to clear", async ({
   await empty.getByRole("button", { name: "Clear search" }).click();
   await expect(page.getByTestId("search-input")).toHaveValue("");
   await expect(page.getByTestId("search-input")).toBeFocused();
+});
+
+test("with one list (the default), a folded Chats list never hides a search result", async ({ page }) => {
+  await mockSearchRail(page, [{ id: "projects" }, { id: "chats", collapsed: true }, { id: "team" }]);
+  // Folded: own and teammates' chats are out of sight together.
+  await expect(page.getByTestId("unified-chat-list")).toBeHidden();
+  await page.getByTestId("search-input").fill("checklist");
+  await expect(page.getByTestId("search-group-team").getByTestId("team-shared-conv-row")).toContainText("Launch checklist");
+  await expect(page.getByTestId("search-hidden-note")).toHaveCount(0);
 });

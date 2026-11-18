@@ -252,19 +252,19 @@ test("a project's chats follow its saved order and reorder from the project's me
   await expect(options).toBeFocused();
 });
 
-test("Temporary chats follow the chosen sort, remembered on this device", async ({ page }) => {
+test("the Recent list follows the chosen sort, remembered on this device", async ({ page }) => {
   await setup(page, []);
   const y = async (id: string) => (await page.locator(`[data-conversation-id="${id}"]`).first().boundingBox())?.y ?? 0;
   const loose = "c4"; // "Loose Recent": more recent activity, started earlier
   const budget = "c7"; // "Budget Notes"
   await expect.poll(async () => (await y(loose)) < (await y(budget))).toBe(true); // Recent activity (default)
-  const sort = page.getByRole("combobox", { name: "Sort temporary chats" });
+  const sort = page.getByRole("combobox", { name: "Sort chats" });
   await sort.selectOption("title");
   await expect.poll(async () => (await y(budget)) < (await y(loose))).toBe(true); // Title A–Z
   await sort.selectOption("created");
   await expect.poll(async () => (await y(budget)) < (await y(loose))).toBe(true); // Newest first
   await page.reload();
-  await expect(page.getByRole("combobox", { name: "Sort temporary chats" })).toHaveValue("created");
+  await expect(page.getByRole("combobox", { name: "Sort chats" })).toHaveValue("created");
 });
 
 for (const scheme of ["light", "dark"] as const) {
