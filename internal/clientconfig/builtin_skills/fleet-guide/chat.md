@@ -1536,7 +1536,8 @@ owner presses **Resume** in the Patrol bar to start them again. The chat
 becomes private to the new owner (team sharing, Multiplayer mode and any
 public link are turned off, and approval mode goes back to **Manual**), and
 you lose access to it unless they share it with you. An archived or Lockdown
-chat can't be transferred. An admin can also transfer a chat listed under
+chat can't be transferred, and a chat with a turn running has to finish or be
+stopped first. An admin can also transfer a chat listed under
 **Team chats** from its `⋮` menu.
 
 ### While a turn is running

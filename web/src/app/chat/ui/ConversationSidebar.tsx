@@ -809,15 +809,19 @@ function ConversationKebab({
         >
           {tr("Share…")}
         </MenuItem>
-        <MenuItem
-          icon={<Icon name="arrow-right" className="size-4" />}
-          onClick={() => {
-            onTransfer();
-            close();
-          }}
-        >
-          {tr("Transfer ownership…")}
-        </MenuItem>
+        {/* An archived or Lockdown chat cannot change hands (the server
+            refuses it), so the item is not offered on one. */}
+        {conversation.lockdown || conversation.archived_at ? null : (
+          <MenuItem
+            icon={<Icon name="arrow-right" className="size-4" />}
+            onClick={() => {
+              onTransfer();
+              close();
+            }}
+          >
+            {tr("Transfer ownership…")}
+          </MenuItem>
+        )}
         <MenuItem
           icon={<Icon name="check-square" className="size-4" />}
           onClick={() => {
@@ -993,7 +997,7 @@ function TeamChatKebab({
             />
           </div>
         ) : null}
-        {onTransfer ? (
+        {onTransfer && !conversation.lockdown && !conversation.archived_at ? (
           <MenuItem
             icon={<Icon name="arrow-right" className="size-4" />}
             onClick={() => {

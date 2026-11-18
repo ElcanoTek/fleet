@@ -3504,6 +3504,10 @@ export function ChatExperience({
     setConversations(remaining);
     setArchivedConversations((current) => current.filter((c) => c.id !== conversationId));
     setTeamSharedConversations((current) => current.filter((c) => c.id !== conversationId));
+    // An admin may have been reading it in the read-only team view: that
+    // access went with the transfer, so the view closes now, not on its
+    // next poll.
+    setTeamChatView((current) => (current === conversationId ? null : current));
     clearConvSlot(conversationId);
     if (activeConversationId !== conversationId) return;
     const next = remaining[0];

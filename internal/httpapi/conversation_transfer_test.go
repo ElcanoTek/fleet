@@ -69,7 +69,28 @@ func TestConversationTransferRoute(t *testing.T) {
 		t.Fatal("a refused transfer moved the chat")
 	}
 
-	rec := post(asUser(ctx, owner), `{"to_email":"`+next+`"}`)
+	// While a turn is running the chat cannot change hands: the turn has the
+	// workspace's private subtrees mid-swap.
+	_, stopTurn := context.WithCancel(ctx)
+	srv.inflightMu.Lock()
+	srv.inflight[conv.ID] = inflightEntry{buf: newTurnBuffer("t-running", ""), cancel: stopTurn}
+	srv.inflightMu.Unlock()
+	if rec := post(asUser(ctx, owner), `{"to_email":"`+next+`"}`); rec.Code != http.StatusConflict {
+		t.Errorf("transfer during a running turn = %d, want 409: %s", rec.Code, rec.Body.String())
+	}
+	if c, _ := st.Get(ctx, owner, conv.ID); c == nil {
+		t.Fatal("a transfer refused for a running turn moved the chat")
+	}
+	srv.inflightMu.Lock()
+	delete(srv.inflight, conv.ID)
+	srv.inflightMu.Unlock()
+	stopTurn()
+
+	// The cleanup after the commit does not depend on the request: a client
+	// that has gone away by then still gets the previous audience reconciled.
+	gone, hangUp := context.WithCancel(asUser(ctx, owner))
+	hangUp()
+	rec := post(gone, `{"to_email":"`+next+`"}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("owner transfer = %d: %s", rec.Code, rec.Body.String())
 	}

@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"os"
@@ -40,6 +41,17 @@ func (s *Server) handleConversationTransfer(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
+	// A running turn has the chat's workspace mid-flight: a participant's
+	// turn swaps the owner's private subtrees (attachments, personal skills)
+	// out and back (activateTurnPrivateWorkspace). Moving the chat under it
+	// could hand those to the new owner when the turn puts them back, so the
+	// transfer waits for the chat to be idle. The reconciliation below still
+	// stops a turn that starts in the moment between this check and the
+	// commit.
+	if s.turnRunning(convID) {
+		http.Error(w, store.ErrTransferBusy.Error(), http.StatusConflict)
+		return
+	}
 	// Everyone who could reach the chat until now, so each of them is
 	// reconciled against its new audience below.
 	seeds := append([]string{conv.UserEmail}, conv.MultiplayerParticipants...)
@@ -66,6 +78,10 @@ func (s *Server) handleConversationTransfer(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "transfer failed", http.StatusInternalServerError)
 		return
 	}
+	// The transfer is committed. What follows must run even if the request
+	// has gone away since, or the previous audience would keep a turn,
+	// approvals or a live stream on a chat that is no longer theirs.
+	ctx = context.WithoutCancel(ctx)
 	// The chat is now private to its new owner: stop a turn the previous
 	// owner or a participant still has running, drop their queued inputs,
 	// pending approvals, session approvals and patrols, and detach their live
@@ -73,10 +89,17 @@ func (s *Server) handleConversationTransfer(w http.ResponseWriter, r *http.Reque
 	s.enforceMultiplayerRevocation(ctx, convID, res.Conversation, seeds)
 	s.cancelConversationAutoSubmits(ctx, convID)
 	// The previous owner's own skills were written into the workspace for
-	// their turns; they are theirs, not part of the chat.
-	skillsDir := filepath.Join(tools.WorkspaceDirForConversation(convID), userSkillsRoot)
-	if err := os.RemoveAll(skillsDir); err != nil { //nolint:gosec // G703: workspace root + the id of a conversation the store just found and moved + a constant directory name — no request-authored path segment
-		logging.From(ctx).Warn("conversations: transfer could not clear user skills", "conv_id", safe.LogSafe(convID), "err", safe.LogSafe(err.Error()))
+	// their turns; they are
+	// theirs, not part of the chat. Both places they can be: the workspace,
+	// and the stash a participant's turn moves the owner's copy to.
+	skillsDirs := []string{filepath.Join(tools.WorkspaceDirForConversation(convID), userSkillsRoot)}
+	if stash, err := s.privateWorkspaceStashDir(convID); err == nil {
+		skillsDirs = append(skillsDirs, filepath.Join(stash, "owner", userSkillsRoot))
+	}
+	for _, dir := range skillsDirs {
+		if err := os.RemoveAll(dir); err != nil { //nolint:gosec // G703: workspace or stash root + the id of a conversation the store just found and moved + constant directory names — no request-authored path segment
+			logging.From(ctx).Warn("conversations: transfer could not clear user skills", "conv_id", safe.LogSafe(convID), "err", safe.LogSafe(err.Error()))
+		}
 	}
 	logging.From(ctx).Info("conversations: chat transferred",
 		"user", safe.LogSafe(user), "conv_id", safe.LogSafe(convID),
@@ -89,4 +112,12 @@ func (s *Server) handleConversationTransfer(w http.ResponseWriter, r *http.Reque
 		"patrols_moved":   res.PatrolsMoved,
 		"patrols_paused":  res.PatrolsPaused,
 	})
+}
+
+// turnRunning reports whether a turn is running in convID right now.
+func (s *Server) turnRunning(convID string) bool {
+	s.inflightMu.Lock()
+	entry, ok := s.inflight[convID]
+	s.inflightMu.Unlock()
+	return ok && entry.IsRunning()
 }

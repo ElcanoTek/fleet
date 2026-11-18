@@ -17,6 +17,8 @@ var (
 	// ErrTransferNotAllowed is returned for a chat that cannot change hands:
 	// an archived one or a Lockdown one.
 	ErrTransferNotAllowed = errors.New("an archived or Lockdown chat can't be transferred")
+	// ErrTransferBusy is returned while a turn is running in the chat.
+	ErrTransferBusy = errors.New("a turn is running in this chat; stop it or wait for it to finish, then transfer")
 )
 
 // ConversationTransfer reports what TransferConversation did.
@@ -92,7 +94,10 @@ func (s *Store) TransferConversation(ctx context.Context, ownerEmail, convID, to
 		return nil, err
 	}
 
-	if _, err := tx.ExecContext(ctx, `
+	// The updated row is read back inside the transaction: once it commits,
+	// the caller must be told so with the conversation in hand, whatever has
+	// happened to its request since (see the handler's post-commit work).
+	conv, err := scanConversation(tx.QueryRowContext(ctx, `
 		UPDATE conversations SET
 			user_email = $1,
 			pinned = FALSE,
@@ -104,11 +109,13 @@ func (s *Store) TransferConversation(ctx context.Context, ownerEmail, convID, to
 			mcp_accounts = '{}',
 			auto_approve = FALSE, approval_mode = 'manual',
 			updated_at = $2
-		WHERE id = $3`, to, now, convID); err != nil {
+		WHERE id = $3
+		RETURNING `+conversationColumns, to, now, convID))
+	if err != nil {
 		return nil, err
 	}
 
-	out := &ConversationTransfer{FromEmail: from, ToEmail: to}
+	out := &ConversationTransfer{Conversation: &conv, FromEmail: from, ToEmail: to}
 	if err := tx.QueryRowContext(ctx,
 		`SELECT count(*), count(*) FILTER (WHERE status = $1)
 		   FROM `+chatSchedulesTable+`
@@ -140,13 +147,5 @@ func (s *Store) TransferConversation(ctx context.Context, ownerEmail, convID, to
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
-	conv, err := s.Get(ctx, to, convID)
-	if err != nil {
-		return nil, err
-	}
-	if conv == nil {
-		return nil, ErrConversationNotFound
-	}
-	out.Conversation = conv
 	return out, nil
 }

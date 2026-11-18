@@ -21,8 +21,12 @@ The transfer is direct. There is no offer for the new owner to accept.
 
 The new owner must have an enabled account that is not a read-only viewer.
 They can be on any team, or none. An archived chat or a Lockdown chat is
-refused (409); a target that cannot take the chat is refused (400) with one
-message whatever the reason.
+refused (409), and the menu does not offer the item on one; a target that
+cannot take the chat is refused (400) with one message whatever the reason.
+A chat with a turn running is refused (409) until the turn finishes or is
+stopped: a participant's turn has the owner's private workspace subtrees
+swapped out, and moving the chat under it could hand them to the new owner
+when the turn puts them back.
 
 **What `store.TransferConversation` does, in one transaction:**
 
@@ -38,13 +42,15 @@ message whatever the reason.
 The transcript, the workspace files (attachments included), the persona, the
 model and the enabled optional connectors are untouched.
 
-**After the transaction** the handler reconciles the chat with its new,
+**After the transaction** (on a context detached from the request, so a
+client that has gone away does not skip it) the handler reconciles the chat with its new,
 private audience the same way a removed Multiplayer participant is reconciled
 (`enforceMultiplayerRevocation`): a turn the previous owner or a participant
 still has running is stopped, their pending approvals, session approvals and
 their own patrols in the chat are cancelled, and their live streams are
 detached. Pending auto-submit countdowns are cancelled, and the previous
-owner's personal skills are removed from the workspace (`user-skills/`). The
+owner's personal skills are removed from the workspace (`user-skills/`) and
+from the stash a participant's turn moves them to. The
 transfer is logged (`conversations: chat transferred`, with the actor, both
 owners and the patrol counts).
 

@@ -83,6 +83,20 @@ test("the owner transfers a chat from its row menu", async ({ page }) => {
   await expect(done).toHaveCount(0);
 });
 
+test("a Lockdown chat does not offer the transfer", async ({ page }) => {
+  await mockChatBoot(page, { conversations: [{ ...OWN, id: "locked1", title: "Sealed deal room", lockdown: true, multiplayer: false }] });
+  await page.route("**/api/me", (r: Route) => r.fulfill({ json: { email: "e2e@example.com", role: "member" } }));
+  await page.route("**/api/admin/settings", (r: Route) => r.fulfill({ status: 403, body: "forbidden" }));
+  await page.route("**/api/projects", (r: Route) => r.fulfill({ json: { projects: [] } }));
+  await page.route("**/api/patrols", (r: Route) => r.fulfill({ json: { patrols: [] } }));
+  await page.route("**/api/sidebar", (r: Route) => r.fulfill({ json: { layout: null, workspace_default: null } }));
+  await page.goto("/chat");
+  await page.getByRole("button", { name: "Conversation options for Sealed deal room" }).click();
+  const menu = page.getByRole("menu", { name: "Options for Sealed deal room" });
+  await expect(menu.getByRole("menuitem", { name: "Share…", exact: true })).toBeVisible();
+  await expect(menu.getByRole("menuitem", { name: "Transfer ownership…", exact: true })).toHaveCount(0);
+});
+
 test("a Team chats row offers the transfer to an admin only", async ({ page }) => {
   await boot(page);
   await page.goto("/chat");
