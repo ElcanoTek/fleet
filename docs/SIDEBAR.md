@@ -52,6 +52,22 @@ sidebar"), which `/help` renders.
   button of their own (it cluttered every row on a phone). A chat last
   read as a dashboard is added as one. A shortcut to the chat already open
   applies the view it names (dashboard or chat) rather than toggling.
+- **Row menus.** Own chats, projects and Team chats rows put their actions
+  behind a `⋯` button; an Archived row keeps its two buttons (**Unarchive**,
+  **Delete**) on the row. With a mouse these controls appear on hover or
+  keyboard focus; on a touch screen (`any-pointer: coarse`) they are always
+  shown, since there is no hover to reveal them, and each tap box and the row
+  are at least 44px (`hit-area-touch`, `any-pointer-coarse:min-h-11`). A Team chats row is a
+  teammate's chat, not the viewer's to rename, file, archive or delete, so
+  its menu holds **Add to sidebar** and **Copy link**: the team link
+  (`/chat?team=<id>`) for a chat shared with the team, the chat link
+  (`/chat?c=<id>`) for one reached only through Multiplayer (a team link
+  refuses it), and no Copy link otherwise. When the clipboard refuses, the
+  menu stays open with the link shown to copy by hand. A Team chats row keeps
+  its right edge clear for the `⋯` (`pr-10`, `any-pointer-coarse:pr-12`), so
+  neither the button nor its tap box ever covers the title, the **Live**
+  badge or the owner's name; the mocked e2e measures that gap with a mouse
+  and on a touch screen. Not done: a long-press to open a row's menu.
 - **Read-only accounts.** The API refuses a Viewer's writes, so the editor,
   **Reset** and the quick pins are offered only once `GET /api/me` has
   confirmed another role (the rule chat reordering uses). A Viewer can open the

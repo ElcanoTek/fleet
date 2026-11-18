@@ -107,10 +107,16 @@ function handleMenuKeys(
 function positionMenu(menu: HTMLElement, anchor: DOMRect, placement: MenuPlacement) {
   // The menu is portaled to <body>, so these are true viewport coordinates.
   // offsetWidth/offsetHeight are measurable while visibility:hidden (still laid out).
-  const w = menu.offsetWidth;
-  const h = menu.offsetHeight;
   const vw = window.innerWidth;
   const vh = window.innerHeight;
+  // Never taller than the room it opens into: a menu above its anchor gets the
+  // space above it, any other the viewport. Past that it scrolls (the surface
+  // is overflow-y-auto), so a long menu on a short screen — a phone in
+  // landscape, with 44px touch rows — keeps its last items reachable.
+  const room = placement.startsWith("top-") ? anchor.top - 6 - VIEWPORT_MARGIN : vh - 2 * VIEWPORT_MARGIN;
+  menu.style.maxHeight = `${Math.max(0, Math.floor(Math.min(room, vh - 2 * VIEWPORT_MARGIN)))}px`;
+  const w = menu.offsetWidth;
+  const h = menu.offsetHeight;
   const clamp = (v: number, max: number) => Math.min(Math.max(v, VIEWPORT_MARGIN), Math.max(VIEWPORT_MARGIN, max));
 
   menu.style.position = "fixed";
@@ -183,10 +189,11 @@ function positionMenu(menu: HTMLElement, anchor: DOMRect, placement: MenuPlaceme
 // rounding of two independently rounded `left` values. Menus whose widest item
 // changed by a few pixels could therefore start overlapping their own flyout.
 function positionFlyout(flyout: HTMLElement, anchor: DOMRect, menu: DOMRect) {
-  const w = flyout.offsetWidth;
-  const h = flyout.offsetHeight;
   const vw = window.innerWidth;
   const vh = window.innerHeight;
+  flyout.style.maxHeight = `${Math.max(0, vh - 2 * VIEWPORT_MARGIN)}px`;
+  const w = flyout.offsetWidth;
+  const h = flyout.offsetHeight;
   let left = Math.max(anchor.right, menu.right) + FLYOUT_GAP;
   if (left + w > vw - VIEWPORT_MARGIN) {
     left = Math.min(anchor.left, menu.left) - w - FLYOUT_GAP;
@@ -202,7 +209,7 @@ function positionFlyout(flyout: HTMLElement, anchor: DOMRect, menu: DOMRect) {
 }
 
 const SURFACE_CLASS =
-  "grid min-w-[9rem] gap-0.5 rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-surface-2)] p-1.5 shadow-[var(--shadow-md)] outline-none motion-safe:animate-pop-up";
+  "grid min-w-[9rem] gap-0.5 overflow-y-auto overscroll-contain rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-surface-2)] p-1.5 shadow-[var(--shadow-md)] outline-none motion-safe:animate-pop-up";
 
 export function Menu({
   open,
@@ -258,6 +265,24 @@ export function Menu({
       );
     }
   });
+
+  // Re-place the menu when its own size changes after the layout effect ran: an
+  // item that renders a moment later (one reading the account's permissions)
+  // must not push the grown menu off the bottom of a short screen.
+  useEffect(() => {
+    if (!open || typeof ResizeObserver === "undefined") return;
+    const menu = menuRef.current;
+    if (!menu) return;
+    const observer = new ResizeObserver(() => {
+      const anchor = anchorRef.current;
+      if (!anchor) return;
+      const rect = anchor.getBoundingClientRect();
+      positionMenu(menu, rect, placement);
+      positionedAnchorRef.current = rect;
+    });
+    observer.observe(menu);
+    return () => observer.disconnect();
+  }, [open, anchorRef, placement]);
 
   // Focus the first item on open.
   useEffect(() => {
@@ -422,7 +447,7 @@ export function MenuItem({
       aria-expanded={ariaExpanded}
       onClick={onClick}
       className={[
-        "flex w-full gap-2 rounded-[0.4rem] px-2 py-1.5 text-left text-[0.82rem] transition",
+        "flex w-full gap-2 rounded-[0.4rem] px-2 py-1.5 text-left text-[0.82rem] transition any-pointer-coarse:min-h-11",
         description ? "items-start" : "items-center",
         "focus-visible:bg-[var(--color-overlay-soft)] focus-visible:outline-none",
         disabled ? "cursor-not-allowed opacity-50" : "",

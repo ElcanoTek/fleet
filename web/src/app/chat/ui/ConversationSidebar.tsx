@@ -51,6 +51,8 @@ import type {
 import type { Project } from "./ProjectsModal";
 import { previewNodes, type SearchResult } from "./SearchBar";
 import { ShareGlyph, TeamGlyph } from "./ShareGlyphs";
+import { teamLinkUrl } from "./teamSharing";
+import { copyText } from "@/app/shared/lib/clipboard";
 import { ChatReorderList } from "./ChatReorderList";
 import { AddToSidebarItem } from "@/app/shared/sidebar/AddToSidebarItem";
 import { sectionOf, type SectionId } from "@/app/shared/sidebar/layout";
@@ -72,6 +74,12 @@ const SEALED_TOOLTIP_TEXT =
 // otherwise clip or capture it (a CSS data-tip's absolutely-positioned
 // ::after also OCCUPIES layout even at opacity 0, which put a horizontal
 // scrollbar on the projects scroller; the portal has no such footprint).
+// A row's options (⋯) button: revealed on hover or keyboard focus where
+// there is a mouse, always shown on a touch screen, which has no hover to
+// reveal it with (a phone user otherwise had to know where to tap).
+const ROW_ACTIONS_REVEAL =
+  "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 any-pointer-coarse:opacity-100";
+
 function usePortalTip(tip: string) {
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
   const show = (e: React.SyntheticEvent<HTMLElement>) => {
@@ -355,10 +363,10 @@ function ProjectKebab({
         }}
         onBlur={tip.hide}
         className={[
-          "hit-area pointer-events-auto inline-flex size-[1.8rem] items-center justify-center rounded-[var(--radius-md)] text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:opacity-100 focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none",
+          "hit-area hit-area-touch pointer-events-auto inline-flex size-[1.8rem] items-center justify-center rounded-[var(--radius-md)] text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:opacity-100 focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none",
           open
             ? "opacity-100"
-            : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100",
+            : ROW_ACTIONS_REVEAL,
         ].join(" ")}
         onClick={(e) => {
           e.stopPropagation();
@@ -632,10 +640,10 @@ function ConversationKebab({
           // Fixed, centered, padded square (~1.8rem) per the handoff .conv-kebab —
           // a rounded hover highlight around the centered icon, not hugging it.
           // hit-area extends the clickable box to ~2rem without growing the fill.
-          "hit-area pointer-events-auto inline-flex size-[1.8rem] items-center justify-center rounded-[var(--radius-md)] text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:opacity-100 focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none",
+          "hit-area hit-area-touch pointer-events-auto inline-flex size-[1.8rem] items-center justify-center rounded-[var(--radius-md)] text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:opacity-100 focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none",
           open
             ? "opacity-100"
-            : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100",
+            : ROW_ACTIONS_REVEAL,
         ].join(" ")}
         onClick={(e) => {
           e.stopPropagation();
@@ -811,6 +819,145 @@ function ConversationKebab({
   );
 }
 
+// ── Team chats row options ──────────────────────────────────────────────────
+// A teammate's chat is not the viewer's to rename, file, archive or delete, so
+// its menu holds what any member can do with it: pin it to their own sidebar,
+// and copy a link that opens it. The link is the one that works for this row:
+// the team link (/chat?team=<id>, the link Share hands out) for a chat shared
+// with the team, the chat link (/chat?c=<id>) for one reached only through
+// Multiplayer (a team link refuses it), and none otherwise.
+function teamChatLink(c: ConversationSummary): string | null {
+  if (c.team_visible) return teamLinkUrl(c.id);
+  if (c.multiplayer && typeof window !== "undefined") {
+    return `${window.location.origin}/chat?c=${encodeURIComponent(c.id)}`;
+  }
+  return null;
+}
+
+function TeamChatKebab({ conversation }: { conversation: ConversationSummary }) {
+  const [open, setOpen] = useState(false);
+  const [copy, setCopy] = useState<"idle" | "copied" | "failed">("idle");
+  const anchorRef = useRef<HTMLButtonElement | null>(null);
+  const closeTimer = useRef<number | null>(null);
+  // Bumped on every close: a copy still pending when the menu closed (a
+  // browser asking for permission) must not write its result into, or
+  // close, a later opening of the menu.
+  const attempt = useRef(0);
+  const fallbackRef = useRef<HTMLInputElement | null>(null);
+  useEffect(() => {
+    if (copy !== "failed") return;
+    fallbackRef.current?.focus();
+    fallbackRef.current?.select();
+  }, [copy]);
+  useEffect(
+    () => () => {
+      if (closeTimer.current !== null) window.clearTimeout(closeTimer.current);
+    },
+    [],
+  );
+  const close = () => {
+    attempt.current += 1;
+    if (closeTimer.current !== null) window.clearTimeout(closeTimer.current);
+    closeTimer.current = null;
+    setOpen(false);
+    setCopy("idle");
+  };
+  const tip = usePortalTip(tr("Options"));
+  const link = teamChatLink(conversation);
+  return (
+    <>
+      <button
+        ref={anchorRef}
+        type="button"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={tr("Conversation options for {0}", [conversation.title])}
+        data-testid="team-chat-options"
+        onMouseEnter={(e) => {
+          if (!open) tip.show(e);
+        }}
+        onMouseLeave={tip.hide}
+        onFocus={(e) => {
+          if (!open) tip.show(e);
+        }}
+        onBlur={tip.hide}
+        className={[
+          "hit-area hit-area-touch pointer-events-auto inline-flex size-[1.8rem] items-center justify-center rounded-[var(--radius-md)] text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:opacity-100 focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none",
+          open ? "opacity-100" : ROW_ACTIONS_REVEAL,
+        ].join(" ")}
+        onClick={(e) => {
+          e.stopPropagation();
+          tip.hide();
+          if (open) close();
+          else setOpen(true);
+        }}
+      >
+        <Icon name="dots" className="size-[1.1rem]" />
+        {tip.tipNode}
+      </button>
+      <Menu
+        open={open}
+        onClose={close}
+        anchorRef={anchorRef}
+        placement="bottom-end"
+        label={tr("Options for {0}", [conversation.title])}
+        className="min-w-[12rem]"
+      >
+        <AddToSidebarItem
+          target={{ kind: "chat", ref: conversation.id, title: conversation.title }}
+          onDone={close}
+        />
+        {link ? (
+          <MenuItem
+            icon={<ShareGlyph className="size-4" />}
+            onClick={() => {
+              // The menu stays open long enough to say whether it worked.
+              // Each press is its own attempt: only the latest may report,
+              // and an earlier success's pending close is called off.
+              const mine = ++attempt.current;
+              if (closeTimer.current !== null) window.clearTimeout(closeTimer.current);
+              closeTimer.current = null;
+              void copyText(link).then((ok) => {
+                if (mine !== attempt.current) return;
+                setCopy(ok ? "copied" : "failed");
+                if (!ok) return;
+                closeTimer.current = window.setTimeout(() => {
+                  // As Escape does: a keyboard user still on the menu goes
+                  // back to the ⋯ button, not to the page body when the
+                  // menu unmounts. Focus moved elsewhere meanwhile stays.
+                  if (document.activeElement?.closest('[role="menu"]')) anchorRef.current?.focus();
+                  close();
+                }, 900);
+              });
+            }}
+          >
+            {copy === "copied" ? tr("Copied ✓") : copy === "failed" ? tr("Copy failed") : tr("Copy link")}
+          </MenuItem>
+        ) : null}
+        {link && copy === "failed" ? (
+          // The clipboard refused (no permission, an insecure page): the
+          // link is shown to copy by hand, as Share does. It sits in a
+          // read-only field, focused and selected, so a keyboard user can
+          // copy it too (Tab reaches it inside the menu's focus trap).
+          <div data-testid="team-chat-link-fallback" className="max-w-[16rem] px-3 py-1.5">
+            <p role="status" className="m-0 text-[0.72rem] text-[var(--color-text-secondary)]">
+              {tr("Couldn’t copy the link. Copy it from here: {0}", [""]).trim()}
+            </p>
+            <input
+              ref={fallbackRef}
+              readOnly
+              value={link}
+              aria-label={tr("Copy link")}
+              onFocus={(e) => e.currentTarget.select()}
+              className="mt-1 w-full rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-transparent px-1.5 py-1 text-[0.72rem] text-[var(--color-text-primary)] focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none any-pointer-coarse:min-h-11"
+            />
+          </div>
+        ) : null}
+      </Menu>
+    </>
+  );
+}
+
 // ── Conversation row ─────────────────────────────────────────────────────────
 function ConvRow({
   conversation,
@@ -903,7 +1050,7 @@ function ConvRow({
           type="button"
           aria-pressed={selecting ? checked : undefined}
           className={[
-            "block w-full min-w-0 rounded-md py-2 pl-[0.55rem] pr-9 text-left text-[0.875rem] transition",
+            "block w-full min-w-0 rounded-md py-2 pl-[0.55rem] pr-9 text-left text-[0.875rem] transition any-pointer-coarse:min-h-11",
             selecting && checked
               ? "text-[var(--color-text-primary)]"
               : active
@@ -1644,7 +1791,7 @@ export function ConversationSidebar({
                         each does one thing and says so. The chevron keeps
                         the row's "Project <name> (N chats)" name and its
                         aria-expanded — it is the disclosure control. */}
-                    <div className="flex w-full items-center rounded-md pr-9">
+                    <div className="flex w-full items-center rounded-md pr-9 any-pointer-coarse:min-h-11">
                       <button
                         type="button"
                         aria-expanded={expanded}
@@ -1986,12 +2133,12 @@ export function ConversationSidebar({
                           ? c.user_email.split("@")[0]
                           : "";
                         return (
-                          <div key={c.id} className="group/team relative">
+                          <div key={c.id} className="group relative">
                           <button
                             type="button"
                             data-testid="team-shared-conv-row"
                             className={[
-                              "flex w-full min-w-0 items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-[0.84rem] transition",
+                              "flex w-full min-w-0 items-center gap-1.5 rounded-md py-1.5 pl-2 pr-10 text-left text-[0.84rem] transition any-pointer-coarse:min-h-11 any-pointer-coarse:pr-12",
                               active
                                 ? "bg-[var(--rail-active)] text-[var(--color-text-primary)]"
                                 : "text-[var(--color-text-secondary)] hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)]",
@@ -2027,6 +2174,9 @@ export function ConversationSidebar({
                               </span>
                             ) : null}
                           </button>
+                          <div className="absolute inset-y-0 right-1 flex items-center">
+                            <TeamChatKebab conversation={c} />
+                          </div>
                           </div>
                         );
                       })
@@ -2420,19 +2570,19 @@ export function ConversationSidebar({
                     >
                       <button
                         type="button"
-                        className="block w-full min-w-0 rounded-md py-1.5 pl-3 pr-20 text-left text-[0.8125rem] text-[var(--color-text-muted)] transition hover:text-[var(--color-text-secondary)]"
+                        className="block w-full min-w-0 rounded-md py-1.5 pl-3 pr-20 text-left text-[0.8125rem] text-[var(--color-text-muted)] transition hover:text-[var(--color-text-secondary)] any-pointer-coarse:min-h-11 any-pointer-coarse:pr-28"
                         onClick={() => void loadConversation(conversation.id)}
                       >
                         <span className="block truncate italic">
                           {conversation.title}
                         </span>
                       </button>
-                      <div className="absolute inset-y-0 right-1 flex items-center gap-1 opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100">
+                      <div className={`absolute inset-y-0 right-1 flex items-center gap-1 transition any-pointer-coarse:gap-4 ${ROW_ACTIONS_REVEAL}`}>
                         <button
                           type="button"
                           aria-label={tr("Unarchive {0}", [conversation.title])}
                           data-tip-top="Unarchive"
-                          className="inline-flex size-10 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-strong)] hover:text-[var(--color-text-primary)] sm:size-7"
+                          className="hit-area-touch inline-flex size-10 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-strong)] hover:text-[var(--color-text-primary)] sm:size-7"
                           onClick={() =>
                             void toggleArchive(conversation, false)
                           }
@@ -2457,7 +2607,7 @@ export function ConversationSidebar({
                           type="button"
                           aria-label={tr("Delete {0}", [conversation.title])}
                           data-tip-top="Delete"
-                          className="inline-flex size-10 items-center justify-center rounded-md text-[var(--color-text-muted)] transition motion-safe:hover:scale-110 hover:bg-[var(--color-status-error-bg)] hover:text-[var(--color-status-error-fg)] sm:size-7"
+                          className="hit-area-touch inline-flex size-10 items-center justify-center rounded-md text-[var(--color-text-muted)] transition motion-safe:hover:scale-110 hover:bg-[var(--color-status-error-bg)] hover:text-[var(--color-status-error-fg)] sm:size-7"
                           onClick={() =>
                             setPendingDeleteConversation({
                               id: conversation.id,

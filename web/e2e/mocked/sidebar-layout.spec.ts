@@ -297,6 +297,284 @@ test("Settings → Admin → Sidebar edits the workspace default", async ({ page
   await shot(page, "07-admin-workspace-default");
 });
 
+// A teammate's chats, the way the Team chats tests below need them.
+const TEAM_CHATS = [
+  { id: "c1", title: "My own notes" },
+  { id: "m1", title: "Incident room", multiplayer: true, user_email: "ops@example.com" },
+  { id: "t1", title: "Q4 planning", team_visible: true, user_email: "pm@example.com" },
+];
+
+// Long titles, a Live badge and long owner names: everything a Team chats row
+// can carry, pressed up against the row's ⋯.
+const CROWDED_TEAM_CHATS = [
+  { id: "m1", title: "Incident room for the big outage review", multiplayer: true, user_email: "operations.team@example.com" },
+  { id: "t1", title: "Q4 planning and budget review for everyone", team_visible: true, user_email: "pm@example.com" },
+  { id: "m2", title: "Short", multiplayer: true, team_visible: true, user_email: "averyveryverylongmailbox@example.com" },
+];
+
+async function setupTeamChats(page: Page, conversations: Record<string, unknown>[] = TEAM_CHATS) {
+  const puts: Layout[] = [];
+  await mockChatBoot(page, { conversations });
+  await page.route("**/api/me", (r: Route) => r.fulfill({ json: { email: "e2e@example.com", role: "member" } }));
+  await page.route("**/api/projects", (r: Route) => r.fulfill({ json: { projects: [] } }));
+  await page.route("**/api/patrols", (r: Route) => r.fulfill({ json: { patrols: [] } }));
+  await page.route("**/api/orchestrator/tasks?*", (r: Route) => r.fulfill({ json: { data: [], total: 0, limit: 50, offset: 0 } }));
+  let own: Layout | null = null;
+  await page.route("**/api/sidebar", (r: Route) => {
+    if (r.request().method() === "PUT") {
+      own = r.request().postDataJSON() as Layout;
+      puts.push(own);
+      return r.fulfill({ json: { layout: own } });
+    }
+    return r.fulfill({ json: { layout: own, workspace_default: null } });
+  });
+  return { puts };
+}
+
+// The gap between a Team chats row's badges (title, Live, owner) and its ⋯ —
+// both the drawn button and its invisible tap box (2rem with a mouse, 44px on
+// a touch screen). Negative means they overlap.
+async function teamRowGaps(page: Page) {
+  return page.evaluate(() =>
+    [...document.querySelectorAll('[data-testid="team-shared-conv-row"]')].map((row) => {
+      const kebab = row.parentElement!.querySelector('[data-testid="team-chat-options"]') as HTMLElement;
+      const k = kebab.getBoundingClientRect();
+      const tap = parseFloat(getComputedStyle(kebab, "::before").width) || k.width;
+      const content = Math.max(...[...row.querySelectorAll("span")].map((s) => s.getBoundingClientRect().right));
+      return { drawn: k.left - content, tap: k.left + k.width / 2 - tap / 2 - content };
+    }),
+  );
+}
+
+test("a Team chats row's ⋯ never covers its badges or owner name", async ({ page }) => {
+  await setupTeamChats(page, CROWDED_TEAM_CHATS);
+  await page.goto("/chat");
+  const first = page.getByTestId("team-shared-conv-row").first();
+  await first.hover();
+  const gaps = await teamRowGaps(page);
+  expect(gaps).toHaveLength(3);
+  for (const g of gaps) {
+    expect(g.drawn).toBeGreaterThanOrEqual(4);
+    expect(g.tap).toBeGreaterThanOrEqual(4);
+  }
+});
+
+test("a Team chats row has a menu: pin it, or copy the link that opens it", async ({ page, context }) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  const { puts } = await setupTeamChats(page);
+  await page.goto("/chat");
+  const row = page.getByTestId("team-shared-conv-row").filter({ hasText: "Incident room" }).locator("..");
+  await row.hover();
+  await row.getByTestId("team-chat-options").click();
+  const menu = page.getByRole("menu", { name: "Options for Incident room" });
+  // Only what a teammate can do with someone else's chat.
+  await expect(menu.getByRole("menuitem")).toHaveText(["Add to sidebar", "Copy link"]);
+  await menu.getByTestId("add-to-sidebar").click();
+  await expect(page.getByTestId("rail-shortcut")).toContainText("Incident room");
+  await expect.poll(() => puts.length).toBeGreaterThan(0);
+
+  // A chat reached only through Multiplayer copies its chat link (a team
+  // link would refuse it)...
+  const origin = new URL(page.url()).origin;
+  await row.getByTestId("team-chat-options").click();
+  await menu.getByRole("menuitem", { name: "Copy link" }).click();
+  await expect(menu.getByRole("menuitem", { name: "Copied ✓" })).toBeVisible();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(`${origin}/chat?c=m1`);
+  await expect(menu).toBeHidden();
+
+  // ...and a chat shared with the team copies the team link.
+  const shared = page.getByTestId("team-shared-conv-row").filter({ hasText: "Q4 planning" }).locator("..");
+  await shared.hover();
+  await shared.getByTestId("team-chat-options").click();
+  await page.getByRole("menu", { name: "Options for Q4 planning" }).getByRole("menuitem", { name: "Copy link" }).click();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(`${origin}/chat?team=t1`);
+});
+
+test("copying a Team chats link from the keyboard returns focus to the row's menu button", async ({ page, context }) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await setupTeamChats(page);
+  await page.goto("/chat");
+  const row = page.getByTestId("team-shared-conv-row").filter({ hasText: "Q4 planning" }).locator("..");
+  const kebab = row.getByTestId("team-chat-options");
+  await kebab.focus();
+  await page.keyboard.press("Enter");
+  const menu = page.getByRole("menu", { name: "Options for Q4 planning" });
+  await menu.getByRole("menuitem", { name: "Copy link" }).focus();
+  await page.keyboard.press("Enter");
+  await expect(menu).toBeHidden();
+  await expect(kebab).toBeFocused();
+});
+
+test("when the clipboard refuses, a Team chats row's menu shows the link to copy by hand", async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: () => Promise.reject(new Error("denied")) },
+    });
+  });
+  await setupTeamChats(page);
+  await page.goto("/chat");
+  const row = page.getByTestId("team-shared-conv-row").filter({ hasText: "Q4 planning" }).locator("..");
+  await row.hover();
+  await row.getByTestId("team-chat-options").click();
+  const menu = page.getByRole("menu", { name: "Options for Q4 planning" });
+  await menu.getByRole("menuitem", { name: "Copy link" }).click();
+  await expect(menu.getByRole("menuitem", { name: "Copy failed" })).toBeVisible();
+  const origin = new URL(page.url()).origin;
+  // The link sits in a read-only field, focused, so the keyboard can copy it too.
+  const field = page.getByTestId("team-chat-link-fallback").getByRole("textbox", { name: "Copy link" });
+  await expect(field).toHaveValue(`${origin}/chat?team=t1`);
+  await expect(field).toBeFocused();
+  // It stays open, so the link can be selected.
+  await expect(menu).toBeVisible();
+});
+
+test("a copy that finishes after the menu closed does not touch the next opening", async ({ page }) => {
+  await page.addInitScript(() => {
+    const w = window as unknown as { finishCopy?: () => void };
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      // Pending until the test lets it finish, like a browser asking for permission.
+      value: { writeText: () => new Promise<void>((resolve) => (w.finishCopy = resolve)) },
+    });
+  });
+  await setupTeamChats(page);
+  await page.goto("/chat");
+  const row = page.getByTestId("team-shared-conv-row").filter({ hasText: "Q4 planning" }).locator("..");
+  await row.hover();
+  const options = row.getByTestId("team-chat-options");
+  const menu = page.getByRole("menu", { name: "Options for Q4 planning" });
+  await options.click();
+  await menu.getByRole("menuitem", { name: "Copy link" }).click();
+  await page.keyboard.press("Escape");
+  await expect(menu).toBeHidden();
+  await options.click();
+  await page.evaluate(() => (window as unknown as { finishCopy?: () => void }).finishCopy?.());
+  // The old attempt neither relabels nor closes the menu opened since.
+  await page.waitForTimeout(1200);
+  await expect(menu).toBeVisible();
+  await expect(menu.getByRole("menuitem", { name: "Copy link" })).toBeVisible();
+});
+
+test("pressing Copy link twice: only the latest press reports", async ({ page }) => {
+  await page.addInitScript(() => {
+    const w = window as unknown as { finishFirst?: () => void; calls?: number };
+    w.calls = 0;
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      // The first press waits (a permission prompt); the second is refused.
+      value: {
+        writeText: () => {
+          w.calls = (w.calls ?? 0) + 1;
+          return w.calls === 1
+            ? new Promise<void>((resolve) => (w.finishFirst = resolve))
+            : Promise.reject(new Error("denied"));
+        },
+      },
+    });
+  });
+  await setupTeamChats(page);
+  await page.goto("/chat");
+  const row = page.getByTestId("team-shared-conv-row").filter({ hasText: "Q4 planning" }).locator("..");
+  await row.hover();
+  await row.getByTestId("team-chat-options").click();
+  const menu = page.getByRole("menu", { name: "Options for Q4 planning" });
+  await menu.getByRole("menuitem", { name: "Copy link" }).click();
+  await menu.getByRole("menuitem", { name: "Copy link" }).click();
+  await expect(menu.getByRole("menuitem", { name: "Copy failed" })).toBeVisible();
+  // The older press finishing late neither relabels nor closes the menu.
+  await page.evaluate(() => (window as unknown as { finishFirst?: () => void }).finishFirst?.());
+  await page.waitForTimeout(1200);
+  await expect(menu).toBeVisible();
+  await expect(menu.getByRole("menuitem", { name: "Copy failed" })).toBeVisible();
+  await expect(page.getByTestId("team-chat-link-fallback")).toBeVisible();
+});
+
+test("a second Copy link press calls off the first one's close", async ({ page }) => {
+  await page.addInitScript(() => {
+    let calls = 0;
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      // The first press succeeds (and schedules the menu's close); the second is refused.
+      value: { writeText: () => (++calls === 1 ? Promise.resolve() : Promise.reject(new Error("denied"))) },
+    });
+  });
+  await setupTeamChats(page);
+  await page.goto("/chat");
+  const row = page.getByTestId("team-shared-conv-row").filter({ hasText: "Q4 planning" }).locator("..");
+  await row.hover();
+  await row.getByTestId("team-chat-options").click();
+  const menu = page.getByRole("menu", { name: "Options for Q4 planning" });
+  await menu.getByRole("menuitem", { name: "Copy link" }).click();
+  await menu.getByRole("menuitem", { name: "Copied ✓" }).click();
+  await expect(menu.getByRole("menuitem", { name: "Copy failed" })).toBeVisible();
+  // Past the first press's 900ms: the menu and its fallback stay.
+  await page.waitForTimeout(1200);
+  await expect(menu).toBeVisible();
+  await expect(page.getByTestId("team-chat-link-fallback")).toBeVisible();
+});
+
+test.describe("on a short touch screen", () => {
+  test.use({ hasTouch: true });
+
+  test("a long row menu scrolls inside the screen, so its last item stays reachable", async ({ page }) => {
+    await setupTeamChats(page);
+    await page.setViewportSize({ width: 1100, height: 360 });
+    await page.goto("/chat");
+    // At this height the account footer covers the row, so it opens from the
+    // keyboard; the touch-screen styles apply either way.
+    await page.getByRole("button", { name: "Conversation options for My own notes" }).focus();
+    await page.keyboard.press("Enter");
+    const menu = page.getByRole("menu").first();
+    await expect(menu).toBeVisible();
+    const box = await menu.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.y).toBeGreaterThanOrEqual(0);
+    expect(box!.y + box!.height).toBeLessThanOrEqual(360);
+    const last = menu.getByRole("menuitem").last();
+    await last.scrollIntoViewIfNeeded();
+    const lb = await last.boundingBox();
+    expect(lb!.y + lb!.height).toBeLessThanOrEqual(360);
+    await expect(last).toBeInViewport();
+  });
+});
+
+test.describe("on a touch screen", () => {
+  test.use({ hasTouch: true, isMobile: true, viewport: { width: 1280, height: 900 } });
+
+  test("a Team chats row's 44px ⋯ tap box stays clear of its badges", async ({ page }) => {
+    await setupTeamChats(page, CROWDED_TEAM_CHATS);
+    await page.goto("/chat");
+    await expect(page.getByTestId("team-shared-conv-row")).toHaveCount(3);
+    for (const g of await teamRowGaps(page)) {
+      expect(g.drawn).toBeGreaterThanOrEqual(4);
+      expect(g.tap).toBeGreaterThanOrEqual(4);
+    }
+  });
+
+  test("row menus are shown without a hover", async ({ page }) => {
+    await setupTeamChats(page);
+    await page.goto("/chat");
+    const team = page.getByTestId("team-shared-conv-row").filter({ hasText: "Incident room" }).locator("..");
+    await expect(team).toBeVisible();
+    const opacity = (l: ReturnType<Page["locator"]>) => l.evaluate((el) => getComputedStyle(el).opacity);
+    await expect.poll(() => opacity(team.getByTestId("team-chat-options"))).toBe("1");
+    await expect
+      .poll(() => opacity(page.getByRole("button", { name: "Conversation options for My own notes" })))
+      .toBe("1");
+    // A finger-sized row (44px), so each row's tap box stays its own.
+    const height = await team.getByTestId("team-shared-conv-row").evaluate((el) => el.getBoundingClientRect().height);
+    expect(height).toBeGreaterThanOrEqual(44);
+    // ...and so are the items of the menu it opens.
+    await team.getByTestId("team-chat-options").tap();
+    const items = page.getByRole("menu", { name: "Options for Incident room" }).getByRole("menuitem");
+    await expect(items).toHaveCount(2);
+    for (const item of await items.all()) {
+      expect((await item.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(44);
+    }
+  });
+});
+
 test("pinning is per item: one of many multiplayer chats, two of many dashboards, each renamed", async ({ page }) => {
   const many = [
     { id: "d1", title: "Revenue board", pinned: true },
