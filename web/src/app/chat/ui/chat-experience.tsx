@@ -7353,13 +7353,17 @@ export function ChatExperience({
         {/* Dashboard view takes the whole screen: the rail stays mounted
             (its search, scroll and drafts survive) but is not drawn. */}
         {/* …except when the dashboard header's sidebar button slides it in
-            over the board (docs/SIDEBAR.md), with a scrim to dismiss it. */}
+            over the board (docs/SIDEBAR.md), with a scrim to dismiss it. It
+            takes the rail overlay's own layers (scrim z-[380], panel z-[390],
+            as NavRail.tsx), below the menus the rail opens (z-[400]/z-[410],
+            Menu.tsx) and its dialogs (DialogShell layer="rail", z-[420]):
+            above those, the account menu and the row menus opened behind it. */}
         {dashboardActive && sidebarOpen ? (
           <button
             type="button"
             aria-label={tr("Close navigation")}
             data-testid="dashboard-rail-scrim"
-            className="fixed inset-0 z-[440] hidden bg-[var(--color-overlay-strong)] sm:block"
+            className="fixed inset-0 z-[380] hidden bg-[var(--color-overlay-strong)] sm:block"
             onClick={() => setSidebarOpen(false)}
           />
         ) : null}
@@ -7369,7 +7373,7 @@ export function ChatExperience({
           className={
             dashboardActive
               ? sidebarOpen
-                ? "fixed inset-y-0 left-0 z-[450] flex"
+                ? "fixed inset-y-0 left-0 z-[390] flex"
                 : "hidden"
               : "contents"
           }
