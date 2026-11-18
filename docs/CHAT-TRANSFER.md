@@ -29,9 +29,14 @@ the owner's private workspace subtrees swapped out, and moving the chat under
 one could hand them to the new owner when the turn puts them back. Idle is
 made to hold for the whole transfer:
 
-- `beginTransfer` refuses while a turn is running and marks the chat as
-  changing hands under the lock turn registration takes, so no turn can
-  register until the transfer has finished (`registerTurnGated`).
+- `beginTransfer` refuses while a turn is running or an approved action is
+  being executed, and marks the chat as changing hands under the lock turn
+  registration takes, so no turn can register until the transfer has finished
+  (`registerTurnGated`). An approval decided while the chat is marked is
+  refused (409) before it is claimed, so it stays pending: `decideApproval`
+  registers its execution first and reads the mark second, and the transfer
+  sets the mark first and looks for executions second, so one of the two
+  always sees the other.
 - The handler then takes the conversation's workspace lock, the one a turn or
   an approval being executed holds from preparing the workspace until it has
   put it back, waiting up to 10 seconds for it.
@@ -81,6 +86,12 @@ client that has gone away does not skip it) the handler:
 - moves the attachments the new owner uploaded while they were a participant
   out of the participant stash and into the workspace, where an owner's
   attachments live, so links from their earlier turns keep resolving.
+
+A workspace file download that passed its access check just before the
+transfer is checked again once it holds the workspace swap lock (the lock the
+attachment move above runs under), for any chat that has changed owner since
+the process started (`handleWorkspaceFile`), so it serves by who owns the
+chat now.
 
 The transfer is logged (`conversations: chat transferred`, with the actor,
 both owners and the patrol counts).

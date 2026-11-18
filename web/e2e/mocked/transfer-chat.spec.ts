@@ -131,6 +131,30 @@ test("an admin transfers a teammate's chat from Team chats", async ({ page }) =>
   await expect(page.getByTestId("team-shared-conv-row").filter({ hasText: "Client handover board" })).toHaveCount(0);
 });
 
+test("a chat an admin transfers to themselves is reloaded into their own list", async ({ page }) => {
+  await boot(page, { admin: true });
+  await page.route("**/api/conversations/mate1/transfer", (r: Route) =>
+    r.fulfill({
+      json: { conversation_id: "mate1", owner_email: "E2E@example.com", patrols_moved: 0, patrols_paused: 0 },
+    }),
+  );
+  await page.goto("/chat");
+  const row = page.getByTestId("team-shared-conv-row").filter({ hasText: "Client handover board" }).locator("..");
+  await row.hover();
+  await row.getByTestId("team-chat-options").click();
+  await page.getByRole("menuitem", { name: "Transfer ownership…", exact: true }).click();
+  const dialog = page.getByTestId("transfer-chat-dialog");
+  await dialog.getByTestId("transfer-chat-email").fill("e2e@example.com");
+  // The chat is now the admin's own, so the page asks for its list again
+  // rather than only dropping the row.
+  const reloaded = page.waitForRequest(
+    (req) => req.method() === "GET" && new URL(req.url()).pathname === "/api/conversations",
+  );
+  await dialog.getByTestId("transfer-chat-confirm").click();
+  await expect(page.getByTestId("transfer-chat-done")).toBeVisible();
+  await reloaded;
+});
+
 // Contrast is per theme, so axe runs over the dialog in both colour schemes.
 for (const scheme of ["light", "dark"] as const) {
   test(`the transfer dialog has no axe violations (${scheme})`, async ({ page }) => {

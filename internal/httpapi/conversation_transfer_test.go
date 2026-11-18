@@ -204,5 +204,22 @@ func assertTransferNeedsAnIdleChat(ctx context.Context, t *testing.T, srv *Serve
 		t.Errorf("a turn registered while the chat was changing hands (ok=%v swept=%v)", ok, swept)
 	}
 	stopGated()
+	if !srv.transferInProgress(convID) {
+		t.Error("a chat changing hands does not report a transfer in progress (decideApproval reads this)")
+	}
 	endTransfer()
+	if srv.transferInProgress(convID) {
+		t.Error("a finished transfer still reports as in progress")
+	}
+
+	// An approved action being executed is not idle either, and a refused
+	// transfer leaves no mark behind.
+	srv.executingApprovals.register(ctx, convID, owner, "ap-running")
+	if _, idle := srv.beginTransfer(convID); idle {
+		t.Error("a transfer began while an approved action was being executed")
+	}
+	if srv.transferInProgress(convID) {
+		t.Error("a transfer refused for a running approval left the chat marked as changing hands")
+	}
+	srv.executingApprovals.unregister("ap-running")
 }

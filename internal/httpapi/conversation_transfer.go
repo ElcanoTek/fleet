@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -159,7 +160,8 @@ func (s *Server) handleConversationTransfer(w http.ResponseWriter, r *http.Reque
 var transferWorkspaceWait = 10 * time.Second
 
 // beginTransfer marks convID as changing hands, unless a turn is running in
-// it or another transfer of it is under way (idle=false). While the mark is
+// it, an approved action is being executed in it, or another transfer of it
+// is under way (idle=false). While the mark is
 // set, registerTurnGated refuses every turn for the conversation; both read
 // and write it under inflightMu, so "no turn is running" and "none can start"
 // are one decision. The returned func clears the mark.
@@ -176,11 +178,26 @@ func (s *Server) beginTransfer(convID string) (end func(), idle bool) {
 		s.transferring = make(map[string]bool)
 	}
 	s.transferring[convID] = true
+	// An approved action being executed in the chat is as much "not idle" as
+	// a turn. It is looked for after the mark is set, and decideApproval
+	// checks the mark after it registers, so one of the two always sees the
+	// other.
+	if slices.Contains(s.executingApprovals.convIDs(), convID) {
+		delete(s.transferring, convID)
+		return nil, false
+	}
 	return func() {
 		s.inflightMu.Lock()
 		delete(s.transferring, convID)
 		s.inflightMu.Unlock()
 	}, true
+}
+
+// transferInProgress reports whether convID is changing owner right now.
+func (s *Server) transferInProgress(convID string) bool {
+	s.inflightMu.Lock()
+	defer s.inflightMu.Unlock()
+	return s.transferring[convID]
 }
 
 // lockWorkspaceWithin takes the conversation's workspace lock, giving up

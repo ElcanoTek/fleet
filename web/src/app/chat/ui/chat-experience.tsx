@@ -7808,7 +7808,15 @@ export function ChatExperience({
             conversationId={transferDialog.id}
             title={transferDialog.title}
             onClose={() => setTransferDialog(null)}
-            onTransferred={(id) => void dropTransferredConversation(id)}
+            onTransferred={(id, result) => {
+              void dropTransferredConversation(id).then(() => {
+                // An admin who transferred a teammate's chat to themselves
+                // now owns it: it belongs in their own list.
+                if (result.ownerEmail.trim().toLowerCase() === userEmail.trim().toLowerCase()) {
+                  void refreshConversations();
+                }
+              });
+            }}
           />
         ) : null}
 

@@ -1808,6 +1808,18 @@ func (s *Server) decideApproval(ctx context.Context, done <-chan struct{}, user,
 		s.armApprovalStop(approvalID)
 	}
 	s.executingApprovals.register(execCtx, convID, user, approvalID)
+	// A chat that is changing owner runs nothing (docs/CHAT-TRANSFER.md).
+	// Checked after registering and before claiming: the transfer marks the
+	// chat and then looks for registered executions (beginTransfer), so
+	// whichever of the two gets there second sees the other, and nothing has
+	// been claimed yet if it is this one.
+	if s.transferInProgress(convID) {
+		s.executingApprovals.unregister(approvalID)
+		if stoppable {
+			s.disarmApprovalStop(approvalID)
+		}
+		return approvalError(http.StatusConflict, "this chat is changing owner; the action was not run. Try again in a moment.")
+	}
 	claimed, err := s.claimApproved(ctx, user, convID, approval, narrowing)
 	if err != nil || !claimed {
 		s.executingApprovals.unregister(approvalID)
