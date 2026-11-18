@@ -5978,5 +5978,6 @@
   "Delete every temporary chat": "Eliminar todos os chats temporários",
   "Patrol on hold: {0} runs were skipped, the latest at {1}, because an approval card is waiting. Approve or decline it to resume.": "Patrulha em espera: {0} execuções foram ignoradas, a última às {1}, porque um cartão de aprovação está pendente. Aprove-o ou recuse-o para retomá-la.",
   "Patrol on hold: the run at {0} was skipped because an approval card is waiting. Approve or decline it to resume.": "Patrulha em espera: a execução das {0} foi ignorada porque um cartão de aprovação está pendente. Aprove-o ou recuse-o para retomá-la.",
-  "Patrol on hold: the runs at {0} were skipped because an approval card is waiting. Approve or decline it to resume.": "Patrulha em espera: as execuções das {0} foram ignoradas porque um cartão de aprovação está pendente. Aprove-o ou recuse-o para retomá-la."
+  "Patrol on hold: the runs at {0} were skipped because an approval card is waiting. Approve or decline it to resume.": "Patrulha em espera: as execuções das {0} foram ignoradas porque um cartão de aprovação está pendente. Aprove-o ou recuse-o para retomá-la.",
+  "Couldn't load patrols": "Não foi possível carregar as patrulhas"
 }

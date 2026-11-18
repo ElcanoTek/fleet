@@ -78,6 +78,15 @@ async function send(
 
 const JSON_HEADERS = { "Content-Type": "application/json" };
 
+/** The conversation's armed and paused schedules, as every other call
+ *  returns them. */
+export function listSchedules(
+  conversationId: string,
+  fallback = tr("Couldn't load patrols"),
+): Promise<PatrolResponse> {
+  return send(conversationApiPath(conversationId, "schedules"), { method: "GET" }, fallback);
+}
+
 export function createSchedule(
   conversationId: string,
   body: CreateScheduleBody,
