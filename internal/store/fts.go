@@ -21,6 +21,9 @@ type SearchResult struct {
 	Preview string `json:"match_preview"`
 	// MatchedAt is the conversation's updated_at (unix seconds).
 	MatchedAt int64 `json:"matched_at"`
+	// OwnerEmail is set only on a conversation someone else shared with the
+	// caller (team-visible or Multiplayer); empty on the caller's own.
+	OwnerEmail string `json:"user_email,omitempty"`
 }
 
 // searchableType reports whether a message type carries user-facing plaintext
@@ -77,10 +80,29 @@ func insertSearchContent(ctx context.Context, tx *sql.Tx, convID string, now int
 	return err
 }
 
-// SearchConversations returns conversations owned by userEmail whose TITLE or
-// message CONTENT matches query, ranked by ts_rank_cd (title + best body match)
-// and paginated. The second return value is the total match count (for paging).
-// Each result carries a <mark>-highlighted ts_headline preview.
+// SearchConversations returns the conversations userEmail may read whose TITLE
+// or message CONTENT matches query, ranked by ts_rank_cd (title + best body
+// match) and paginated. The second return value is the total match count (for
+// paging). Each result carries a <mark>-highlighted ts_headline preview.
+//
+// "May read" is two sets, and the second is decided by code that already
+// exists rather than by a second copy of its rule:
+//
+//   - the caller's own conversations (archived ones included), and
+//   - the conversations other people shared with the caller — exactly the ids
+//     ListSharedAndMultiplayerConversations returns for them (team-visible to
+//     their team, or Multiplayer they may take part in; never archived,
+//     sealed or deleted). Search asks that function and searches inside its
+//     answer, so the two cannot drift: a chat the Team chats list would not
+//     show can never be found, and revoking a share removes it from search on
+//     the next query.
+//
+// Inside a shared conversation only what a teammate may read is matched: its
+// title, and user/assistant text — the rows teamTranscriptEntry passes. A
+// compaction summary is indexed for the owner, but a team reader gets it as a
+// content-free boundary, so it is not searched (or quoted in a preview) for
+// anyone but the owner. A shared result carries the owner's email, so the
+// client can say whose chat it is and open it through the shared door.
 //
 // The query is parsed with websearch_to_tsquery, which accepts free-form input
 // ("foo bar", quoted phrases, OR, -negation) without throwing on punctuation —
@@ -98,20 +120,36 @@ func (s *Store) SearchConversations(ctx context.Context, userEmail, query string
 		offset = 0
 	}
 
-	// total: distinct conversations that match in title OR any message body.
-	// Soft-deleted rows (#279) are excluded so a tombstoned conversation never
-	// surfaces in search (the restore window is a future endpoint, not search).
-	const countSQL = `
-SELECT COUNT(DISTINCT c.id)
+	// The shared set, from the one function that owns the rule. It is keyed
+	// on the normalized email, as that function's own SQL is.
+	shared, err := s.ListSharedAndMultiplayerConversations(ctx, userEmail)
+	if err != nil {
+		return nil, 0, fmt.Errorf("search shared set: %w", err)
+	}
+	sharedIDs := make([]string, 0, len(shared))
+	for i := range shared {
+		sharedIDs = append(sharedIDs, shared[i].ID)
+	}
+
+	// $2 is the caller (own rows), $3 the shared ids. A body row counts for a
+	// shared conversation only when it is user/assistant text.
+	const matchSQL = `
 FROM conversations c
 CROSS JOIN websearch_to_tsquery('english', $1) AS q
 LEFT JOIN message_search_content m
        ON m.conversation_id = c.id AND m.search_vector @@ q
-WHERE c.user_email = $2
+      AND (c.user_email = $2 OR EXISTS (
+            SELECT 1 FROM messages mm
+            WHERE mm.id = m.message_id AND mm.type = 'text' AND mm.role IN ('user', 'assistant')))
+WHERE (c.user_email = $2 OR c.id = ANY($3::text[]))
   AND c.deleted_at IS NULL
   AND (c.search_vector @@ q OR m.search_vector @@ q)`
+
+	// total: distinct conversations that match in title OR any message body.
+	// Soft-deleted rows (#279) are excluded so a tombstoned conversation never
+	// surfaces in search (the restore window is a future endpoint, not search).
 	var total int
-	if err := s.db.QueryRowContext(ctx, countSQL, q, userEmail).Scan(&total); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(DISTINCT c.id)`+matchSQL, q, userEmail, sharedIDs).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("search count: %w", err)
 	}
 	if total == 0 {
@@ -124,20 +162,14 @@ SELECT c.id, c.title, c.updated_at,
                    COALESCE((array_agg(m.content ORDER BY ts_rank_cd(m.search_vector, q) DESC)
                              FILTER (WHERE m.search_vector @@ q))[1], c.title),
                    q,
-                   'MaxWords=30, MinWords=15, ShortWord=3, MaxFragments=1, StartSel=<mark>, StopSel=</mark>') AS preview
-FROM conversations c
-CROSS JOIN websearch_to_tsquery('english', $1) AS q
-LEFT JOIN message_search_content m
-       ON m.conversation_id = c.id AND m.search_vector @@ q
-WHERE c.user_email = $2
-  AND c.deleted_at IS NULL
-  AND (c.search_vector @@ q OR m.search_vector @@ q)
-GROUP BY c.id, c.title, c.updated_at, c.search_vector, q
+                   'MaxWords=30, MinWords=15, ShortWord=3, MaxFragments=1, StartSel=<mark>, StopSel=</mark>') AS preview,
+       CASE WHEN c.user_email = $2 THEN '' ELSE c.user_email END AS owner` + matchSQL + `
+GROUP BY c.id, c.title, c.updated_at, c.search_vector, c.user_email, q
 ORDER BY (ts_rank_cd(c.search_vector, q) + COALESCE(MAX(ts_rank_cd(m.search_vector, q)), 0)) DESC,
          c.updated_at DESC
-LIMIT $3 OFFSET $4`
+LIMIT $4 OFFSET $5`
 
-	rows, err := s.db.QueryContext(ctx, searchSQL, q, userEmail, limit, offset)
+	rows, err := s.db.QueryContext(ctx, searchSQL, q, userEmail, sharedIDs, limit, offset)
 	if err != nil {
 		return nil, 0, fmt.Errorf("search: %w", err)
 	}
@@ -150,7 +182,7 @@ LIMIT $3 OFFSET $4`
 	var results []SearchResult
 	for rows.Next() {
 		var r SearchResult
-		if err := rows.Scan(&r.ConversationID, &r.Title, &r.MatchedAt, &r.Preview); err != nil {
+		if err := rows.Scan(&r.ConversationID, &r.Title, &r.MatchedAt, &r.Preview, &r.OwnerEmail); err != nil {
 			return nil, 0, fmt.Errorf("search scan: %w", err)
 		}
 		results = append(results, r)

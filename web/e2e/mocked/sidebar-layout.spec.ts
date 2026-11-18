@@ -683,6 +683,44 @@ test("Team chats stay visible when Chats starts folded", async ({ page }) => {
   await expect(page.getByTestId("team-shared-conv-row")).toContainText("All-hands war room");
 });
 
+test("One list for all chats: teammates' chats join the Chats list, and temporary chats are marked", async ({ page }) => {
+  const { puts } = await setupTeamChats(page);
+  await page.goto("/chat");
+  await expect(page.getByTestId("team-chats-section")).toBeVisible();
+  await expect(page.getByTestId("temporary-mark")).toHaveCount(0);
+
+  await page.getByTestId("account-menu-button").click();
+  await page.getByTestId("customize-sidebar").click();
+  const panel = page.getByTestId("sidebar-customizer");
+  await panel.getByTestId("sidebar-editor-unified").click();
+
+  // The rail follows at once: no Team chats section, one list holding both.
+  await expect(page.getByTestId("team-chats-section")).toHaveCount(0);
+  const list = page.getByTestId("unified-chat-list");
+  await expect(list.getByTestId("team-shared-conv-row")).toHaveCount(2);
+  await expect(list).toContainText("My own notes");
+  await expect(list).toContainText("Incident room");
+  // The person's own chat is temporary and says so; a teammate's is not theirs to lose.
+  await expect(list.getByTestId("temporary-mark")).toHaveCount(1);
+  await expect(list.getByLabel("Temporary chat")).toHaveAttribute("title", /14 days/);
+  // The panel shows where Team chats went.
+  await expect(panel.getByTestId("sidebar-editor-team-merged")).toHaveText("In Chats");
+
+  await expect.poll(() => (puts.at(-1) as { unified?: boolean } | undefined)?.unified).toBe(true);
+
+  const results = await new AxeBuilder({ page })
+    .include('[data-testid="unified-chat-list"]')
+    .include('[data-testid="sidebar-customizer"]')
+    .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+    .analyze();
+  expect(results.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(" ")).join(", ")}`)).toEqual([]);
+
+  // Off again: the separate lists come back.
+  await panel.getByTestId("sidebar-editor-unified").click();
+  await expect(page.getByTestId("team-chats-section")).toBeVisible();
+  await expect(page.getByTestId("temporary-mark")).toHaveCount(0);
+});
+
 test("a read-only Viewer can look at the panel but not change the sidebar", async ({ page }) => {
   const { puts } = await setup(page, { role: "viewer" });
   await page.goto("/chat");

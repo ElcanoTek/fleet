@@ -723,6 +723,9 @@ function AddShortcut({
 // ── The chat page's sections ───────────────────────────────────────────────
 
 function SectionsSection({ layout, onChange }: { layout: SidebarLayout; onChange: (next: SidebarLayout) => void }) {
+  const unifiedId = useId();
+  const unified = Boolean(layout.unified);
+  const chatsName = layout.sections.find((x) => x.id === "chats")?.label || sectionName("chats");
   return (
     <section aria-labelledby="sidebar-sections-heading" className="grid gap-2">
       <h3 id="sidebar-sections-heading" className={HEADING}>
@@ -734,13 +737,17 @@ function SectionsSection({ layout, onChange }: { layout: SidebarLayout; onChange
       <ol className="grid gap-1" data-testid="sidebar-editor-sections">
         {layout.sections.map((s, index) => {
           const name = s.label || sectionName(s.id);
+          // With one list for all chats, Team chats has no section of its
+          // own to fold or hide: its chats follow the Chats list.
+          const merged = unified && s.id === "team";
           return (
             <li
               key={s.id}
               className={cn(
                 "flex items-center gap-1 rounded-[var(--radius-md)] border bg-[var(--color-surface-1)] px-1.5 py-1.5",
-                s.hidden ? "border-dashed border-[var(--color-border-strong)] bg-transparent" : "border-[var(--color-border)]",
+                s.hidden && !merged ? "border-dashed border-[var(--color-border-strong)] bg-transparent" : "border-[var(--color-border)]",
               )}
+              data-merged={merged ? "true" : undefined}
             >
               <span className="flex size-7 shrink-0 items-center justify-center text-[var(--color-text-muted)]">
                 <Icon name={sectionIcon(s.id)} className="size-3.5" />
@@ -753,9 +760,18 @@ function SectionsSection({ layout, onChange }: { layout: SidebarLayout; onChange
                 onCommit={(label) => onChange(updateSection(layout, s.id, { label }))}
                 className="h-7 min-w-0 flex-1 rounded-md border border-transparent bg-transparent px-1.5 text-[0.84rem] font-medium text-[var(--color-text-primary)] outline-none transition placeholder:text-[var(--color-text-primary)] hover:border-[var(--color-border)] focus-visible:border-[var(--color-border-strong)] focus-visible:bg-[var(--color-overlay-soft)] focus-visible:placeholder:text-[var(--color-text-muted)] any-pointer-coarse:h-9"
               />
+              {merged ? (
+                <span
+                  data-testid="sidebar-editor-team-merged"
+                  className="shrink-0 rounded-full border border-[var(--color-border)] px-1.5 py-px text-[0.66rem] font-medium text-[var(--color-text-secondary)]"
+                >
+                  {tr("In {0}", [chatsName])}
+                </span>
+              ) : null}
               <button
                 type="button"
                 className={ICON_BUTTON}
+                disabled={merged}
                 aria-pressed={Boolean(s.collapsed)}
                 aria-label={tr("Start {0} folded", [name])}
                 title={s.collapsed ? tr("Starts folded") : tr("Starts open")}
@@ -765,6 +781,7 @@ function SectionsSection({ layout, onChange }: { layout: SidebarLayout; onChange
               </button>
               <Switch
                 checked={!s.hidden}
+                disabled={merged}
                 onCheckedChange={(on) => onChange(updateSection(layout, s.id, { hidden: !on }))}
                 aria-label={tr("Show {0} on the Chat page", [name])}
                 title={s.hidden ? tr("Hidden — switch on to show") : tr("Shown — switch off to hide")}
@@ -794,6 +811,22 @@ function SectionsSection({ layout, onChange }: { layout: SidebarLayout; onChange
           );
         })}
       </ol>
+      <div className="flex items-start justify-between gap-3 rounded-[var(--radius-md)] border border-[var(--color-border)] px-3 py-2.5">
+        <span className="grid gap-0.5">
+          <label htmlFor={unifiedId} className="text-[0.84rem] font-medium text-[var(--color-text-primary)]">
+            {tr("One list for all chats")}
+          </label>
+          <span className="text-[0.72rem] leading-snug text-[var(--color-text-muted)]">
+            {tr("List your teammates' shared chats together with your own, in one list, instead of in a list of their own. Chats of yours that are temporary are marked with a clock.")}
+          </span>
+        </span>
+        <Switch
+          id={unifiedId}
+          data-testid="sidebar-editor-unified"
+          checked={unified}
+          onCheckedChange={(on) => onChange({ ...layout, unified: on || undefined })}
+        />
+      </div>
     </section>
   );
 }

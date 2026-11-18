@@ -170,7 +170,16 @@ function SealedNewChatButton({ onClick }: { onClick: () => void }) {
 const RECENT_INFO_TEXT =
   tr("Chats here are deleted after 14 days of inactivity. Pin a chat or move it into a project to keep it.");
 
-function RecentInfoButton() {
+// The one-list view (docs/SIDEBAR.md) mixes the person's temporary chats with
+// teammates' chats, so "chats here are deleted" would be wrong for half the
+// rows: there the clock on a row is what marks a temporary chat, and the
+// explainer says what the clock means.
+const UNIFIED_INFO_TEXT =
+  tr("Chats marked with a clock are temporary: they are deleted after 14 days of inactivity. Pin a chat or move it into a project to keep it. A teammate's chat is theirs to keep.");
+const TEMPORARY_ROW_TEXT =
+  tr("Temporary — deleted after 14 days of inactivity. Pin it or move it into a project to keep it.");
+
+function RecentInfoButton({ text = RECENT_INFO_TEXT, label = tr("About temporary chats") }: { text?: string; label?: string }) {
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
   // Hover AND keyboard focus show the explainer (the sealed-lock tooltip's
   // exact mechanics — was click-toggle, which read as a broken button). The
@@ -190,7 +199,7 @@ function RecentInfoButton() {
     <span className="relative inline-flex">
       <button
         type="button"
-        aria-label={tr("About temporary chats")}
+        aria-label={label}
         className="hit-area inline-flex items-center justify-center rounded-full text-[var(--color-text-muted)] transition hover:text-[var(--color-text-secondary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
         onMouseEnter={show}
         onMouseLeave={hide}
@@ -206,7 +215,7 @@ function RecentInfoButton() {
               className="conv-tooltip"
               style={{ top: pos.top, left: pos.left }}
             >
-              {RECENT_INFO_TEXT}
+              {text}
             </span>,
             document.body,
           )
@@ -981,8 +990,12 @@ function ConvRow({
   titleNode,
   context,
   tag,
+  temporary,
 }: {
   conversation: ConversationSummary;
+  // The one-list view only: this chat is temporary (unpinned, in no project),
+  // marked with a clock that says so and how to keep it.
+  temporary?: boolean;
   // Search results only: the title with the matched words marked, the place
   // the chat lives (its project's name) and a kind tag ("Patrol"). A result
   // is shown out of its section, so the row says where it belongs.
@@ -1099,6 +1112,15 @@ function ConvRow({
                 title={tr("Working…")}
                 className="inline-block size-1.5 shrink-0 animate-pulse rounded-full bg-[var(--color-accent)]"
               />
+            ) : null}
+            {temporary ? (
+              <span
+                data-testid="temporary-mark"
+                aria-label={tr("Temporary chat")}
+                title={TEMPORARY_ROW_TEXT}
+              >
+                <Icon name="clock" className="size-3 shrink-0 text-[var(--color-text-muted)]" />
+              </span>
             ) : null}
             {/* Two audiences, two marks, each labeled (ADR-0057). A single
                 unlabeled chain link stood for "shared" and, inside a
@@ -1505,6 +1527,10 @@ export function ConversationSidebar({
   const sectionIndex = (id: SectionId) => railLayout.sections.findIndex((x) => x.id === id);
   const projectsFirst = sectionIndex("projects") < sectionIndex("chats");
   const teamFirst = sectionIndex("team") < sectionIndex("chats");
+  // One list for all chats (docs/SIDEBAR.md): teammates' chats are listed in
+  // the Chats section with the person's own, and Team chats has no section
+  // of its own.
+  const unified = Boolean(railLayout.unified);
   // Projects section (#509 follow-up): the section itself starts open (its
   // presence is the affordance) unless the layout folds it; each project
   // starts collapsed and remembers its expansion for the session only, like
@@ -1665,6 +1691,21 @@ export function ConversationSidebar({
     setReorderScope(null);
   };
   const recent = sortRecent(recentUnfiled(conversations, knownProjectIds), recentSort);
+  // The one-list view: the person's unpinned, unfiled chats and teammates'
+  // chats in one list under one sort. The person's own rows keep the relative
+  // order they have on their own (sortRecent breaks ties by input order, and
+  // theirs come first), so j/k — which walks only their own — still matches.
+  // A chat is listed once: a teammate's row wins over a copy in the own list.
+  const teamRowIds = new Set(teamSharedConversations.map((c) => c.id));
+  const allRecent = unified
+    ? sortRecent(
+        [
+          ...recentUnfiled(conversations, knownProjectIds).filter((c) => !teamRowIds.has(c.id)),
+          ...teamSharedConversations,
+        ],
+        recentSort,
+      )
+    : recent;
   const filtering = computeIsFiltering({
     labels: filterLabels,
     query: sidebarQuery,
@@ -1712,6 +1753,7 @@ export function ConversationSidebar({
   const shownIds = new Set([
     ...filteredConversations.map((c) => c.id),
     ...archivedMatches.map((c) => c.id),
+    ...teamMatches.map((c) => c.id),
   ]);
   // Only the answer to what is typed now: while a new query's answer is on
   // its way, the previous query's hits are not shown, counted or opened.
@@ -1766,10 +1808,11 @@ export function ConversationSidebar({
     />
   );
 
-  const renderRowIn = (conversation: ConversationSummary, inResults: boolean) => (
+  const renderRowIn = (conversation: ConversationSummary, inResults: boolean, temporary = false) => (
     <ConvRow
       key={conversation.id}
       conversation={conversation}
+      temporary={temporary}
       titleNode={inResults ? markMatches(conversation.title, tokens) : undefined}
       context={
         inResults && conversation.project_id
@@ -2319,7 +2362,7 @@ visibleProjectTree.map(({ project, chats }) => {
 
   // One Team chats row: in the section, and in the search results (where the
   // title's matched words are marked).
-  const renderTeamRow = (c: ConversationSummary, inResults: boolean) => {
+  const renderTeamRow = (c: ConversationSummary, inResults: boolean, merged = false) => {
                         const active = activeConversationId === c.id;
                         const ownerShort = c.user_email
                           ? c.user_email.split("@")[0]
@@ -2331,7 +2374,10 @@ visibleProjectTree.map(({ project, chats }) => {
                             data-testid="team-shared-conv-row"
                             data-rail-row=""
                             className={[
-                              "flex w-full min-w-0 items-center gap-1.5 rounded-md py-1.5 pl-2 pr-10 text-left text-[0.84rem] transition any-pointer-coarse:min-h-11 any-pointer-coarse:pr-12",
+                              "flex w-full min-w-0 items-center gap-1.5 rounded-md pr-10 text-left transition any-pointer-coarse:min-h-11 any-pointer-coarse:pr-12",
+                              // In the one-list view a teammate's row sits
+                              // between the person's own, so it takes their size.
+                              merged ? "py-2 pl-[0.55rem] text-[0.875rem]" : "py-1.5 pl-2 text-[0.84rem]",
                               active
                                 ? "bg-[var(--rail-active)] text-[var(--color-text-primary)]"
                                 : "text-[var(--color-text-secondary)] hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)]",
@@ -2377,7 +2423,7 @@ visibleProjectTree.map(({ project, chats }) => {
   // Teammates' shared and multiplayer chats, above or below the person's own
   // chats as their layout orders the sections.
   const teamBlock =
-    !teamSec.hidden && teamSharedConversations.length > 0 ? (
+    !unified && !teamSec.hidden && teamSharedConversations.length > 0 ? (
                 <div
                   data-testid="team-chats-section"
                   className={
@@ -2442,10 +2488,26 @@ visibleProjectTree.map(({ project, chats }) => {
     projectsLoaded ? null : sectionLabel("projects", tr("Projects")),
     archivedLoaded ? null : tr("Archived"),
   ].filter((x): x is string => x !== null);
-  const openMessageHit = (id: string) => {
-    const team = teamSharedConversations.find((c) => c.id === id);
+  // A hit in a chat someone shared with the person (it carries the owner's
+  // email) opens through the shared door, as its Team chats row does. If the
+  // shared list has not loaded, the hit itself stands in for the row: the
+  // page tries it as a chat the person takes part in, then as a read-only
+  // team chat.
+  const openMessageHit = (r: SearchResult) => {
+    const team = teamSharedConversations.find((c) => c.id === r.conversation_id);
     if (team && onSelectTeamSharedConversation) onSelectTeamSharedConversation(team);
-    else void loadConversation(id);
+    else if (r.user_email && onSelectTeamSharedConversation) {
+      onSelectTeamSharedConversation({
+        id: r.conversation_id,
+        title: r.title,
+        persona: "",
+        model: "",
+        pinned: false,
+        updated_at: r.matched_at,
+        user_email: r.user_email,
+        multiplayer: true,
+      });
+    } else void loadConversation(r.conversation_id);
   };
   const searchResults = (
     <div data-testid="search-results" role="region" aria-label={tr("Search results")}>
@@ -2502,8 +2564,9 @@ visibleProjectTree.map(({ project, chats }) => {
           testId="search-group-team"
           title={sectionLabel("team", tr("Team chats"))}
           count={teamMatches.length}
-          hidden={teamSec.hidden}
-          onShow={showSection("team")}
+          // In the one-list view teammates' chats live in the Chats section.
+          hidden={unified ? chatsSec.hidden : teamSec.hidden}
+          onShow={showSection(unified ? "chats" : "team")}
         >
           {teamMatches.map((c) => renderTeamRow(c, true))}
         </SearchGroup>
@@ -2540,15 +2603,25 @@ visibleProjectTree.map(({ project, chats }) => {
                 data-testid="search-result"
                 data-rail-row=""
                 className="block w-full rounded-md px-2 py-1.5 text-left transition hover:bg-[var(--rail-hover)] any-pointer-coarse:min-h-11"
-                onClick={() => openMessageHit(r.conversation_id)}
+                onClick={() => {
+                  if (r.user_email) setSidebarOpen(false);
+                  openMessageHit(r);
+                }}
               >
                 <span className="flex min-w-0 items-center gap-1.5 text-[0.85rem] text-[var(--color-text-secondary)]">
-                  <span className="min-w-0 truncate">
+                  {r.user_email ? <TeamGlyph className="size-3 shrink-0 text-[var(--color-accent)]" /> : null}
+                  <span className="min-w-0 flex-1 truncate">
                     {proj ? <span className="text-[var(--color-text-muted)]">{proj.name} › </span> : null}
                     {r.title || tr("Untitled")}
                   </span>
                   {archived ? <ResultTag>{tr("Archived")}</ResultTag> : null}
                   {patrolIds.has(r.conversation_id) ? <ResultTag>{tr("Patrol")}</ResultTag> : null}
+                  {r.user_email ? (
+                    // Whose chat it is, as on a Team chats row.
+                    <span className="max-w-[45%] min-w-0 shrink truncate font-[family-name:var(--font-code)] text-[0.66rem] text-[var(--color-text-muted)]">
+                      {r.user_email.split("@")[0]}
+                    </span>
+                  ) : null}
                 </span>
                 <span className="block truncate text-[0.75rem] text-[var(--color-text-muted)] [&_mark]:rounded-[2px] [&_mark]:bg-[var(--color-accent)]/25 [&_mark]:text-[var(--color-text-primary)]">
                   {previewNodes(r.match_preview)}
@@ -2875,12 +2948,16 @@ visibleProjectTree.map(({ project, chats }) => {
                     next row whole instead of being cut off. */}
                 <div className="flex items-center gap-1.5 px-2 pb-1 pt-2 text-[0.68rem] font-semibold uppercase tracking-[0.08em] text-[var(--color-text-muted)] any-pointer-coarse:flex-wrap">
                   <Icon
-                    name="clock"
+                    name={unified ? "message" : "clock"}
                     className="size-3 shrink-0 text-[var(--color-accent)]"
                   />
-                  {tr("Temporary")}
-                  <RecentInfoButton />
-                  {onRecentSortChange && recent.length > 1 ? (
+                  {unified ? tr("Recent") : tr("Temporary")}
+                  {unified ? (
+                    <RecentInfoButton text={UNIFIED_INFO_TEXT} label={tr("About this list")} />
+                  ) : (
+                    <RecentInfoButton />
+                  )}
+                  {onRecentSortChange && allRecent.length > 1 ? (
                     // On a touch screen every select is forced to 16px text
                     // (so iOS does not zoom on focus); the width cap below is
                     // sized for the 11px desktop label and cut the value off
@@ -2890,7 +2967,7 @@ visibleProjectTree.map(({ project, chats }) => {
                     // (field-sizing) and may shrink (min-w-0), so a longer
                     // translation no longer pushes it past the sidebar.
                     <select
-                      aria-label={tr("Sort temporary chats")}
+                      aria-label={unified ? tr("Sort chats") : tr("Sort temporary chats")}
                       data-testid="recent-sort"
                       value={recentSort}
                       onChange={(e) => {
@@ -2906,10 +2983,16 @@ visibleProjectTree.map(({ project, chats }) => {
                     </select>
                   ) : null}
                 </div>
-                {recent.length === 0 ? (
+                {allRecent.length === 0 ? (
                   <p className="px-2 py-1.5 text-[0.82rem] text-[var(--color-text-muted)]">
                     {tr("No saved chats yet.")}
                   </p>
+                ) : unified ? (
+                  <div data-testid="unified-chat-list">
+                    {allRecent.map((c) =>
+                      teamRowIds.has(c.id) ? renderTeamRow(c, false, true) : renderRowIn(c, false, true),
+                    )}
+                  </div>
                 ) : (
                   recent.map(renderRow)
                 )}

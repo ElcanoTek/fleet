@@ -40,6 +40,23 @@ sidebar"), which `/help` renders.
   None of this affects search: while the search field holds text the
   sections step aside for one list of results drawn from all of them, hidden
   and folded ones included ([SIDEBAR-SEARCH.md](SIDEBAR-SEARCH.md)).
+- **One list for all chats** (`unified` in the layout, off by default).
+  Teammates' shared and multiplayer chats are listed inside the Chats section
+  with the person's own, and Team chats has no section of its own (its order,
+  fold and hide settings are kept but not used, and the Customize panel shows
+  it as "In Chats"). Pinned chats keep their group at the top, with its
+  reorder mode. Below it, one **Recent** list holds the person's unpinned,
+  unfiled chats and teammates' chats under one sort (the Temporary sort
+  control). Because that list is no longer only temporary chats, each of the
+  person's chats that is temporary carries a clock that says it is deleted
+  after 14 days of inactivity unless pinned or filed, and the heading's
+  explainer says what the clock means. A teammate's row is the Team chats row
+  (team glyph, **Live**, owner, its own `⋯` menu). Folding or hiding Chats
+  folds or hides teammates' chats with it; search still finds them
+  ([SIDEBAR-SEARCH.md](SIDEBAR-SEARCH.md)). Presets keep the choice, like
+  shortcuts. Deliberately unchanged: a project's chats stay under their
+  project (in the rail a project chat lives only there), `j`/`k` walk the
+  person's own rows, and select mode selects only their own.
 - **Compact** hides the one-line subtitles.
 - **The Customize panel** (`SidebarCustomizer.tsx`, `SidebarEditor.tsx`) is a
   *non-modal* sheet: the rail stays visible and usable beside it, so every edit

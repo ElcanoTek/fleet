@@ -55,6 +55,28 @@ func TestParseContractExample(t *testing.T) {
 	}
 }
 
+// Unified (one list for all chats) is a plain view flag: kept when set,
+// omitted when not, and stable under re-normalizing.
+func TestNormalizeKeepsUnified(t *testing.T) {
+	t.Parallel()
+	l, err := Parse([]byte(`{"version":1,"items":[],"sections":[],"unified":true}`))
+	if err != nil || !l.Unified {
+		t.Fatalf("Parse = %+v, %v; want unified", l, err)
+	}
+	got, _ := json.Marshal(l)
+	if !strings.Contains(string(got), `"unified":true`) {
+		t.Errorf("normalized layout dropped unified: %s", got)
+	}
+	again, err := Parse(got)
+	if err != nil || !reflect.DeepEqual(again, l) {
+		t.Errorf("re-normalize = %+v, %v; want %+v", again, err, l)
+	}
+	off, _ := Normalize(Layout{Version: 1})
+	if raw, _ := json.Marshal(off); strings.Contains(string(raw), "unified") {
+		t.Errorf("a layout without unified serializes it: %s", raw)
+	}
+}
+
 func TestNormalizeFillsDefaults(t *testing.T) {
 	t.Parallel()
 	l, err := Normalize(Layout{Version: 1})

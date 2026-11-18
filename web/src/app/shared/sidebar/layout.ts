@@ -59,6 +59,12 @@ export type SidebarLayout = {
   home?: string;
   /** Hide the one-line descriptions under the rail's destinations. */
   compact?: boolean;
+  /**
+   * One list for all chats: teammates' shared chats are listed inside the
+   * Chats section with the person's own, instead of in a Team chats section
+   * of their own (docs/SIDEBAR.md).
+   */
+  unified?: boolean;
 };
 
 export const MAX_ITEMS = 60;
@@ -208,6 +214,7 @@ export function normalizeLayout(raw: unknown): SidebarLayout {
   }
   const layout: SidebarLayout = { version: LAYOUT_VERSION, items, sections, home: "" };
   if (r.compact === true) layout.compact = true;
+  if (r.unified === true) layout.unified = true;
   layout.home = validHome(layout, typeof r.home === "string" ? r.home : "");
   return layout;
 }
@@ -421,6 +428,9 @@ function arrange(
     sections,
     home: "",
     compact: opts.compact || undefined,
+    // One list or separate lists is the person's choice, like their
+    // shortcuts: a preset rearranges around it.
+    unified: layout.unified || undefined,
   };
   next.home = opts.home ? opts.home(next) : layout.home && !opts.hide?.includes(layout.home as BuiltinId) ? layout.home : "";
   return normalizeLayout(next);

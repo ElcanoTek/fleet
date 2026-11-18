@@ -9,6 +9,9 @@ export type SearchResult = {
   title: string;
   match_preview: string;
   matched_at: number;
+  // Set only on a chat someone else shared with the person (team-visible or
+  // Multiplayer): the owner's email. Absent on their own chats.
+  user_email?: string;
 };
 
 // previewNodes turns a server-produced snippet into React nodes: plain text,

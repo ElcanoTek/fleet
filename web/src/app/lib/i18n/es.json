@@ -5959,5 +5959,13 @@
   "Search looked through all your chats with the chosen labels, plus team chats and projects, including hidden and folded sections. Try fewer words, or clear the label filter.": "La búsqueda revisó todos tus chats con las etiquetas elegidas, además de los chats del equipo y los proyectos, incluidas las secciones ocultas y plegadas. Prueba con menos palabras o quita el filtro de etiquetas.",
   "Search looked through all your chats, team chats, projects and archived chats, including hidden and folded sections. Try fewer or different words.": "La búsqueda revisó todos tus chats, los chats del equipo, los proyectos y los chats archivados, incluidas las secciones ocultas y plegadas. Prueba con menos palabras o con otras.",
   "Try fewer or different words.": "Prueba con menos palabras o con otras.",
-  "Not searched, because it has not loaded: {0}. If this stays, reload the page.": "No se buscó en lo que aún no se ha cargado: {0}. Si sigue así, recarga la página."
+  "Not searched, because it has not loaded: {0}. If this stays, reload the page.": "No se buscó en lo que aún no se ha cargado: {0}. Si sigue así, recarga la página.",
+  "About this list": "Acerca de esta lista",
+  "Chats marked with a clock are temporary: they are deleted after 14 days of inactivity. Pin a chat or move it into a project to keep it. A teammate's chat is theirs to keep.": "Los chats marcados con un reloj son temporales: se eliminan tras 14 días de inactividad. Fija un chat o muévelo a un proyecto para conservarlo. El chat de un compañero lo conserva su propietario.",
+  "List your teammates' shared chats together with your own, in one list, instead of in a list of their own. Chats of yours that are temporary are marked with a clock.": "Muestra los chats compartidos por tus compañeros junto con los tuyos, en una sola lista, en lugar de en una lista aparte. Tus chats temporales se marcan con un reloj.",
+  "One list for all chats": "Una sola lista para todos los chats",
+  "Recent": "Recientes",
+  "Sort chats": "Ordenar chats",
+  "Temporary chat": "Chat temporal",
+  "Temporary — deleted after 14 days of inactivity. Pin it or move it into a project to keep it.": "Temporal: se elimina tras 14 días de inactividad. Fíjalo o muévelo a un proyecto para conservarlo."
 }

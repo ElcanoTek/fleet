@@ -375,9 +375,10 @@ Clear the field and the rail returns exactly as you left it.
   see the chats they shared.
 - **In messages** lists chats where the words appear in the conversation
   itself, with the matching line beneath. This covers your own chats,
-  archived ones included (tagged **Archived**); teammates' chats are found by
-  title and owner only. A deployment can switch message search off, in which
-  case this group does not appear.
+  archived ones included (tagged **Archived**), and the chats shared with
+  you: the ones in **Team chats**, shown with their owner's name. In a shared
+  chat it searches what was asked and answered. A deployment can switch
+  message search off, in which case this group does not appear.
 - If a result comes from a list you have hidden, the group says **Hidden in
   your sidebar** and offers **Show it**, which puts that list back in your
   sidebar (not offered on a read-only **Viewer** account).
@@ -498,6 +499,17 @@ A read-only **Viewer** account can open the panel but not change anything.
   **Chats** and **Team chats** lists. Search still finds what is in a hidden
   or folded list. A hidden Chats list still leaves the
   **+** for a new chat.
+- **One list for all chats**, in the same part of the panel, lists your
+  teammates' shared chats together with your own instead of in a **Team
+  chats** list of their own. Your pinned chats stay in **Pinned** at the top;
+  below them, one **Recent** list holds the rest of your chats and your
+  teammates', sorted together (most recently active first, or by the sort
+  you pick beside the heading). A teammate's row keeps its team mark and the
+  owner's name. Each chat of yours that is temporary carries a small clock:
+  it is deleted after a period of inactivity (14 days on a default
+  deployment) unless you pin it or move it into a project. Chats in a
+  project stay under their project. Off by default; switch it off again to
+  get the separate lists back.
 - **Compact** shows one line per item, without the descriptions.
 
 **Add to sidebar** in a chat's menu, or in a project's menu, pins it without

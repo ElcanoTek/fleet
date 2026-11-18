@@ -47,9 +47,11 @@ This note records what shipped to fix that, and what was left out.
   `Project ›` before its title; a patrol chat carries a **Patrol** tag (read
   once from `/api/patrols` when the first search starts); an archived message
   hit carries **Archived**.
-- **In messages** is unchanged in what it searches (`GET /api/search`,
-  Postgres full text over the person's own chats, archived ones included)
-  and is deduplicated against chats already listed by title. While that
+- **In messages** (`GET /api/search`, Postgres full text) covers the
+  person's own chats, archived ones included, and the chats shared with them
+  (see "Searching shared chats" below). It is deduplicated against chats
+  already listed by title. A shared hit shows the team glyph and its owner's
+  name and opens as its Team chats row does. While that
   answer is on its way, an otherwise empty list says "Searching…" rather than
   "Nothing matches". Hits belong to the query typed now: the previous
   query's hits are dropped as soon as the text changes.
@@ -68,14 +70,37 @@ This note records what shipped to fix that, and what was left out.
 - **Screen readers.** The list is a labelled region; a polite status line
   announces the number of results for the query.
 
-## Deviations and limits
+## Searching shared chats (server)
 
-- **Teammates' chats are matched by title and owner, not by message text.**
-  `GET /api/search` reads only the caller's own conversations. Searching the
-  text of chats shared with the caller needs the shared-scope access rule
-  (`ListSharedAndMultiplayerConversations`) inside the full-text query, which
-  is a server change with its own access-control review. Not done here; the
-  guide says so.
+`GET /search` used to read only the caller's own conversations. It now also
+searches the conversations other people shared with the caller
+(`store.SearchConversations`):
+
+- **The shared set is the Team chats list's own.** Search calls
+  `ListSharedAndMultiplayerConversations` for the caller and searches inside
+  the ids it returns: team-visible to the caller's team, or Multiplayer the
+  caller may take part in; never archived, sealed or deleted. There is no
+  second copy of that rule in the search query, so the two cannot drift: a
+  chat the Team chats list would not show cannot be found, and a share that
+  is revoked is gone from search on the next query.
+- **Only what a teammate may read is matched.** In a shared conversation the
+  query matches the title and user/assistant text, the rows
+  `teamTranscriptEntry` passes. Tool calls and reasoning were never indexed.
+  A compaction summary is indexed for its owner, but a team reader gets it as
+  a content-free boundary, so it is neither matched nor quoted in a preview
+  for anyone but the owner. This narrower rule is applied to Multiplayer
+  chats too.
+- **A shared result carries `user_email`**, the owner's; the caller's own
+  results omit it. No other field of the conversation is returned.
+- Cost: one extra list read per search. No migration, no new index.
+
+`internal/store/fts_test.go` pins this: found by a teammate by title and by
+text; not by another team or a person on no team; a never-shared chat stays
+private; unsharing removes it; summary text and tool calls are not matched or
+quoted; archived and Multiplayer-excluded chats are not found; and every
+shared result is inside the caller's shared list.
+
+## Deviations and limits
 - **Projects keep their tree rows in the results** (expand, the `⋯` menu,
   drop target), rather than a flat link, so a project found by search behaves
   like the one in the section.
@@ -85,6 +110,8 @@ This note records what shipped to fix that, and what was left out.
   viewer's, so they are matched on the text alone.
 - **`j`/`k` list navigation** walks the own-chat results only, as before
   (`visibleConversationOrder`); the arrow keys above walk every result.
+- **Shared chats in a project the caller has not opened** are found like any
+  other shared chat; the result opens the chat, not the project.
 - **Not done:** searching background tasks from this field, ranking across
   groups, and remembering recent searches.
 
