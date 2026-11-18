@@ -348,3 +348,52 @@ test("Review still jumps after the dashboard's approvals light was used", async 
   await bar.getByRole("button", { name: "Review" }).click();
   await expect(card).toBeInViewport({ timeout: 5_000 });
 });
+
+test("pausing two patrols at once leaves both paused", async ({ page }) => {
+  // The server pauses each on arrival and replies with the whole list as it
+  // stood then; the first reply is slow. Applied out of order, the first
+  // (older) list would land last and show the second patrol still running.
+  const second = { ...PATROL, id: "sched-b", title: "Margin Sweep", cron: "0 */4 * * *" };
+  let schedules = [PATROL, second];
+  const sent: string[] = [];
+  let inFlight = 0;
+  let overlapped = false;
+  await page.clock.setFixedTime(NOW);
+  await mockChatBoot(page, {
+    conversations: [{ id: "conv-patrol", title: "Northpeak Campaign Watch" }],
+  });
+  await page.route("**/api/conversations/conv-patrol/schedules/**", async (r: Route) => {
+    const id = new URL(r.request().url()).pathname.split("/").pop()!;
+    sent.push(id);
+    inFlight += 1;
+    if (inFlight > 1) overlapped = true;
+    schedules = schedules.map((s) => (s.id === id ? { ...s, status: "paused" } : s));
+    const snapshot = schedules;
+    if (id === PATROL.id) await new Promise((done) => setTimeout(done, 1200));
+    inFlight -= 1;
+    await r.fulfill({ json: { schedules: snapshot, auto_approve: true, approval_mode: "auto" } });
+  });
+  await page.route("**/api/conversations/conv-patrol", (r: Route) => {
+    if (r.request().method() !== "GET") return r.fulfill({ json: {} });
+    return r.fulfill({
+      json: {
+        conversation: { id: "conv-patrol", title: "Northpeak Campaign Watch", persona: "default", auto_approve: true, approval_mode: "auto" },
+        schedules,
+        history: [{ id: 1, type: "text", role: "user", content: { text: "Watch Northpeak pacing." } }],
+        pending_approvals: [],
+      },
+    });
+  });
+  await page.goto("/chat");
+  await page.getByText("Northpeak Campaign Watch").first().click();
+  await expect(page.getByTestId("patrol-banner")).toBeVisible({ timeout: 15_000 });
+
+  await page.getByTestId("chat-patrol-button").click();
+  const dialog = page.getByRole("dialog", { name: "Patrols & timers" });
+  await dialog.getByRole("button", { name: `Pause ${PATROL.title}` }).click();
+  await dialog.getByRole("button", { name: `Pause ${second.title}` }).click();
+  await expect.poll(() => sent).toEqual([PATROL.id, second.id]);
+  await expect(dialog.getByRole("button", { name: `Resume ${PATROL.title}` })).toBeVisible();
+  await expect(dialog.getByRole("button", { name: `Resume ${second.title}` })).toBeVisible();
+  expect(overlapped).toBe(false);
+});

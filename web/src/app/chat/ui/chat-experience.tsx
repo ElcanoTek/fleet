@@ -6328,6 +6328,25 @@ export function ChatExperience({
     }
   };
 
+  // Every reply carries the chat's whole schedule list, and applying one
+  // replaces the list. Requests from different cards could otherwise
+  // settle out of order, an older list landing on a newer one, so a chat's
+  // patrol requests run one at a time, in the order they were made.
+  const patrolQueueRef = useRef(new Map<string, Promise<unknown>>());
+  const queuePatrolCall = <T,>(convId: string, call: () => Promise<T>): Promise<T> => {
+    const prev = patrolQueueRef.current.get(convId) ?? Promise.resolve();
+    const next = prev.then(call, call);
+    const settled = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    patrolQueueRef.current.set(convId, settled);
+    void settled.then(() => {
+      if (patrolQueueRef.current.get(convId) === settled) patrolQueueRef.current.delete(convId);
+    });
+    return next;
+  };
+
   // `accepted`: the risk prompt was just accepted. Its retry runs this
   // render's closure, whose `autonomousAccepted` is still false, so without
   // the flag the precheck would reopen the prompt forever.
@@ -6361,7 +6380,7 @@ export function ChatExperience({
       return true;
     }
     try {
-      const data = await createSchedule(convId, {
+      const data = await queuePatrolCall(convId, () => createSchedule(convId, {
         title: input.title,
         prompt: input.prompt,
         cron: input.cron,
@@ -6371,7 +6390,7 @@ export function ChatExperience({
           ? { auto_approve: requestedMode !== "manual", approval_mode: requestedMode }
           : {}),
         allow_multiple: input.allowMultiple,
-      });
+      }));
       applyScheduleResponse(convId, data);
       notify({
         message: data.schedule
@@ -6406,7 +6425,7 @@ export function ChatExperience({
     const convId = activeConversationId;
     if (!convId || isPendingKey(convId)) return false;
     try {
-      applyScheduleResponse(convId, await call(convId));
+      applyScheduleResponse(convId, await queuePatrolCall(convId, () => call(convId)));
       after?.(convId);
       return true;
     } catch (e) {
