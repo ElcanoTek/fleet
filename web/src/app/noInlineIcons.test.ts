@@ -13,7 +13,8 @@ import { describe, expect, it } from "vitest";
  * beside it, and they all moved to Flag.
  *
  * This guard keeps it that way. An `<svg>` written in a component must be one
- * of the things listed below — the `<use>` that renders a sprite symbol, or a
+ * of the things listed below — the `<Icon>` component itself (the one `<use>`
+ * that renders a sprite symbol), or a
  * drawing of data or motion (a chart, the loading logo, a spinner). Adding a
  * file here is a statement that its `<svg>` is not an icon; an icon goes to
  * Flag instead.
@@ -25,7 +26,6 @@ const APP_DIR = join(import.meta.dirname ?? __dirname);
 const ALLOWED: Record<string, { count: number; why: string }> = {
   "shared/ui/Icon.tsx": { count: 1, why: "renders a sprite symbol with <use>" },
   "chat/ui/Icon.tsx": { count: 1, why: "renders a sprite symbol with <use>" },
-  "chat/ui/EmptyStatePrompts.tsx": { count: 1, why: "renders a sprite symbol with <use>" },
   "chat/ui/LoadingLogo.tsx": { count: 2, why: "the animated loading logo" },
   "chat/ui/genui/GenerativeCard.tsx": { count: 1, why: "a chart drawn from card data" },
   "orchestrator/AdoptionPanel.tsx": { count: 2, why: "charts" },
