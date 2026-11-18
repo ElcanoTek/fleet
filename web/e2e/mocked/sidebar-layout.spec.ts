@@ -733,6 +733,39 @@ test("the sidebar over a dashboard is a modal drawer: Escape closes it, not the 
   await expect(opener).toBeFocused();
 });
 
+test("over a dashboard, the sidebar's menus open in front of it", async ({ page }) => {
+  await setup(page);
+  await page.goto("/chat?c=c2");
+  await page.getByTestId("dashboard-enter").click();
+  await expect(page.getByTestId("dashboard-hud")).toBeVisible();
+  await page.getByTestId("dashboard-sidebar-button").click();
+  await expect(page.getByTestId("rail-nav")).toBeVisible();
+  // What a person sees at a menu's centre is the menu, not the drawer or its scrim.
+  const onTop = (menu: ReturnType<Page["locator"]>) =>
+    menu.evaluate((el) => {
+      const r = el.getBoundingClientRect();
+      return el.contains(document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2));
+    });
+  // The account menu (the person's name at the foot of the sidebar)...
+  await page.getByTestId("account-menu-button").click();
+  const account = page.getByRole("menu").filter({ has: page.getByTestId("customize-sidebar") });
+  await expect(account).toBeVisible();
+  expect(await onTop(account)).toBe(true);
+  // ...and its items take the click (Playwright refuses a covered target).
+  await page.getByTestId("customize-sidebar").click();
+  await expect(page.getByTestId("sidebar-customizer")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("sidebar-customizer")).toBeHidden();
+  // A chat row's ⋯ menu too.
+  if (!(await page.getByTestId("rail-nav").isVisible())) await page.getByTestId("dashboard-sidebar-button").click();
+  const kebab = page.getByRole("button", { name: /^Conversation options for / }).first();
+  await kebab.focus();
+  await page.keyboard.press("Enter");
+  const rowMenu = page.getByRole("menu", { name: /^Options for / });
+  await expect(rowMenu).toBeVisible();
+  expect(await onTop(rowMenu)).toBe(true);
+});
+
 test("the admin page never saves over a workspace sidebar it could not load", async ({ page }) => {
   await setup(page, { admin: true });
   let fail = true;
