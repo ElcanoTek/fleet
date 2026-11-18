@@ -55,7 +55,7 @@ import type {
 import type { Project } from "./ProjectsModal";
 import { previewNodes, type SearchResult } from "./SearchBar";
 import { isTemporaryChat } from "./deleteAllUnpinnedScope";
-import { ShareGlyph, TeamGlyph, UnarchiveGlyph } from "./ShareGlyphs";
+import { ShareGlyph, TeamGlyph } from "./ShareGlyphs";
 import { teamLinkUrl } from "./teamSharing";
 import { copyText } from "@/app/shared/lib/clipboard";
 import { ChatReorderList } from "./ChatReorderList";
@@ -2355,7 +2355,7 @@ visibleProjectTree.map(({ project, chats }) => {
                             void toggleArchive(conversation, false)
                           }
                         >
-                          <UnarchiveGlyph className="size-3.5" />
+                          <Icon name="unarchive" className="size-3.5" />
                         </button>
                         <button
                           type="button"

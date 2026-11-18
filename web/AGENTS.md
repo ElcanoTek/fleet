@@ -115,16 +115,13 @@ Code highlighting is in-housed (`src/app/chat/ui/highlight/`, see the root
   `alert-triangle`, `tools`, …). `src/app/shared/ui/iconHref.ts` keeps a few
   aliases (`book-open`, `warning`, `wrench`) only for names that arrive as
   client-bundle data; `spriteCoverage.test.ts` rejects them in fleet's source.
-  A glyph Flag lacks is requested from Flag, not drawn here. The written
-  exception is `src/app/chat/ui/ShareGlyphs.tsx`: the few glyphs the sprite has
-  no symbol for yet (the link and team share marks, the "Only you" lock,
-  unarchive). They are drawn in that one file,
-  all from one set of props that is the sprite's own spec (24-unit box,
-  currentColor, round caps, 1.9 stroke), so a drawn glyph and a sprite icon
-  read as one set. A new one goes there, is offered to Flag, and is replaced
-  by the sprite id once Flag ships it (as the hourglass on a temporary chat
-  was: it is the sprite's `hourglass` now); never inline an `<svg>` icon in a
-  component.
+  A glyph Flag lacks is requested from Flag, not drawn here, and no component
+  inlines an `<svg>` icon: an icon is `<Icon name="…">`. An `<svg>` written in
+  a component is a drawing of data or motion, never an icon: a chart, the
+  loading logo, a spinner. (`src/app/chat/ui/ShareGlyphs.tsx` only names the
+  sprite icons for the share audiences, so every surface uses the same one.)
+  `src/app/noInlineIcons.test.ts` lists the files that may contain an `<svg>`
+  and fails on any other.
 
 ## Tests
 

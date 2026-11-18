@@ -400,4 +400,27 @@
     <path d="M7 3v3.5a5 5 0 0 0 2 4L12 12l3-1.5a5 5 0 0 0 2-4V3"></path>
     <path d="M7 21v-3.5a5 5 0 0 1 2-4L12 12l3 1.5a5 5 0 0 1 2 4V21"></path>
   </symbol>
+  <symbol id="link" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M10 13a5 5 0 0 0 7.07 0l2-2a5 5 0 0 0-7.07-7.07l-1 1"></path>
+    <path d="M14 11a5 5 0 0 0-7.07 0l-2 2a5 5 0 0 0 7.07 7.07l1-1"></path>
+  </symbol>
+  <symbol id="users" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M16 19v-1.5a3.5 3.5 0 0 0-3.5-3.5h-5A3.5 3.5 0 0 0 4 17.5V19"></path>
+    <circle cx="10" cy="8" r="3"></circle>
+    <path d="M20 19v-1.5a3.5 3.5 0 0 0-2.6-3.4"></path>
+    <path d="M15.5 5.2a3 3 0 0 1 0 5.6"></path>
+  </symbol>
+  <symbol id="unarchive" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="2" y="3" width="20" height="5" rx="1"></rect>
+    <path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"></path>
+    <path d="M12 18v-6"></path>
+    <path d="M9.5 14.5 12 12l2.5 2.5"></path>
+  </symbol>
+  <symbol id="branch" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="6" cy="5" r="2"></circle>
+    <circle cx="6" cy="19" r="2"></circle>
+    <circle cx="18" cy="8" r="2"></circle>
+    <path d="M6 7v10"></path>
+    <path d="M18 10c0 4-6 3-11.2 7.4"></path>
+  </symbol>
 </svg>

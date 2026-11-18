@@ -334,20 +334,7 @@ function Reveal({
         aria-controls={id}
         onClick={onToggle}
       >
-        <svg
-          className="task-reveal-chevron"
-          width="12"
-          height="12"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2.2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          aria-hidden="true"
-        >
-          <path d="M6 9l6 6 6-6" />
-        </svg>
+        <Icon name="chevron-down" className="task-reveal-chevron size-3" />
         <span className="task-reveal-label">{label}</span>
         <span className="task-reveal-hint">{hint}</span>
         <span className="task-reveal-spacer" />
@@ -1783,19 +1770,7 @@ export function TaskCreateModal({
                     </div>
                     {errors.scheduled_for ? (
                       <div className="task-inline-error" data-testid="error-scheduled">
-                        <svg
-                          width="13"
-                          height="13"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="2"
-                          strokeLinecap="round"
-                          aria-hidden="true"
-                        >
-                          <circle cx="12" cy="12" r="9" />
-                          <path d="M12 8v4M12 15.5v.5" />
-                        </svg>
+                        <Icon name="alert-circle" className="size-[13px]" />
                         {errors.scheduled_for}
                       </div>
                     ) : (
@@ -1935,19 +1910,7 @@ export function TaskCreateModal({
                         id="recurrence-error"
                         data-testid="error-recurrence"
                       >
-                        <svg
-                          width="13"
-                          height="13"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="2"
-                          strokeLinecap="round"
-                          aria-hidden="true"
-                        >
-                          <circle cx="12" cy="12" r="9" />
-                          <path d="M12 8v4M12 15.5v.5" />
-                        </svg>
+                        <Icon name="alert-circle" className="size-[13px]" />
                         {errors.recurrence}
                       </div>
                     ) : null}
@@ -1995,19 +1958,7 @@ export function TaskCreateModal({
                     ) : null}
                     {!errors.recurrence && cronDescription ? (
                       <div className="task-cron-echo" id="recurrence-echo" aria-live="polite">
-                        <svg
-                          width="13"
-                          height="13"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="2.4"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          aria-hidden="true"
-                        >
-                          <path d="M5 12l5 5L20 6" />
-                        </svg>
+                        <Icon name="check" className="size-[13px]" />
                         <span>
                           <strong>{cronNext ? tr("Next run {0}", [formatNextRun(cronNext, timezone)]) : tr("Schedule ready")}</strong>
                           <span>

@@ -8380,21 +8380,7 @@ export function ChatExperience({
                     type="button"
                     onClick={jumpToLatest}
                   >
-                    <svg
-                      aria-hidden="true"
-                      viewBox="0 0 20 20"
-                      className="size-4"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="1.8"
-                    >
-                      <path d="M10 4v10" strokeLinecap="round" />
-                      <path
-                        d="m5.5 10.5 4.5 4.5 4.5-4.5"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                    </svg>
+                    <Icon name="arrow-up" className="size-4 rotate-180" />
                   </button>
                 </div>
               ) : null}

@@ -1,3 +1,4 @@
+import { Icon } from "@/app/shared/ui/Icon";
 import { messageRoleLabel } from "@/app/lib/i18n/ownedLabels";
 import { rich } from "@/app/lib/i18n/rich";
 import { t as tr } from "@/app/lib/i18n";
@@ -419,9 +420,7 @@ export function ToolOutput({
 
 function Chevron() {
   return (
-    <svg className="lt-chevron" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-      <path d="M6 3.5 10.5 8 6 12.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
+    <Icon name="chevron-right" className="lt-chevron size-[14px]" />
   );
 }
 

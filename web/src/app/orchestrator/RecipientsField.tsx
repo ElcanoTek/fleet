@@ -1,3 +1,4 @@
+import { Icon } from "@/app/shared/ui/Icon";
 import { t as tr } from "@/app/lib/i18n";
 import { useEffect, useImperativeHandle, useMemo, useRef, useState, type Ref } from "react";
 import { orchestratorApi, type RecipientUse } from "@/app/shared/lib/orchestratorApi";
@@ -145,18 +146,7 @@ export function RecipientsField({
                   aria-label={tr("Remove {0}", [e])}
                   onClick={() => onChange(value.filter((x) => x !== e))}
                 >
-                  <svg
-                    width="10"
-                    height="10"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2.4"
-                    strokeLinecap="round"
-                    aria-hidden="true"
-                  >
-                    <path d="M18 6L6 18M6 6l12 12" />
-                  </svg>
+                  <Icon name="close" className="size-[10px]" />
                 </button>
               </span>
             ))}
@@ -254,19 +244,7 @@ export function RecipientsField({
         </div>
         {error ? (
           <div className="task-inline-error" id="email-error" data-testid="error-email">
-            <svg
-              width="13"
-              height="13"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              aria-hidden="true"
-            >
-              <circle cx="12" cy="12" r="9" />
-              <path d="M12 8v4M12 15.5v.5" />
-            </svg>
+            <Icon name="alert-circle" className="size-[13px]" />
             {error}
           </div>
         ) : (
