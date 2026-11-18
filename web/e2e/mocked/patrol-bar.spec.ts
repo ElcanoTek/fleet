@@ -37,7 +37,10 @@ const PATROL = {
   last_run_at: nowSec - 600,
 };
 
-async function mockPatrolChat(page: Page, opts: { pending?: boolean; padding?: number } = {}) {
+async function mockPatrolChat(
+  page: Page,
+  opts: { pending?: boolean; padding?: number; failRunNow?: boolean } = {},
+) {
   const calls: string[] = [];
   let schedules = [PATROL];
   await page.clock.setFixedTime(NOW);
@@ -47,6 +50,9 @@ async function mockPatrolChat(page: Page, opts: { pending?: boolean; padding?: n
   await page.route("**/api/conversations/conv-patrol/schedules/**", (r: Route) => {
     calls.push(`${r.request().method()} ${new URL(r.request().url()).pathname}`);
     if (r.request().method() === "DELETE") schedules = [];
+    if (opts.failRunNow && r.request().url().endsWith("/run-now")) {
+      return r.fulfill({ status: 500, json: { error: "Patrol runner is unavailable" } });
+    }
     return r.fulfill({
       json: { schedules, auto_approve: true, approval_mode: "auto" },
     });
@@ -241,4 +247,48 @@ test("starting a patrol in an Autonomous chat asks once, then creates it", async
   await expect(risk).toBeHidden();
   expect(accepts).toBe(1);
   expect(creates[0]).toMatchObject({ approval_mode: "autonomous" });
+});
+
+test("a failed action is shown inside the Patrols dialog", async ({ page }) => {
+  await mockPatrolChat(page, { failRunNow: true });
+  await expect(page.getByTestId("patrol-banner")).toBeVisible({ timeout: 15_000 });
+  await page.getByTestId("chat-patrol-button").click();
+  const dialog = page.getByRole("dialog", { name: "Patrols & timers" });
+  await dialog.getByRole("button", { name: "Run now" }).first().click();
+  await expect(dialog.getByTestId("patrols-error")).toBeVisible();
+  await dialog.getByRole("button", { name: "Dismiss error" }).click();
+  await expect(dialog.getByTestId("patrols-error")).toBeHidden();
+});
+
+test("picking Autonomous in the edit form asks once, and Save applies it", async ({ page }) => {
+  const modes: unknown[] = [];
+  let accepts = 0;
+  await page.route("**/api/chat/autonomous-accept", (r: Route) => {
+    accepts += 1;
+    return r.fulfill({ json: { ok: true } });
+  });
+  await page.route("**/api/conversations/conv-patrol/auto-approve", (r: Route) => {
+    const body = r.request().postDataJSON() as { approval_mode?: string };
+    modes.push(body.approval_mode);
+    return r.fulfill({ json: { auto_approve: true, approval_mode: body.approval_mode } });
+  });
+  await mockPatrolChat(page);
+  await expect(page.getByTestId("patrol-banner")).toBeVisible({ timeout: 15_000 });
+  await page.getByTestId("chat-patrol-button").click();
+  const dialog = page.getByRole("dialog", { name: "Patrols & timers" });
+  await dialog.getByTestId("patrols-card").getByRole("button", { expanded: false }).click();
+  await dialog.getByRole("button", { name: "Edit schedule & task" }).click();
+  const form = dialog.getByTestId("patrol-form-edit");
+  await form.getByRole("radio", { name: /Autonomous/ }).click();
+  // The patrol is running: the inline confirm first, then the risk prompt.
+  await form.getByTestId("patrols-autonomous-confirm").getByRole("button", { name: "Switch to Autonomous" }).click();
+  const risk = page.getByTestId("autonomous-risk-modal");
+  await expect(risk).toBeVisible();
+  await page.getByTestId("autonomous-risk-accept").click();
+  await expect(risk).toBeHidden();
+
+  await form.getByRole("button", { name: "Save changes" }).click();
+  await expect.poll(() => modes).toEqual(["autonomous"]);
+  await expect(risk).toBeHidden();
+  expect(accepts).toBe(1);
 });

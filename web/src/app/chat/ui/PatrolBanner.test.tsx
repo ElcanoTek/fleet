@@ -195,6 +195,25 @@ describe("PatrolBanner", () => {
     expect(screen.queryByTestId("patrol-mode-menu")).toBeNull();
   });
 
+  it("offers no Hide while an approval waits, since the bar must stay", () => {
+    renderBar({ pendingApprovals: 1 });
+    expect(screen.queryByTestId("patrol-bar-hide")).toBeNull();
+  });
+
+  it("keeps each row's controls busy until its own request settles", async () => {
+    let finishA!: () => void;
+    const onTogglePause = vi.fn((id: string) =>
+      id === "sched-1" ? new Promise<void>((r) => (finishA = r)) : new Promise<void>(() => {}),
+    );
+    renderBar({ schedules: [sampleSchedule, { ...timerSchedule, title: "Timer B" }], onTogglePause });
+    const [pauseA, pauseB] = screen.getAllByRole("button", { name: "Pause" });
+    fireEvent.click(pauseA);
+    fireEvent.click(pauseB);
+    await act(async () => finishA());
+    expect(pauseA).toBeEnabled();
+    expect(pauseB).toBeDisabled();
+  });
+
   it("flags a waiting approval with a Review button", () => {
     const props = renderBar({ pendingApprovals: 1 });
     expect(screen.getByTestId("patrol-bar-attention")).toHaveTextContent(
@@ -335,6 +354,42 @@ describe("PatrolsDialog", () => {
     expect(within(form).getByRole("radio", { name: "Autonomous" })).toHaveAttribute("aria-checked", "false");
     act(() => vi.mocked(props.onRequireAutonomousAccept).mock.calls[0][0]());
     expect(within(form).getByRole("radio", { name: "Autonomous" })).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("keeps each card busy until its own request settles", async () => {
+    let finishA!: () => void;
+    const onTogglePause = vi.fn((id: string) =>
+      id === "sched-1" ? new Promise<void>((r) => (finishA = r)) : new Promise<void>(() => {}),
+    );
+    renderDialog({ onTogglePause });
+    const pauseA = screen.getByRole("button", { name: `Pause ${sampleSchedule.title}` });
+    const pauseB = screen.getByRole("button", { name: `Pause ${timerSchedule.title}` });
+    fireEvent.click(pauseA);
+    fireEvent.click(pauseB);
+    await act(async () => finishA());
+    expect(pauseA).toBeEnabled();
+    expect(pauseB).toBeDisabled();
+  });
+
+  it("shows an action's failure inside the dialog, above its scrim", () => {
+    const props = renderDialog({ error: "Patrol not found", onDismissError: vi.fn() });
+    expect(screen.getByTestId("patrols-error")).toHaveTextContent("Patrol not found");
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss error" }));
+    expect(props.onDismissError).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows a running timer's own deadline until its schedule is changed", () => {
+    const due = new Date(Date.now() + 15 * 60_000);
+    const time = due.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+    renderDialog({ schedules: [{ ...timerSchedule, next_run_at: Math.floor(due.getTime() / 1000) }] });
+    fireEvent.click(cardToggle(0));
+    fireEvent.click(screen.getByRole("button", { name: "Edit schedule & task" }));
+    const form = screen.getByTestId("patrol-form-edit");
+    if (due.toDateString() === new Date().toDateString()) {
+      expect(form).toHaveTextContent(`Runs once · today at ${time}`);
+    } else {
+      expect(form).toHaveTextContent(time);
+    }
   });
 
   it("keeps the remove confirmation armed when the DELETE fails", async () => {

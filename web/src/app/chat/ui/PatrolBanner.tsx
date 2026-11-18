@@ -306,7 +306,20 @@ export function PatrolBanner({
   const effectiveApprovalMode = resolveApprovalMode(approvalMode, isAutoApprove);
   const visible = liveSchedules(schedules);
   const [nowSec, setNowSec] = useState<number>(() => Math.floor(Date.now() / 1000));
-  const [busyId, setBusyId] = useState<string | null>(null);
+  // Every schedule with a request in flight (see PatrolsDialog's runBusy).
+  const [busyIds, setBusyIds] = useState<ReadonlySet<string>>(() => new Set());
+  const runBusy = async (id: string, fn: () => unknown) => {
+    setBusyIds((prev) => new Set(prev).add(id));
+    try {
+      await fn();
+    } finally {
+      setBusyIds((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    }
+  };
 
   useEffect(() => {
     if (visible.length === 0) return;
@@ -328,7 +341,7 @@ export function PatrolBanner({
       {visible.map((sc, idx) => {
         const isPaused = sc.status === "paused";
         const attention = sc.id === attentionId;
-        const busy = busyId === sc.id || Boolean(isStreaming);
+        const busy = busyIds.has(sc.id) || Boolean(isStreaming);
         const runDisabled = busy || isPaused;
         return (
           <div
@@ -383,14 +396,7 @@ export function PatrolBanner({
                 <button
                   type="button"
                   disabled={runDisabled}
-                  onClick={async () => {
-                    setBusyId(sc.id);
-                    try {
-                      await onRunNow(sc.id);
-                    } finally {
-                      setBusyId(null);
-                    }
-                  }}
+                  onClick={() => runBusy(sc.id, () => onRunNow(sc.id))}
                   className="pill-btn inline-flex h-8 items-center gap-1.5 font-medium disabled:opacity-40"
                 >
                   <Icon name="play" className="size-3" />
@@ -399,31 +405,30 @@ export function PatrolBanner({
                 <button
                   type="button"
                   disabled={busy}
-                  onClick={async () => {
-                    setBusyId(sc.id);
-                    try {
-                      await onTogglePause(sc.id, sc.status);
-                    } finally {
-                      setBusyId(null);
-                    }
-                  }}
+                  onClick={() => runBusy(sc.id, () => onTogglePause(sc.id, sc.status))}
                   className="pill-btn inline-flex h-8 items-center gap-1.5 disabled:opacity-40"
                 >
                   <Icon name={isPaused ? "play" : "pause"} className="size-3" />
                   {isPaused ? tr("Resume") : tr("Pause")}
                 </button>
-                <span aria-hidden="true" className="mx-0.5 h-5 w-px shrink-0 bg-[var(--color-border-strong)]" />
-                <button
-                  type="button"
-                  data-testid="patrol-bar-hide"
-                  aria-label={tr("Hide patrol bar. The patrol keeps running.")}
-                  data-tip-top={tr("Hide bar · patrol keeps running")}
-                  data-tip-align="end"
-                  onClick={onHide}
-                  className="hit-area inline-flex size-8 shrink-0 items-center justify-center rounded-[var(--radius-md)] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
-                >
-                  <Icon name="collapse-down" className="size-4" />
-                </button>
+                {/* A waiting approval keeps the bar on screen, so Hide could
+                    not fold it: offered again once the approval is settled. */}
+                {pendingApprovals > 0 ? null : (
+                  <>
+                    <span aria-hidden="true" className="mx-0.5 h-5 w-px shrink-0 bg-[var(--color-border-strong)]" />
+                    <button
+                      type="button"
+                      data-testid="patrol-bar-hide"
+                      aria-label={tr("Hide patrol bar. The patrol keeps running.")}
+                      data-tip-top={tr("Hide bar · patrol keeps running")}
+                      data-tip-align="end"
+                      onClick={onHide}
+                      className="hit-area inline-flex size-8 shrink-0 items-center justify-center rounded-[var(--radius-md)] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
+                    >
+                      <Icon name="collapse-down" className="size-4" />
+                    </button>
+                  </>
+                )}
               </div>
             </div>
             {attention ? (

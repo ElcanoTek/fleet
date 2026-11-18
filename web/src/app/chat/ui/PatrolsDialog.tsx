@@ -119,8 +119,9 @@ function formStartFor(sc: ChatSchedule | undefined): FormStart {
   return { ...base, presetId: "custom", customCron: cron || DEFAULT_CUSTOM_CRON, customTz: tz };
 }
 
-function formatRunOnce(seconds: number): string {
-  const at = new Date(Date.now() + seconds * 1000);
+// `deadlineSec`: a running timer's own next_run_at, when the edit keeps it.
+function formatRunOnce(seconds: number, deadlineSec?: number): string {
+  const at = new Date(deadlineSec ? deadlineSec * 1000 : Date.now() + seconds * 1000);
   const time = at.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
   const sameDay = at.toDateString() === new Date().toDateString();
   return sameDay
@@ -249,7 +250,12 @@ export function PatrolForm({
   const canSubmit = task.trim().length > 0 && (kind === "timer" || Boolean(cron)) && !submitting;
   const summary =
     kind === "timer"
-      ? formatRunOnce(durationSeconds ?? 0)
+      ? // An edit that leaves the schedule alone keeps the timer's own
+        // deadline (editBody sends no duration), so show that one.
+        formatRunOnce(
+          durationSeconds ?? 0,
+          isEdit && !scheduleChanged && schedule?.kind === "timer" ? schedule.next_run_at : undefined,
+        )
       : cron
         ? formatScheduleCadence({ kind: "patrol", cron } as ChatSchedule) ||
           describeCronExpression(cron)
@@ -568,6 +574,8 @@ export function PatrolsDialog({
   onRemove,
   onSave,
   onStart,
+  error = null,
+  onDismissError,
   onClose,
 }: {
   /** The conversation's armed or paused patrols and timers. */
@@ -594,6 +602,9 @@ export function PatrolsDialog({
     approvalMode: ConversationApprovalMode,
   ) => Outcome;
   onStart: (input: CreatePatrolInput) => Outcome;
+  /** The last patrol action's failure (the rail toast is under the scrim). */
+  error?: string | null;
+  onDismissError?: () => void;
   onClose: () => void;
 }) {
   const hasPatrols = schedules.length > 0;
@@ -601,7 +612,9 @@ export function PatrolsDialog({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null);
-  const [busyId, setBusyId] = useState<string | null>(null);
+  // Every schedule with a request in flight: actions on another card can
+  // start meanwhile, and one finishing must not free the other's controls.
+  const [busyIds, setBusyIds] = useState<ReadonlySet<string>>(() => new Set());
   const [justAddedId, setJustAddedId] = useState<string | null>(null);
   const [confirmAutonomousId, setConfirmAutonomousId] = useState<string | null>(null);
   const anyArmed = schedules.some((s) => s.status === "active");
@@ -634,11 +647,15 @@ export function PatrolsDialog({
   const attentionId = pendingApprovals > 0 ? attentionScheduleId(schedules) : null;
 
   const runBusy = async (id: string, fn: () => unknown): Promise<unknown> => {
-    setBusyId(id);
+    setBusyIds((prev) => new Set(prev).add(id));
     try {
       return await fn();
     } finally {
-      setBusyId(null);
+      setBusyIds((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
     }
   };
 
@@ -676,6 +693,18 @@ export function PatrolsDialog({
         </header>
 
         <div className="picker-modal__body grid content-start gap-5 sm:!px-6 sm:!pt-5 sm:!pb-6">
+          {error ? (
+            <div
+              role="alert"
+              data-testid="patrols-error"
+              className="flex items-start gap-2 rounded-[var(--radius-md)] border border-[var(--color-danger-border)] px-2.5 py-1.5 text-[0.78rem] leading-[1.55] text-[var(--color-danger)]"
+            >
+              <p className="m-0 min-w-0 flex-1">{error}</p>
+              {onDismissError ? (
+                <CloseButton label={tr("Dismiss error")} onClick={onDismissError} className="-my-1 -mr-1.5 shrink-0" />
+              ) : null}
+            </div>
+          ) : null}
           {hasPatrols ? (
             <section aria-labelledby="patrols-dialog-active" className="grid gap-2.5">
               <div className="flex flex-wrap items-center gap-2">
@@ -703,7 +732,7 @@ export function PatrolsDialog({
                   const isEditing = editingId === sc.id;
                   const attention = sc.id === attentionId;
                   const isConfirm = confirmRemoveId === sc.id;
-                  const busy = busyId === sc.id || Boolean(isStreaming);
+                  const busy = busyIds.has(sc.id) || Boolean(isStreaming);
                   const meta = [formatScheduleMeta(sc, nowSec), approvalModeLabel(approvalMode)].join(" · ");
                   return (
                     <li

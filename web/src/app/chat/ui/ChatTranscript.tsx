@@ -549,6 +549,7 @@ export function ChatTranscript({
   // A message folded into compacted history has no row of its own: expand
   // the history first, then jump once its row exists.
   // The two sources keep their own nonces, so the handled key names which.
+  // The approval nonce never resets across chats (chat-experience.tsx).
   const dashboardJump = dashboard?.jumpRequest ?? approvalJumpRequest;
   const jumpKey = dashboardJump
     ? `${dashboard?.jumpRequest ? "dashboard" : "approval"}:${dashboardJump.nonce}`

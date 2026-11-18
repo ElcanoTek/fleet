@@ -5995,6 +5995,13 @@ export function ChatExperience({
   // to hide the Patrol bar (patrolBarPrefs). patrolBarHiddenOverride holds
   // the choices made on this page; the stored value covers the rest.
   const [patrolsOpen, setPatrolsOpen] = useState(false);
+  // A patrol action's failure while the dialog is open: the rail toast sits
+  // under the dialog's scrim, so the dialog shows it (as Share does).
+  const [patrolError, setPatrolError] = useState<string | null>(null);
+  const reportPatrolError = (message: string) => {
+    if (patrolsOpen) setPatrolError(message);
+    else showRailError(message);
+  };
   const [patrolBarHiddenOverride, setPatrolBarHiddenOverride] = useState<
     Record<string, boolean>
   >({});
@@ -6039,17 +6046,21 @@ export function ChatExperience({
   const [approvalJumpRequest, setApprovalJumpRequest] = useState<
     { messageId: number; approvalId: string; nonce: number } | null
   >(null);
+  // Never reset, so a request in the next chat can't repeat a nonce the
+  // (still mounted) transcript already handled.
+  const approvalJumpNonceRef = useRef(0);
   useEffect(() => setApprovalJumpRequest(null), [activeConversationId]);
   const reviewPendingApproval = () => {
     setPatrolsOpen(false);
     for (const m of messages) {
       const pending = m.approvals?.find((a) => a.status === "pending");
       if (pending) {
-        setApprovalJumpRequest((prev) => ({
+        approvalJumpNonceRef.current += 1;
+        setApprovalJumpRequest({
           messageId: m.id,
           approvalId: pending.id,
-          nonce: (prev?.nonce ?? 0) + 1,
-        }));
+          nonce: approvalJumpNonceRef.current,
+        });
         return;
       }
     }
@@ -6359,7 +6370,7 @@ export function ChatExperience({
         });
         return false;
       }
-      showRailError(
+      reportPatrolError(
         e instanceof PatrolApiError ? e.message : tr("Couldn't reach the server to schedule the patrol."),
       );
       return false;
@@ -6382,7 +6393,7 @@ export function ChatExperience({
       after?.(convId);
       return true;
     } catch (e) {
-      showRailError(
+      reportPatrolError(
         e instanceof PatrolApiError ? e.message : tr(
           verb === "trigger" ? "Couldn't reach the server to trigger patrol."
             : verb === "resume" ? "Couldn't reach the server to resume patrol."
@@ -6430,7 +6441,11 @@ export function ChatExperience({
       const ok = await mutatePatrol("save", (convId) => updateSchedule(convId, scheduleId, body));
       if (!ok) return false;
     }
-    if (mode !== approvalMode && isActiveConversationOwner) requestApprovalModeChange(mode);
+    // Not requestApprovalModeChange: the form already showed the risk
+    // prompt when Autonomous was picked, so asking again here would be a
+    // second prompt for one choice (a server that still refuses answers 409,
+    // which asks once more).
+    if (mode !== approvalMode && isActiveConversationOwner) changeApprovalMode(mode);
     return true;
   };
 
@@ -8389,7 +8404,12 @@ export function ChatExperience({
                     if (ok !== false && (!convId || isPendingKey(convId))) setPatrolsOpen(false);
                     return ok;
                   }}
-                  onClose={() => setPatrolsOpen(false)}
+                  error={patrolError}
+                  onDismissError={() => setPatrolError(null)}
+                  onClose={() => {
+                    setPatrolError(null);
+                    setPatrolsOpen(false);
+                  }}
                 />
               ) : null}
               {activeConversationId ? (
@@ -8409,6 +8429,7 @@ export function ChatExperience({
                 cancelRecovery={cancelRecovery}
                 onOpenPatrols={() => {
                   clearPatrolHideHint();
+                  setPatrolError(null);
                   setPatrolsOpen(true);
                 }}
                 activePatrolCount={livePatrols.length}

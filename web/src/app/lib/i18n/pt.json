@@ -5945,5 +5945,6 @@
   "Undo": "Desfazer",
   "Wake this conversation on your cadence with full history, workspace files, and enabled connectors.": "Desperta esta conversa na sua cadência, com todo o histórico, os arquivos do espaço de trabalho e os conectores ativados.",
   "1 patrol or timer in this chat": "1 patrulha ou temporizador neste chat",
-  "No patrols or timers in this chat.": "Não há patrulhas nem temporizadores neste chat."
+  "No patrols or timers in this chat.": "Não há patrulhas nem temporizadores neste chat.",
+  "Dismiss error": "Dispensar erro"
 }
