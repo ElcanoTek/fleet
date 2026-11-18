@@ -99,6 +99,12 @@ When an allowed participant submits `POST /chat` on a multiplayer conversation:
   longer in the replay window the card is not delivered live and arrives with
   the next history read. The model replay for a participant's own turn
   (`redactHistoryForSender`) still omits the whole trace, cards included.
+  So that a participant can still ask for a card someone else's turn drew to
+  be updated, a turn in a multiplayer chat is told which cards the chat is
+  showing: title, card id and panel key, never the contents
+  ([DASHBOARD-VIEW.md](DASHBOARD-VIEW.md), "Cards a turn did not draw"). An
+  in-chat patrol runs as the participant who created it and is told the same
+  list.
 
 ### Per-instance default (`team_chats_shared_by_default`)
 

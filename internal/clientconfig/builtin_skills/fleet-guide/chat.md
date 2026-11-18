@@ -590,6 +590,16 @@ straight into this view.
   chat. The layout, and whether a conversation opens in dashboard view, are
   remembered in this browser only, so a teammate opening the same chat sees the
   panels in their own arrangement.
+- **Keep it current with a patrol, and share it with your team.** An
+  [in-chat patrol](#in-chat-patrols-and-timers) can refresh the board on a
+  schedule: ask for it in the same chat ("patrol this every morning and update
+  the panels"), and each run redraws the panels it has new figures for. In a
+  [Multiplayer](#sharing-with-your-team) chat everyone sees the same panels,
+  whoever's message or patrol drew them, and anyone in the chat can ask for a
+  panel to be updated or added. A patrol run, and a teammate's message, are
+  told which cards the chat is showing and how to update each one — its title,
+  not its contents, when the card was drawn on someone else's turn — so the
+  assistant updates the existing panel instead of adding a second one.
 - **Nothing changes about what the assistant can do.** You type, attach files,
   and answer approval cards in the chat rail exactly as before, and emails and
   other actions still wait for your approval. The status light at the top says

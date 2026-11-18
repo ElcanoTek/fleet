@@ -209,3 +209,36 @@ func TestManagerRunTurn_SystemPromptDescribesDeferredTools(t *testing.T) {
 		}
 	}
 }
+
+// TestManagerRunTurn_PatrolTurnOffersShowUI: an in-chat patrol turn keeps
+// show_ui on its roster. A patrol that re-shows a panel is how a dashboard
+// board updates (docs/DASHBOARD-VIEW.md); without the tool a scheduled run
+// answers "tool not found: show_ui" and the board stays on its last version.
+// enable_mcp_connectors stays off a patrol turn: that one does need a person.
+func TestManagerRunTurn_PatrolTurnOffersShowUI(t *testing.T) {
+	for _, kind := range []string{"", InputKindChatPatrol} {
+		fake := fakellm.New()
+		fake.SetDefault(fakellm.Scenario{Steps: []fakellm.Step{fakellm.TextStep("noted")}})
+		capture := &systemPromptCapture{next: fake.Handler()}
+		mgr := newFakeLLMManagerWithHandler(t, capture, nil)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		if _, err := mgr.RunTurn(ctx, TurnInput{
+			UserMessage: "refresh the pacing panel",
+			Model:       "anthropic/claude-opus-4.8",
+			InputKind:   kind,
+		}, &recordingSink{}); err != nil {
+			cancel()
+			t.Fatalf("inputKind=%q RunTurn: %v", kind, err)
+		}
+		cancel()
+
+		names := capture.toolNames()
+		if !names["show_ui"] {
+			t.Errorf("inputKind=%q: show_ui is not offered; tools = %v", kind, names)
+		}
+		if kind == InputKindChatPatrol && names["enable_mcp_connectors"] {
+			t.Errorf("a patrol turn offers enable_mcp_connectors")
+		}
+	}
+}
