@@ -28,8 +28,12 @@ fi
 
 # The web tree. `npm install` (not `npm ci`) keeps an existing node_modules,
 # which is what makes a cached container fast; it still honours the lockfile.
+# --no-save keeps it from rewriting web/package-lock.json: a container whose
+# npm is older than the one that wrote the lockfile would otherwise strip
+# fields it does not know (e.g. `libc`) and leave the checkout dirty on every
+# session start.
 if command -v npm >/dev/null 2>&1; then
-  (cd web && npm install --no-audit --no-fund)
+  (cd web && npm install --no-save --no-audit --no-fund)
 else
   echo "session-start: npm not found — the web checks need node (web/.nvmrc)" >&2
 fi
