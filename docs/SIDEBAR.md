@@ -47,8 +47,9 @@ sidebar"), which `/help` renders.
   drawn as a miniature of the person's own rail; a preset rearranges the
   destinations and sections and keeps every shortcut.
 - **Quick pins.** **Add to sidebar** / **Remove from sidebar** in a chat's menu
-  and a project's menu, and a pin on each Team chats row (so one of a team's
-  many shared or multiplayer chats can be pinned on its own). A chat last
+  and a project's menu. A team's shared or multiplayer chat is pinned one at a
+  time from the Customize panel's **Add** picker; Team chats rows carry no pin
+  button of their own (it cluttered every row on a phone). A chat last
   read as a dashboard is added as one. A shortcut to the chat already open
   applies the view it names (dashboard or chat) rather than toggling.
 - **Read-only accounts.** The API refuses a Viewer's writes, so the editor,

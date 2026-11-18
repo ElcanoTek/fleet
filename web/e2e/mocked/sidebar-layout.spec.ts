@@ -324,16 +324,25 @@ test("pinning is per item: one of many multiplayer chats, two of many dashboards
   });
   await page.goto("/chat");
 
-  // One multiplayer chat, straight from its Team chats row.
+  // Team chats rows carry no pin button: pinning is the Customize panel's job.
+  // Checked once the row is there and the account may customize (the Add
+  // picker is enabled), when the old button would have been rendered.
   const incident = page.getByTestId("team-shared-conv-row").filter({ hasText: "Incident room" });
-  await incident.hover();
-  await page.getByRole("button", { name: "Add Incident room to the sidebar" }).click();
-  await expect(page.getByTestId("rail-shortcut")).toHaveCount(1);
-
-  // Two of the four dashboards, from the Customize panel's picker.
+  await expect(incident).toBeVisible();
   await page.getByTestId("account-menu-button").click();
   await page.getByTestId("customize-sidebar").click();
   const panel = page.getByTestId("sidebar-customizer");
+  await expect(panel.getByTestId("sidebar-add-shortcut")).toBeEnabled();
+  await incident.hover();
+  await expect(page.getByTestId("team-chat-pin")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Add Incident room to the sidebar" })).toHaveCount(0);
+
+  // One multiplayer chat, from the Customize panel's picker.
+  await panel.getByTestId("sidebar-add-shortcut").click();
+  await page.getByRole("option", { name: "Incident room", exact: true }).click();
+  await expect(page.getByTestId("rail-shortcut")).toHaveCount(1);
+
+  // Two of the four dashboards, from the same picker.
   for (const name of ["Revenue board", "Churn board"]) {
     await panel.getByTestId("sidebar-add-shortcut").click();
     await page.getByRole("option", { name: new RegExp(name) }).click();
