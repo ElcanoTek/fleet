@@ -131,13 +131,16 @@ describe("presets", () => {
     }
   });
 
-  it("one list for all chats survives normalizing and every preset", () => {
-    expect(normalizeLayout({ version: 1, unified: true }).unified).toBe(true);
-    expect(normalizeLayout({ version: 1, unified: "yes" }).unified).toBeUndefined();
-    expect("unified" in normalizeLayout({ version: 1 })).toBe(false);
-    const mine = { ...BUILTIN_LAYOUT, unified: true };
-    for (const preset of PRESETS) expect(preset.apply(mine).unified).toBe(true);
-    for (const preset of PRESETS) expect(preset.apply(BUILTIN_LAYOUT).unified).toBeUndefined();
+  it("one list for all chats is the default; separate lists survive normalizing and every preset", () => {
+    // A layout that says nothing (the built-in one, and every layout saved
+    // before the choice existed) is one list.
+    expect("separate_lists" in normalizeLayout({ version: 1 })).toBe(false);
+    expect(BUILTIN_LAYOUT.separate_lists).toBeUndefined();
+    expect(normalizeLayout({ version: 1, separate_lists: true }).separate_lists).toBe(true);
+    expect(normalizeLayout({ version: 1, separate_lists: "yes" }).separate_lists).toBeUndefined();
+    const mine = { ...BUILTIN_LAYOUT, separate_lists: true };
+    for (const preset of PRESETS) expect(preset.apply(mine).separate_lists).toBe(true);
+    for (const preset of PRESETS) expect(preset.apply(BUILTIN_LAYOUT).separate_lists).toBeUndefined();
   });
 
   it("Classic on the built-in layout is the built-in layout", () => {

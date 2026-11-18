@@ -219,7 +219,7 @@ describe("ConversationSidebar chat order", () => {
     const zulu = screen.getByText("Zulu");
     const alpha = screen.getByText("Alpha");
     expect(alpha.compareDocumentPosition(zulu) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    const select = screen.getByRole("combobox", { name: "Sort temporary chats" }) as HTMLSelectElement;
+    const select = screen.getByRole("combobox", { name: "Sort chats" }) as HTMLSelectElement;
     expect(select.value).toBe("title");
     fireEvent.change(select, { target: { value: "created" } });
     expect(onRecentSortChange).toHaveBeenCalledWith("created");

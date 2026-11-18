@@ -181,9 +181,16 @@ const UNIFIED_INFO_TEXT =
 const PATROL_ICON = defaultIcon({ id: "", kind: "chat" }, true);
 const PATROL_ROW_TEXT = tr("Patrol — this chat checks in on a schedule");
 
+// The row marks below (patrol, temporary) never change a row's accessible
+// name: the row is still found, and read, by its title. The mark is a
+// tooltip for sighted users, and the same sentence reaches a screen reader
+// as the row's description (aria-describedby to one hidden copy per rail).
+const PATROL_DESC_ID = "rail-row-desc-patrol";
+const TEMPORARY_DESC_ID = "rail-row-desc-temporary";
+
 function PatrolMark() {
   return (
-    <span data-testid="patrol-mark" aria-label={tr("Patrol chat")} title={PATROL_ROW_TEXT}>
+    <span data-testid="patrol-mark" aria-hidden="true" title={PATROL_ROW_TEXT}>
       <Icon name={PATROL_ICON} className="size-3 shrink-0 text-[var(--color-accent)]" />
     </span>
   );
@@ -1089,6 +1096,9 @@ function ConvRow({
         <button
           type="button"
           aria-pressed={selecting ? checked : undefined}
+          aria-describedby={
+            [temporary ? TEMPORARY_DESC_ID : "", patrol ? PATROL_DESC_ID : ""].filter(Boolean).join(" ") || undefined
+          }
           data-rail-row=""
           className={[
             "block w-full min-w-0 rounded-md py-2 pl-[0.55rem] pr-9 text-left text-[0.875rem] transition any-pointer-coarse:min-h-11",
@@ -1127,11 +1137,7 @@ function ConvRow({
               />
             ) : null}
             {temporary ? (
-              <span
-                data-testid="temporary-mark"
-                aria-label={tr("Temporary chat")}
-                title={TEMPORARY_ROW_TEXT}
-              >
+              <span data-testid="temporary-mark" aria-hidden="true" title={TEMPORARY_ROW_TEXT}>
                 <HourglassGlyph className="size-3 shrink-0 text-[var(--color-text-muted)]" />
               </span>
             ) : null}
@@ -1546,10 +1552,11 @@ export function ConversationSidebar({
   const sectionIndex = (id: SectionId) => railLayout.sections.findIndex((x) => x.id === id);
   const projectsFirst = sectionIndex("projects") < sectionIndex("chats");
   const teamFirst = sectionIndex("team") < sectionIndex("chats");
-  // One list for all chats (docs/SIDEBAR.md): teammates' chats are listed in
-  // the Chats section with the person's own, and Team chats has no section
-  // of its own.
-  const unified = Boolean(railLayout.unified);
+  // One list for all chats, the default (docs/SIDEBAR.md): teammates' chats
+  // are listed in the Chats section with the person's own, and Team chats
+  // has no section of its own. A person who hid Team chats still sees none
+  // of them here; search finds them all the same.
+  const unified = !railLayout.separate_lists;
   // Projects section (#509 follow-up): the section itself starts open (its
   // presence is the affordance) unless the layout folds it; each project
   // starts collapsed and remembers its expansion for the session only, like
@@ -1715,12 +1722,13 @@ export function ConversationSidebar({
   // order they have on their own (sortRecent breaks ties by input order, and
   // theirs come first), so j/k — which walks only their own — still matches.
   // A chat is listed once: a teammate's row wins over a copy in the own list.
-  const teamRowIds = new Set(teamSharedConversations.map((c) => c.id));
+  const listedTeamChats = teamSec.hidden ? [] : teamSharedConversations;
+  const teamRowIds = new Set(listedTeamChats.map((c) => c.id));
   const allRecent = unified
     ? sortRecent(
         [
           ...recentUnfiled(conversations, knownProjectIds).filter((c) => !teamRowIds.has(c.id)),
-          ...teamSharedConversations,
+          ...listedTeamChats,
         ],
         recentSort,
       )
@@ -2407,6 +2415,7 @@ visibleProjectTree.map(({ project, chats }) => {
                             type="button"
                             data-testid="team-shared-conv-row"
                             data-rail-row=""
+                            aria-describedby={isPatrol(c.id) ? PATROL_DESC_ID : undefined}
                             className={[
                               "flex w-full min-w-0 items-center gap-1.5 rounded-md pr-10 text-left transition any-pointer-coarse:min-h-11 any-pointer-coarse:pr-12",
                               // In the one-list view a teammate's row sits
@@ -2599,9 +2608,10 @@ visibleProjectTree.map(({ project, chats }) => {
           testId="search-group-team"
           title={sectionLabel("team", tr("Team chats"))}
           count={teamMatches.length}
-          // In the one-list view teammates' chats live in the Chats section.
-          hidden={unified ? chatsSec.hidden : teamSec.hidden}
-          onShow={showSection(unified ? "chats" : "team")}
+          // In the one-list view teammates' chats live in the Chats section,
+          // so hiding either one hides them.
+          hidden={teamSec.hidden || (unified && chatsSec.hidden)}
+          onShow={showSection(teamSec.hidden ? "team" : "chats")}
         >
           {teamMatches.map((c) => renderTeamRow(c, true))}
         </SearchGroup>
@@ -2637,6 +2647,7 @@ visibleProjectTree.map(({ project, chats }) => {
                 type="button"
                 data-testid="search-result"
                 data-rail-row=""
+                aria-describedby={isPatrol(r.conversation_id) ? PATROL_DESC_ID : undefined}
                 className="block w-full rounded-md px-2 py-1.5 text-left transition hover:bg-[var(--rail-hover)] any-pointer-coarse:min-h-11"
                 onClick={() => {
                   if (r.user_email) setSidebarOpen(false);
@@ -2781,6 +2792,14 @@ visibleProjectTree.map(({ project, chats }) => {
           </button>
         ) : null}
       </div>
+
+      {/* What a row's mark means, once, for the rows that point here. */}
+      <span id={PATROL_DESC_ID} hidden>
+        {PATROL_ROW_TEXT}
+      </span>
+      <span id={TEMPORARY_DESC_ID} hidden>
+        {TEMPORARY_ROW_TEXT}
+      </span>
 
       {teamFirst && teamAboveProjects ? teamTop : null}
       {projectsFirst ? projectsBlock : null}

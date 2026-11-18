@@ -11,10 +11,12 @@ sidebar"), which `/help` renders.
 
 ## What shipped
 
-- **The default is unchanged.** With no saved layout the rail renders exactly
-  what it did: Chat, Patrols and Background tasks with their subtitles and
-  test ids, then Projects, Chats and Team chats. Nobody's rail moves until
-  they (or an admin) change it.
+- **The default.** With no saved layout the rail renders Chat, Patrols and
+  Background tasks with their subtitles and test ids, then Projects and
+  Chats. Until one list for all chats (below) the default also had a Team
+  chats section; that is now a choice, and the one change the default has
+  seen: every other part of a rail stays as it was until its owner (or an
+  admin) changes it.
 - **Destinations and shortcuts in one ordered list** (`RailNav.tsx`). The
   three built-in destinations can be moved, renamed, given another icon, or
   hidden. Next to them a person pins shortcuts: a chat, a patrol (a chat), a
@@ -40,11 +42,20 @@ sidebar"), which `/help` renders.
   None of this affects search: while the search field holds text the
   sections step aside for one list of results drawn from all of them, hidden
   and folded ones included ([SIDEBAR-SEARCH.md](SIDEBAR-SEARCH.md)).
-- **One list for all chats** (`unified` in the layout, off by default).
-  Teammates' shared and multiplayer chats are listed inside the Chats section
-  with the person's own, and Team chats has no section of its own (its order,
-  fold and hide settings are kept but not used, and the Customize panel shows
-  it as "In Chats"). Pinned chats keep their group at the top, with its
+- **One list for all chats** is the default. Teammates' shared and
+  multiplayer chats are listed inside the Chats section with the person's
+  own, and Team chats has no section of its own. The layout stores the
+  opposite choice, `separate_lists: true`, so a layout that says nothing —
+  the built-in one, a workspace default, and every layout saved before the
+  choice existed — is one list. That is deliberate: the separate, foldable
+  Team chats section is where people lost their teammates' chats
+  ([SIDEBAR-SEARCH.md](SIDEBAR-SEARCH.md)), so the fix reaches the people
+  who already had it folded. **One list for all chats** in the Customize
+  panel switches it off, which restores the Team chats section and the
+  Temporary group exactly as they were. In one list the Team chats entry of
+  the panel shows "In Chats"; its order, name and fold are kept but not
+  used, and its show/hide switch still works: a person who hid Team chats
+  sees no teammates' chats in the list. Pinned chats keep their group at the top, with its
   reorder mode. Below it, one **Recent** list holds the person's unpinned,
   unfiled chats and teammates' chats under one sort (the Temporary sort
   control). Because that list is no longer only temporary chats, each of the

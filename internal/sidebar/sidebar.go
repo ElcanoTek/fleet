@@ -111,11 +111,12 @@ type Layout struct {
 	Home     string    `json:"home"`
 	// Compact hides the rail's one-line subtitles.
 	Compact bool `json:"compact,omitempty"`
-	// Unified lists teammates' shared chats inside the Chats section, in one
-	// list with the person's own, instead of in a Team chats section of their
-	// own. A view preference only: it changes where chats are listed, never
-	// which chats the person may open.
-	Unified bool `json:"unified,omitempty"`
+	// SeparateLists gives teammates' shared chats a Team chats section of
+	// their own. Unset (the default, and every layout saved before this
+	// field existed) lists them inside the Chats section, in one list with
+	// the person's own. A view preference only: it changes where chats are
+	// listed, never which chats the person may open.
+	SeparateLists bool `json:"separate_lists,omitempty"`
 }
 
 // Parse decodes raw JSON and normalizes it. A malformed document or one that
@@ -139,7 +140,7 @@ func Normalize(l Layout) (Layout, error) {
 	if len(l.Items) > MaxItems {
 		return Layout{}, invalid("at most %d items", MaxItems)
 	}
-	out := Layout{Version: Version, Compact: l.Compact, Unified: l.Unified, Items: make([]Item, 0, len(l.Items)+len(BuiltinIDs))}
+	out := Layout{Version: Version, Compact: l.Compact, SeparateLists: l.SeparateLists, Items: make([]Item, 0, len(l.Items)+len(BuiltinIDs))}
 	seen := map[string]bool{}
 	for i, in := range l.Items {
 		it, err := normalizeItem(in)

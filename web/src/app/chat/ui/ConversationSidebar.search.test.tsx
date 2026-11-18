@@ -161,6 +161,12 @@ function layoutWith(patches: Partial<Record<SectionId, { hidden?: boolean; colla
   return layout;
 }
 
+// The same, for a person who chose separate lists: Team chats is a section of
+// its own, with its own fold.
+function separateLayout(patches: Parameters<typeof layoutWith>[0] = {}) {
+  return { ...layoutWith(patches), separate_lists: true };
+}
+
 function stubFetch(layout: unknown, messageHits: unknown[] = []) {
   const calls: { url: string; method: string; body?: string }[] = [];
   vi.stubGlobal(
@@ -262,7 +268,11 @@ describe("ConversationSidebar — search looks everywhere", () => {
     expect(screen.getByTestId("patrol-mark").closest("[data-rail-row]")?.getAttribute("title")).toBe(
       "Morning pacing patrol",
     );
-    expect(screen.getByLabelText("Patrol chat").getAttribute("title")).toContain("schedule");
+    const mark = screen.getByTestId("patrol-mark");
+    expect(mark.getAttribute("title")).toContain("schedule");
+    // The mark does not rename the row: it is the row's description.
+    const row = screen.getByRole("button", { name: "Morning pacing patrol" });
+    expect(document.getElementById(row.getAttribute("aria-describedby") ?? "")?.textContent).toContain("schedule");
     type("morning");
     expect(within(group("chats")).getByTestId("patrol-mark")).toBeTruthy();
   });
@@ -285,7 +295,7 @@ describe("ConversationSidebar — search looks everywhere", () => {
 
   it("shows results when every section is folded", async () => {
     await renderRail(
-      layoutWith({ chats: { collapsed: true }, team: { collapsed: true }, projects: { collapsed: true } }),
+      separateLayout({ chats: { collapsed: true }, team: { collapsed: true }, projects: { collapsed: true } }),
     );
     // Folded: nothing listed until the search.
     expect(screen.queryByTestId("team-shared-conv-row")).toBeNull();
@@ -299,7 +309,7 @@ describe("ConversationSidebar — search looks everywhere", () => {
 
   it("finds chats in hidden sections, says they are hidden, and brings a section back", async () => {
     const { calls } = await renderRail(
-      layoutWith({ chats: { hidden: true }, team: { hidden: true }, projects: { hidden: true } }),
+      separateLayout({ chats: { hidden: true }, team: { hidden: true }, projects: { hidden: true } }),
     );
     expect(screen.queryByTestId("team-chats-section")).toBeNull();
     type("pacing");
@@ -419,7 +429,7 @@ describe("ConversationSidebar — search looks everywhere", () => {
     fireEvent.click(within(empty).getByRole("button", { name: "Clear search" }));
     expect((search() as HTMLInputElement).value).toBe("");
     expect(screen.queryByTestId("search-results")).toBeNull();
-    expect(screen.getByTestId("team-chats-section")).toBeTruthy();
+    expect(screen.getByTestId("unified-chat-list")).toBeTruthy();
   });
 });
 
@@ -475,7 +485,8 @@ describe("ConversationSidebar — shared chats in message search", () => {
 });
 
 describe("ConversationSidebar — one list for all chats", () => {
-  const unifiedLayout = (patches: Parameters<typeof layoutWith>[0] = {}) => ({ ...layoutWith(patches), unified: true });
+  // One list is the default: a layout that says nothing about it.
+  const unifiedLayout = (patches: Parameters<typeof layoutWith>[0] = {}) => layoutWith(patches);
   // Activity order across own and team chats: team-2, own-1, team-1, own-patrol.
   const own = [
     conv({ id: "own-1", title: "Budget pacing review", updated_at: 300 }),
@@ -535,14 +546,34 @@ describe("ConversationSidebar — one list for all chats", () => {
     // the patrol mark, never the hourglass.
     await waitFor(() => expect(titlesOf("patrol-mark")).toEqual(["Morning pacing patrol"]));
     expect(titlesOf("temporary-mark")).toEqual(["Budget pacing review"]);
-    expect(within(list).getAllByLabelText("Temporary chat")[0].getAttribute("title")).toContain("14 days");
+    expect(within(list).getAllByTestId("temporary-mark")[0].getAttribute("title")).toContain("14 days");
+    const row = screen.getByRole("button", { name: "Budget pacing review" });
+    expect(document.getElementById(row.getAttribute("aria-describedby") ?? "")?.textContent).toContain("14 days");
     // Pinned chats are kept, so they carry no mark.
     expect(screen.getByTestId("pinned-section").querySelector('[data-testid="temporary-mark"]')).toBeNull();
     expect(screen.getByRole("button", { name: "About this list" })).toBeTruthy();
   });
 
-  it("separate lists stay the default: no marks, a Temporary group, a Team chats section", async () => {
+  it("is the default, with no saved layout at all", async () => {
     await renderRail(null, { overrides });
+    expect(screen.getByTestId("unified-chat-list")).toBeTruthy();
+    expect(screen.queryByTestId("team-chats-section")).toBeNull();
+  });
+
+  it("a person who hid Team chats sees none of them in the list, and search still finds them", async () => {
+    await renderRail(unifiedLayout({ team: { hidden: true } }), { overrides });
+    const list = screen.getByTestId("unified-chat-list");
+    expect(within(list).queryByTestId("team-shared-conv-row")).toBeNull();
+    expect(within(list).getByTitle("Budget pacing review")).toBeTruthy();
+    type("launch");
+    fireEvent.click(await within(group("team")).findByRole("button", { name: "Show Team chats in the sidebar" }));
+    expect(getSidebarState().layout.sections.find((x) => x.id === "team")?.hidden).toBeFalsy();
+    type("");
+    expect(within(screen.getByTestId("unified-chat-list")).getAllByTestId("team-shared-conv-row")).toHaveLength(2);
+  });
+
+  it("separate lists are one switch away: no marks, a Temporary group, a Team chats section", async () => {
+    await renderRail(separateLayout(), { overrides });
     expect(screen.queryByTestId("unified-chat-list")).toBeNull();
     expect(screen.queryByTestId("temporary-mark")).toBeNull();
     expect(screen.getByTestId("team-chats-section")).toBeTruthy();
@@ -557,7 +588,7 @@ describe("ConversationSidebar — one list for all chats", () => {
     expect(await within(group("team")).findByRole("button", { name: "Show Team chats in the sidebar" })).toBeTruthy();
     fireEvent.click(within(group("team")).getByRole("button", { name: "Show Team chats in the sidebar" }));
     expect(getSidebarState().layout.sections.find((x) => x.id === "chats")?.hidden).toBeFalsy();
-    expect(getSidebarState().layout.unified).toBe(true);
+    expect(getSidebarState().layout.separate_lists).toBeUndefined();
   });
 });
 

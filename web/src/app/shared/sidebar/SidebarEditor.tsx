@@ -724,7 +724,7 @@ function AddShortcut({
 
 function SectionsSection({ layout, onChange }: { layout: SidebarLayout; onChange: (next: SidebarLayout) => void }) {
   const unifiedId = useId();
-  const unified = Boolean(layout.unified);
+  const unified = !layout.separate_lists;
   const chatsName = layout.sections.find((x) => x.id === "chats")?.label || sectionName("chats");
   return (
     <section aria-labelledby="sidebar-sections-heading" className="grid gap-2">
@@ -738,7 +738,8 @@ function SectionsSection({ layout, onChange }: { layout: SidebarLayout; onChange
         {layout.sections.map((s, index) => {
           const name = s.label || sectionName(s.id);
           // With one list for all chats, Team chats has no section of its
-          // own to fold or hide: its chats follow the Chats list.
+          // own to fold or name: its chats are in the Chats list (unless
+          // the person hid them, which its switch still does).
           const merged = unified && s.id === "team";
           return (
             <li
@@ -771,6 +772,8 @@ function SectionsSection({ layout, onChange }: { layout: SidebarLayout; onChange
               <button
                 type="button"
                 className={ICON_BUTTON}
+                // In one list there is no Team chats heading to fold; the
+                // switch beside it still says whether teammates' chats show.
                 disabled={merged}
                 aria-pressed={Boolean(s.collapsed)}
                 aria-label={tr("Start {0} folded", [name])}
@@ -781,7 +784,6 @@ function SectionsSection({ layout, onChange }: { layout: SidebarLayout; onChange
               </button>
               <Switch
                 checked={!s.hidden}
-                disabled={merged}
                 onCheckedChange={(on) => onChange(updateSection(layout, s.id, { hidden: !on }))}
                 aria-label={tr("Show {0} on the Chat page", [name])}
                 title={s.hidden ? tr("Hidden — switch on to show") : tr("Shown — switch off to hide")}
@@ -824,7 +826,7 @@ function SectionsSection({ layout, onChange }: { layout: SidebarLayout; onChange
           id={unifiedId}
           data-testid="sidebar-editor-unified"
           checked={unified}
-          onCheckedChange={(on) => onChange({ ...layout, unified: on || undefined })}
+          onCheckedChange={(on) => onChange({ ...layout, separate_lists: on ? undefined : true })}
         />
       </div>
     </section>
