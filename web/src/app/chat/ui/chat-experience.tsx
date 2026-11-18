@@ -91,7 +91,10 @@ import {
 import { isToggleable, type PickerCategory } from "./toolsPicker";
 import { useIsAdmin } from "@/app/settings/useIsAdmin";
 import { bootstrapFailureDestination } from "./bootstrapFailure";
-import { AutonomousRiskModal } from "./AutonomousRiskModal";
+import {
+  AUTONOMOUS_ACCEPTED_EVENT,
+  AutonomousRiskModal,
+} from "./AutonomousRiskModal";
 import type { AutoSubmitPauseResult, UIAutoSubmitState } from "./genui/model";
 import { isPendingKey, PENDING_CONV_KEY, realConvId } from "./workspaceHref";
 import { DialogShell } from "@/app/shared/ui/DialogShell";
@@ -896,12 +899,26 @@ export function ChatExperience({
       getBootstrap().session?.autonomous_accepted === true ||
       restoredSession?.serverConfig?.autonomousAccepted === true,
   );
+  // Monotonic epoch bumped on local acceptance or 409 invalidation so an
+  // already-in-flight /api/server-config, /api/conversations/{id}, or
+  // /api/session read cannot overwrite the newer acceptance state.
+  const autonomousAcceptedEpochRef = useRef(0);
+  const applyLocalAutonomousAccepted = useCallback((accepted: boolean) => {
+    autonomousAcceptedEpochRef.current += 1;
+    setAutonomousAccepted(accepted);
+    setServerConfig((prev) => ({ ...prev, autonomousAccepted: accepted }));
+  }, []);
   const [autonomousRiskOpen, setAutonomousRiskOpen] = useState(false);
   const pendingAutonomousConfirmRef = useRef<(() => void) | null>(null);
   const requireAutonomousAccept = useCallback((onAccepted: () => void) => {
     pendingAutonomousConfirmRef.current = onAccepted;
     setAutonomousRiskOpen(true);
   }, []);
+  useEffect(() => {
+    const onAccepted = () => applyLocalAutonomousAccepted(true);
+    window.addEventListener(AUTONOMOUS_ACCEPTED_EVENT, onAccepted);
+    return () => window.removeEventListener(AUTONOMOUS_ACCEPTED_EVENT, onAccepted);
+  }, [applyLocalAutonomousAccepted]);
   const [uiAutoSubmitsByConv, setUiAutoSubmitsByConv] = useState<
     Map<string, Map<string, UIAutoSubmitState>>
   >(() => new Map());
@@ -1010,15 +1027,24 @@ export function ChatExperience({
     // later refresh happens to fix it. Same rule as client-config.
     serverConfigFetchSeqRef.current += 1;
     const seq = serverConfigFetchSeqRef.current;
+    const acceptEpoch = autonomousAcceptedEpochRef.current;
     try {
       const cfgRes = await fetch("/api/server-config", { cache: "no-store" });
       if (!cfgRes.ok) return;
       const cfg = (await cfgRes.json()) as Parameters<typeof parseServerConfigPayload>[0];
       if (seq <= serverConfigAppliedSeqRef.current) return;
       serverConfigAppliedSeqRef.current = seq;
-      setServerConfig(parseServerConfigPayload(cfg));
-      if (typeof cfg.autonomous_accepted === "boolean") {
-        setAutonomousAccepted(cfg.autonomous_accepted);
+      const parsedCfg = parseServerConfigPayload(cfg);
+      if (acceptEpoch === autonomousAcceptedEpochRef.current) {
+        setServerConfig(parsedCfg);
+        if (typeof cfg.autonomous_accepted === "boolean") {
+          setAutonomousAccepted(cfg.autonomous_accepted);
+        }
+      } else {
+        setServerConfig((prev) => ({
+          ...parsedCfg,
+          autonomousAccepted: prev.autonomousAccepted,
+        }));
       }
     } catch {
       // Optional capability — leave the snapshot as it is.
@@ -1298,7 +1324,7 @@ export function ChatExperience({
             }),
           });
           if (res.status === 409) {
-            setAutonomousAccepted(false);
+            applyLocalAutonomousAccepted(false);
             requireAutonomousAccept(() => changeApprovalMode("autonomous"));
             throw new Error(tr("HTTP {0}", [res.status]));
           }
@@ -1344,6 +1370,7 @@ export function ChatExperience({
       autoApproveChainRef.current.set(convId, run);
     },
     [
+      applyLocalAutonomousAccepted,
       approvalMode,
       activeConversationId,
       cancelLocalPendingAutoSubmits,
@@ -1353,13 +1380,13 @@ export function ChatExperience({
   );
   const requestApprovalModeChange = useCallback(
     (next: ConversationApprovalMode) => {
-      if (next === "autonomous" && !autonomousAccepted) {
+      if (next === "autonomous" && approvalMode !== "autonomous") {
         requireAutonomousAccept(() => changeApprovalMode("autonomous"));
         return;
       }
       changeApprovalMode(next);
     },
-    [autonomousAccepted, changeApprovalMode, requireAutonomousAccept],
+    [approvalMode, changeApprovalMode, requireAutonomousAccept],
   );
   const toggleAutoApprove = useCallback(() => {
     changeApprovalMode(approvalMode !== "manual" ? "manual" : "auto");
@@ -2782,6 +2809,7 @@ export function ChatExperience({
     try {
       const url = conversationApiUrl(conversationId);
       if (!url) throw new Error(tr("Unable to load conversation."));
+      const acceptEpoch = autonomousAcceptedEpochRef.current;
       const response = await fetch(url, {
         cache: "no-store",
         signal: options.signal,
@@ -2990,7 +3018,10 @@ export function ChatExperience({
           return nextOrigins;
         });
       }
-      if (typeof data.autonomous_accepted === "boolean") {
+      if (
+        typeof data.autonomous_accepted === "boolean" &&
+        acceptEpoch === autonomousAcceptedEpochRef.current
+      ) {
         setAutonomousAccepted(data.autonomous_accepted);
       }
       setSchedulesByConv((prev) => {
@@ -4765,7 +4796,7 @@ export function ChatExperience({
           response.status === 409 &&
           errText.includes("autonomous_acceptance_required")
         ) {
-          setAutonomousAccepted(false);
+          applyLocalAutonomousAccepted(false);
           requireAutonomousAccept(() => {
             void openShareFromComposer();
           });
@@ -5904,7 +5935,7 @@ export function ChatExperience({
       });
     },
     onAutonomousAcceptanceRequired: (convKey) => {
-      setAutonomousAccepted(false);
+      applyLocalAutonomousAccepted(false);
       requireAutonomousAccept(() => {
         if (!isPendingKey(convKey)) {
           changeApprovalMode("autonomous");
@@ -6207,7 +6238,7 @@ export function ChatExperience({
       return true;
     } catch (e) {
       if (e instanceof PatrolApiError && e.status === 409) {
-        setAutonomousAccepted(false);
+        applyLocalAutonomousAccepted(false);
         requireAutonomousAccept(() => {
           void handleStartPatrol(input);
         });
@@ -6779,6 +6810,7 @@ export function ChatExperience({
         if (initialUserEmail) {
           setUserEmail(initialUserEmail);
         } else {
+          const acceptEpoch = autonomousAcceptedEpochRef.current;
           let sessionResponse: Response;
           try {
             sessionResponse = await fetch("/api/session", {
@@ -6806,7 +6838,10 @@ export function ChatExperience({
           };
           if (cancelled) return;
           setUserEmail(sessionData.email);
-          if (typeof sessionData.autonomous_accepted === "boolean") {
+          if (
+            typeof sessionData.autonomous_accepted === "boolean" &&
+            acceptEpoch === autonomousAcceptedEpochRef.current
+          ) {
             setAutonomousAccepted(sessionData.autonomous_accepted);
           }
         }
@@ -8307,8 +8342,7 @@ export function ChatExperience({
           setAutonomousRiskOpen(false);
         }}
         onAccepted={() => {
-          setAutonomousAccepted(true);
-          setServerConfig((prev) => ({ ...prev, autonomousAccepted: true }));
+          applyLocalAutonomousAccepted(true);
           setAutonomousRiskOpen(false);
           const fn = pendingAutonomousConfirmRef.current;
           pendingAutonomousConfirmRef.current = null;

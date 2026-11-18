@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef } from "react";
 import type { RefObject } from "react";
+import { isTopDialogLayer, pushDialogLayer } from "./dialogStack";
 
 // useDialogA11y — shared modal accessibility behavior for the Operations Center
 // modals (New Task, Settings). When `open` flips true it remembers the element
@@ -28,8 +29,7 @@ const FOCUSABLE_SELECTOR =
 // (preventDefault does not stop propagation), and the two Tab traps fought
 // over focus. Every open dialog still installs its listener — it just yields
 // while something newer is open, and takes over again when that closes.
-const dialogStack: symbol[] = [];
-const isTopDialog = (token: symbol): boolean => dialogStack[dialogStack.length - 1] === token;
+const isTopDialog = (token: symbol): boolean => isTopDialogLayer(token);
 
 export type DialogA11yOptions = {
   // Where focus lands when the dialog opens. Defaults to the first focusable
@@ -84,7 +84,7 @@ export function useDialogA11y(
     (initial ?? nodes[0] ?? container)?.focus();
 
     const token = Symbol("dialog");
-    dialogStack.push(token);
+    const popLayer = pushDialogLayer(token);
 
     const onKeyDown = (event: KeyboardEvent) => {
       // A newer dialog is open on top of this one: its listener handles the
@@ -130,8 +130,7 @@ export function useDialogA11y(
     document.addEventListener("keydown", onKeyDown, true);
     return () => {
       document.removeEventListener("keydown", onKeyDown, true);
-      const at = dialogStack.indexOf(token);
-      if (at >= 0) dialogStack.splice(at, 1);
+      popLayer();
       const restoreTarget = returnFocus ?? trigger;
       if (restoreTarget && typeof restoreTarget.focus === "function") {
         restoreTarget.focus();

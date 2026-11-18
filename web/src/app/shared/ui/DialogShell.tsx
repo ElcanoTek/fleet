@@ -6,6 +6,7 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
+import { isTopDialogLayer, pushDialogLayer } from "./dialogStack";
 import { useDialogDismiss } from "./useDialogDismiss";
 
 // DialogShell — the one modal-dialog base for the chat and settings surfaces.
@@ -50,14 +51,13 @@ import { useDialogDismiss } from "./useDialogDismiss";
 // z-index alone, so document order would answer the wrong dialog. Mount order
 // rather than z-index: two dialogs on the same layer stack by which opened
 // last, which is what the reader means by "the one on top".
-const openShells: unknown[] = [];
-
 export type DialogShellProps = {
   // Accessible name. Pass `label` for a titled dialog, or `labelledBy` when
   // the dialog's own copy is the name (the confirm shape whose body IS the
   // question).
   label?: string;
   labelledBy?: string;
+  describedBy?: string;
   // Accessible name for the scrim's dismiss affordance, e.g. "Close projects".
   scrimLabel: string;
   onDismiss: () => void;
@@ -67,7 +67,7 @@ export type DialogShellProps = {
   // at 640–900px the expanded rail is a fixed overlay (scrim z-[380], panel
   // z-[390], NavRail.tsx) and its menus portal at z-[400]/z-[410] (Menu.tsx),
   // all of which would otherwise cover a z-50 dialog and take its clicks.
-  layer?: "modal" | "stacked" | "rail";
+  layer?: "modal" | "stacked" | "rail" | "topmost";
   // "top" hangs the panel below the viewport top (the shortcuts overlay)
   // instead of centring it.
   align?: "center" | "top";
@@ -75,6 +75,9 @@ export type DialogShellProps = {
   className?: string;
   // Where focus lands on open. Defaults to the panel itself.
   initialFocusRef?: RefObject<HTMLElement | null>;
+  // Optional explicit element to restore focus to on close when the trigger
+  // unmounted on activation (e.g. an overflow menu item).
+  returnFocusRef?: RefObject<HTMLElement | null>;
   // data-testid on the PANEL (the thing tests assert about).
   testId?: string;
   // Below sm, fill the viewport edge to edge as a full-height sheet — the
@@ -87,26 +90,22 @@ export type DialogShellProps = {
 export function DialogShell({
   label,
   labelledBy,
+  describedBy,
   scrimLabel,
   onDismiss,
   layer = "modal",
   align = "center",
   className,
   initialFocusRef,
+  returnFocusRef,
   testId,
   sheetOnPhone = false,
   children,
 }: DialogShellProps) {
   const panelRef = useRef<HTMLDivElement | null>(null);
 
-  // Register/unregister in the open-shell stack for the Escape ordering above.
-  useEffect(() => {
-    openShells.push(panelRef);
-    return () => {
-      const at = openShells.indexOf(panelRef);
-      if (at !== -1) openShells.splice(at, 1);
-    };
-  }, []);
+  // Register/unregister in the shared dialog stack for Escape and Tab ordering.
+  useEffect(() => pushDialogLayer(panelRef), []);
 
   // onDismiss through a ref so `dismiss` stays stable: useDialogDismiss
   // re-arms its listener whenever its callback changes, and a parent
@@ -119,7 +118,7 @@ export function DialogShell({
     onDismissRef.current = onDismiss;
   });
   const dismiss = useCallback(() => {
-    if (openShells[openShells.length - 1] !== panelRef) return;
+    if (!isTopDialogLayer(panelRef)) return;
     onDismissRef.current();
   }, []);
   useDialogDismiss(true, dismiss);
@@ -127,7 +126,7 @@ export function DialogShell({
   useEffect(() => {
     const onTab = (event: KeyboardEvent) => {
       if (event.key !== "Tab" || event.defaultPrevented) return;
-      if (openShells[openShells.length - 1] !== panelRef) return;
+      if (!isTopDialogLayer(panelRef)) return;
       const panel = panelRef.current;
       if (!panel) return;
       const controls = Array.from(panel.querySelectorAll<HTMLElement>(
@@ -166,16 +165,23 @@ export function DialogShell({
     const opener = (
       typeof document !== "undefined" ? document.activeElement : null
     ) as HTMLElement | null;
+    const returnFocus = returnFocusRef?.current ?? null;
     (initialFocusRef?.current ?? panelRef.current)?.focus();
-    return () => opener?.focus?.();
-  }, [initialFocusRef]);
+    return () => (returnFocus ?? opener)?.focus?.();
+  }, [initialFocusRef, returnFocusRef]);
 
   return (
     <div
       className={[
         "fixed inset-0 flex justify-center",
         sheetOnPhone ? "px-0 sm:px-4" : "px-4",
-        layer === "rail" ? "z-[420]" : layer === "stacked" ? "z-[60]" : "z-50",
+        layer === "topmost"
+          ? "z-[1300]"
+          : layer === "rail"
+            ? "z-[420]"
+            : layer === "stacked"
+              ? "z-[60]"
+              : "z-50",
         align === "top" ? "items-start pt-[10vh]" : "items-center",
       ].join(" ")}
     >
@@ -193,6 +199,7 @@ export function DialogShell({
         aria-modal="true"
         aria-label={label}
         aria-labelledby={labelledBy}
+        aria-describedby={describedBy}
         data-testid={testId}
         className={[
           // The opaque surface is the point of this component. --color-surface-1

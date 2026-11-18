@@ -20,6 +20,8 @@ export type Me = {
   team_id: string;
   /** Effective admin flag (ADMIN_EMAILS or role admin). */
   admin: boolean;
+  /** Whether the caller accepted CurrentAutonomousPolicyVersion. */
+  autonomous_accepted?: boolean;
 };
 
 export const ME_TTL_MS = 10_000;
@@ -59,6 +61,9 @@ async function readMe(gen: number): Promise<Me | null> {
       role: typeof me.role === "string" ? me.role : "",
       team_id: typeof me.team_id === "string" ? me.team_id : "",
       admin: me.admin === true,
+      ...(typeof me.autonomous_accepted === "boolean"
+        ? { autonomous_accepted: me.autonomous_accepted }
+        : {}),
     };
     if (gen === generation) {
       cached = record;

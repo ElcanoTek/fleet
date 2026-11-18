@@ -35,8 +35,8 @@ type PatrolDraftInput struct {
 	Memories []string
 	// Cadence is the schedule in words ("Weekdays at 08:00 (America/New_York)").
 	Cadence string
-	// Mode is how far the patrol may go on its own: "report", "suggest" or
-	// "act". Anything else reads as "suggest".
+	// Mode is how far the patrol may go on its own: "report", "suggest", "act",
+	// or "autonomous". Anything else reads as "suggest".
 	Mode string
 	// Persona the patrol chat runs as, if not the workspace default.
 	Persona string
@@ -151,7 +151,7 @@ const patrolDraftSystemPrompt = "You write the standing instructions for a PATRO
 	"**Each run** (a numbered checklist, one item per goal, naming the specific connector to use and exactly what to look at; give a sensible default threshold where a goal needs one — e.g. \"spend down more than 25% versus the same hour yesterday\" — so the first run is useful, and say the person can change it); " +
 	"**Report** (the format: start with one headline line — \"✅ All clear\" or \"⚠️ N items need you\" — then the items ordered by urgency, each with what was found, why it matters, and the recommended next step; compare with the previous run and say what is new, what is resolved and what is still open, rather than repeating unchanged findings in full; keep it scannable); " +
 	"**Boundaries** (what the assistant may do on its own, following the autonomy mode given below, and that anything it cannot check because a connector is missing should be said once in the report, plainly, rather than guessed). " +
-	"Autonomy modes: \"report\" means observe and report only, never change anything; \"suggest\" means recommend specific actions and stage them for the person's approval, but do not execute changes; \"act\" means it may take routine, reversible actions itself and must list every action it took in the report, while still asking first for anything costly, irreversible, or outside the goals. " +
+	"Autonomy modes: \"report\" means observe and report only, never change anything; \"suggest\" means recommend specific actions and stage them for the person's approval, but do not execute changes; \"act\" means it may take routine, reversible actions itself and must list every action it took in the report, while still asking first for anything costly, irreversible, or outside the goals; \"autonomous\" means full Autonomous mode is on, so it executes the live platform actions needed to resolve findings without waiting for approval cards, lists every change it made in the report, and pauses only for external messages, calendar invites, schedule changes, destructive storage or permission changes, git push, or deployment-blocked actions. " +
 	"Do not invent connectors, data, accounts or thresholds the person did not imply beyond a sensible default. Do not contradict a memory. If a goal has no connector that can serve it, keep the goal and tell the assistant to report what it needs. " +
 	"(2) `title` — a short (≤5 word) name for the patrol, e.g. \"Morning deal & inbox sweep\". " +
 	"(3) `summary` — one friendly sentence the person reads before launching, describing what will happen each run. " +
@@ -208,14 +208,16 @@ func patrolDraftUserMessage(in PatrolDraftInput) string {
 	return b.String()
 }
 
-// normalizePatrolMode maps the wizard's autonomy choice onto the three modes
-// the system prompt defines; anything unknown is the middle one.
+// normalizePatrolMode maps the wizard's autonomy choice onto the four modes
+// the system prompt defines; anything unknown is "suggest".
 func normalizePatrolMode(mode string) string {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
 	case "report":
 		return "report"
 	case "act":
 		return "act"
+	case "autonomous":
+		return "autonomous"
 	default:
 		return "suggest"
 	}
