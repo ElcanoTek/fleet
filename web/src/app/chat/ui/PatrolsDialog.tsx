@@ -656,11 +656,17 @@ export function PatrolsDialog({
 
   const attentionId = pendingApprovals > 0 ? attentionScheduleId(schedules) : null;
 
+  // The ref refuses a second action on a schedule already in flight (the
+  // state alone lags a render); a refused one reports false.
+  const busyRef = useRef<Set<string>>(new Set());
   const runBusy = async (id: string, fn: () => unknown): Promise<unknown> => {
+    if (busyRef.current.has(id)) return false;
+    busyRef.current.add(id);
     setBusyIds((prev) => new Set(prev).add(id));
     try {
       return await fn();
     } finally {
+      busyRef.current.delete(id);
       setBusyIds((prev) => {
         const next = new Set(prev);
         next.delete(id);
@@ -803,7 +809,7 @@ export function PatrolsDialog({
                         <div className="ml-auto flex shrink-0 items-center gap-2 pb-1 pl-8 sm:pb-0 sm:pl-0">
                         <button
                           type="button"
-                          disabled={busy || isPaused}
+                          disabled={busy}
                           onClick={() => void runBusy(sc.id, () => onRunNow(sc.id))}
                           className="pill-btn inline-flex h-9 shrink-0 items-center gap-1.5 font-medium disabled:opacity-40"
                         >
@@ -884,12 +890,13 @@ export function PatrolsDialog({
                           <div className="flex flex-wrap items-center gap-2">
                             <button
                               type="button"
+                              disabled={busyIds.has(sc.id)}
                               onClick={() => {
                                 setEditingId(sc.id);
                                 setAdding(false);
                                 setConfirmRemoveId(null);
                               }}
-                              className="pill-btn inline-flex h-9 items-center gap-2 px-3.5 font-medium"
+                              className="pill-btn inline-flex h-9 items-center gap-2 px-3.5 font-medium disabled:opacity-40"
                             >
                               <Icon name="edit" className="size-3.5" />
                               {tr("Edit schedule & task")}

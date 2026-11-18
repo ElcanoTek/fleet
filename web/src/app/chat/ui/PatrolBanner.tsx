@@ -308,11 +308,17 @@ export function PatrolBanner({
   const [nowSec, setNowSec] = useState<number>(() => Math.floor(Date.now() / 1000));
   // Every schedule with a request in flight (see PatrolsDialog's runBusy).
   const [busyIds, setBusyIds] = useState<ReadonlySet<string>>(() => new Set());
+  // The ref refuses a second action on a schedule already in flight, even
+  // one clicked before the disabled state rendered.
+  const busyRef = useRef<Set<string>>(new Set());
   const runBusy = async (id: string, fn: () => unknown) => {
+    if (busyRef.current.has(id)) return;
+    busyRef.current.add(id);
     setBusyIds((prev) => new Set(prev).add(id));
     try {
       await fn();
     } finally {
+      busyRef.current.delete(id);
       setBusyIds((prev) => {
         const next = new Set(prev);
         next.delete(id);
@@ -342,7 +348,8 @@ export function PatrolBanner({
         const isPaused = sc.status === "paused";
         const attention = sc.id === attentionId;
         const busy = busyIds.has(sc.id) || Boolean(isStreaming);
-        const runDisabled = busy || isPaused;
+        // A paused schedule can still run once now (the server allows it).
+        const runDisabled = busy;
         return (
           <div
             key={sc.id}

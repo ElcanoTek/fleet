@@ -140,10 +140,13 @@ describe("PatrolBanner", () => {
     expect(props.onHide).toHaveBeenCalledTimes(1);
   });
 
-  it("disables Run now while the patrol is paused and offers Resume", () => {
-    renderBar({ schedules: [{ ...sampleSchedule, status: "paused" }] });
-    expect(screen.getByRole("button", { name: "Run now" })).toBeDisabled();
+  it("keeps Run now for a paused patrol (the server runs it once) and offers Resume", () => {
+    const props = renderBar({ schedules: [{ ...sampleSchedule, status: "paused" }] });
+    const run = screen.getByRole("button", { name: "Run now" });
+    expect(run).toBeEnabled();
     expect(screen.getByRole("button", { name: "Resume" })).toBeEnabled();
+    fireEvent.click(run);
+    expect(props.onRunNow).toHaveBeenCalledWith("sched-1");
   });
 
   it("shows the approval mode as a dropdown and switches without asking for Manual/Auto", async () => {
@@ -369,6 +372,17 @@ describe("PatrolsDialog", () => {
     await act(async () => finishA());
     expect(pauseA).toBeEnabled();
     expect(pauseB).toBeDisabled();
+  });
+
+  it("keeps a card's Edit off while its Run now is pending", async () => {
+    let finish!: () => void;
+    renderDialog({ onRunNow: vi.fn(() => new Promise<void>((r) => (finish = r))) });
+    fireEvent.click(cardToggle(0));
+    const edit = screen.getByRole("button", { name: "Edit schedule & task" });
+    fireEvent.click(screen.getAllByRole("button", { name: "Run now" })[0]);
+    await waitFor(() => expect(edit).toBeDisabled());
+    await act(async () => finish());
+    expect(edit).toBeEnabled();
   });
 
   it("keeps a card's Run now and Pause off while its edit is saving", async () => {
