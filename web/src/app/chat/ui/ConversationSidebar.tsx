@@ -912,7 +912,8 @@ function TeamChatKebab({ conversation }: { conversation: ConversationSummary }) 
             icon={<ShareGlyph className="size-4" />}
             onClick={() => {
               // The menu stays open long enough to say whether it worked.
-              const mine = attempt.current;
+              // Each press is its own attempt: only the latest may report.
+              const mine = ++attempt.current;
               void copyText(link).then((ok) => {
                 if (mine !== attempt.current) return;
                 setCopy(ok ? "copied" : "failed");

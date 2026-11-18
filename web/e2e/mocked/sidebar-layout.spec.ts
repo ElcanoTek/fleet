@@ -420,6 +420,65 @@ test("a copy that finishes after the menu closed does not touch the next opening
   await expect(menu.getByRole("menuitem", { name: "Copy link" })).toBeVisible();
 });
 
+test("pressing Copy link twice: only the latest press reports", async ({ page }) => {
+  await page.addInitScript(() => {
+    const w = window as unknown as { finishFirst?: () => void; calls?: number };
+    w.calls = 0;
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      // The first press waits (a permission prompt); the second is refused.
+      value: {
+        writeText: () => {
+          w.calls = (w.calls ?? 0) + 1;
+          return w.calls === 1
+            ? new Promise<void>((resolve) => (w.finishFirst = resolve))
+            : Promise.reject(new Error("denied"));
+        },
+      },
+    });
+  });
+  await setupTeamChats(page);
+  await page.goto("/chat");
+  const row = page.getByTestId("team-shared-conv-row").filter({ hasText: "Q4 planning" }).locator("..");
+  await row.hover();
+  await row.getByTestId("team-chat-options").click();
+  const menu = page.getByRole("menu", { name: "Options for Q4 planning" });
+  await menu.getByRole("menuitem", { name: "Copy link" }).click();
+  await menu.getByRole("menuitem", { name: "Copy link" }).click();
+  await expect(menu.getByRole("menuitem", { name: "Copy failed" })).toBeVisible();
+  // The older press finishing late neither relabels nor closes the menu.
+  await page.evaluate(() => (window as unknown as { finishFirst?: () => void }).finishFirst?.());
+  await page.waitForTimeout(1200);
+  await expect(menu).toBeVisible();
+  await expect(menu.getByRole("menuitem", { name: "Copy failed" })).toBeVisible();
+  await expect(page.getByTestId("team-chat-link-fallback")).toBeVisible();
+});
+
+test.describe("on a short touch screen", () => {
+  test.use({ hasTouch: true });
+
+  test("a long row menu scrolls inside the screen, so its last item stays reachable", async ({ page }) => {
+    await setupTeamChats(page);
+    await page.setViewportSize({ width: 1100, height: 360 });
+    await page.goto("/chat");
+    // At this height the account footer covers the row, so it opens from the
+    // keyboard; the touch-screen styles apply either way.
+    await page.getByRole("button", { name: "Conversation options for My own notes" }).focus();
+    await page.keyboard.press("Enter");
+    const menu = page.getByRole("menu").first();
+    await expect(menu).toBeVisible();
+    const box = await menu.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.y).toBeGreaterThanOrEqual(0);
+    expect(box!.y + box!.height).toBeLessThanOrEqual(360);
+    const last = menu.getByRole("menuitem").last();
+    await last.scrollIntoViewIfNeeded();
+    const lb = await last.boundingBox();
+    expect(lb!.y + lb!.height).toBeLessThanOrEqual(360);
+    await expect(last).toBeInViewport();
+  });
+});
+
 test.describe("on a touch screen", () => {
   test.use({ hasTouch: true, isMobile: true, viewport: { width: 1280, height: 900 } });
 
