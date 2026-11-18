@@ -490,6 +490,30 @@ test("pressing Copy link twice: only the latest press reports", async ({ page })
   await expect(page.getByTestId("team-chat-link-fallback")).toBeVisible();
 });
 
+test("a second Copy link press calls off the first one's close", async ({ page }) => {
+  await page.addInitScript(() => {
+    let calls = 0;
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      // The first press succeeds (and schedules the menu's close); the second is refused.
+      value: { writeText: () => (++calls === 1 ? Promise.resolve() : Promise.reject(new Error("denied"))) },
+    });
+  });
+  await setupTeamChats(page);
+  await page.goto("/chat");
+  const row = page.getByTestId("team-shared-conv-row").filter({ hasText: "Q4 planning" }).locator("..");
+  await row.hover();
+  await row.getByTestId("team-chat-options").click();
+  const menu = page.getByRole("menu", { name: "Options for Q4 planning" });
+  await menu.getByRole("menuitem", { name: "Copy link" }).click();
+  await menu.getByRole("menuitem", { name: "Copied ✓" }).click();
+  await expect(menu.getByRole("menuitem", { name: "Copy failed" })).toBeVisible();
+  // Past the first press's 900ms: the menu and its fallback stay.
+  await page.waitForTimeout(1200);
+  await expect(menu).toBeVisible();
+  await expect(page.getByTestId("team-chat-link-fallback")).toBeVisible();
+});
+
 test.describe("on a short touch screen", () => {
   test.use({ hasTouch: true });
 
