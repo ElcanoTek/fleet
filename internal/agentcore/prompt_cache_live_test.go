@@ -441,11 +441,21 @@ func TestLiveMixedUpstreams(t *testing.T) {
 // run's records. Every attempt starts a fresh cache (a new nonce), so a retry
 // is never warmed by the attempt before it. It fails — never passes vacuously —
 // when every attempt was split across upstreams.
-func runLiveUntilOneUpstream(t *testing.T, label string, run func(attempt int) []liveCacheRecord) []liveCacheRecord {
+//
+// Each attempt runs under its share of the time the test binary has left
+// (`go test -timeout`), so a slow split attempt cannot push the retries past
+// the binary's deadline — a panic that would report nothing — and when too
+// little time remains for another attempt the test fails, saying so.
+func runLiveUntilOneUpstream(t *testing.T, label string, run func(attempt int, budget time.Duration) []liveCacheRecord) []liveCacheRecord {
 	t.Helper()
 	var splits []string
 	for attempt := 1; attempt <= liveRoutingAttempts; attempt++ {
-		records := run(attempt)
+		budget := liveAttemptBudget(t, liveRoutingAttempts-attempt+1)
+		if budget < liveMinAttemptBudget {
+			t.Fatalf("%s: %d/%d attempts were served by more than one upstream (%s) and only %s remains before the test deadline, too little for another attempt; raise go test -timeout",
+				label, attempt-1, liveRoutingAttempts, strings.Join(splits, " | "), budget.Round(time.Second))
+		}
+		records := run(attempt, budget)
 		mixed := liveMixedUpstreams(records)
 		if mixed == "" {
 			return records
@@ -459,11 +469,59 @@ func runLiveUntilOneUpstream(t *testing.T, label string, run func(attempt int) [
 	return nil
 }
 
+// liveMaxAttemptBudget caps one attempt; liveMinAttemptBudget is the least a
+// trajectory is started with (a 3-turn run takes about a minute when healthy).
+const (
+	liveMaxAttemptBudget = 15 * time.Minute
+	liveMinAttemptBudget = 3 * time.Minute
+)
+
+// liveAttemptBudget splits the time left before the test binary's deadline,
+// less a margin for reporting, evenly over the attempts still allowed, capped
+// at liveMaxAttemptBudget. With no deadline (-timeout 0) it is the cap.
+func liveAttemptBudget(t *testing.T, attemptsLeft int) time.Duration {
+	deadline, ok := t.Deadline()
+	if !ok {
+		return liveMaxAttemptBudget
+	}
+	return attemptBudget(time.Until(deadline), attemptsLeft)
+}
+
+func attemptBudget(remaining time.Duration, attemptsLeft int) time.Duration {
+	const margin = 30 * time.Second
+	if attemptsLeft < 1 {
+		attemptsLeft = 1
+	}
+	b := (remaining - margin) / time.Duration(attemptsLeft)
+	if b < 0 {
+		return 0
+	}
+	return min(b, liveMaxAttemptBudget)
+}
+
+func TestAttemptBudget(t *testing.T) {
+	for _, tc := range []struct {
+		remaining time.Duration
+		left      int
+		want      time.Duration
+	}{
+		{25 * time.Minute, 3, 490 * time.Second},             // (25m-30s)/3
+		{60 * time.Minute, 1, liveMaxAttemptBudget},          // capped
+		{10 * time.Minute, 2, 285 * time.Second},             // (10m-30s)/2
+		{20 * time.Second, 1, 0},                             // past the margin
+		{6*time.Minute + 30*time.Second, 0, 6 * time.Minute}, // no attempts left counts as one
+	} {
+		if got := attemptBudget(tc.remaining, tc.left); got != tc.want {
+			t.Errorf("attemptBudget(%s, %d) = %s, want %s", tc.remaining, tc.left, got, tc.want)
+		}
+	}
+}
+
 func runPromptCacheLive(t *testing.T, key, slug string) {
 	var fleetCached, fleetWrite int
-	records := runLiveUntilOneUpstream(t, slug, func(attempt int) []liveCacheRecord {
+	records := runLiveUntilOneUpstream(t, slug, func(attempt int, budget time.Duration) []liveCacheRecord {
 		var recs []liveCacheRecord
-		recs, fleetCached, fleetWrite = runPromptCacheTrajectory(t, key, slug, attempt)
+		recs, fleetCached, fleetWrite = runPromptCacheTrajectory(t, key, slug, attempt, budget)
 		return recs
 	})
 	assertPromptCacheLive(t, slug, records, fleetCached, fleetWrite)
@@ -471,7 +529,7 @@ func runPromptCacheLive(t *testing.T, key, slug string) {
 
 // runPromptCacheTrajectory runs the 3-turn conversation once against a fresh
 // cache and returns the wire records with fleet's own cache accounting.
-func runPromptCacheTrajectory(t *testing.T, key, slug string, attempt int) ([]liveCacheRecord, int, int) {
+func runPromptCacheTrajectory(t *testing.T, key, slug string, attempt int, budget time.Duration) ([]liveCacheRecord, int, int) {
 	transport := &liveCacheTransport{}
 	provider, err := openrouter.New(
 		openrouter.WithAPIKey(key),
@@ -483,7 +541,7 @@ func runPromptCacheTrajectory(t *testing.T, key, slug string, attempt int) ([]li
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Minute)
+	ctx, cancel := context.WithTimeout(t.Context(), budget)
 	defer cancel()
 	model, err := provider.LanguageModel(ctx, slug)
 	if err != nil {
@@ -692,15 +750,15 @@ func TestPromptCacheLive_LongToolChainCrossTurn(t *testing.T) {
 		slug = v
 	}
 
-	records := runLiveUntilOneUpstream(t, "long-chain "+slug, func(attempt int) []liveCacheRecord {
-		return runLongToolChainTrajectory(t, key, slug, attempt)
+	records := runLiveUntilOneUpstream(t, "long-chain "+slug, func(attempt int, budget time.Duration) []liveCacheRecord {
+		return runLongToolChainTrajectory(t, key, slug, attempt, budget)
 	})
 	assertLongToolChainCache(t, slug, records)
 }
 
 // runLongToolChainTrajectory runs the 10-step chain and its follow-up turn once
 // against a fresh cache and returns the wire records.
-func runLongToolChainTrajectory(t *testing.T, key, slug string, attempt int) []liveCacheRecord {
+func runLongToolChainTrajectory(t *testing.T, key, slug string, attempt int, budget time.Duration) []liveCacheRecord {
 	transport := &liveCacheTransport{}
 	provider, err := openrouter.New(
 		openrouter.WithAPIKey(key),
@@ -712,7 +770,7 @@ func runLongToolChainTrajectory(t *testing.T, key, slug string, attempt int) []l
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Minute)
+	ctx, cancel := context.WithTimeout(t.Context(), budget)
 	defer cancel()
 	model, err := provider.LanguageModel(ctx, slug)
 	if err != nil {

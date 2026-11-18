@@ -297,6 +297,11 @@ conversation against a fresh cache (a new nonce), up to three attempts
 served by a single upstream. When all three attempts are split, the test
 fails and names the upstreams, rather than passing on a measurement it could
 not make. The log keeps each inconclusive attempt's served providers.
+Each attempt runs under an equal share of the time the test binary has left
+before its `go test -timeout`. CI and the nightly canary run the suite with
+`-timeout 25m`, so three attempts fit. When too little time remains for
+another attempt, the test fails and says so, rather than letting the binary
+panic at its deadline.
 
 `FLEET_CACHE_LIVE_TURN_GAP`
 sets the pause between turns (default 5s); `FLEET_CACHE_LIVE_DUMP=<dir>` writes

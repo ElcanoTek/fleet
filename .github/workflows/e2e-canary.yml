@@ -51,7 +51,7 @@ jobs:
     needs: guard
     if: ${{ needs.guard.outputs.has_key == 'true' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     services:
       postgres:
@@ -160,7 +160,7 @@ jobs:
         run: |
           set -uo pipefail
           rc=0
-          go test -tags fleet_host_executor -count=1 -v -timeout 15m -run '^TestPromptCacheLive($|_)' ./internal/agentcore/ 2>&1 | tee prompt-cache-canary.log || rc=$?
+          go test -tags fleet_host_executor -count=1 -v -timeout 25m -run '^TestPromptCacheLive($|_)' ./internal/agentcore/ 2>&1 | tee prompt-cache-canary.log || rc=$?
           {
             echo "### Live Prompt-Cache Canary (exit $rc)"
             echo '```'
