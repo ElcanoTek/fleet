@@ -353,7 +353,7 @@ too. Below that, conversations are grouped:
 | Group | What it holds |
 | --- | --- |
 | **Projects** | Workspaces with standing instructions, shared learnings, and their own conversations. A project shared with your team carries a team glyph. See [Memory and projects](#7-memory-and-projects). |
-| **Team chats** | Conversations shared with you or open in **Multiplayer mode** from teammates, with the owner's short name and a **Live** badge when multiplayer is on. |
+| **Team chats** | Conversations shared with you or open in **Multiplayer mode** from teammates, with the owner's short name and a **Live** badge when multiplayer is on. Each row's `⋮` menu holds **Add to sidebar** and **Copy link** (the team link, which opens the chat for anyone on your team). |
 | **Pinned** | Conversations you have chosen to keep. Pinned conversations never expire. With two or more, **Reorder** in the heading lets you put them in your own order (see [Ordering your chats](#ordering-your-chats)). |
 | **Labels** | Your labels, each a filter. Click one to show only conversations carrying it; click several to narrow further. |
 | **Temporary** | Everything else, most recently active first; the menu beside the heading can sort it by **Newest first** or **Title A–Z** instead. Chats here are deleted after a period of inactivity (14 days on a default deployment); the ⓘ beside the heading says so. Pin a chat or move it into a project to keep it. **Delete temporary chats**, in red at the bottom of the sidebar, deletes them all at once after you confirm. |
@@ -1327,7 +1327,7 @@ Labels organize; they carry no instructions or learnings.
 ## 8. Keeping, shaping, and sharing conversations
 
 Every conversation in the rail has a menu behind the `⋮` button that appears when
-you hover over it. Here is everything in it.
+you hover over it (on a touch screen it is always shown). Here is everything in it.
 
 | Item | What it does |
 | --- | --- |

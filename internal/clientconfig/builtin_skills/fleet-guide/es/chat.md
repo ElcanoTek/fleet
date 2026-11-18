@@ -86,7 +86,7 @@ En la parte superior de la barra están las tres formas de trabajar, cada una co
 | Grupo | Qué contiene |
 | --- | --- |
 | **Proyectos** | Espacios de trabajo con instrucciones permanentes, aprendizajes compartidos y sus propias conversaciones. Un proyecto compartido con tu equipo lleva un icono de equipo. Consulta [Recuerdos y proyectos](#7-memory-and-projects). |
-| **Chats de equipo** | Conversaciones que tus compañeros comparten contigo o abren en **Modo colaborativo**, con el nombre corto del propietario y una etiqueta **En directo** cuando el chat colaborativo está activo. |
+| **Chats de equipo** | Conversaciones que tus compañeros comparten contigo o abren en **Modo colaborativo**, con el nombre corto del propietario y una etiqueta **En directo** cuando el chat colaborativo está activo. El menú `⋮` de cada fila incluye **Añadir a la barra lateral** y **Copiar enlace** (el enlace de equipo, que abre el chat para cualquier persona de tu equipo). |
 | **Fijados** | Conversaciones que has elegido conservar. Las conversaciones fijadas nunca caducan. Si hay dos o más, **Reordenar** en la cabecera te permite ordenarlas a tu gusto (consulta [Ordenar tus chats](#ordering-your-chats)). |
 | **Etiquetas** | Tus etiquetas, cada una como filtro. Pulsa una para mostrar solo las conversaciones que la llevan; pulsa varias para acotar más. |
 | **Temporales** | Todo lo demás, con la actividad más reciente primero; el menú junto a la cabecera permite ordenar por **Más recientes primero** o **Título A–Z**. Estos chats se eliminan tras un período de inactividad (14 días en una instalación predeterminada); el icono ⓘ junto a la cabecera lo indica. Fija un chat o muévelo a un proyecto para conservarlo. **Eliminar chats temporales**, en rojo al final de la barra lateral, los elimina todos a la vez después de confirmar. |
@@ -370,7 +370,7 @@ Puedes mover cualquier conversación a un proyecto con **Mover a un proyecto** y
 
 ## 8. Conservar, organizar y compartir conversaciones
 
-Cada conversación de la barra tiene un menú en el botón `⋮` que aparece al pasar el cursor. Estas son todas sus opciones.
+Cada conversación de la barra tiene un menú en el botón `⋮` que aparece al pasar el cursor (en una pantalla táctil se muestra siempre). Estas son todas sus opciones.
 
 | Opción | Qué hace |
 | --- | --- |

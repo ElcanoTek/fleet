@@ -297,6 +297,69 @@ test("Settings → Admin → Sidebar edits the workspace default", async ({ page
   await shot(page, "07-admin-workspace-default");
 });
 
+// A teammate's chats, the way the Team chats tests below need them.
+async function setupTeamChats(page: Page) {
+  const puts: Layout[] = [];
+  await mockChatBoot(page, {
+    conversations: [
+      { id: "c1", title: "My own notes" },
+      { id: "m1", title: "Incident room", multiplayer: true, user_email: "ops@example.com" },
+    ],
+  });
+  await page.route("**/api/me", (r: Route) => r.fulfill({ json: { email: "e2e@example.com", role: "member" } }));
+  await page.route("**/api/projects", (r: Route) => r.fulfill({ json: { projects: [] } }));
+  await page.route("**/api/patrols", (r: Route) => r.fulfill({ json: { patrols: [] } }));
+  await page.route("**/api/orchestrator/tasks?*", (r: Route) => r.fulfill({ json: { data: [], total: 0, limit: 50, offset: 0 } }));
+  let own: Layout | null = null;
+  await page.route("**/api/sidebar", (r: Route) => {
+    if (r.request().method() === "PUT") {
+      own = r.request().postDataJSON() as Layout;
+      puts.push(own);
+      return r.fulfill({ json: { layout: own } });
+    }
+    return r.fulfill({ json: { layout: own, workspace_default: null } });
+  });
+  return { puts };
+}
+
+test("a Team chats row has a menu: pin it, or copy its team link", async ({ page, context }) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  const { puts } = await setupTeamChats(page);
+  await page.goto("/chat");
+  const row = page.getByTestId("team-shared-conv-row").filter({ hasText: "Incident room" }).locator("..");
+  await row.hover();
+  await row.getByTestId("team-chat-options").click();
+  const menu = page.getByRole("menu", { name: "Options for Incident room" });
+  // Only what a teammate can do with someone else's chat.
+  await expect(menu.getByRole("menuitem")).toHaveText(["Add to sidebar", "Copy link"]);
+  await menu.getByTestId("add-to-sidebar").click();
+  await expect(page.getByTestId("rail-shortcut")).toContainText("Incident room");
+  await expect.poll(() => puts.length).toBeGreaterThan(0);
+
+  await row.getByTestId("team-chat-options").click();
+  await menu.getByRole("menuitem", { name: "Copy link" }).click();
+  await expect(menu.getByRole("menuitem", { name: "Copied ✓" })).toBeVisible();
+  const origin = new URL(page.url()).origin;
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(`${origin}/chat?team=m1`);
+  await expect(menu).toBeHidden();
+});
+
+test.describe("on a touch screen", () => {
+  test.use({ hasTouch: true, isMobile: true, viewport: { width: 1280, height: 900 } });
+
+  test("row menus are shown without a hover", async ({ page }) => {
+    await setupTeamChats(page);
+    await page.goto("/chat");
+    const team = page.getByTestId("team-shared-conv-row").filter({ hasText: "Incident room" }).locator("..");
+    await expect(team).toBeVisible();
+    const opacity = (l: ReturnType<Page["locator"]>) => l.evaluate((el) => getComputedStyle(el).opacity);
+    await expect.poll(() => opacity(team.getByTestId("team-chat-options"))).toBe("1");
+    await expect
+      .poll(() => opacity(page.getByRole("button", { name: "Conversation options for My own notes" })))
+      .toBe("1");
+  });
+});
+
 test("pinning is per item: one of many multiplayer chats, two of many dashboards, each renamed", async ({ page }) => {
   const many = [
     { id: "d1", title: "Revenue board", pinned: true },

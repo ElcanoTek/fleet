@@ -51,6 +51,8 @@ import type {
 import type { Project } from "./ProjectsModal";
 import { previewNodes, type SearchResult } from "./SearchBar";
 import { ShareGlyph, TeamGlyph } from "./ShareGlyphs";
+import { teamLinkUrl } from "./teamSharing";
+import { copyText } from "@/app/shared/lib/clipboard";
 import { ChatReorderList } from "./ChatReorderList";
 import { AddToSidebarItem } from "@/app/shared/sidebar/AddToSidebarItem";
 import { sectionOf, type SectionId } from "@/app/shared/sidebar/layout";
@@ -72,6 +74,12 @@ const SEALED_TOOLTIP_TEXT =
 // otherwise clip or capture it (a CSS data-tip's absolutely-positioned
 // ::after also OCCUPIES layout even at opacity 0, which put a horizontal
 // scrollbar on the projects scroller; the portal has no such footprint).
+// A row's options (⋯) button: revealed on hover or keyboard focus where
+// there is a mouse, always shown on a touch screen, which has no hover to
+// reveal it with (a phone user otherwise had to know where to tap).
+const ROW_ACTIONS_REVEAL =
+  "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 any-pointer-coarse:opacity-100";
+
 function usePortalTip(tip: string) {
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
   const show = (e: React.SyntheticEvent<HTMLElement>) => {
@@ -358,7 +366,7 @@ function ProjectKebab({
           "hit-area pointer-events-auto inline-flex size-[1.8rem] items-center justify-center rounded-[var(--radius-md)] text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:opacity-100 focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none",
           open
             ? "opacity-100"
-            : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100",
+            : ROW_ACTIONS_REVEAL,
         ].join(" ")}
         onClick={(e) => {
           e.stopPropagation();
@@ -635,7 +643,7 @@ function ConversationKebab({
           "hit-area pointer-events-auto inline-flex size-[1.8rem] items-center justify-center rounded-[var(--radius-md)] text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:opacity-100 focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none",
           open
             ? "opacity-100"
-            : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100",
+            : ROW_ACTIONS_REVEAL,
         ].join(" ")}
         onClick={(e) => {
           e.stopPropagation();
@@ -805,6 +813,89 @@ function ConversationKebab({
           }}
         >
           {tr("Delete")}
+        </MenuItem>
+      </Menu>
+    </>
+  );
+}
+
+// ── Team chats row options ──────────────────────────────────────────────────
+// A teammate's chat is not the viewer's to rename, file, archive or delete, so
+// its menu holds what any member can do with it: pin it to their own sidebar
+// and copy the team link (/chat?team=<id>, the link Share hands out), which
+// opens it for anyone on the team.
+function TeamChatKebab({ conversation }: { conversation: ConversationSummary }) {
+  const [open, setOpen] = useState(false);
+  const [copy, setCopy] = useState<"idle" | "copied" | "failed">("idle");
+  const anchorRef = useRef<HTMLButtonElement | null>(null);
+  const closeTimer = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (closeTimer.current !== null) window.clearTimeout(closeTimer.current);
+    },
+    [],
+  );
+  const close = () => {
+    if (closeTimer.current !== null) window.clearTimeout(closeTimer.current);
+    closeTimer.current = null;
+    setOpen(false);
+    setCopy("idle");
+  };
+  const tip = usePortalTip(tr("Options"));
+  return (
+    <>
+      <button
+        ref={anchorRef}
+        type="button"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={tr("Conversation options for {0}", [conversation.title])}
+        data-testid="team-chat-options"
+        onMouseEnter={(e) => {
+          if (!open) tip.show(e);
+        }}
+        onMouseLeave={tip.hide}
+        onFocus={(e) => {
+          if (!open) tip.show(e);
+        }}
+        onBlur={tip.hide}
+        className={[
+          "hit-area pointer-events-auto inline-flex size-[1.8rem] items-center justify-center rounded-[var(--radius-md)] text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:opacity-100 focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none",
+          open ? "opacity-100" : ROW_ACTIONS_REVEAL,
+        ].join(" ")}
+        onClick={(e) => {
+          e.stopPropagation();
+          tip.hide();
+          if (open) close();
+          else setOpen(true);
+        }}
+      >
+        <Icon name="dots" className="size-[1.1rem]" />
+        {tip.tipNode}
+      </button>
+      <Menu
+        open={open}
+        onClose={close}
+        anchorRef={anchorRef}
+        placement="bottom-end"
+        label={tr("Options for {0}", [conversation.title])}
+        className="min-w-[12rem]"
+      >
+        <AddToSidebarItem
+          target={{ kind: "chat", ref: conversation.id, title: conversation.title }}
+          onDone={close}
+        />
+        <MenuItem
+          icon={<ShareGlyph className="size-4" />}
+          onClick={() => {
+            // The menu stays open long enough to say whether it worked.
+            void copyText(teamLinkUrl(conversation.id)).then((ok) => {
+              setCopy(ok ? "copied" : "failed");
+              if (ok) closeTimer.current = window.setTimeout(close, 900);
+            });
+          }}
+        >
+          {copy === "copied" ? tr("Copied ✓") : copy === "failed" ? tr("Copy failed") : tr("Copy link")}
         </MenuItem>
       </Menu>
     </>
@@ -1986,12 +2077,12 @@ export function ConversationSidebar({
                           ? c.user_email.split("@")[0]
                           : "";
                         return (
-                          <div key={c.id} className="group/team relative">
+                          <div key={c.id} className="group relative">
                           <button
                             type="button"
                             data-testid="team-shared-conv-row"
                             className={[
-                              "flex w-full min-w-0 items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-[0.84rem] transition",
+                              "flex w-full min-w-0 items-center gap-1.5 rounded-md py-1.5 pl-2 pr-9 text-left text-[0.84rem] transition",
                               active
                                 ? "bg-[var(--rail-active)] text-[var(--color-text-primary)]"
                                 : "text-[var(--color-text-secondary)] hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)]",
@@ -2027,6 +2118,9 @@ export function ConversationSidebar({
                               </span>
                             ) : null}
                           </button>
+                          <div className="absolute inset-y-0 right-1 flex items-center">
+                            <TeamChatKebab conversation={c} />
+                          </div>
                           </div>
                         );
                       })
@@ -2427,7 +2521,7 @@ export function ConversationSidebar({
                           {conversation.title}
                         </span>
                       </button>
-                      <div className="absolute inset-y-0 right-1 flex items-center gap-1 opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100">
+                      <div className={`absolute inset-y-0 right-1 flex items-center gap-1 transition ${ROW_ACTIONS_REVEAL}`}>
                         <button
                           type="button"
                           aria-label={tr("Unarchive {0}", [conversation.title])}
