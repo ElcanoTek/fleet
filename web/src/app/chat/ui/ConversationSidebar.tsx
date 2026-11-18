@@ -52,7 +52,7 @@ import type { Project } from "./ProjectsModal";
 import { previewNodes, type SearchResult } from "./SearchBar";
 import { ShareGlyph, TeamGlyph } from "./ShareGlyphs";
 import { ChatReorderList } from "./ChatReorderList";
-import { AddToSidebarItem, TeamChatPinButton } from "@/app/shared/sidebar/AddToSidebarItem";
+import { AddToSidebarItem } from "@/app/shared/sidebar/AddToSidebarItem";
 import { sectionOf, type SectionId } from "@/app/shared/sidebar/layout";
 import { useSidebar } from "@/app/shared/sidebar/store";
 import { SidebarTargetsContext, type SidebarTargets } from "@/app/shared/sidebar/targets";
@@ -2027,10 +2027,6 @@ export function ConversationSidebar({
                               </span>
                             ) : null}
                           </button>
-                          <TeamChatPinButton
-                            target={{ kind: "chat", ref: c.id, title: c.title }}
-                            title={c.title}
-                          />
                           </div>
                         );
                       })

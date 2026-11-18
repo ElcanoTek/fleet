@@ -34,37 +34,3 @@ export function AddToSidebarItem({ target, onDone }: { target: ShortcutTarget; o
     </MenuItem>
   );
 }
-
-// TeamChatPinButton — the pin on a Team chats row (shown on hover or keyboard
-// focus): when a team shares many chats, a person pins just the one they live
-// in, and can then rename it in the Customize panel. Pressed again, it unpins.
-export function TeamChatPinButton({ target, title }: { target: ShortcutTarget; title: string }) {
-  const { layout } = useSidebar();
-  const canCustomize = useCanCustomize();
-  const existing = findShortcut(layout, target.kind, target.ref);
-  const inRail = Boolean(existing && !existing.hidden);
-  const label = inRail ? tr("Remove {0} from the sidebar", [title]) : tr("Add {0} to the sidebar", [title]);
-  if (!canCustomize) return null;
-  return (
-    <button
-      type="button"
-      aria-label={label}
-      aria-pressed={inRail}
-      title={label}
-      data-testid="team-chat-pin"
-      onClick={() =>
-        updateSidebarLayout((l) => {
-          const found = findShortcut(l, target.kind, target.ref);
-          return found && !found.hidden ? removeItem(l, found.id) : addShortcut(l, target);
-        })
-      }
-      className={[
-        "absolute right-1 top-1/2 inline-flex size-7 -translate-y-1/2 items-center justify-center rounded-md bg-[var(--color-surface-2)] text-[var(--color-text-muted)] shadow-[var(--shadow-sm)] transition hover:text-[var(--color-text-primary)] focus-visible:opacity-100 focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] any-pointer-coarse:opacity-100",
-        inRail ? "text-[var(--color-accent)]" : "",
-        "opacity-0 group-hover/team:opacity-100",
-      ].join(" ")}
-    >
-      <Icon name="panel-left" className="size-3.5" />
-    </button>
-  );
-}
