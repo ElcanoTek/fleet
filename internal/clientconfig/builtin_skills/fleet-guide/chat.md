@@ -241,6 +241,10 @@ and `git push` still ask, and only turns triggered by the conversation owner use
 Auto-approve or Autonomous).
 If a patrol turn does stage an approval card, the card stays open for 24 hours
 and automatically resumes the patrol turn as soon as you approve it.
+While the card waits on you, the patrol's scheduled runs are skipped rather
+than stacked up behind it, and the Patrol bar says so under that patrol:
+**Patrol on hold**, with the times of the runs it skipped. Approve or decline
+the card and the next scheduled run goes ahead.
 Conversations with an active or paused patrol are exempt from retention sweeps
 until the patrol is stopped.
 

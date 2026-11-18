@@ -617,3 +617,154 @@ func TestChatScheduleEditAfterDeliveryCountsTheRun(t *testing.T) {
 		t.Fatalf("the next slot's turn = %q; want the edited prompt", row.Message)
 	}
 }
+
+// A scheduled fire meeting an approval card that waits on the patrol's owner
+// skips its slot (busy, by design). The skip records why, and the schedule
+// list tells the owner which slots were skipped — until the card is answered.
+func TestChatSchedulesReportSlotsSkippedForApproval(t *testing.T) {
+	t.Parallel()
+
+	s, dsn := newTestStoreDSN(t)
+	ctx := context.Background()
+	const user = "patroller@elcanotek.com"
+
+	conv, err := s.CreateConversation(ctx, user, "Two-hourly patrol", "victoria", "", false)
+	if err != nil {
+		t.Fatalf("CreateConversation: %v", err)
+	}
+	sched, err := s.CreateChatSchedule(ctx, ChatScheduleInput{
+		ConversationID: conv.ID, UserEmail: user, Title: "Patrol", Prompt: "Check the deals.",
+		CronExpr: "0 */2 * * *", Timezone: "UTC",
+	})
+	if err != nil {
+		t.Fatalf("CreateChatSchedule: %v", err)
+	}
+	card, err := s.CreateApproval(ctx, conv.ID, user, "update_deal", "call-1", `{}`, time.Now().Unix()+86400, ApprovalSeat{})
+	if err != nil {
+		t.Fatalf("CreateApproval: %v", err)
+	}
+
+	listed := func() ChatSchedule {
+		t.Helper()
+		list, err := s.ListChatSchedules(ctx, user, conv.ID, false)
+		if err != nil || len(list) != 1 {
+			t.Fatalf("ListChatSchedules = %+v, %v", list, err)
+		}
+		return list[0]
+	}
+	if sc := listed(); sc.Skipped != nil {
+		t.Fatalf("Skipped = %+v before any slot was skipped; want nil", sc.Skipped)
+	}
+
+	var slots []int64
+	for i := 0; i < 3; i++ {
+		due := listed().NextRunAt
+		fired := fireDueChatSchedules(t, s, dsn, time.Unix(due+1, 0).UTC())
+		if len(fired) != 1 || fired[0].delivery.Outcome != models.ChatScheduleBusy ||
+			fired[0].delivery.Reason != models.ChatScheduleBusyApprovalPending {
+			t.Fatalf("fire %d = %+v; want busy for the pending approval", i, fired)
+		}
+		slots = append(slots, due)
+	}
+
+	sc := listed()
+	if sc.Skipped == nil || sc.Skipped.Reason != models.ChatScheduleBusyApprovalPending ||
+		sc.Skipped.Count != 3 || len(sc.Skipped.Slots) != 3 {
+		t.Fatalf("Skipped = %+v; want 3 slots skipped for approval", sc.Skipped)
+	}
+	for i, want := range slots {
+		if sc.Skipped.Slots[i] != want {
+			t.Fatalf("Skipped.Slots = %v; want %v (oldest first)", sc.Skipped.Slots, slots)
+		}
+	}
+	runs, err := openSchedOn(t, dsn).ListChatScheduleRuns(ctx, sched.ID, 10)
+	if err != nil || len(runs) != 3 {
+		t.Fatalf("run history = %+v, %v; want 3 rows", runs, err)
+	}
+	for _, r := range runs {
+		if r.Outcome != models.ChatScheduleBusy || r.Reason != models.ChatScheduleBusyApprovalPending {
+			t.Fatalf("run = %+v; want busy with reason %q", r, models.ChatScheduleBusyApprovalPending)
+		}
+	}
+
+	// Answering the card clears the note: nothing is waiting any more.
+	if ok, err := s.ClaimApproval(ctx, user, card.ID, "rejected", "Declined."); err != nil || !ok {
+		t.Fatalf("ClaimApproval = %v, %v", ok, err)
+	}
+	if sc := listed(); sc.Skipped != nil {
+		t.Fatalf("Skipped = %+v after the card was answered; want nil", sc.Skipped)
+	}
+
+	// A new card does not inherit the slots skipped behind the old one: only
+	// slots fired since it was staged count.
+	if _, err := s.CreateApproval(ctx, conv.ID, user, "update_deal", "call-2", `{}`, time.Now().Unix()+86400, ApprovalSeat{}); err != nil {
+		t.Fatalf("CreateApproval: %v", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE approvals SET created_at = $2 WHERE conversation_id = $1 AND status = 'pending'`,
+		conv.ID, slots[2]+60); err != nil {
+		t.Fatal(err)
+	}
+	if sc := listed(); sc.Skipped != nil {
+		t.Fatalf("Skipped = %+v for a card staged after those slots; want nil", sc.Skipped)
+	}
+	due := listed().NextRunAt
+	fireDueChatSchedules(t, s, dsn, time.Unix(due+1, 0).UTC())
+	if sc := listed(); sc.Skipped == nil || sc.Skipped.Count != 1 || len(sc.Skipped.Slots) != 1 || sc.Skipped.Slots[0] != due {
+		t.Fatalf("Skipped = %+v; want just the slot at %d", sc.Skipped, due)
+	}
+
+	// A paused patrol is not reported (the bar already says Paused).
+	paused := ChatScheduleStatusPaused
+	if _, err := s.UpdateChatSchedule(ctx, user, conv.ID, sched.ID, ChatSchedulePatch{Status: &paused}); err != nil {
+		t.Fatalf("pause: %v", err)
+	}
+	if sc := listed(); sc.Skipped != nil {
+		t.Fatalf("Skipped = %+v on a paused patrol; want nil", sc.Skipped)
+	}
+}
+
+// A slot skipped because the owner's previous patrol turn is still running
+// records that reason, and is not reported as waiting on an approval.
+func TestChatScheduleBusyForPatrolInFlightIsNotReportedAsApproval(t *testing.T) {
+	t.Parallel()
+
+	s, dsn := newTestStoreDSN(t)
+	ctx := context.Background()
+	const user = "patroller@elcanotek.com"
+
+	conv, err := s.CreateConversation(ctx, user, "Patrol in flight", "victoria", "", false)
+	if err != nil {
+		t.Fatalf("CreateConversation: %v", err)
+	}
+	sched, err := s.CreateChatSchedule(ctx, ChatScheduleInput{
+		ConversationID: conv.ID, UserEmail: user, Title: "Patrol", Prompt: "Check.",
+		CronExpr: "0 */2 * * *", Timezone: "UTC",
+	})
+	if err != nil {
+		t.Fatalf("CreateChatSchedule: %v", err)
+	}
+	now := time.Now().Unix()
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO chat_input_queue
+		(id, conversation_id, user_email, client_input_id, message, attachments, mode, state, position, created_at, updated_at)
+		VALUES ('running-patrol', $1, $2, 'chat-patrol:earlier', 'patrol', '[]', 'patrol', 'running', 1, $3, $3)`,
+		conv.ID, user, now); err != nil {
+		t.Fatal(err)
+	}
+	fired := fireDueChatSchedules(t, s, dsn, time.Unix(sched.NextRunAt+1, 0).UTC())
+	if len(fired) != 1 || fired[0].delivery.Outcome != models.ChatScheduleBusy ||
+		fired[0].delivery.Reason != models.ChatScheduleBusyPatrolInFlight {
+		t.Fatalf("fire = %+v; want busy for the patrol in flight", fired)
+	}
+	runs, err := openSchedOn(t, dsn).ListChatScheduleRuns(ctx, sched.ID, 10)
+	if err != nil || len(runs) != 1 || runs[0].Reason != models.ChatScheduleBusyPatrolInFlight {
+		t.Fatalf("run history = %+v, %v; want one patrol_in_flight row", runs, err)
+	}
+	// Even with a card pending now, the in-flight skip is not pinned on it.
+	if _, err := s.CreateApproval(ctx, conv.ID, user, "update_deal", "call-1", `{}`, now+86400, ApprovalSeat{}); err != nil {
+		t.Fatalf("CreateApproval: %v", err)
+	}
+	list, err := s.ListChatSchedules(ctx, user, conv.ID, false)
+	if err != nil || len(list) != 1 || list[0].Skipped != nil {
+		t.Fatalf("ListChatSchedules = %+v, %v; want no skipped-for-approval note", list, err)
+	}
+}

@@ -58,7 +58,8 @@ const (
 	// ErrChatScheduleFiring.
 	ChatScheduleCoalesced ChatScheduleOutcome = "coalesced"
 	// ChatScheduleBusy: a scheduled fire found a patrol in flight, an approval
-	// waiting on the owner or a full input queue. The slot is skipped.
+	// waiting on the owner or a full input queue. The slot is skipped;
+	// Delivery.Reason (and the run history's reason) says which.
 	ChatScheduleBusy ChatScheduleOutcome = "busy"
 	// ChatScheduleGone: the conversation was deleted or the owner can no
 	// longer use it. The schedule is cancelled.
@@ -82,6 +83,22 @@ const (
 	// fires the definition as it is now. (An edit after delivery does not
 	// supersede: the run happened, and its settle counts it.)
 	ChatScheduleSuperseded ChatScheduleOutcome = "superseded"
+)
+
+// Why a scheduled fire was busy (ChatScheduleDelivery.Reason, recorded as
+// sched.chat_schedule_runs.reason). The chat UI tells the owner when a
+// patrol's slots are being skipped for an approval card they have not
+// answered (store.ChatSchedule.Skipped); the other two are recorded for the
+// run history only.
+const (
+	// ChatScheduleBusyPatrolInFlight: an earlier patrol turn of the owner's
+	// is still queued or running in the conversation.
+	ChatScheduleBusyPatrolInFlight = "patrol_in_flight"
+	// ChatScheduleBusyApprovalPending: an approval card waits on the owner.
+	ChatScheduleBusyApprovalPending = "approval_pending"
+	// ChatScheduleBusyQueueFull: the conversation's input queue is full. (A
+	// manual fire meeting a full queue is rejected with the same reason.)
+	ChatScheduleBusyQueueFull = "queue_full"
 )
 
 // ChatScheduleFire is one claimed fire of a chat schedule: the definition as
@@ -119,7 +136,8 @@ type ChatScheduleFire struct {
 // ChatScheduleDelivery is the chat server's answer to a fire.
 type ChatScheduleDelivery struct {
 	Outcome ChatScheduleOutcome
-	// Reason says why a fire was rejected ("queue_full").
+	// Reason says why a fire was rejected ("queue_full") or busy (one of the
+	// ChatScheduleBusy* reasons).
 	Reason string
 	// InputID is the chat_input_queue row of a queued or coalesced fire.
 	InputID string
@@ -133,9 +151,12 @@ type ChatScheduleRun struct {
 	RunNumber int
 	Trigger   ChatScheduleTrigger
 	Outcome   ChatScheduleOutcome
-	InputID   string
-	DueAt     *int64
-	FiredAt   time.Time
+	// Reason is a busy run's ChatScheduleBusy* reason; "" for any other
+	// outcome, and for a busy run recorded before reasons were (0203).
+	Reason  string
+	InputID string
+	DueAt   *int64
+	FiredAt time.Time
 }
 
 // ChatScheduleLocation resolves a schedule's timezone ("" is UTC).

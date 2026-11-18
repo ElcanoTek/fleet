@@ -1,6 +1,7 @@
 import { t as tr } from "@/app/lib/i18n";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Icon } from "./Icon";
+import { PatrolSkippedNote } from "./PatrolSkippedNote";
 import {
   type ChatSchedule,
   type ConversationApprovalMode,
@@ -438,6 +439,7 @@ export function PatrolBanner({
                 )}
               </div>
             </div>
+            <PatrolSkippedNote schedule={sc} />
             {attention ? (
               <div
                 data-testid="patrol-bar-attention"
