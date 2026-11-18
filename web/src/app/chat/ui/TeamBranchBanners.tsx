@@ -13,28 +13,13 @@ import { t as tr } from "@/app/lib/i18n";
 //   messages since. "Since" compares the chat's last update with the branch's
 //   creation time; there is no per-person read state behind it.
 
+import { Icon } from "./Icon";
 import type { BranchOrigin, ViewerBranch } from "./teamSharing";
 import { formatDay, ownerFirstName } from "./teamSharing";
 
+// The mark on a chat branched from a teammate's: Flag's `branch` icon.
 function BranchGlyph({ className }: { className?: string }) {
-  return (
-    <svg
-      aria-hidden="true"
-      viewBox="0 0 24 24"
-      className={className}
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={1.8}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <circle cx="6" cy="5" r="2" />
-      <circle cx="6" cy="19" r="2" />
-      <circle cx="18" cy="8" r="2" />
-      <path d="M6 7v10" />
-      <path d="M18 10c0 4-6 3-11.2 7.4" />
-    </svg>
-  );
+  return <Icon name="branch" className={className} />;
 }
 
 const linkButton =

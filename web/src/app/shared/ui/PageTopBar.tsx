@@ -86,20 +86,7 @@ export function PageTopBar({ title, onMenu, actions, support }: PageTopBarProps)
             type="button"
             onClick={onMenu}
           >
-            <svg
-              aria-hidden="true"
-              className="size-4"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.9"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <path d="M4 6h16" />
-              <path d="M4 12h16" />
-              <path d="M4 18h16" />
-            </svg>
+            <Icon name="menu" className="size-4" />
           </button>
           <h1 className="truncate text-[1.05rem] font-semibold text-[var(--color-text-primary)]">
             {title}
