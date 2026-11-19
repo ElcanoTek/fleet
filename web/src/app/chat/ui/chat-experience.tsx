@@ -3703,6 +3703,33 @@ export function ChatExperience({
     const pinUrl = conversationApiUrl(conversation.id, "/pin");
     if (!pinUrl) return false;
     const nextPinned = !conversation.pinned;
+    // A teammate's chat (a Team chats row): the pin is the person's own —
+    // the server keeps it per viewer and nothing changes for the owner — and
+    // the row lives in the shared list, not in the person's own.
+    const mine = userEmail.trim().toLowerCase();
+    const owner = (conversation.user_email ?? "").trim().toLowerCase();
+    if (owner && mine && owner !== mine) {
+      setTeamSharedConversations((current) =>
+        current
+          .map((c) => (c.id === conversation.id ? { ...c, pinned: nextPinned } : c))
+          // As the server lists them: pinned first, each group most recent first.
+          .sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) || b.updated_at - a.updated_at),
+      );
+      let ok = false;
+      try {
+        const response = await fetch(pinUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ pinned: nextPinned }),
+        });
+        ok = response.ok;
+      } catch {
+        ok = false;
+      }
+      // The optimistic row is a lie until the list is read again.
+      if (!ok) await loadTeamSharedChatCounts();
+      return ok;
+    }
     // Optimistic update
     setConversations((current) =>
       current
@@ -7536,6 +7563,7 @@ export function ChatExperience({
           togglePin={togglePin}
           chatOrders={chatOrders}
           onReorderChats={accountRole !== undefined && accountRole !== "viewer" ? reorderChats : undefined}
+          canPinTeamChats={accountRole !== undefined && accountRole !== "viewer"}
           recentSort={recentSort}
           onRecentSortChange={setRecentSort}
           toggleArchive={requestArchive}

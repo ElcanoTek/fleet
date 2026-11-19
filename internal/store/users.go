@@ -1051,6 +1051,13 @@ func (s *Store) DeleteUser(ctx context.Context, email string) error {
 		`DELETE FROM conversation_order WHERE lower(user_email) = lower($1)`, email); err != nil {
 		return fmt.Errorf("delete chat orders: %w", err)
 	}
+	// The account's pins on other people's chats (migration 0204). Pins
+	// other people put on this account's chats go with those chats (the
+	// table's foreign key cascades).
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM chat.shared_conversation_pins WHERE user_email = $1`, normalizeEmail(email)); err != nil {
+		return fmt.Errorf("delete shared chat pins: %w", err)
+	}
 	// The saved rail layout (migration 0202) names the account's chats,
 	// projects and tasks; it goes with them.
 	if _, err := tx.ExecContext(ctx,

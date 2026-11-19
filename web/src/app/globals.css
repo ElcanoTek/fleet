@@ -1023,6 +1023,15 @@
   right: 0;
   transform: none;
 }
+/* The phone drawer's body is one scroller (NavRail's rail-body), and a side
+   label drawn beside a rail item — the collapsed strip's name for it, which
+   the drawer never needs: its items are always labelled — sat invisibly past
+   the drawer's edge and made the body scroll sideways. */
+@media (width < 40rem) {
+  [data-rail-body] [data-tip]::after {
+    display: none;
+  }
+}
 [data-tip]:hover::after,
 [data-tip]:focus-visible::after,
 [data-tip-top]:hover::after,

@@ -428,19 +428,33 @@ export function NavRail({
           />
         </div>
 
-        {/* Primary navigation: the person's destinations and pinned
-            shortcuts, in their own order (sidebar/RailNav.tsx). */}
-        <RailNav
-          activeView={activeView}
-          collapsed={collapsed}
-          opsCount={opsCount}
-          onNavigate={() => setSidebarOpen(false)}
-        />
+        {/* On a phone the drawer's body scrolls as one: the destinations,
+            the search and the sections above the chat list took most of the
+            screen, and the list, scrolling on its own in what was left,
+            showed four or five rows of however many chats there were. From
+            sm up this wrapper is not a box at all (display: contents), so the
+            rail lays out exactly as before: fixed chrome, and a list that
+            scrolls by itself. -mx/px keep the rows' focus rings from being
+            clipped by the scroller's edge. */}
+        <div
+          data-testid="rail-body"
+          data-rail-body=""
+          className="max-sm:-mx-1 max-sm:flex max-sm:min-h-0 max-sm:flex-1 max-sm:flex-col max-sm:gap-2 max-sm:overflow-y-auto max-sm:overflow-x-hidden max-sm:overscroll-contain max-sm:px-1 sm:contents"
+        >
+          {/* Primary navigation: the person's destinations and pinned
+              shortcuts, in their own order (sidebar/RailNav.tsx). */}
+          <RailNav
+            activeView={activeView}
+            collapsed={collapsed}
+            opsCount={opsCount}
+            onNavigate={() => setSidebarOpen(false)}
+          />
 
-        <CustomizeRailButton collapsed={collapsed} />
+          <CustomizeRailButton collapsed={collapsed} />
 
-        {/* Surface-specific middle content (chat: conversation org; ops: New task). */}
-        <div className="flex min-h-0 flex-1 flex-col">{children}</div>
+          {/* Surface-specific middle content (chat: conversation org; ops: New task). */}
+          <div className="flex min-h-0 flex-1 flex-col max-sm:flex-none">{children}</div>
+        </div>
 
         {/* Surface-specific footer items (e.g. update banner, delete-all-unpinned). */}
         {footer}

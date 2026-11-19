@@ -614,7 +614,7 @@ func (s *Store) ListSharedAndMultiplayerConversations(ctx context.Context, calle
 		    )
 		    OR (c.team_visible = TRUE AND $2 <> '' AND c.team_shared_with = $2 AND c.team_shared_with_id = (SELECT t.id FROM teams t WHERE t.name = $2))
 		  )
-		ORDER BY c.pinned DESC, c.updated_at DESC, c.id DESC`,
+		ORDER BY c.updated_at DESC, c.id DESC`,
 		callerEmail, callerTeam,
 	)
 	if err != nil {
@@ -665,7 +665,22 @@ func (s *Store) ListSharedAndMultiplayerConversations(ctx context.Context, calle
 		c.MultiplayerExcluded = nil
 		out = append(out, c)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// Pinned, in this listing, is the CALLER's pin (migration 0204), never
+	// the owner's: the owner's pin is their own arrangement and no business
+	// of a teammate's list. The caller's pinned chats come first, each group
+	// most recent first as the query left it.
+	pins, err := s.sharedPinSet(ctx, callerEmail)
+	if err != nil {
+		return nil, err
+	}
+	for i := range out {
+		out[i].Pinned = pins[out[i].ID]
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Pinned && !out[j].Pinned })
+	return out, nil
 }
 
 // GetConversationOwnerAndMultiplayer returns the owner, multiplayer state, and

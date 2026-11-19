@@ -62,6 +62,28 @@ sidebar"), which `/help` renders.
   person's chats that is temporary carries an hourglass that says it is
   deleted after 14 days of inactivity unless pinned or filed, and the
   heading's explainer says what the hourglass means.
+- **Pinning a teammate's chat.** A Team chats row's `⋯` menu has **Pin** /
+  **Unpin**. The pin is the viewer's own: `chat.shared_conversation_pins`
+  (migration 0204) holds one row per person and chat, and
+  `conversations.pinned` — the owner's pin, which is what the retention
+  sweep reads — is not touched. So nothing changes for the owner or for any
+  other teammate, and a viewer's pin never keeps a chat alive. `POST
+  /api/conversations/{id}/pin` sets the chat's own pin for its owner and the
+  caller's pin for anyone it is shared with (`store.SetSharedPin`, which
+  accepts only a chat `ListSharedAndMultiplayerConversations` returns for the
+  caller; any other ID is the 404 an unknown ID gets). In the shared listing
+  (`?scope=shared`) and in a non-owner's read of the chat, `pinned` is the
+  caller's pin; **the owner's pin is no longer sent to teammates**, and it no
+  longer orders their list. In the one list a pinned teammate's chat moves to
+  the **Pinned** group, keeps its Team chats row (team glyph, **Live**,
+  owner, `⋯`), and shares the group's hand-set order with the person's own
+  pinned chats ([CHAT-ORDER.md](CHAT-ORDER.md)). With separate lists it
+  stays in **Team chats**, listed first and marked with a pin. A person who
+  hid Team chats sees none of them, pinned or not. A Viewer account, whose
+  writes the API refuses, is not offered the item. At most 500 such pins per
+  person (the cap on one saved order); a pin past it is a 409. Not done: a
+  pinned teammate's chat is not walked by `j`/`k` and cannot be selected,
+  like every teammate's row.
 - **Temporary has one definition.** `store.temporaryConversationClause` is
   what the retention sweep deletes for inactivity, what the per-user cap
   evicts, and what **Delete temporary chats** removes: unpinned, in no
@@ -99,6 +121,21 @@ sidebar"), which `/help` renders.
   that has a populated dashboard. The board is derived from the transcript
   ([DASHBOARD-VIEW.md](DASHBOARD-VIEW.md)), which the chat list does not
   carry, so it needs a server-side flag on the conversation first.
+- **The sort is a menu button, not a native select.** A touch screen draws
+  every `<select>` at 16px (so iOS does not zoom on focus), which made the
+  control twice the size of the 11px heading it sits in and pushed it onto a
+  row of its own. It is now a small button showing the chosen sort, the same
+  size on every device, opening a menu of the three choices
+  (`menuitemradio`, full-height rows on touch).
+- **On a phone the drawer scrolls as one.** Below 640px the rail is an
+  off-canvas drawer. Its destinations, search, Projects and Chats heading
+  used to stay fixed while only the chat list scrolled, in what was left: four
+  or five rows on a tall phone, none in landscape. Now everything between the
+  brand row and the footer scrolls together (`rail-body` in `NavRail.tsx`);
+  from 640px up that wrapper is `display: contents`, so the wider rail is laid
+  out exactly as before. The brand row (with the close button), **Delete
+  temporary chats** and the account menu stay put. Not done: the search field
+  does not stick to the top while scrolling.
 - **Compact** hides the one-line subtitles.
 - **The Customize panel** (`SidebarCustomizer.tsx`, `SidebarEditor.tsx`) is a
   *non-modal* sheet: the rail stays visible and usable beside it, so every edit
@@ -108,10 +145,12 @@ sidebar"), which `/help` renders.
   presets (Classic, Just chat, Dashboards first, Automation, Team room), each
   drawn as a miniature of the person's own rail; a preset rearranges the
   destinations and sections and keeps every shortcut.
-- **Quick pins.** **Add to sidebar** / **Remove from sidebar** in a chat's menu
-  and a project's menu. A team's shared or multiplayer chat is pinned one at a
-  time from the Customize panel's **Add** picker; Team chats rows carry no pin
-  button of their own (it cluttered every row on a phone). A chat last
+- **Quick pins.** **Add to sidebar** / **Remove from sidebar** in a chat's menu,
+  a project's menu and a Team chats row's menu; a team's shared or multiplayer
+  chat can also be added from the Customize panel's **Add** picker. Team chats
+  rows carry no button of their own for it on the row (it cluttered every row
+  on a phone). This is a shortcut among the destinations; **Pin** in the same
+  menus is the other thing, a place in the Pinned group of the chat list. A chat last
   read as a dashboard is added as one. A shortcut to the chat already open
   applies the view it names (dashboard or chat) rather than toggling.
 - **Row menus.** Own chats, projects and Team chats rows put their actions
@@ -121,7 +160,12 @@ sidebar"), which `/help` renders.
   shown, since there is no hover to reveal them, and each tap box and the row
   are at least 44px (`hit-area-touch`, `any-pointer-coarse:min-h-11`). A Team chats row is a
   teammate's chat, not the viewer's to rename, file, archive or delete, so
-  its menu holds **Add to sidebar** and **Copy link**: the team link
+  its menu holds **Pin** (above), **Add to sidebar**, **Copy link** and, for a
+  Multiplayer chat the viewer takes part in, **Download chat…** (the export
+  route serves a participant and refuses a read-only team reader). The menu
+  was audited against what the API lets a non-owner do: branching needs a
+  message to branch from and stays in the open chat, and sharing settings are
+  the owner's, so passing a chat on is **Copy link**. The link is the team link
   (`/chat?team=<id>`) for a chat shared with the team, the chat link
   (`/chat?c=<id>`) for one reached only through Multiplayer (a team link
   refuses it), and no Copy link otherwise. When the clipboard refuses, the
@@ -272,6 +316,15 @@ sidebar"), which `/help` renders.
   editor's own checks prevent every case a person can reach through the UI.
 
 ## Tests
+
+- `internal/store/shared_pins_test.go`, `internal/httpapi/shared_pin_http_test.go`:
+  a pin on a teammate's chat is per viewer, is refused for a chat not shared
+  with the caller, joins the pinned order, and is cleaned up with the account
+  and the chat.
+- `web/e2e/mocked/chat-list.spec.ts`: 120 chats; pinning a teammate's chat
+  from its menu (and a refused pin put back), the one Pinned group and its
+  order, separate lists, and on a phone: the sort's size and menu, reordering
+  with a finger, and the drawer scrolling as one.
 
 - `internal/sidebar/sidebar_test.go`: the validation and normalization table.
 - `internal/store/sidebar_layout_test.go`: round trips, the workspace row,

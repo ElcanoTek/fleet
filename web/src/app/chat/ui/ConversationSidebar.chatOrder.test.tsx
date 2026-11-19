@@ -219,9 +219,121 @@ describe("ConversationSidebar chat order", () => {
     const zulu = screen.getByText("Zulu");
     const alpha = screen.getByText("Alpha");
     expect(alpha.compareDocumentPosition(zulu) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    const select = screen.getByRole("combobox", { name: "Sort chats" }) as HTMLSelectElement;
-    expect(select.value).toBe("title");
-    fireEvent.change(select, { target: { value: "created" } });
+    // The sort is a small button naming what it is and its value, opening a
+    // menu of the three choices (not a native select, which a touch screen
+    // draws at twice the heading's size).
+    const sort = screen.getByRole("button", { name: "Sort chats: Title A–Z" });
+    expect(sort.getAttribute("data-value")).toBe("title");
+    expect(screen.queryByRole("combobox")).toBeNull();
+    fireEvent.click(sort);
+    const menu = screen.getByRole("menu", { name: "Sort chats" });
+    const choices = within(menu).getAllByRole("menuitemradio");
+    expect(choices.map((c) => [c.textContent, c.getAttribute("aria-checked")])).toEqual([
+      ["Recent activity", "false"],
+      ["Newest first", "false"],
+      ["Title A–Z", "true"],
+    ]);
+    fireEvent.click(within(menu).getByRole("menuitemradio", { name: "Newest first" }));
     expect(onRecentSortChange).toHaveBeenCalledWith("created");
+    expect(screen.queryByRole("menu", { name: "Sort chats" })).toBeNull();
+    // Choosing the sort already on changes nothing.
+    fireEvent.click(sort);
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Title A–Z" }));
+    expect(onRecentSortChange).toHaveBeenCalledTimes(1);
+  });
+
+  // A teammate's chat the person pinned for themselves (docs/SIDEBAR.md).
+  const TEAM = (id: string, title: string, extra: Partial<ConversationSummary> = {}): ConversationSummary => ({
+    ...CONV,
+    id,
+    title,
+    user_email: "ana@example.com",
+    team_visible: true,
+    ...extra,
+  });
+
+  it("lists a pinned teammate's chat in Pinned, in one saved order with the person's own", () => {
+    const own = [
+      { ...CONV, id: "a", title: "Alpha", pinned: true, updated_at: 30 },
+      { ...CONV, id: "b", title: "Bravo", pinned: false, updated_at: 20 },
+    ];
+    const team = [TEAM("t1", "Team pinned", { pinned: true, updated_at: 40 }), TEAM("t2", "Team loose", { updated_at: 10 })];
+    renderSidebar({
+      conversations: own,
+      filteredConversations: own,
+      teamSharedConversations: team,
+      teamSharedLoaded: true,
+      chatOrders: { pinned: ["a", "t1"] },
+      onReorderChats: noop,
+    });
+    const pinned = screen.getByTestId("pinned-section");
+    const titles = (root: HTMLElement) =>
+      [...root.querySelectorAll("[data-rail-row]")].map((r) => r.querySelector(".truncate")?.textContent);
+    expect(titles(pinned)).toEqual(["Alpha", "Team pinned"]);
+    // It is not listed a second time below, and the heading already says
+    // Pinned, so the row carries no pin of its own.
+    const list = screen.getByTestId("unified-chat-list");
+    expect(titles(list)).toEqual(["Bravo", "Team loose"]);
+    expect(within(pinned).queryByTestId("team-chat-pinned-mark")).toBeNull();
+    // Two pinned chats, one of them a teammate's: the group can be reordered.
+    expect(screen.getByTestId("pinned-reorder-toggle")).toBeTruthy();
+  });
+
+  it("puts a newly pinned teammate's chat first until an order names it", () => {
+    const own = [{ ...CONV, id: "a", title: "Alpha", pinned: true, updated_at: 30 }];
+    const team = [TEAM("t1", "Older team", { pinned: true, updated_at: 5 }), TEAM("t2", "Newer team", { pinned: true, updated_at: 50 })];
+    renderSidebar({ conversations: own, filteredConversations: own, teamSharedConversations: team, teamSharedLoaded: true });
+    const rows = [...screen.getByTestId("pinned-section").querySelectorAll("[data-rail-row]")].map(
+      (r) => r.querySelector(".truncate")?.textContent,
+    );
+    expect(rows).toEqual(["Newer team", "Alpha", "Older team"]);
+  });
+
+  it("reorders the Pinned group with a teammate's chat in it, saving every ID", () => {
+    const own = [{ ...CONV, id: "a", title: "Alpha", pinned: true, updated_at: 30 }];
+    const team = [TEAM("t1", "Team pinned", { pinned: true, updated_at: 20 })];
+    const onReorderChats = vi.fn();
+    renderSidebar({
+      conversations: own,
+      filteredConversations: own,
+      teamSharedConversations: team,
+      teamSharedLoaded: true,
+      onReorderChats,
+    });
+    fireEvent.click(screen.getByTestId("pinned-reorder-toggle"));
+    // Done sits in the Pinned heading, where Reorder was.
+    expect(screen.getByTestId("pinned-section").querySelectorAll('[data-testid="chat-reorder-done"]').length).toBe(1);
+    fireEvent.click(screen.getByRole("button", { name: "Move Team pinned up" }));
+    expect(onReorderChats).toHaveBeenCalledWith("pinned", ["t1", "a"]);
+    fireEvent.click(screen.getByTestId("chat-reorder-done"));
+    expect(screen.queryByTestId("chat-reorder-list")).toBeNull();
+  });
+
+  it("offers Pin and Unpin in a teammate's chat menu only to an account that can save", () => {
+    const team = [TEAM("t1", "Team pinned", { pinned: true }), TEAM("t2", "Team loose")];
+    const togglePin = vi.fn(async () => true);
+    const { unmount } = renderSidebar({ teamSharedConversations: team, teamSharedLoaded: true, togglePin, canPinTeamChats: true });
+    fireEvent.click(screen.getByRole("button", { name: "Conversation options for Team loose" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Pin" }));
+    expect(togglePin).toHaveBeenLastCalledWith(team[1]);
+    fireEvent.click(screen.getByRole("button", { name: "Conversation options for Team pinned" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Unpin" }));
+    expect(togglePin).toHaveBeenLastCalledWith(team[0]);
+    unmount();
+    // Download is for a Multiplayer chat the person takes part in only.
+    const downloadConversation = vi.fn(async () => {});
+    const mixed = [TEAM("t3", "Live room", { multiplayer: true }), TEAM("t4", "Read only")];
+    const second = renderSidebar({ teamSharedConversations: mixed, teamSharedLoaded: true, downloadConversation });
+    fireEvent.click(screen.getByRole("button", { name: "Conversation options for Read only" }));
+    expect(screen.queryByRole("menuitem", { name: "Download chat…" })).toBeNull();
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+    fireEvent.click(screen.getByRole("button", { name: "Conversation options for Live room" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Download chat…" }));
+    expect(downloadConversation).toHaveBeenCalledWith(mixed[0]);
+    second.unmount();
+    // A Viewer (or a role not known yet): no pin in the menu.
+    renderSidebar({ teamSharedConversations: team, teamSharedLoaded: true, togglePin });
+    fireEvent.click(screen.getByRole("button", { name: "Conversation options for Team loose" }));
+    expect(screen.queryByRole("menuitem", { name: "Pin" })).toBeNull();
   });
 });

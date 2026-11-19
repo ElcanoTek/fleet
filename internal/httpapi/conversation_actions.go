@@ -249,6 +249,14 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, u
 	// were copied in (ADR-0079) — the branch banner and its "Your copy"
 	// labels. Display data: a failed read degrades to no banner.
 	isOwner := strings.EqualFold(conv.UserEmail, user) || conv.UserEmail == ""
+	if !isOwner {
+		// To anyone but the owner, pinned is their own pin on this chat (as
+		// in the shared listing), not the owner's. A failed read is "not
+		// pinned": the flag only places a row in the rail.
+		shown := *conv
+		shown.Pinned, _ = s.store.SharedPinned(r.Context(), user, id)
+		conv = &shown
+	}
 	var origin *store.BranchOrigin
 	if isOwner {
 		var oerr error
@@ -392,6 +400,12 @@ func (s *Server) handleConversationTruncate(w http.ResponseWriter, r *http.Reque
 }
 
 // handleConversationPin serves POST /conversations/{id}/pin.
+//
+// On the caller's own chat it sets the chat's pin. On a chat somebody else
+// owns and shared with the caller (a team chat, a Multiplayer chat they take
+// part in) it sets the CALLER's pin on it instead (store.SetSharedPin): the
+// chat moves to the top of the caller's list and nothing changes for its
+// owner. Any other ID is the same 404 either way.
 func (s *Server) handleConversationPin(w http.ResponseWriter, r *http.Request, user, id string) {
 	var req struct {
 		Pinned bool `json:"pinned"`
@@ -399,7 +413,15 @@ func (s *Server) handleConversationPin(w http.ResponseWriter, r *http.Request, u
 	if !decodeJSONBody(w, r, &req) {
 		return
 	}
-	if err := s.store.SetPinned(r.Context(), user, id, req.Pinned); err != nil {
+	err := s.store.SetPinned(r.Context(), user, id, req.Pinned)
+	if errors.Is(err, store.ErrConversationNotFound) {
+		err = s.store.SetSharedPin(r.Context(), user, id, req.Pinned)
+		if errors.Is(err, store.ErrTooManySharedPins) {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+	}
+	if err != nil {
 		writeConversationMutationError(w, err)
 		return
 	}

@@ -44,6 +44,8 @@ type chatStore interface {
 	DeleteAllMatching(ctx context.Context, userEmail, label string) (int, error)
 	BulkPatch(ctx context.Context, userEmail string, ids []string, pinned *bool, labels []string) (int, error)
 	SetPinned(ctx context.Context, userEmail, convID string, pinned bool) error
+	SetSharedPin(ctx context.Context, userEmail, convID string, pinned bool) error
+	SharedPinned(ctx context.Context, userEmail, convID string) (bool, error)
 	SetArchived(ctx context.Context, userEmail, convID string, archived bool) error
 	// SetConversationProject re-files a conversation into a project ("" =
 	// unfile); the handler validates membership first (#509 follow-up).

@@ -357,8 +357,8 @@ the rail**, below the table). Below that, conversations are grouped:
 | Group | What it holds |
 | --- | --- |
 | **Projects** | Workspaces with standing instructions, shared learnings, and their own conversations. A project shared with your team carries a team glyph. See [Memory and projects](#7-memory-and-projects). |
-| **Team chats** | Conversations shared with you or open in **Multiplayer mode** from teammates. By default they are listed in **Recent**, among your own chats, each with a team mark, the owner's short name and a **Live** badge when multiplayer is on; with **One list for all chats** switched off they have a **Team chats** list of their own. Each row's `⋮` menu holds **Add to sidebar** (not on a read-only **Viewer** account) and **Copy link**: for a chat shared with your team, the team link, which opens it for anyone on your team; for a chat you were added to in Multiplayer, its chat link, which opens it for the people in it. |
-| **Pinned** | Conversations you have chosen to keep. Pinned conversations never expire. With two or more, **Reorder** in the heading lets you put them in your own order (see [Ordering your chats](#ordering-your-chats)). |
+| **Team chats** | Conversations shared with you or open in **Multiplayer mode** from teammates. By default they are listed in **Recent**, among your own chats, each with a team mark, the owner's short name and a **Live** badge when multiplayer is on; with **One list for all chats** switched off they have a **Team chats** list of their own. Each row's `⋮` menu holds **Pin** and **Add to sidebar** (neither on a read-only **Viewer** account) and **Copy link**. **Pin** moves the chat into your **Pinned** group, for you alone: nothing changes for its owner or for anyone else, and it does not stop the owner's chat from expiring. With a **Team chats** list of its own, a chat you pinned stays in that list, first and marked with a pin. **Copy link** copies: for a chat shared with your team, the team link, which opens it for anyone on your team; for a chat you were added to in Multiplayer, its chat link, which opens it for the people in it. A Multiplayer chat you take part in also has **Download chat…**. Renaming, filing, archiving and deleting stay with the chat's owner. |
+| **Pinned** | Conversations you have chosen to keep at the top: your own, and any teammate's chat you pinned from its menu. Your own pinned conversations never expire. With two or more, **Reorder** in the heading lets you put them in your own order (see [Ordering your chats](#ordering-your-chats)). |
 | **Labels** | Your labels, each a filter. Click one to show only conversations carrying it; click several to narrow further. |
 | **Recent** | Your other chats and your teammates' shared chats, in one list, most recently active first; the menu beside the heading can sort it by **Newest first** or **Title A–Z** instead. Each chat of yours that is temporary carries an hourglass: it is deleted after a period of inactivity (14 days on a default deployment), and the ⓘ beside the heading says so. Pin a chat or move it into a project to keep it; a chat with a patrol, and a chat you have shared, is kept too. **Delete temporary chats**, in red at the bottom of the sidebar, deletes them all at once after you confirm. With **One list for all chats** switched off, this group is headed **Temporary** and holds only your own chats. |
 | **Archived** | Collapsed by default. Conversations you have put away but not deleted; open the group to bring one back. |
@@ -1421,11 +1421,15 @@ your own order:
 - **A project's chats:** open the project's `⋮` menu and choose **Reorder
   chats**.
 
-Each chat then shows a pair of arrows. Drag a chat to where you want it, or
-press its up and down arrows, which also work from the keyboard and on a phone.
-Every move is saved as you make it, to your account, so the order is the same
-on every device you sign in from. Press **Done** (or `Esc`) to go back to the
-ordinary rows.
+Each chat then shows a handle and a pair of arrows. Drag a chat to where you
+want it — with a mouse by any part of its row, on a phone or tablet by the
+handle at its left — or press its up and down arrows, which also work from the
+keyboard. Every move is saved as you make it, to your account, so the order is
+the same on every device you sign in from. Press **Done**, above the list (or
+`Esc`), to go back to the ordinary rows.
+
+The **Pinned** group is one order for everything in it: a teammate's chat you
+pinned is moved like your own.
 
 A chat you pin, or file in the project, for the first time appears at the top
 of the list, above the ones you have ordered, until you move it; one you unpin
