@@ -36,10 +36,14 @@ type Drag = {
   step: number;
 };
 
+// The nearest ancestor that actually scrolls. One that only could — on a
+// phone the chat list still computes to overflow-y: auto, but grows with its
+// rows and it is the drawer's body that scrolls — has no range to scroll and
+// is passed over.
 function scrollParent(el: HTMLElement | null): HTMLElement | null {
   for (let node = el?.parentElement ?? null; node; node = node.parentElement) {
     const overflow = getComputedStyle(node).overflowY;
-    if (overflow === "auto" || overflow === "scroll") return node;
+    if ((overflow === "auto" || overflow === "scroll") && node.scrollHeight > node.clientHeight) return node;
   }
   return null;
 }

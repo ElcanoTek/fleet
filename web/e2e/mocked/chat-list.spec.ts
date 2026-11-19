@@ -389,6 +389,42 @@ test.describe("on a phone", () => {
     await expect(page.getByTestId("chat-reorder-list")).toHaveCount(0);
   });
 
+  test("a long Pinned list scrolls under a finger held at the edge", async ({ page }) => {
+    // On a phone the scroller is the drawer's body, not the chat list (which
+    // still computes to overflow-y: auto but has nothing to scroll).
+    const { orders, own } = await boot(page, { pinAllOwn: true });
+    await openDrawer(page);
+    await page.getByTestId("pinned-reorder-toggle").tap();
+    const items = page.getByTestId("chat-reorder-list").locator("li");
+    await expect(items).toHaveCount(80);
+    const body = page.getByTestId("rail-body");
+    const box = (await body.boundingBox())!;
+    const start = await body.evaluate((el) => el.scrollTop);
+    const handle = page.getByTestId(`chat-reorder-handle-${own[0].id}`);
+    await handle.scrollIntoViewIfNeeded();
+    const hb = (await handle.boundingBox())!;
+    const x = hb.x + hb.width / 2;
+    const from = hb.y + hb.height / 2;
+    const edge = box.y + box.height - 8;
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y: from }] });
+    for (let i = 1; i <= 8; i++) {
+      await cdp.send("Input.dispatchTouchEvent", {
+        type: "touchMove",
+        touchPoints: [{ x, y: from + ((edge - from) * i) / 8 }],
+      });
+    }
+    // The finger holds still; the drawer scrolls on by itself.
+    await expect.poll(() => body.evaluate((el) => el.scrollTop), { timeout: 15_000 }).toBeGreaterThan(start + 600);
+    expect(orders.length).toBe(0);
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    await cdp.detach();
+    // One save; the chat went well down the list (it started first).
+    await expect.poll(() => orders.length).toBe(1);
+    expect(orders[0].ids.indexOf(own[0].id)).toBeGreaterThan(12);
+    expect(orders[0].ids.length).toBe(80);
+  });
+
   test("the drawer scrolls as one, so a long list gets the screen", async ({ page }) => {
     await boot(page);
     await openDrawer(page);

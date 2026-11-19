@@ -112,6 +112,18 @@ func TestSharedPin_OnlyWhatIsSharedWithYou(t *testing.T) {
 		}
 	}
 
+	// Unpinning follows the same rule: a chat that is not shared with the
+	// caller, and that they never pinned, is not found.
+	for name, tc := range map[string]struct{ email, id string }{
+		"a private chat":      {"bob@x.com", private.ID},
+		"another team's chat": {"dana@x.com", shared.ID},
+		"an unknown chat":     {"bob@x.com", "no-such-chat"},
+	} {
+		if err := f.s.SetSharedPin(f.ctx, tc.email, tc.id, false); !errors.Is(err, ErrConversationNotFound) {
+			t.Errorf("unpin %s: SetSharedPin = %v, want ErrConversationNotFound", name, err)
+		}
+	}
+
 	// A pin on a chat that stops being shared drops out of the listing with
 	// the chat, and comes back with it: the row is a preference, not access.
 	if err := f.s.SetSharedPin(f.ctx, "bob@x.com", shared.ID, true); err != nil {
@@ -122,6 +134,14 @@ func TestSharedPin_OnlyWhatIsSharedWithYou(t *testing.T) {
 	}
 	if _, order := sharedPinnedIDs(t, f); len(order) != 0 {
 		t.Errorf("an unshared chat is still listed for a teammate who pinned it: %v", order)
+	}
+	// ...and the pin can still be taken off, once: after that the chat is
+	// neither pinned nor shared, so it is not found.
+	if err := f.s.SetSharedPin(f.ctx, "bob@x.com", shared.ID, false); err != nil {
+		t.Errorf("unpinning a chat that stopped being shared = %v, want nil", err)
+	}
+	if err := f.s.SetSharedPin(f.ctx, "bob@x.com", shared.ID, false); !errors.Is(err, ErrConversationNotFound) {
+		t.Errorf("unpinning it again = %v, want ErrConversationNotFound", err)
 	}
 }
 
@@ -229,5 +249,72 @@ func TestSharedPin_Cap(t *testing.T) {
 	}
 	if err := f.s.setSharedPin(f.ctx, "bob@x.com", b.ID, true, limit); err != nil {
 		t.Errorf("pin after making room = %v, want nil", err)
+	}
+}
+
+// Pins racing at the cap cannot both land: with room for one, twelve
+// concurrent pins of twelve different chats leave exactly one pinned.
+func TestSharedPin_CapHoldsUnderConcurrency(t *testing.T) {
+	t.Parallel()
+
+	f := newTeamFixture(t)
+	const n = 12
+	ids := make([]string, n)
+	for i := range ids {
+		ids[i] = f.sharedChat(t, "alice@x.com", f.project.ID, "Chat").ID
+	}
+	errs := make(chan error, n)
+	start := make(chan struct{})
+	for _, id := range ids {
+		go func() {
+			<-start
+			errs <- f.s.setSharedPin(f.ctx, "bob@x.com", id, true, 1)
+		}()
+	}
+	close(start)
+	landed, refused := 0, 0
+	for range ids {
+		switch err := <-errs; {
+		case err == nil:
+			landed++
+		case errors.Is(err, ErrTooManySharedPins):
+			refused++
+		default:
+			t.Errorf("unexpected error: %v", err)
+		}
+	}
+	if landed != 1 || refused != n-1 {
+		t.Errorf("landed = %d, refused = %d; want 1 and %d", landed, refused, n-1)
+	}
+	if pinned, _ := sharedPinnedIDs(t, f); len(pinned) != 1 {
+		t.Errorf("pinned = %v, want exactly one", pinned)
+	}
+}
+
+// A pin row cannot outlive its account: the foreign key removes it with the
+// users row even when nothing else does, and refuses a row for no account.
+func TestSharedPin_TiedToTheAccount(t *testing.T) {
+	t.Parallel()
+
+	f := newTeamFixture(t)
+	c := f.sharedChat(t, "alice@x.com", f.project.ID, "A")
+	if err := f.s.SetSharedPin(f.ctx, "bob@x.com", c.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.s.db.ExecContext(f.ctx,
+		`INSERT INTO chat.shared_conversation_pins (user_email, conversation_id, pinned_at) VALUES ('ghost@x.com', $1, 1)`,
+		c.ID); !pgForeignKeyViolation(err) {
+		t.Errorf("a pin for no account = %v, want a foreign-key violation", err)
+	}
+	if err := f.s.DeleteUser(f.ctx, "bob@x.com"); err != nil {
+		t.Fatalf("DeleteUser: %v", err)
+	}
+	var n int
+	if err := f.s.db.QueryRowContext(f.ctx,
+		`SELECT count(*) FROM chat.shared_conversation_pins WHERE user_email = 'bob@x.com'`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Errorf("pins left after the account was deleted = %d", n)
 	}
 }

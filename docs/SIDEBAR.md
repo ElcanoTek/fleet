@@ -81,7 +81,11 @@ sidebar"), which `/help` renders.
   stays in **Team chats**, listed first and marked with a pin. A person who
   hid Team chats sees none of them, pinned or not. A Viewer account, whose
   writes the API refuses, is not offered the item. At most 500 such pins per
-  person (the cap on one saved order); a pin past it is a 409. Not done: a
+  person (the cap on one saved order); a pin past it is a 409, and pins are
+  taken one at a time per person so two at the cap cannot both land. A pin
+  row is tied to its account and its chat by foreign keys, so it goes with
+  whichever is deleted. Unpinning an ID that is neither pinned by nor shared
+  with the caller is the same 404. Not done: a
   pinned teammate's chat is not walked by `j`/`k` and cannot be selected,
   like every teammate's row.
 - **Temporary has one definition.** `store.temporaryConversationClause` is

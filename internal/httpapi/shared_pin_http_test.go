@@ -88,6 +88,14 @@ func TestConversationPin_TeammatesSharedChat(t *testing.T) {
 			other.Code, other.Body.String(), missing.Code, missing.Body.String())
 	}
 
+	// Unpinning a chat that is not theirs to see is the same 404.
+	if w := convSub(t, f.srv, http.MethodPost, "zoe@x.com", f.chat.ID, "pin", `{"pinned":false}`); w.Code != http.StatusNotFound {
+		t.Errorf("outsider unpin = %d, want 404", w.Code)
+	}
+	if w := convSub(t, f.srv, http.MethodPost, "bob@x.com", "no-such-chat", "pin", `{"pinned":false}`); w.Code != http.StatusNotFound {
+		t.Errorf("unpin of an unknown ID = %d, want 404", w.Code)
+	}
+
 	// The pinned order keeps the teammate's chat bob pinned.
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPut, "/conversations/order",
