@@ -160,6 +160,15 @@ func (s *fakeChatStore) ReleaseWebhookDelivery(_ context.Context, slug, key, tok
 	return nil
 }
 
+func (s *fakeChatStore) DetachWebhookDelivery(_ context.Context, slug, key, token string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if d := s.webhookDeliveries[slug+"\x00"+key]; d != nil && d.token == token && !d.completed {
+		delete(s.webhookDeliveries, slug+"\x00"+key)
+	}
+	return nil
+}
+
 func (s *fakeChatStore) AbandonWebhookConversation(_ context.Context, slug, key, token, ownTurnID string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -41,7 +41,10 @@ made to hold for the whole transfer:
   until that is done.
 - A webhook turn registers without an admission record, for a conversation
   the webhook created a moment earlier. If that chat has changed owner in
-  between, the turn does not start (`registerTurnGated`).
+  between, the turn does not start (`registerTurnGated`), and the delivery is
+  given back without discarding the chat (`DetachWebhookDelivery`): it is the
+  new owner's, where the webhook's ordinary cleanup deletes its own
+  still-empty conversation.
 - The handler then takes the conversation's workspace lock, the one a turn or
   an approval being executed holds from preparing the workspace until it has
   put it back, waiting up to 10 seconds for it.

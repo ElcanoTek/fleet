@@ -223,6 +223,20 @@ func (s *Store) ReleaseWebhookDelivery(ctx context.Context, slug, deliveryKey, t
 	return err
 }
 
+// DetachWebhookDelivery drops an unaccepted delivery row held by token and
+// leaves the conversation it names alone. It is for a conversation that
+// changed owner before the webhook's turn could start (docs/CHAT-TRANSFER.md):
+// the chat is now someone else's, so it must not be discarded as the
+// webhook's own empty conversation, and the sender's retry is processed
+// afresh. A no-op when the token no longer holds the row.
+func (s *Store) DetachWebhookDelivery(ctx context.Context, slug, deliveryKey, token string) error {
+	_, err := s.db.ExecContext(ctx,
+		`DELETE FROM webhook_deliveries
+		  WHERE slug = $1 AND delivery_key = $2 AND claim_token = $3 AND completed_at = 0`,
+		slug, deliveryKey, token)
+	return err
+}
+
 // AbandonWebhookConversation gives back a bound delivery whose turn input did
 // not commit: in one transaction it drops the delivery row held by token and
 // deletes the conversation the row names while it is still empty — no
