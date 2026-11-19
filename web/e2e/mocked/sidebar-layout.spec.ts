@@ -575,7 +575,7 @@ test.describe("on a touch screen", () => {
     // ...and so are the items of the menu it opens.
     await team.getByTestId("team-chat-options").tap();
     const items = page.getByRole("menu", { name: "Options for Incident room" }).getByRole("menuitem");
-    await expect(items).toHaveCount(2);
+    await expect(items).toHaveCount(4); // Pin, Add to sidebar, Copy link, Download chat…
     for (const item of await items.all()) {
       expect((await item.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(44);
     }
