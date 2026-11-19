@@ -664,3 +664,50 @@ func TestCheckContextPressure_LargeWindowInteractiveDefaultCapsAndOverrides(t *t
 		t.Fatalf("400K with explicit 0.60/0.80 thresholds on 1M window must stay silent, events=%v", obs.events)
 	}
 }
+
+// A chat patrol turn (enableResendBudget) whose operator turned the resend
+// budget off has nothing else bounding the chat history it replays on every
+// tick, so it takes the interactive large-window caps. With the budget on, the
+// budget bounds it and the window limit stays the plain fraction; a scheduled
+// engine never takes the caps.
+func TestCheckContextPressure_PatrolWithResendBudgetOffTakesInteractiveCaps(t *testing.T) {
+	const slug = "ctx-1m-patrol-budget-off"
+	recordContextMaxForModel(context.Background(), &namedMockModel{name: slug}, 1_000_000)
+	model := &namedMockModel{name: slug}
+	msgs := fillerMessages(8, 200)
+
+	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "0")
+	patrol := newMockEngine(t, model)
+	patrol.enableResendBudget = true
+	if got := patrol.windowCheckpointLimit(model); got != defaultInteractiveContextCompactionMaxTokens {
+		t.Fatalf("patrol, budget off: 1M windowCheckpointLimit = %d, want %d", got, defaultInteractiveContextCompactionMaxTokens)
+	}
+	if got := patrol.checkpointThreshold(model); got != defaultInteractiveContextCompactionMaxTokens {
+		t.Fatalf("patrol, budget off: checkpointThreshold = %d, want %d", got, defaultInteractiveContextCompactionMaxTokens)
+	}
+
+	obs := &captureObserver{}
+	patrol.logSession.LastStepPromptTokens = 260_000
+	res := patrol.checkContextPressure(context.Background(), msgs, model, newStreamSink(obs), false)
+	if !res.warned || !hasEvent(obs.events, evtContextPressure) || hasEvent(obs.events, evtContextCompacted) {
+		t.Fatalf("patrol, budget off: 260K on 1M window must warn without compacting, events=%v warned=%v", obs.events, res.warned)
+	}
+
+	obs = &captureObserver{}
+	patrol.logSession.LastStepPromptTokens = 360_000
+	res = patrol.checkContextPressure(context.Background(), msgs, model, newStreamSink(obs), false)
+	if !hasEvent(obs.events, evtContextCompacted) || len(res.messages) >= len(msgs) {
+		t.Fatalf("patrol, budget off: 360K on 1M window must compact, events=%v len=%d", obs.events, len(res.messages))
+	}
+
+	scheduled := newMockEngine(t, model)
+	scheduled.requireCompactionOptIn = true
+	if got := scheduled.windowCompactionTokens(1_000_000); got != 900_000 {
+		t.Fatalf("scheduled, budget off: windowCompactionTokens = %d, want 900000", got)
+	}
+
+	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "80000")
+	if got := patrol.windowCompactionTokens(1_000_000); got != 900_000 {
+		t.Fatalf("patrol, budget on: windowCompactionTokens = %d, want 900000", got)
+	}
+}

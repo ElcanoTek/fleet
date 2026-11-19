@@ -226,6 +226,16 @@ the same stop-condition mechanism, at a different threshold:
 - **When it goes inert**: if a window compaction finds nothing to summarize
   (one enormous message), the checkpoint stops pausing until a later
   compaction — proactive or the reactive overflow recovery — removes history.
+- **A chat patrol turn with the resend budget off pauses there too**
+  (`engine.chatWindowCaps`): a patrol turn is opted into the resend budget
+  (`EnableResendBudget`), which bounds its history at 80K by default. With
+  `FLEET_CONTEXT_RESEND_BUDGET_TOKENS=0` it has no budget, and it used to lose
+  the 350,000-token cap as well, because the cap was for engines without the
+  resend budget. A patrol's history is the chat's and is replayed on every
+  tick, so it grew to 0.90 of a 1M window: every tick resent 700K–950K tokens,
+  waited minutes for a first chunk, and failed as "too long" when one step's
+  tool results crossed the window. With the budget off a patrol turn now warns
+  and compacts at the interactive caps.
 - **Scheduled runs can opt into it** (#1764): a scheduled engine uses the
   window checkpoint instead of the resend budget when the operator turns the
   budget off (`FLEET_CONTEXT_RESEND_BUDGET_TOKENS=0`) **and** opts into

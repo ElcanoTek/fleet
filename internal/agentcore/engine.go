@@ -1601,13 +1601,29 @@ func (e *engine) windowCheckpointLimit(active fantasy.LanguageModel) int {
 	return limit
 }
 
+// chatWindowCaps reports whether the large-window default caps (250K warn,
+// 350K compact) apply to this engine: an interactive engine, and an in-chat
+// patrol turn (enableResendBudget) whose resend budget the operator turned off
+// (FLEET_CONTEXT_RESEND_BUDGET_TOKENS=0). A patrol's history is the chat's: it
+// is replayed on every tick, so with the budget off and no cap it grew to the
+// plain 90% of a 1M window and every tick resent 700K–950K tokens. A scheduled
+// engine never qualifies: its history lasts one run, and "compact only near
+// the model's limit" is what its operator chose.
+func (e *engine) chatWindowCaps() bool {
+	if e == nil || e.requireCompactionOptIn {
+		return false
+	}
+	return !e.enableResendBudget || contextResendBudgetTokens() <= 0
+}
+
 // windowCompactionTokens returns the window-compaction point for a model with
 // the given context window: window × contextCompactionThreshold, capped at
-// defaultInteractiveContextCompactionMaxTokens (350K) for interactive engines
-// unless the operator explicitly set FLEET_CONTEXT_COMPACTION_THRESHOLD.
+// defaultInteractiveContextCompactionMaxTokens (350K) for chat engines
+// (chatWindowCaps) unless the operator explicitly set
+// FLEET_CONTEXT_COMPACTION_THRESHOLD.
 func (e *engine) windowCompactionTokens(window int) int {
 	limit := int(float64(window) * contextCompactionThreshold())
-	if !e.resendBudgetEnabled() && !fleetEnv.hasExplicitFraction("CONTEXT_COMPACTION_THRESHOLD") && limit > defaultInteractiveContextCompactionMaxTokens {
+	if e.chatWindowCaps() && !fleetEnv.hasExplicitFraction("CONTEXT_COMPACTION_THRESHOLD") && limit > defaultInteractiveContextCompactionMaxTokens {
 		return defaultInteractiveContextCompactionMaxTokens
 	}
 	return limit
@@ -1615,13 +1631,14 @@ func (e *engine) windowCompactionTokens(window int) int {
 
 // atWindowPressureWarn reports whether used tokens reached the context-pressure
 // warning threshold for window: window × contextPressureWarnThreshold, or
-// defaultInteractiveContextPressureWarnMaxTokens (250K) on interactive engines
-// when FLEET_CONTEXT_PRESSURE_WARN_THRESHOLD is not explicitly overridden.
+// defaultInteractiveContextPressureWarnMaxTokens (250K) on chat engines
+// (chatWindowCaps) when FLEET_CONTEXT_PRESSURE_WARN_THRESHOLD is not explicitly
+// overridden.
 func (e *engine) atWindowPressureWarn(used, window int) bool {
 	if window <= 0 {
 		return false
 	}
-	if !e.resendBudgetEnabled() && !fleetEnv.hasExplicitFraction("CONTEXT_PRESSURE_WARN_THRESHOLD") && used >= defaultInteractiveContextPressureWarnMaxTokens {
+	if e.chatWindowCaps() && !fleetEnv.hasExplicitFraction("CONTEXT_PRESSURE_WARN_THRESHOLD") && used >= defaultInteractiveContextPressureWarnMaxTokens {
 		return true
 	}
 	return float64(used)/float64(window) >= contextPressureWarnThreshold()
