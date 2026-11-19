@@ -243,6 +243,40 @@ func assertTransferNeedsAnIdleChat(ctx context.Context, t *testing.T, srv *Serve
 	endTransfer()
 }
 
+// TestTransferGatesLateStarters: a webhook turn for a chat that changed owner
+// after the webhook created it does not start, and a model-suggestion card's
+// decision keeps its admission until the caller has resolved it.
+func TestTransferGatesLateStarters(t *testing.T) {
+	t.Parallel()
+	srv := &Server{inflight: make(map[string]inflightEntry)}
+	_, stop := context.WithCancel(t.Context())
+	defer stop()
+	if _, _, _, ok := srv.registerTurn("fresh", stop); !ok {
+		t.Fatal("a turn with no admission record could not register on a chat that never changed owner")
+	}
+	srv.inflightMu.Lock()
+	srv.ownershipEpochs = map[string]uint64{"moved": 1}
+	srv.inflightMu.Unlock()
+	if _, _, _, ok := srv.registerTurn("moved", stop); ok {
+		t.Error("a turn with no admission record registered on a chat that changed owner after it was created")
+	}
+
+	end, admitted := srv.beginApprovalDecision("c1")
+	if !admitted {
+		t.Fatal("decision not admitted")
+	}
+	d := approvalDecision{suggest: &store.Approval{}, release: end}
+	if _, idle := srv.beginTransfer("c1"); idle {
+		t.Error("a transfer began while a suggestion card was still being resolved")
+	}
+	d.release()
+	if endTransfer, idle := srv.beginTransfer("c1"); !idle {
+		t.Error("a transfer could not begin once the suggestion was resolved")
+	} else {
+		endTransfer()
+	}
+}
+
 // TestMoveAcrossVolumes covers the copy path promoteParticipantAttachments
 // falls back to when the stash and the workspace are on different volumes,
 // for a file and for a directory.

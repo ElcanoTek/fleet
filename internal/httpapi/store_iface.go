@@ -395,6 +395,7 @@ type chatStore interface {
 	CommitWebhookUserMessage(ctx context.Context, slug, deliveryKey, token, convID, turnID string, entry agent.HistoryEntry) (int64, error)
 	ReleaseWebhookDelivery(ctx context.Context, slug, deliveryKey, token string) error
 	AbandonWebhookConversation(ctx context.Context, slug, deliveryKey, token, ownTurnID string) (completed bool, err error)
+	DetachWebhookDelivery(ctx context.Context, slug, deliveryKey, token string) error
 	SweepWebhookDeliveries(ctx context.Context, ttl time.Duration) (int, error)
 	// SweepTurnEvents prunes the durable SSE ledger (turns + turn_events +
 	// turn_journal via cascade) for turns terminal longer than ttl; a

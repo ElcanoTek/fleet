@@ -153,10 +153,11 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 	var (
 		bound    bool // the conversation is created and bound to the claim
 		launched bool // the turn goroutine is started; it settles the claim itself
+		detached bool // the conversation changed owner; the delivery was detached from it
 	)
 	defer func() {
 		switch {
-		case launched:
+		case launched, detached:
 		case bound:
 			_, _ = s.abandonWebhookConversation(trig.Slug, deliveryKey, claim.Token, "")
 		default:
@@ -280,8 +281,13 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 	// like a /chat turn (turnContext, #2052).
 	turnCtx = turnContext(turnCtx, r.Context(), conv.ID, turnID, user)
 	if !ok {
-		// Unreachable in practice — the conversation was created just above,
-		// so no turn can be running on it. Fail closed rather than panic.
+		// The conversation was created just above, so no turn can be running
+		// on it; what can have happened is that its owner transferred it
+		// before this point (registerTurnGated). Fail closed.
+		// A transferred chat is its new owner's: the delivery is given back
+		// without discarding it, where the ordinary cleanup would delete the
+		// still-empty conversation.
+		detached = s.detachTransferredWebhookDelivery(conv.ID, trig.Slug, deliveryKey, claim.Token)
 		turnCancel()
 		releaseTurn()
 		metrics.RecordWebhookTrigger(trig.Slug, "conflict")
@@ -437,6 +443,22 @@ func (s *Server) releaseWebhookClaim(slug, deliveryKey, token string) {
 	if err := s.store.ReleaseWebhookDelivery(ctx, slug, deliveryKey, token); err != nil {
 		logging.From(ctx).Error("webhook trigger: release delivery claim failed", "err", err)
 	}
+}
+
+// detachTransferredWebhookDelivery gives back a delivery whose conversation
+// changed owner before its turn could start, leaving that conversation in
+// place, and reports whether it did. A conversation that has not changed
+// owner is left to the ordinary cleanup.
+func (s *Server) detachTransferredWebhookDelivery(convID, slug, deliveryKey, token string) bool {
+	if s.currentOwnershipEpoch(convID) == 0 {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := s.store.DetachWebhookDelivery(ctx, slug, deliveryKey, token); err != nil {
+		logging.From(ctx).Error("webhook trigger: detach delivery failed", "err", err)
+	}
+	return true
 }
 
 // abandonWebhookConversation gives back a delivery whose turn input was not

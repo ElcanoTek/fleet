@@ -235,6 +235,7 @@ func (s *Server) handleApprovalGroup(w http.ResponseWriter, r *http.Request, con
 				out := s.decideApproval(ctx, r.Context().Done(), user, convID, d.id, approvalRequest{Approved: d.approve, Scope: "once", ApprovedValues: groupApprovedValues(req.Narrow, d.id), NarrowedArg: req.NarrowArgs[d.id]})
 				switch {
 				case out.suggest != nil:
+					out.release()
 					// Unreachable: a suggestion card is handler-only and never
 					// joins a group. Refused rather than resolved off-shape.
 					res.StatusCode, res.Error = http.StatusBadRequest, "this card cannot be decided in a group"

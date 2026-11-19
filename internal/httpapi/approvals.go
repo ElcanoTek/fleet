@@ -1643,6 +1643,9 @@ func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request, convID, 
 
 	d := s.decideApproval(r.Context(), r.Context().Done(), user, convID, approvalID, req)
 	if d.suggest != nil {
+		// The decision is still being made: its admission is held until the
+		// suggestion has been resolved (approvalDecision.release).
+		defer d.release()
 		// suggest_advanced_model has its own resolution shape (three actions
 		// instead of approve/reject) and a side effect that's pure metadata
 		// — flipping conversations.model — rather than firing an MCP tool.
@@ -1665,6 +1668,10 @@ type approvalDecision struct {
 	// resolution has its own shape and writes its own answer
 	// (handleSuggestAdvancedApproval).
 	suggest *store.Approval
+	// release ends the decision's admission (beginApprovalDecision). Set
+	// only with suggest, whose resolution happens after decideApproval
+	// returns; every other decision has ended its own by then.
+	release func()
 	// gone: the client disconnected while the call ran; nobody reads a reply.
 	gone bool
 }
@@ -1705,8 +1712,14 @@ func (s *Server) decideApproval(ctx context.Context, done <-chan struct{}, user,
 	if !admitted {
 		return approvalError(http.StatusConflict, "this chat is changing owner; nothing was decided. Try again in a moment.")
 	}
-	defer endDecision()
-	return s.decideAdmittedApproval(ctx, done, user, convID, approvalID, req)
+	d := s.decideAdmittedApproval(ctx, done, user, convID, approvalID, req)
+	if d.suggest != nil {
+		// Resolved by the caller, after this returns: the caller ends it.
+		d.release = endDecision
+		return d
+	}
+	endDecision()
+	return d
 }
 
 // decideAdmittedApproval is decideApproval once the decision has been

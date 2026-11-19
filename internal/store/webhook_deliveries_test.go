@@ -358,3 +358,32 @@ func TestWebhookDeliveryConcurrentClaims(t *testing.T) {
 		t.Fatalf("%d concurrent claims succeeded, want exactly 1", claimed)
 	}
 }
+
+// TestDetachWebhookDeliveryKeepsTheConversation: a delivery whose conversation
+// changed owner before its turn could start is given back without discarding
+// that conversation, and its repeat is claimable afresh.
+func TestDetachWebhookDeliveryKeepsTheConversation(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := newTestStore(t)
+	c, err := s.ClaimWebhookDelivery(ctx, "gh", "github:moved")
+	if err != nil || !c.Claimed {
+		t.Fatalf("claim = %+v, %v", c, err)
+	}
+	conv := bindWebhook(t, s, "github:moved", c.Token)
+	if err := s.DetachWebhookDelivery(ctx, "gh", "github:moved", "not-the-token"); err != nil {
+		t.Fatalf("detach with a wrong token: %v", err)
+	}
+	if again, _ := s.ClaimWebhookDelivery(ctx, "gh", "github:moved"); again.Claimed {
+		t.Fatal("a wrong token detached the delivery")
+	}
+	if err := s.DetachWebhookDelivery(ctx, "gh", "github:moved", c.Token); err != nil {
+		t.Fatalf("detach: %v", err)
+	}
+	if !conversationExists(t, s, conv.ID) {
+		t.Fatal("detaching the delivery deleted the conversation")
+	}
+	if again, err := s.ClaimWebhookDelivery(ctx, "gh", "github:moved"); err != nil || !again.Claimed {
+		t.Fatalf("repeat after detach = %+v, %v; want claimed afresh", again, err)
+	}
+}

@@ -3501,9 +3501,18 @@ export function ChatExperience({
   // A chat handed to someone else is no longer this person's: it leaves
   // every list, and the pane moves on if it was the open chat. (An admin who
   // moved a teammate's chat only loses the Team chats row.)
+  // The list as of the latest render, for a callback that runs after a
+  // request and must not act on the list it was created with.
+  const latestConversationsRef = useRef(conversations);
+  useEffect(() => {
+    latestConversationsRef.current = conversations;
+  }, [conversations]);
   const dropTransferredConversation = async (conversationId: string) => {
-    const remaining = conversations.filter((c) => c.id !== conversationId);
-    setConversations(remaining);
+    // The lists may have changed while the transfer request was in flight,
+    // so each is filtered as it is now, and the next chat is picked from the
+    // current list too.
+    const remaining = latestConversationsRef.current.filter((c) => c.id !== conversationId);
+    setConversations((current) => current.filter((c) => c.id !== conversationId));
     setArchivedConversations((current) => current.filter((c) => c.id !== conversationId));
     setTeamSharedConversations((current) => current.filter((c) => c.id !== conversationId));
     // An admin may have been reading it in the read-only team view: that

@@ -897,6 +897,14 @@ func (s *Server) registerTurnGated(convID string, cancel context.CancelFunc, ste
 		s.inflightMu.Unlock()
 		return nil, "", 0, false, true
 	}
+	// A caller with no admission record (the webhook) made the conversation
+	// itself a moment ago, as its creator. If the chat has changed owner in
+	// between, the turn would run as the previous owner in someone else's
+	// chat (docs/CHAT-TRANSFER.md), so it does not start.
+	if steer == nil && s.ownershipEpochs[convID] != 0 {
+		s.inflightMu.Unlock()
+		return nil, "", 0, false, true
+	}
 	if queued != nil && s.stopSweepGens[convID] != queued.sweepGen {
 		s.inflightMu.Unlock()
 		return nil, "", 0, false, true
