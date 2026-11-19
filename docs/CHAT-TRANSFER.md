@@ -36,7 +36,12 @@ made to hold for the whole transfer:
   on an approval card (approve, reject, an expiry noticed on click, or a
   dismissal) is admitted under that same lock and counted until it returns
   (`beginApprovalDecision`); one that arrives while the chat is marked is
-  refused (409) and the card stays pending.
+  refused (409) and the card stays pending. A model-suggestion card, which
+  the handler resolves after the shared decision returns, keeps its admission
+  until that is done.
+- A webhook turn registers without an admission record, for a conversation
+  the webhook created a moment earlier. If that chat has changed owner in
+  between, the turn does not start (`registerTurnGated`).
 - The handler then takes the conversation's workspace lock, the one a turn or
   an approval being executed holds from preparing the workspace until it has
   put it back, waiting up to 10 seconds for it.

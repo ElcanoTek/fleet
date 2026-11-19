@@ -280,8 +280,9 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 	// like a /chat turn (turnContext, #2052).
 	turnCtx = turnContext(turnCtx, r.Context(), conv.ID, turnID, user)
 	if !ok {
-		// Unreachable in practice — the conversation was created just above,
-		// so no turn can be running on it. Fail closed rather than panic.
+		// The conversation was created just above, so no turn can be running
+		// on it; what can have happened is that its owner transferred it
+		// before this point (registerTurnGated). Fail closed.
 		turnCancel()
 		releaseTurn()
 		metrics.RecordWebhookTrigger(trig.Slug, "conflict")

@@ -3502,8 +3502,10 @@ export function ChatExperience({
   // every list, and the pane moves on if it was the open chat. (An admin who
   // moved a teammate's chat only loses the Team chats row.)
   const dropTransferredConversation = async (conversationId: string) => {
+    // The lists may have changed while the transfer request was in flight,
+    // so each is filtered as it is now; `remaining` only picks the next chat.
     const remaining = conversations.filter((c) => c.id !== conversationId);
-    setConversations(remaining);
+    setConversations((current) => current.filter((c) => c.id !== conversationId));
     setArchivedConversations((current) => current.filter((c) => c.id !== conversationId));
     setTeamSharedConversations((current) => current.filter((c) => c.id !== conversationId));
     // An admin may have been reading it in the read-only team view: that
