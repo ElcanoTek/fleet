@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1003,6 +1004,114 @@ func TestInteractiveFinalize_EmptyTurnRetryPropagatesCommittedToolFailure(t *tes
 	}
 	if !sawCall || !sawResult {
 		t.Fatalf("committed retry tool entries missing from partial Result (call=%v result=%v): %+v", sawCall, sawResult, res.Entries)
+	}
+}
+
+// TestInteractiveFinalize_EmptyTurnRetryRecoversFromContextOverflow is the
+// regression test for a production patrol turn that ended with "This
+// conversation exceeds the selected model's context window": the first response
+// on a long chat was empty, the retry ran its tools, and the call after them
+// was over the window. The retry was streamed by the finalize hook, outside the
+// loop's stream-error recovery, so the overflow ended the turn. It is a round
+// of the loop now: the overflow compacts the older history and the same round
+// resumes after its completed tool step, without running the tool again.
+func TestInteractiveFinalize_EmptyTurnRetryRecoversFromContextOverflow(t *testing.T) {
+	broker := &interactiveRecordingBroker{}
+	var (
+		mu          sync.Mutex
+		calls       int
+		afterPrompt []fantasy.Message
+	)
+	model := &itMockModel{
+		streamFunc: func(_ context.Context, call fantasy.Call) (fantasy.StreamResponse, error) {
+			mu.Lock()
+			calls++
+			n := calls
+			if n == 4 {
+				afterPrompt = append([]fantasy.Message(nil), call.Prompt...)
+			}
+			mu.Unlock()
+			switch n {
+			case 1:
+				return func(yield func(fantasy.StreamPart) bool) {
+					yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonStop})
+				}, nil
+			case 2:
+				return func(yield func(fantasy.StreamPart) bool) {
+					if !yield(fantasy.StreamPart{
+						Type:          fantasy.StreamPartTypeToolCall,
+						ID:            "write-call-1",
+						ToolCallName:  "mcp_bundle_update_floor",
+						ToolCallInput: `{"floor":0.75}`,
+					}) {
+						return
+					}
+					yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonToolCalls})
+				}, nil
+			case 3:
+				return nil, &fantasy.ProviderError{StatusCode: 400, ContextTooLargeErr: true, Message: "prompt too large"}
+			default:
+				return func(yield func(fantasy.StreamPart) bool) {
+					if !yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextDelta, Delta: "floor updated to 0.75"}) {
+						return
+					}
+					yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonStop})
+				}, nil
+			}
+		},
+	}
+	// Earlier patrol ticks: enough history for the forced compaction to have a
+	// middle to summarize.
+	var history []fantasy.Message
+	for i := 0; i < 20; i++ {
+		history = append(history,
+			fantasy.NewUserMessage(fmt.Sprintf("patrol tick %d", i)),
+			fantasy.Message{Role: fantasy.MessageRoleAssistant, Content: []fantasy.MessagePart{fantasy.TextPart{Text: fmt.Sprintf("tick %d: nothing to change", i)}}},
+		)
+	}
+	history = append(history, fantasy.NewUserMessage("apply floor 0.75"))
+	tc := TurnConfig{
+		SystemPrompt:  "sys",
+		Messages:      history,
+		Model:         model,
+		MaxTokens:     1024,
+		MaxIterations: 6,
+		MCPBroker:     broker,
+		MCPCatalog: []mcp.ServerTool{{
+			ServerName: "bundle",
+			Tool:       mcp.Tool{Name: "update_floor", Description: "updates floor"},
+		}},
+	}
+	obs := &captureObs{}
+	res, err := RunInteractiveTurn(context.Background(), tc, obs)
+	if err != nil {
+		t.Fatalf("RunInteractiveTurn err = %v, want the overflow in the retry round to be compacted and resumed", err)
+	}
+	if res.FinalText != "floor updated to 0.75" {
+		t.Fatalf("FinalText = %q, want the answer written after the compaction", res.FinalText)
+	}
+	if broker.calls != 1 {
+		t.Fatalf("broker calls = %d, want 1 (the resumed round must not run the tool again)", broker.calls)
+	}
+	if !slices.Contains(obs.events, "fleet.context_compacted") {
+		t.Fatalf("no fleet.context_compacted event, events = %v", obs.events)
+	}
+	mu.Lock()
+	prompt := afterPrompt
+	mu.Unlock()
+	if len(prompt) >= len(history) {
+		t.Fatalf("prompt after the overflow has %d messages, want fewer than the %d-message history", len(prompt), len(history))
+	}
+	var sawResult bool
+	for _, m := range prompt {
+		for _, part := range m.Content {
+			if tr, ok := fantasy.AsMessagePart[fantasy.ToolResultPart](part); ok && tr.ToolCallID == "write-call-1" {
+				sawResult = true
+			}
+		}
+	}
+	if !sawResult {
+		t.Fatal("prompt after the overflow lost the completed tool result")
 	}
 }
 

@@ -671,6 +671,9 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 	// banner, not one per round. A successful proactive compaction relieves the
 	// pressure and resets it, so a later climb warns again.
 	pressureWarned := false
+	// redriven records that the finalize hook already had its one re-drive
+	// round (FinalizeInput.Redrive).
+	redriven := false
 
 	for round := 0; round < maxEnforcementRounds; round++ {
 		if ctx.Err() != nil {
@@ -822,30 +825,31 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 			// Stubbed unless the driver supplies an impl. The hook streams its
 			// own follow-up text deltas through the Observer; recovered text
 			// replaces the loop's text and is appended as an assistant entry so
-			// it persists.
-			if deps.Finalize != nil {
-				// The hook's recovery calls must see the conversation as it
-				// stands NOW: the round's input plus its completed tool
-				// transcript. The input slice alone lacks the round's tool
-				// calls/results (they live in finalResult.Steps), so a forced
-				// summary built from it fabricated an answer from stale context
-				// — never the tool results it was summarizing (#1117). Same
-				// carry as the enforcement loop and the terminal structured-
-				// output phase; copied so the loop's own slice stays the round
-				// input (completeRun appends the carry itself).
-				finalizeMessages := append(append([]fantasy.Message(nil), messages...), eng.roundCarry(finalResult)...)
-				finInput := finalizeInputFor(
-					mode, finalText, finalizeMessages, sink.toolEventCount()-roundToolMark,
-					fantasyTools, deps.Observer, systemPrompt, sink, panicAttribution, usageOrch, activeModel, cfg.MaxIterations,
-					eng.outOfRoster,
-				)
-				finInput.StablePrefixTokens = eng.modelContextPrefix.toolTokens
-				finalText, err = finalizeWithPanicBoundary(ctx, deps.Finalize, finInput, observerBoundary)
-				if err != nil {
-					sink.replaceFinalTextFrom(roundMark.finalText, finalText)
-					return streamErrorResult(ctx, err, cfg, sink, usageOrch, label, activeModel, swappedToFallback, round+1)
-				}
+			// it persists. The hook's recovery calls must see the conversation
+			// as it stands NOW: the round's input plus its completed tool
+			// transcript. The input slice alone lacks the round's tool
+			// calls/results (they live in finalResult.Steps), so a forced
+			// summary built from it fabricated an answer from stale context
+			// — never the tool results it was summarizing (#1117). Same
+			// carry as the enforcement loop and the terminal structured-
+			// output phase; copied so the loop's own slice stays the round
+			// input (completeRun appends the carry itself).
+			finInput := finalizeInputFor(
+				mode, finalText, append(append([]fantasy.Message(nil), messages...), eng.roundCarry(finalResult)...),
+				sink.toolEventCount()-roundToolMark,
+				fantasyTools, deps.Observer, systemPrompt, sink, panicAttribution, usageOrch, activeModel, cfg.MaxIterations,
+				eng.outOfRoster,
+			)
+			finInput.StablePrefixTokens = eng.modelContextPrefix.toolTokens
+			finalText, enforcementMsgs, err = finalizeRound(ctx, deps.Finalize, finInput, observerBoundary, sink, &redriven)
+			if err != nil {
+				sink.replaceFinalTextFrom(roundMark.finalText, finalText)
+				return streamErrorResult(ctx, err, cfg, sink, usageOrch, label, activeModel, swappedToFallback, round+1)
 			}
+			// A re-drive is a blocked finish: its nudge opens the next round.
+			canFinish = len(enforcementMsgs) == 0
+		}
+		if canFinish {
 			res, cerr := completeRun(ctx, runCompletion{
 				engine:            eng,
 				config:            cfg,
@@ -911,6 +915,35 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 	res := cancelledResult(sink, usageOrch, label, activeModel, swappedToFallback, maxEnforcementRounds)
 	res.Cancelled = false
 	return withAuditVerdict(res, usageOrch), fmt.Errorf("%w (%d) exceeded without task completion", ErrMaxEnforcementRounds, maxEnforcementRounds)
+}
+
+// finalizeRound runs the driver's finalize hook on a round the policy let
+// finish, and returns the run's final text. A nil hook keeps in.FinalText.
+//
+// A round that produced nothing may be run again, once per run, as an ordinary
+// governed round: the hook asks through FinalizeInput.Redrive, and the nudge
+// comes back as redrive for the loop to inject like an enforcement message.
+// It is offered only while the run has committed no tool event, so the round
+// cannot repeat an executed call (ADR-0035). redriven records the use.
+func finalizeRound(ctx context.Context, hook FinalizeHook, in FinalizeInput, observer *panicContainedObserver, sink *streamSink, redriven *bool) (finalText string, redrive []string, err error) {
+	if hook == nil {
+		return in.FinalText, nil, nil
+	}
+	if !*redriven && sink.toolEventCount() == 0 {
+		in.Redrive = func(nudge string) bool {
+			if nudge == "" || len(redrive) > 0 {
+				return false
+			}
+			redrive = []string{nudge}
+			return true
+		}
+	}
+	finalText, err = finalizeWithPanicBoundary(ctx, hook, in, observer)
+	if err != nil {
+		return finalText, nil, err
+	}
+	*redriven = *redriven || len(redrive) > 0
+	return finalText, redrive, nil
 }
 
 // runCompletion carries the last ordinary round into the single terminal

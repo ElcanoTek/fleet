@@ -246,11 +246,14 @@ func TestFinalizeRecoveryCalls_CarryActiveModelRoutingPolicy(t *testing.T) {
 		t.Errorf("leaked call retry provider options = %#v, want precision floor routing policy", fallback.opts[0])
 	}
 
-	// 3. Empty-turn retry (FinalText == "", zero tool events, tools present) also uses in.Model and routing policy.
+	// 3. Empty-turn retry (FinalText == "", zero tool events, tools present): the
+	// hook asks the loop for one more round and makes no model call of its own,
+	// so the retry runs on the loop's active model with the loop's routing.
 	fallback.opts = nil
 	nopTool := fantasy.NewAgentTool("nop", "no-op", func(context.Context, struct{}, fantasy.ToolCall) (fantasy.ToolResponse, error) {
 		return fantasy.NewTextResponse("ok"), nil
 	})
+	var redriveNudge string
 	gotEmptyRetry, err := hook(context.Background(), agentcore.FinalizeInput{
 		FinalText:       "",
 		RoundToolEvents: 0,
@@ -259,17 +262,30 @@ func TestFinalizeRecoveryCalls_CarryActiveModelRoutingPolicy(t *testing.T) {
 		Messages:        []fantasy.Message{fantasy.NewUserMessage("run patrol")},
 		SystemPrompt:    "sys",
 		Model:           fallback,
+		Redrive: func(nudge string) bool {
+			redriveNudge = nudge
+			return true
+		},
 	})
 	if err != nil {
 		t.Fatalf("empty turn retry finalize failed: %v", err)
 	}
-	if gotEmptyRetry != "recovered summary" {
-		t.Fatalf("empty turn retry text = %q, want %q", gotEmptyRetry, "recovered summary")
+	if gotEmptyRetry != "" || redriveNudge != emptyTurnRetryNudge {
+		t.Fatalf("empty turn retry = (%q, nudge %q), want no text and the empty-turn nudge handed to the loop", gotEmptyRetry, redriveNudge)
 	}
-	if len(fallback.opts) != 1 {
-		t.Fatalf("fallback model received %d empty-retry calls, want 1", len(fallback.opts))
+	if len(primary.opts)+len(fallback.opts) != 0 {
+		t.Fatalf("hook made %d model calls for an empty-turn retry, want 0 (the loop runs the round)", len(primary.opts)+len(fallback.opts))
 	}
-	if or, ok := fallback.opts[0][openrouter.Name].(*openrouter.ProviderOptions); !ok || or.Provider == nil || len(or.Provider.Quantizations) == 0 {
-		t.Errorf("empty turn retry provider options = %#v, want precision floor routing policy", fallback.opts[0])
+
+	// 4. With no re-drive left and nothing executed, the hook does not buy a
+	// summary of work that never happened.
+	gotSpent, err := hook(context.Background(), agentcore.FinalizeInput{
+		Tools:        []fantasy.AgentTool{nopTool},
+		Messages:     []fantasy.Message{fantasy.NewUserMessage("run patrol")},
+		SystemPrompt: "sys",
+		Model:        fallback,
+	})
+	if err != nil || gotSpent != "" || len(fallback.opts) != 0 {
+		t.Fatalf("no re-drive left = (%q, %v) with %d model calls, want an empty turn and no call", gotSpent, err, len(fallback.opts))
 	}
 }

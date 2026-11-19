@@ -5,7 +5,6 @@ import (
 	"errors"
 	"strconv"
 	"strings"
-	"sync/atomic"
 
 	"charm.land/fantasy"
 
@@ -236,16 +235,20 @@ func RunInteractiveTurn(ctx context.Context, tc TurnConfig, obs agentcore.Observ
 //  1. with-tools retry: when the turn produced no surviving user-visible text
 //     (either a leaked `call:...{...}` narration that stripped to empty, or a
 //     completely empty response after silent thinking / an aborted tool call)
-//     AND the run committed no tool event in any round, re-run once WITH tools
-//     and the matching nudge so the intended work actually executes. After any
+//     AND the run committed no tool event in any round, ask the loop to run
+//     one more round WITH tools and the matching nudge
+//     (agentcore.FinalizeInput.Redrive) so the intended work actually
+//     executes. The hook makes no model call for it: a retry streamed from
+//     here had no compaction and no stream-error recovery, and a prompt that
+//     outgrew the window in its second step ended the turn. After any
 //     committed tool event in the run, the re-drive is suppressed (ADR-0035)
 //     and the turn degrades to path 2;
 //  2. forced final summary: when the turn executed tool calls and ended with
 //     no user-visible text, make one tool-less call with the force-summary
 //     nudge to coax out a written answer from those tool results.
 //
-// The hook captures the model + tools + temp + maxTokens so it can stream the
-// follow-up calls. Returns recovered final text (empty keeps the loop's text).
+// The hook captures the model + temp + maxTokens so it can stream the summary
+// call. Returns recovered final text (empty keeps the loop's text).
 func buildInteractiveFinalize(tc TurnConfig) agentcore.FinalizeHook {
 	return func(ctx context.Context, in agentcore.FinalizeInput) (string, error) {
 		cleaned := stripLeakedToolCalls(strings.TrimSpace(in.FinalText))
@@ -264,53 +267,42 @@ func buildInteractiveFinalize(tc TurnConfig) agentcore.FinalizeHook {
 		// straight to the tool-less streamForceFinalSummary strips every tool
 		// and instructs the model "Do not call any tools", turning an empty
 		// reasoning step into a "tool calls disabled for this turn" failure.
-		// Re-run once WITH tools instead.
+		// The round is run once more WITH tools instead.
 		//
-		// Once ANY tool event has committed in the run, the with-tools re-drive
-		// is suppressed: re-driving from in.Messages with the governed roster
-		// could re-issue an executed MCP write and repeat its side effect,
-		// the exact hazard ADR-0035's mark gate suppresses in
-		// streamRoundWithResilience. Degrade to the tool-less summary below,
-		// which sees the executed work in in.Messages and writes it up safely.
-		// Like ADR-0035's own mark, the count is deliberately coarse: read-only
-		// and staged (never-executed) tool events also suppress the re-drive.
+		// Once ANY tool event has committed in the run, there is no re-drive:
+		// a round that starts over from the turn's instruction could re-issue
+		// an executed MCP write and repeat its side effect, the hazard
+		// ADR-0035's mark gate suppresses in streamRoundWithResilience. The
+		// loop does not offer one then (in.Redrive is nil), and the hook
+		// degrades to the tool-less summary below, which sees the executed
+		// work in in.Messages and writes it up safely. Like ADR-0035's own
+		// mark, the count is deliberately coarse: read-only and staged
+		// (never-executed) tool events also suppress the re-drive.
 		committedTools := max(in.RoundToolEvents, in.RunToolEvents)
-		completedToolWork := committedTools > 0
 		hasLeakedCall := strings.Contains(in.FinalText, "call:")
 		if committedTools == 0 && (hasLeakedCall || len(in.Tools) > 0) {
 			nudge := interactiveEmptyTurnRetryNudge
 			if hasLeakedCall {
 				nudge = interactiveLeakedToolCallNudge
 			}
-			recovered, retryCarry, retryTools, err := streamWithToolsRetry(ctx, tc, in, nudge)
-			if err == nil && recovered != "" {
-				return recovered, nil
+			// The loop runs the retry as one more round of its own, so it has
+			// what every round has: compaction when the prompt nears the
+			// window, recovery from a provider error, the fallback model.
+			if in.Redrive != nil && in.Redrive(nudge) {
+				return "", nil
 			}
-			if len(retryCarry) > 0 {
-				in.Messages = append(append([]fantasy.Message{}, in.Messages...), retryCarry...)
-			}
-			switch {
-			case retryTools == 0 && len(retryCarry) == 0:
-				// Neither the main round nor the with-tools retry executed a
-				// tool. On an empty-turn retry (or a cancelled/budget-stopped
-				// leaked-call retry), do not run a third tool-less call asking
-				// the model to summarize "the work you already did above".
-				if err != nil {
-					if !hasLeakedCall || isFatalFinalizeError(ctx, err) {
-						return recovered, err
-					}
-				} else if !hasLeakedCall {
-					return "", nil
-				}
-			case err != nil:
-				return recovered, err
-			default:
-				completedToolWork = true
+			// The loop has no re-drive left: the retry round ended like this
+			// one, and no tool ran in either. Do not ask for a summary of
+			// "the work you already did above" when there is none; only a
+			// leaked call still gets the tool-less call, which can answer in
+			// words what the model tried to do with a tool.
+			if !hasLeakedCall {
+				return "", nil
 			}
 		}
 
 		// Otherwise force a tool-less written answer from the work already done.
-		return streamBestEffortForceSummary(ctx, tc, in, completedToolWork)
+		return streamBestEffortForceSummary(ctx, tc, in, committedTools > 0)
 	}
 }
 
@@ -345,109 +337,6 @@ func finalizeModel(in agentcore.FinalizeInput, configured fantasy.LanguageModel)
 	return configured
 }
 
-// streamWithToolsRetry re-runs the turn WITH tools after a zero-tool-event
-// round ended with no surviving prose (either a leaked `call:...{...}` text
-// narration or a completely empty response), appending nudge, and returns the
-// recovered final text, any carried tool transcript from the retry, and how
-// many tool events the retry committed.
-func streamWithToolsRetry(ctx context.Context, tc TurnConfig, in agentcore.FinalizeInput, nudge string) (string, []fantasy.Message, int, error) {
-	model := finalizeModel(in, tc.Model)
-	convo := append(append([]fantasy.Message{}, in.Messages...), fantasy.NewUserMessage(nudge))
-	prepare := chainPrepareSteps(
-		agentcore.ToolCallInputSanitizeStep(),
-		agentcore.ModelContextBudgetStep(in.SystemPrompt, in.Tools, tc.MaxTokens),
-		agentcore.PromptCachingStep(
-			model.Model(),
-			agentcore.WithCompactionSummaryBreakpoint(nil),
-			agentcore.WithStablePrefixTokens(in.StablePrefixTokens),
-		),
-	)
-	// Stream under the run's own ceilings: the budget guard blocks the next
-	// paid completion once the cost/token ceiling is hit — without it this
-	// retry could keep buying steps unboundedly (its tool calls are only
-	// soft-blocked by policy, which doesn't stop the paid completions).
-	if in.GuardStep != nil {
-		prepare = in.GuardStep(prepare)
-	}
-	agent := fantasy.NewAgent(model,
-		fantasy.WithSystemPrompt(in.SystemPrompt),
-		// Reuse agentcore.Run's final governed roster. This keeps the finalize
-		// retry inside the same policy/credential/panic boundaries as the main
-		// stream instead of re-registering raw driver tools.
-		fantasy.WithTools(in.Tools...),
-		fantasy.WithPrepareStep(prepare),
-	)
-	maxTokens := int64(tc.MaxTokens)
-	temp := tc.Temperature
-	var repair fantasy.RepairToolCallFunction
-	if in.RepairToolCall != nil {
-		repair = in.RepairToolCall(model.Model())
-	}
-	var (
-		sb          strings.Builder
-		retryEvents atomic.Int64
-	)
-	onToolCall := func(tc fantasy.ToolCallContent) error {
-		retryEvents.Add(1)
-		if in.OnToolCall != nil {
-			return in.OnToolCall(tc)
-		}
-		return nil
-	}
-	onToolResult := func(tr fantasy.ToolResultContent) error {
-		retryEvents.Add(1)
-		if in.OnToolResult != nil {
-			return in.OnToolResult(tr)
-		}
-		return nil
-	}
-	// The retry is a multi-step loop like the main stream, so its steps get
-	// the same paragraph break between them (agentcore.StepTextSeparator).
-	stepEnded := false
-	res, err := agent.Stream(ctx, fantasy.AgentStreamCall{
-		Messages:        convo,
-		MaxOutputTokens: &maxTokens,
-		Temperature:     &temp,
-		ProviderOptions: agentcore.RoutingProviderOptions(model.Model()),
-		// The run's out-of-roster recovery (#1744), as on the main stream.
-		RepairToolCall: repair,
-		// The run's step cap (FLEET_MAX_ITERATIONS) applies to the retry too —
-		// it streams with tools, so it is a real loop, not a single call.
-		StopWhen: in.StopWhen,
-		OnTextDelta: func(_, text string) error {
-			if stepEnded && text != "" {
-				text = agentcore.StepTextSeparator(sb.String(), text) + text
-				stepEnded = false
-			}
-			sb.WriteString(text)
-			if in.Observer != nil {
-				in.Observer.Observe("text.delta", map[string]any{"text": text})
-			}
-			return nil
-		},
-		OnToolCall:   onToolCall,
-		OnToolResult: onToolResult,
-		// Meter this recovery call into the run's accounting so its tokens/cost
-		// are not invisible to the cost chip (#83). Nil-safe.
-		OnStepFinish: func(step fantasy.StepResult) error {
-			stepEnded = sb.Len() > 0
-			if in.RecordUsage != nil {
-				in.RecordUsage(step.Usage, step.ProviderMetadata)
-			}
-			return nil
-		},
-	})
-	var carried []fantasy.Message
-	if in.CarryResult != nil && res != nil {
-		carried = in.CarryResult(res)
-	}
-	cleaned := stripLeakedToolCalls(strings.TrimSpace(sb.String()))
-	if err != nil {
-		return cleaned, carried, int(retryEvents.Load()), err
-	}
-	return cleaned, carried, int(retryEvents.Load()), nil
-}
-
 // streamForceFinalSummary makes one tool-less call with the force-summary nudge
 // to coax out a written answer. The nudge is appended to in.Messages — the
 // conversation as the loop just finished it, carrying the current user message
@@ -459,8 +348,8 @@ func streamWithToolsRetry(ctx context.Context, tc TurnConfig, in agentcore.Final
 // here, but production never populated TurnHistory, so this recovery saw prior
 // turns only and fabricated from stale context — #1117. The loop's own message
 // slice is the single source of truth; TurnConfig no longer duplicates it.)
-// NO in.GuardStep HERE, AND THAT IS DELIBERATE — unlike
-// streamWithToolsRetry above, which needs it. Recording the reasoning
+// NO in.GuardStep HERE, AND THAT IS DELIBERATE — unlike the with-tools retry,
+// which the loop runs as a round under its own guard. Recording the reasoning
 // because the asymmetry looks like an oversight and was flagged as one during
 // the enterprise security audit:
 //
