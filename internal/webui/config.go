@@ -60,9 +60,10 @@ type Config struct {
 
 	// RelabelledPinSlugs are the FLEET_PINNED_MODELS slugs that carry a
 	// label, set by the caller (cmd/fleet) from config.Config.PinnedModels.
-	// The picker shows such a row under the operator's name only, so the
-	// per-lab "newest model" list skips it and offers that lab's next-newest
-	// model under the lab's own name. See docs/PINNED-MODELS.md.
+	// The picker shows such a row under the operator's name only, so when
+	// one is a lab's newest model the per-lab list adds that lab's
+	// next-newest model, which keeps the lab's own name. See
+	// docs/PINNED-MODELS.md.
 	RelabelledPinSlugs []string
 
 	// TrustedProxies is config.Config.TrustedProxies (FLEET_TRUSTED_PROXIES),

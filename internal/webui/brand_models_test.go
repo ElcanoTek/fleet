@@ -189,17 +189,26 @@ func TestModelCatalogAndRankings(t *testing.T) {
 }
 
 // A pin the operator relabelled shows under the operator's name, so the lab
-// keeps a row of its own: the per-lab list offers that lab's next-newest model.
-// An unlabelled pin still names the lab, so nothing is skipped for it.
-func TestModelRankingsSkipRelabelledPins(t *testing.T) {
+// keeps a row of its own: the per-lab list adds that lab's next-newest model
+// after the newest. The newest is never dropped, because the browser may not
+// offer the pin at all (routing), and then the lab's newest must still be
+// there. A pin may name a model by a ":variant" or by its dated canonical slug.
+func TestModelRankingsAddNextNewestForRelabelledPins(t *testing.T) {
+	newestMoonshot := entry("moonshotai/kimi", 0.000002, 200)
+	newestMoonshot.CanonicalSlug = "moonshotai/kimi-20260420"
 	catalog := fixedCatalog{entries: []agentcore.ModelInfo{
-		entry("deepseek/older", 0.000001, 100),
-		entry("deepseek/newest", 0.000002, 200),
 		entry("x-ai/older", 0.000001, 100),
 		entry("x-ai/newest", 0.000002, 200),
+		entry("deepseek/oldest", 0.000001, 50),
+		entry("deepseek/older", 0.000001, 100),
+		entry("deepseek/newest", 0.000002, 200),
+		entry("moonshotai/older", 0.000001, 100),
+		newestMoonshot,
+		entry("qwen/only", 0.000001, 100),
 	}}
-	ranked := func(e *testEnv) string {
+	ranked := func(pins ...string) string {
 		t.Helper()
+		e := newTestEnv(t, func(c *Config, _ *Options) { c.RelabelledPinSlugs = pins })
 		e.g.models.openrouter = catalog
 		var rk struct {
 			Models []rankedModel `json:"models"`
@@ -211,12 +220,21 @@ func TestModelRankingsSkipRelabelledPins(t *testing.T) {
 		}
 		return strings.Join(ids, ",")
 	}
-	if got := ranked(newTestEnv(t)); got != "x-ai/newest,deepseek/newest" {
-		t.Fatalf("no pins: %s", got)
-	}
-	relabelled := func(c *Config, _ *Options) { c.RelabelledPinSlugs = []string{"deepseek/newest:nitro"} }
-	if got := ranked(newTestEnv(t, relabelled)); got != "x-ai/newest,deepseek/older" {
-		t.Fatalf("relabelled pin: %s", got)
+	for _, tc := range []struct {
+		name string
+		pins []string
+		want string
+	}{
+		{"no pins", nil, "x-ai/newest,deepseek/newest,moonshotai/kimi,qwen/only"},
+		{"a variant of the newest", []string{"deepseek/newest:nitro"}, "x-ai/newest,deepseek/newest,deepseek/older,moonshotai/kimi,qwen/only"},
+		{"the dated canonical slug", []string{"moonshotai/kimi-20260420"}, "x-ai/newest,deepseek/newest,moonshotai/kimi,moonshotai/older,qwen/only"},
+		{"the next-newest is relabelled too", []string{"deepseek/newest", "deepseek/older"}, "x-ai/newest,deepseek/newest,deepseek/oldest,moonshotai/kimi,qwen/only"},
+		{"not the lab's newest", []string{"deepseek/older"}, "x-ai/newest,deepseek/newest,moonshotai/kimi,qwen/only"},
+		{"the lab's only model", []string{"qwen/only"}, "x-ai/newest,deepseek/newest,moonshotai/kimi,qwen/only"},
+	} {
+		if got := ranked(tc.pins...); got != tc.want {
+			t.Errorf("%s: got %s, want %s", tc.name, got, tc.want)
+		}
 	}
 }
 
