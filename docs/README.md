@@ -201,6 +201,10 @@ there) and [`../.agents/skills/steward/SKILL.md`](../.agents/skills/steward/SKIL
   their blocked, failed, stopped and overdue scheduled tasks; the admin
   switch and hour; the once-a-day claim):
   [`docs/OWNER-DIGEST.md`](OWNER-DIGEST.md)
+- **Temporary chats: what is deleted, when, and the warning beforehand** (the
+  90-day inactivity window, the countdown in the sidebar and in the chat, the
+  per-person cap, and what is deliberately not done):
+  [`docs/CHAT-RETENTION.md`](CHAT-RETENTION.md)
 - **Reclamation, disk backpressure & stuck-task backstops** (the one hourly
   maintenance loop, the daily `fleet-maintenance.timer`, the free-space floor
   that sheds scheduled work while chat keeps serving, and the terminal backstop
@@ -274,6 +278,7 @@ above fails otherwise.
 - [`SIDEBAR.md`](SIDEBAR.md) — a sidebar of your own: pinned chats, dashboards, patrols, projects, tasks and pages, Home, presets, and the admin workspace default (`/api/sidebar`, `/api/admin/sidebar`)
 - [`SIDEBAR-SEARCH.md`](SIDEBAR-SEARCH.md) — the rail's search looks everywhere: own, team, project and archived chats in one list of results, whatever sections are hidden or folded
 - [`PATROL-LAUNCHPAD.md`](PATROL-LAUNCHPAD.md) — Patrols in the rail and the Patrol Launchpad wizard (Chat · Patrols · Background tasks; `GET /api/patrols`, `POST /api/patrol-draft`)
+- [`CHAT-RETENTION.md`](CHAT-RETENTION.md) — Temporary chats: what is deleted, when, and what people are told first
 - [`CHAT-STREAM-RECOVERY.md`](CHAT-STREAM-RECOVERY.md) — Chat stream recovery — losing the socket is not losing the turn
 - [`CHAT-SURFACE-METRICS.md`](CHAT-SURFACE-METRICS.md) — Chat-surface metrics: rate-limit 429s and stream reattaches (`/metrics`)
 - [`CHAT-WORKING-STATUS.md`](CHAT-WORKING-STATUS.md) — The chat view while the agent works

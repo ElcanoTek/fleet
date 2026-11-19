@@ -53,7 +53,15 @@ type serverConfigResponse struct {
 	// ConversationTTLDays: how many days of inactivity before a temporary
 	// chat is deleted (CONVERSATION_TTL_DAYS), so the rail quotes this
 	// deployment's period instead of the default.
-	ConversationTTLDays     int  `json:"conversation_ttl_days"`
+	ConversationTTLDays int `json:"conversation_ttl_days"`
+	// ConversationExpiryWarningDays: how many days before that deletion the
+	// interface starts flagging the chat (0 = no warning). Already held below
+	// the period above, so a client can use it as is.
+	ConversationExpiryWarningDays int `json:"conversation_expiry_warning_days"`
+	// ConversationUnpinnedCap: the most temporary chats one person keeps
+	// (CONVERSATION_UNPINNED_CAP); past it the least recently active go
+	// first. Sent so the rail can say so before it happens.
+	ConversationUnpinnedCap int  `json:"conversation_unpinned_cap"`
 	AutonomousAccepted      bool `json:"autonomous_accepted"`
 	AutonomousPolicyVersion int  `json:"autonomous_policy_version"`
 }
@@ -65,13 +73,15 @@ func (s *Server) serverConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	accepted := s.hasAcceptedAutonomous(r.Context(), userFromCtx(r.Context()))
 	resp := serverConfigResponse{
-		LockdownAvailable:        s.cfg.LockdownAvailable(),
-		LockdownOnly:             s.cfg.LockdownOnly,
-		UploadMaxBytes:           s.cfg.UploadMaxBytes,
-		TeamChatsSharedByDefault: s.cfg.LiveTeamChatsSharedByDefault(),
-		ConversationTTLDays:      s.cfg.ConversationTTL,
-		AutonomousAccepted:       accepted,
-		AutonomousPolicyVersion:  store.CurrentAutonomousPolicyVersion,
+		LockdownAvailable:             s.cfg.LockdownAvailable(),
+		LockdownOnly:                  s.cfg.LockdownOnly,
+		UploadMaxBytes:                s.cfg.UploadMaxBytes,
+		TeamChatsSharedByDefault:      s.cfg.LiveTeamChatsSharedByDefault(),
+		ConversationTTLDays:           s.cfg.ConversationTTL,
+		ConversationExpiryWarningDays: s.cfg.ExpiryWarningDays(),
+		ConversationUnpinnedCap:       s.cfg.UnpinnedCap,
+		AutonomousAccepted:            accepted,
+		AutonomousPolicyVersion:       store.CurrentAutonomousPolicyVersion,
 	}
 	if resp.LockdownAvailable {
 		resp.LockdownAllowedModels = append(resp.LockdownAllowedModels, s.cfg.LockdownModels()...)

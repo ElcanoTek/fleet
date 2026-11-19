@@ -115,7 +115,7 @@ func (s *Server) RunMaintenance(ctx context.Context) {
 	}
 	s.sweepOrphanPrivateWorkspaceStashes(ctx)
 	if s.sweepTaskWorkspaces != nil {
-		if taskRemoved, terr := s.sweepTaskWorkspaces(ctx, tools.WorkspaceDirForConversation(""), time.Duration(s.cfg.ConversationTTL)*24*time.Hour); terr != nil {
+		if taskRemoved, terr := s.sweepTaskWorkspaces(ctx, tools.WorkspaceDirForConversation(""), s.cfg.ScratchRetention()); terr != nil {
 			logging.From(ctx).Error("maintenance: task workspace sweep failed", "err", terr)
 		} else if taskRemoved > 0 {
 			logging.From(ctx).Info("maintenance: task workspace sweep removed dirs", "removed", taskRemoved)

@@ -278,9 +278,30 @@ type Config struct {
 	ShutdownGraceSeconds int
 
 	// ── data (interactive) ──
-	DataDir         string
+	DataDir string
+	// ConversationTTL is how many days a TEMPORARY chat (unpinned, in no
+	// project, not archived, not shared, no patrol or timer) may sit without
+	// activity before the retention sweep deletes it. CONVERSATION_TTL_DAYS,
+	// default 90 (docs/CHAT-RETENTION.md).
 	ConversationTTL int // days
-	UnpinnedCap     int // per-user
+	// UnpinnedCap is the per-user ceiling on temporary chats; past it the
+	// least recently active are deleted first. A backstop against runaway
+	// growth, not the everyday rule — the default (500) is well above what
+	// the inactivity window leaves a person with. CONVERSATION_UNPINNED_CAP.
+	UnpinnedCap int // per-user
+	// ConversationExpiryWarningDays is how long before its deletion a
+	// temporary chat is flagged in the interface (the rail's "deleted in N
+	// days" mark and count, and the notice in the chat itself). It changes
+	// only what people are told, never what is deleted.
+	// FLEET_CONVERSATION_EXPIRY_WARNING_DAYS, default 14; 0 turns the
+	// warning off.
+	ConversationExpiryWarningDays int
+	// ScratchRetentionDays bounds the scheduler's scratch files: orchestrator
+	// upload staging (temp_uploads) and finished task / mcp-run workspaces.
+	// These used to share the conversation TTL; they have a knob of their own
+	// so keeping chats for longer does not also keep run scratch for longer.
+	// FLEET_SCRATCH_RETENTION_DAYS, default 14.
+	ScratchRetentionDays int
 	// InputQueueRetentionDays bounds how long completed/cancelled input-queue
 	// rows retain their idempotency keys after terminal transition.
 	// FLEET_INPUT_QUEUE_RETENTION_DAYS, default 30; 0 disables the purge.
@@ -291,9 +312,8 @@ type Config struct {
 	// after reaching a terminal state. The ledger exists for reattach/replay
 	// and crash recovery — canonical history lives in messages — so it only
 	// needs to outlive any plausible reconnect, not the conversation.
-	// FLEET_TURN_EVENT_RETENTION_DAYS, default 14 (matching the conversation
-	// TTL default); 0 disables the sweep. Running turns are never retention
-	// candidates.
+	// FLEET_TURN_EVENT_RETENTION_DAYS, default 14; 0 disables the sweep.
+	// Running turns are never retention candidates.
 	TurnEventRetentionDays int
 	// UploadMaxBytes is the per-file cap for chat /attachments uploads
 	// (FLEET_UPLOAD_MAX_BYTES, default 1 GiB). Surfaced to the browser via
@@ -1199,18 +1219,20 @@ func Load(envFile string) (*Config, error) {
 		TLSHTTPAddr:  getenvDefault("FLEET_TLS_HTTP_ADDR", ":80"),
 
 		// ── data (interactive) ──
-		DataDir:                 getenvFleetDefault("DATA_DIR", "./data"),
-		ConversationTTL:         lp.getenvInt("CONVERSATION_TTL_DAYS", 14),
-		UnpinnedCap:             lp.getenvInt("CONVERSATION_UNPINNED_CAP", 50),
-		InputQueueRetentionDays: lp.getenvFleetInt("INPUT_QUEUE_RETENTION_DAYS", 30),
-		TurnEventRetentionDays:  lp.getenvFleetInt("TURN_EVENT_RETENTION_DAYS", 14),
-		UploadMaxBytes:          lp.getenvFleetInt64("UPLOAD_MAX_BYTES", 1<<30),
-		SharedFilesMaxTotalMB:   lp.getenvFleetInt("SHARED_FILES_MAX_TOTAL_MB", 10240),
-		AutoArchiveAfterDays:    lp.getenvFleetInt("AUTO_ARCHIVE_AFTER_DAYS", 0),
-		SearchEnabled:           lp.getenvBool("FLEET_SEARCH_ENABLED", true),
-		ConversationSoftDelete:  lp.getenvBool("FLEET_CONVERSATION_SOFT_DELETE", false),
-		DatabaseURL:             dsns.Chat,
-		SchedDatabaseURL:        dsns.Sched,
+		DataDir:                       getenvFleetDefault("DATA_DIR", "./data"),
+		ConversationTTL:               lp.getenvInt("CONVERSATION_TTL_DAYS", 90),
+		UnpinnedCap:                   lp.getenvInt("CONVERSATION_UNPINNED_CAP", 500),
+		ConversationExpiryWarningDays: lp.getenvFleetInt("CONVERSATION_EXPIRY_WARNING_DAYS", 14),
+		ScratchRetentionDays:          lp.getenvFleetInt("SCRATCH_RETENTION_DAYS", defaultScratchRetentionDays),
+		InputQueueRetentionDays:       lp.getenvFleetInt("INPUT_QUEUE_RETENTION_DAYS", 30),
+		TurnEventRetentionDays:        lp.getenvFleetInt("TURN_EVENT_RETENTION_DAYS", 14),
+		UploadMaxBytes:                lp.getenvFleetInt64("UPLOAD_MAX_BYTES", 1<<30),
+		SharedFilesMaxTotalMB:         lp.getenvFleetInt("SHARED_FILES_MAX_TOTAL_MB", 10240),
+		AutoArchiveAfterDays:          lp.getenvFleetInt("AUTO_ARCHIVE_AFTER_DAYS", 0),
+		SearchEnabled:                 lp.getenvBool("FLEET_SEARCH_ENABLED", true),
+		ConversationSoftDelete:        lp.getenvBool("FLEET_CONVERSATION_SOFT_DELETE", false),
+		DatabaseURL:                   dsns.Chat,
+		SchedDatabaseURL:              dsns.Sched,
 
 		// DB connection pools (#276) — defaults reproduce the historical
 		// hard-coded behavior exactly: 25 open / 5 idle, idle-time reaping OFF
@@ -1582,6 +1604,37 @@ func ModelAllowed(slug string, patterns []string) bool {
 	return false
 }
 
+// ExpiryWarningDays is the warning window the interface shows: the configured
+// FLEET_CONVERSATION_EXPIRY_WARNING_DAYS, held strictly inside the inactivity
+// window. A warning as long as the window itself would flag every temporary
+// chat from the moment it is created, which is the noise the warning exists to
+// replace, so a value at or past the window is cut to one day short of it.
+func (c *Config) ExpiryWarningDays() int {
+	w := c.ConversationExpiryWarningDays
+	if w >= c.ConversationTTL {
+		w = c.ConversationTTL - 1
+	}
+	if w < 0 {
+		w = 0
+	}
+	return w
+}
+
+// defaultScratchRetentionDays is FLEET_SCRATCH_RETENTION_DAYS's default.
+const defaultScratchRetentionDays = 14
+
+// ScratchRetention is ScratchRetentionDays as a duration. The env knob is
+// bounded at load (>= 1); a Config built by hand with the field unset gets the
+// default rather than zero, because these sweeps delete everything OLDER than
+// the duration and a zero would empty the staging tree.
+func (c *Config) ScratchRetention() time.Duration {
+	days := c.ScratchRetentionDays
+	if days <= 0 {
+		days = defaultScratchRetentionDays
+	}
+	return time.Duration(days) * 24 * time.Hour
+}
+
 // Validate checks the interactive (chat) required values.
 func (c *Config) Validate() error {
 	if c.OpenRouterAPIKey == "" && !c.MockMode {
@@ -1592,6 +1645,9 @@ func (c *Config) Validate() error {
 	}
 	if c.UnpinnedCap <= 0 {
 		return fmt.Errorf("CONVERSATION_UNPINNED_CAP must be positive")
+	}
+	if c.ConversationExpiryWarningDays < 0 {
+		return fmt.Errorf("FLEET_CONVERSATION_EXPIRY_WARNING_DAYS must be non-negative")
 	}
 	if c.InputQueueRetentionDays < 0 {
 		return fmt.Errorf("FLEET_INPUT_QUEUE_RETENTION_DAYS must be non-negative")

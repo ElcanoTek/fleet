@@ -12,8 +12,8 @@
 //
 // # Retention
 //
-// Unpinned conversations expire after CONVERSATION_TTL_DAYS (default 14) of
-// inactivity. Pinned, archived, shared, and project-bound (#509)
+// Temporary conversations expire after CONVERSATION_TTL_DAYS (default 90) of
+// inactivity (docs/CHAT-RETENTION.md). Pinned, archived, shared, and project-bound (#509)
 // conversations are exempt from TTL and cap eviction and are kept
 // indefinitely. The [Store.SweepExpired] routine runs after every successful
 // turn. Terminal input-queue rows retain their idempotency keys for

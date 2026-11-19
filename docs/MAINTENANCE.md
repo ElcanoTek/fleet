@@ -39,12 +39,13 @@ iteration.
 
 | Step | Reclaims | Bound |
 | --- | --- | --- |
-| `SweepExpired` | Conversations past `CONVERSATION_TTL_DAYS` (default 14; no `FLEET_` prefix — it predates the alias chain), plus per-user cap eviction | TTL / cap |
+| `SweepExpired` | Temporary conversations past `CONVERSATION_TTL_DAYS` without activity (default 90; no `FLEET_` prefix — it predates the alias chain), plus per-user cap eviction (`CONVERSATION_UNPINNED_CAP`, 500). The policy and the warning people get first: [CHAT-RETENTION.md](CHAT-RETENTION.md) | TTL / cap |
 | `PurgeTerminalInputs` | Terminal input-queue rows | `FLEET_INPUT_QUEUE_RETENTION_DAYS` (30) |
 | `SweepTurnEvents` | Finished turns' durable SSE ledgers | `FLEET_TURN_EVENT_RETENTION_DAYS` (14) |
 | `SweepAttachments` | Attachment files past the conversation TTL | conversation TTL |
 | `SweepOrphanWorkspaces` | `<workspace>/<convID>/` dirs with no live conversation row | liveness, not age |
-| `CleanupTempFiles` | Orchestrator `temp_uploads` staging files | conversation TTL |
+| `CleanupTempFiles` | Orchestrator `temp_uploads` staging files | `FLEET_SCRATCH_RETENTION_DAYS` (14) |
+| task workspace sweep | Finished task and mcp-run workspaces | `FLEET_SCRATCH_RETENTION_DAYS` (14) |
 | `SweepExpiredOAuthFlows` | Abandoned per-user remote-MCP OAuth flow rows | flow expiry |
 | `worktree.PruneStale` | Orphaned per-run git worktrees | `FLEET_WORKTREE_PRUNE_AGE` (24h) |
 
@@ -255,6 +256,10 @@ rarely reach their cap — it just makes the number visible at boot rather than 
 | `FLEET_MAINTENANCE_MIN_INTERVAL` | `5m` | Rate limit on the opportunistic post-turn pass. `0` = every turn. |
 | `FLEET_CLEANUP_HOUR` | `4` | UTC hour of the scheduler's daily run-history retention sweep. |
 | `FLEET_RUN_LOG_RETENTION_DAYS` | `90` | Age before terminal task runs are pruned. `0` disables. |
+| `CONVERSATION_TTL_DAYS` | `90` | Days without activity before a temporary chat is deleted. |
+| `CONVERSATION_UNPINNED_CAP` | `500` | Most temporary chats one person keeps; the least recently active go first. |
+| `FLEET_CONVERSATION_EXPIRY_WARNING_DAYS` | `14` | How long before deletion a chat is flagged in the interface. `0` turns the warning off. |
+| `FLEET_SCRATCH_RETENTION_DAYS` | `14` | Age before upload staging files and finished task workspaces are removed. |
 | `FLEET_INPUT_QUEUE_RETENTION_DAYS` | `30` | Age before terminal input-queue rows are purged. `0` disables. |
 | `FLEET_TURN_EVENT_RETENTION_DAYS` | `14` | Age before finished turns' SSE ledgers are swept. `0` disables. |
 | `FLEET_PAUSED_TASK_EXPIRY_MINUTES` | `0` (off) | Fail a task awaiting input longer than this. |
