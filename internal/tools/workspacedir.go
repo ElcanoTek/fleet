@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/logging"
+	"github.com/ElcanoTek/fleet/internal/safe"
 )
 
 // Opening a directory inside the workspace tree without following a symbolic
@@ -273,7 +274,7 @@ func logWorkspaceRefusal(ctx context.Context, path, opening string) {
 		refusalLogged.Store(path, now)
 	}
 	logging.From(ctx).Log(ctx, level, "workspace: refused a directory that is a symbolic link or not a directory; it was not followed",
-		"path", path, "opening", opening)
+		"path", safe.LogSafe(path), "opening", safe.LogSafe(opening))
 }
 
 // openChildNoFollow opens the directory name inside parent, refusing a
