@@ -44,7 +44,7 @@ func TestTriggerCRUDAndSpawn(t *testing.T) {
 	}
 
 	// GetTriggerBySlug round-trips.
-	got, err := store.GetTriggerBySlug(ctx, "deploy-hook")
+	got, err := store.GetTriggerBySlug(ctx, models.TriggerKindWebhook, "deploy-hook")
 	if err != nil {
 		t.Fatalf("get by slug: %v", err)
 	}
@@ -116,7 +116,7 @@ func TestTriggerCRUDAndSpawn(t *testing.T) {
 	if err != nil || !deleted {
 		t.Fatalf("delete: deleted=%v err=%v", deleted, err)
 	}
-	if _, err := store.GetTriggerBySlug(ctx, "deploy-hook"); err == nil {
+	if _, err := store.GetTriggerBySlug(ctx, models.TriggerKindWebhook, "deploy-hook"); err == nil {
 		t.Error("expected error after delete")
 	}
 }
@@ -150,7 +150,7 @@ func TestCreateTrigger_KindPolicyRoundTrip(t *testing.T) {
 	if err := store.CreateTrigger(ctx, &models.TaskTrigger{ID: uuid.New(), TaskID: task.ID, Slug: "e1", Secret: "s", Kind: models.TriggerKindEmail, EmailPolicy: pol}); err != nil {
 		t.Fatalf("CreateTrigger email: %v", err)
 	}
-	got, err := store.GetTriggerBySlug(ctx, "e1")
+	got, err := store.GetTriggerBySlug(ctx, models.TriggerKindEmail, "e1")
 	if err != nil {
 		t.Fatalf("GetTriggerBySlug: %v", err)
 	}
@@ -166,7 +166,7 @@ func TestCreateTrigger_KindPolicyRoundTrip(t *testing.T) {
 	if err := store.CreateTrigger(ctx, &models.TaskTrigger{ID: uuid.New(), TaskID: task.ID, Slug: "w1", Secret: "s"}); err != nil {
 		t.Fatalf("CreateTrigger webhook: %v", err)
 	}
-	wh, err := store.GetTriggerBySlug(ctx, "w1")
+	wh, err := store.GetTriggerBySlug(ctx, models.TriggerKindWebhook, "w1")
 	if err != nil {
 		t.Fatalf("GetTriggerBySlug webhook: %v", err)
 	}
@@ -236,7 +236,7 @@ func TestSpawnEmailRun_ConnectorGating(t *testing.T) {
 	mcp := models.MCPSelection{{Server: "github"}}
 	cred := models.CredentialAllowlist{{Server: "github"}}
 	task := seedTemplateTask(t, store, mcp, cred)
-	trig := &models.TaskTrigger{TaskID: task.ID}
+	trig := &models.TaskTrigger{TaskID: task.ID, Kind: models.TriggerKindEmail}
 	ctx := context.Background()
 
 	// Opt-out: NO connectors (neither MCP selection nor credential allowlist).

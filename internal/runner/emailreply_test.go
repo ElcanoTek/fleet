@@ -90,7 +90,7 @@ func TestMaybeReplyToEmailEvent_Replies(t *testing.T) {
 	if err := store.CreateTrigger(ctx, &models.TaskTrigger{ID: trigID, TaskID: template.ID, Slug: "r1", Secret: "s", Kind: models.TriggerKindEmail, EmailPolicy: &models.EmailTriggerPolicy{}}); err != nil {
 		t.Fatalf("CreateTrigger: %v", err)
 	}
-	runID, err := store.SpawnEmailRun(ctx, &models.TaskTrigger{TaskID: template.ID}, "do the work", false)
+	runID, err := store.SpawnEmailRun(ctx, &models.TaskTrigger{TaskID: template.ID, Kind: models.TriggerKindEmail}, "do the work", false)
 	if err != nil {
 		t.Fatalf("SpawnEmailRun: %v", err)
 	}

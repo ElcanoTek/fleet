@@ -1553,9 +1553,12 @@ var Operations = map[string]apispec.Operation{
 			"by a typed fleet_webhook_ API key whose allowed trigger slugs include " +
 			"this slug (#190), sent as X-API-Key or Authorization: Bearer — never " +
 			"the admin API key or any other key type. A valid webhook key that does" +
-			" not list this slug is a definitive 403. Unknown slug and bad " +
-			"signature both return 401 (indistinguishable, with equalized HMAC " +
-			"work) to prevent slug enumeration. A leaked secret or key lets a " +
+			" not list this slug is a definitive 403. An unknown slug and the slug " +
+			"of an email-kind trigger (fired only by POST /triggers/email/{slug}) " +
+			"both get the same 401 as a bad signature sent without a webhook key, " +
+			"whether a signature or a webhook key listing the slug was sent " +
+			"(indistinguishable, with equalized HMAC work), to prevent slug and " +
+			"kind enumeration. A leaked secret or key lets a " +
 			"caller inject the spawned run's prompt under the template's seat " +
 			"(network/MCP/files); the sandbox remains the execution boundary. " +
 			"Rotate the secret with `fleet sched trigger rotate`.",
