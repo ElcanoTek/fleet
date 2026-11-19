@@ -318,6 +318,9 @@ func (o *orchestrationState) checkCriticalToolApproval(toolName, toolCallID, raw
 			toolName, pending.tool, pending.approvalID)
 	}
 	id, err := o.approvalSink.Stage(toolName, toolCallID, rawInput)
+	if refused := stageRefusal(err); refused != "" {
+		return true, refused
+	}
 	if err != nil {
 		o.log().Error("approval stage failed", "tool", toolName, "err", err)
 		return true, fmt.Sprintf("APPROVAL_REQUIRED: %s is a critical action. Could not stage it for user approval (%v). Ask the user what to do.", toolName, err)
@@ -523,4 +526,16 @@ func classifyRiskyBash(rawInput string) (bool, string) {
 		}
 	}
 	return false, ""
+}
+
+// stageRefusal is the tool result for a Stage error that refused the call's
+// arguments before any card existed (StageRefusedError), or "" for any other
+// outcome. Nothing waits on the user, so it must not read as APPROVAL_REQUIRED:
+// the model is told what is wrong and can call again.
+func stageRefusal(err error) string {
+	var refused *StageRefusedError
+	if errors.As(err, &refused) {
+		return "ARGUMENTS_REFUSED: " + refused.Reason
+	}
+	return ""
 }

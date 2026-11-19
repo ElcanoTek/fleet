@@ -872,6 +872,14 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 	if err := prevalidateStagedTaskPrompt(toolName, rawInput); err != nil {
 		return "", err
 	}
+	// Likewise an MCP call the server is certain to reject (an `action` its
+	// schema does not list): refused before a card, and before a session or
+	// Autonomous pre-approval would run it.
+	if _, catalog, _ := a.mcpScope(); len(catalog) > 0 {
+		if err := prevalidateStagedMCPArguments(catalog, toolName, rawInput); err != nil {
+			return "", err
+		}
+	}
 	if sentinel, ok := a.tryPreResolveBeforeMaterialize(toolName, rawInput); ok {
 		return sentinel, nil
 	}

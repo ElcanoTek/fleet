@@ -239,6 +239,29 @@ func TestTaskGatesReportAStageRefusalAsARefusal(t *testing.T) {
 	}
 }
 
+// The same for a bundle critical tool whose arguments the stager refused (an
+// `action` the MCP tool's schema does not list): the model is told what is
+// wrong, not to wait on a card that does not exist or to ask the user.
+func TestCriticalToolGateReportsAStageRefusalAsARefusal(t *testing.T) {
+	t.Cleanup(func() { ConfigureAgentPolicy(testFixturePolicy()) })
+	ConfigureAgentPolicy(AgentPolicy{CriticalToolSuffixes: []string{"patch_page"}})
+	sink := &stagerFake{err: fmt.Errorf("stage: %w", &StageRefusedError{Reason: `"nope" is not a valid action. Nothing was staged for approval`})}
+	p := NewInteractivePolicy(0, 0, sink, nil)
+	blocked, msg := p.BeforeToolCall("mcp_pages_patch_page", "tc-1", `{"action":"nope"}`)
+	if !blocked || !strings.HasPrefix(msg, "ARGUMENTS_REFUSED: ") || !strings.Contains(msg, "Nothing was staged") {
+		t.Fatalf("blocked=%v msg=%q, want an ARGUMENTS_REFUSED refusal", blocked, msg)
+	}
+	if strings.Contains(msg, "APPROVAL_REQUIRED") || strings.Contains(msg, "Ask the user") {
+		t.Fatalf("a refused input was reported as awaiting approval: %q", msg)
+	}
+	// Nothing is pending on the server, so a corrected call is not blocked
+	// behind the refused one.
+	sink.err = nil
+	if blocked, msg := p.BeforeToolCall("mcp_pages_patch_page", "tc-2", `{}`); !blocked || strings.Contains(msg, "APPROVAL_BLOCKED") {
+		t.Fatalf("the corrected call was blocked behind the refused one: blocked=%v msg=%q", blocked, msg)
+	}
+}
+
 // manage_tasks action="show" only reads, so it runs without a card — the model
 // has to be able to see a stored prompt before it edits one. Every write action
 // still stages, through the full interactive policy, not just the one gate.
