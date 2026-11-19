@@ -158,6 +158,9 @@ type Server struct {
 	ownershipEpochs map[string]uint64
 	// transferring marks the conversations whose transfer is under way
 	// (beginTransfer). Guarded by inflightMu: no turn registers for one.
+	// decidingApprovals counts the approval decisions under way per
+	// conversation (beginApprovalDecision); guarded by inflightMu.
+	decidingApprovals  map[string]int
 	transferring       map[string]bool
 	workspaceLocks     keyedLocks
 	workspaceSwapLocks keyedLocks

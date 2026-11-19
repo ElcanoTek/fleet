@@ -222,4 +222,57 @@ func assertTransferNeedsAnIdleChat(ctx context.Context, t *testing.T, srv *Serve
 		t.Error("a transfer refused for a running approval left the chat marked as changing hands")
 	}
 	srv.executingApprovals.unregister("ap-running")
+
+	// The same goes for an approval being decided, whatever the decision;
+	// and no decision is admitted while the chat is changing hands.
+	endDecision, admitted := srv.beginApprovalDecision(convID)
+	if !admitted {
+		t.Fatal("an approval decision was not admitted on an idle chat")
+	}
+	if _, idle := srv.beginTransfer(convID); idle {
+		t.Error("a transfer began while an approval was being decided")
+	}
+	endDecision()
+	endTransfer, idle = srv.beginTransfer(convID)
+	if !idle {
+		t.Fatal("a transfer could not begin once the decision had finished")
+	}
+	if d := srv.decideApproval(ctx, ctx.Done(), owner, convID, "ap-any", approvalRequest{}); d.status != http.StatusConflict {
+		t.Errorf("an approval decision during a transfer = %d, want 409", d.status)
+	}
+	endTransfer()
+}
+
+// TestMoveAcrossVolumes covers the copy path promoteParticipantAttachments
+// falls back to when the stash and the workspace are on different volumes,
+// for a file and for a directory.
+func TestMoveAcrossVolumes(t *testing.T) {
+	t.Parallel()
+	src, dst := t.TempDir(), t.TempDir()
+	if err := os.MkdirAll(filepath.Join(src, "dir", "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{"a.csv": "a", filepath.Join("dir", "sub", "b.txt"): "b"} {
+		if err := os.WriteFile(filepath.Join(src, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// copyDirRecursive is the cross-volume half: a plain file and a tree.
+	if err := copyDirRecursive(filepath.Join(src, "a.csv"), filepath.Join(dst, "copied.csv")); err != nil {
+		t.Fatalf("copy a file: %v", err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dst, "copied.csv")); string(got) != "a" {
+		t.Errorf("copied file = %q, want a", got)
+	}
+	for _, name := range []string{"a.csv", "dir"} {
+		if err := moveAcrossVolumes(filepath.Join(src, name), filepath.Join(dst, name)); err != nil {
+			t.Fatalf("move %s: %v", name, err)
+		}
+		if _, err := os.Lstat(filepath.Join(src, name)); !os.IsNotExist(err) {
+			t.Errorf("%s is still in the source after the move", name)
+		}
+	}
+	if got, _ := os.ReadFile(filepath.Join(dst, "dir", "sub", "b.txt")); string(got) != "b" {
+		t.Errorf("moved tree file = %q, want b", got)
+	}
 }

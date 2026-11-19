@@ -65,6 +65,11 @@ func TestTransferConversation(t *testing.T) {
 		t.Fatalf("seed queue: %v", err)
 	}
 
+	quick := 1
+	if err := s.SetApprovalTimeout(ctx, from, conv.ID, &quick); err != nil {
+		t.Fatalf("SetApprovalTimeout: %v", err)
+	}
+
 	assertTransferRefusedUnchanged(ctx, t, s, conv.ID, from, to, mate)
 
 	res, err := s.TransferConversation(ctx, from, conv.ID, " Client@Reklaim.com ")
@@ -91,6 +96,7 @@ func TestTransferConversation(t *testing.T) {
 		t.Errorf("the chat itself changed: %+v", c)
 	}
 	if c.Pinned || len(c.Labels) != 0 || c.AutoApprove || c.ApprovalMode != ConversationApprovalManual ||
+		c.ApprovalTimeoutSeconds != nil ||
 		c.ShareToken != "" || c.Multiplayer || c.TeamVisible || len(c.MultiplayerParticipants) != 0 || len(c.MCPAccounts) != 0 {
 		t.Errorf("the previous owner's arrangement carried over: %+v", c)
 	}

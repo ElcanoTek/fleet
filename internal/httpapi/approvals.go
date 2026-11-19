@@ -1696,6 +1696,22 @@ func (d approvalDecision) write(w http.ResponseWriter, r *http.Request) {
 // every write after a successful claim runs detached from it. done fires
 // when the client goes away while it waits for a running call.
 func (s *Server) decideApproval(ctx context.Context, done <-chan struct{}, user, convID, approvalID string, req approvalRequest) approvalDecision {
+	// A chat that is changing owner resolves nothing (docs/CHAT-TRANSFER.md):
+	// not an approval, a rejection, an expiry or a dismissal. The decision is
+	// admitted under the lock the transfer marks the chat under and counted
+	// until it returns, so a transfer waits out a decision already under way
+	// and a decision never starts during a transfer. The card stays pending.
+	endDecision, admitted := s.beginApprovalDecision(convID)
+	if !admitted {
+		return approvalError(http.StatusConflict, "this chat is changing owner; nothing was decided. Try again in a moment.")
+	}
+	defer endDecision()
+	return s.decideAdmittedApproval(ctx, done, user, convID, approvalID, req)
+}
+
+// decideAdmittedApproval is decideApproval once the decision has been
+// admitted (beginApprovalDecision).
+func (s *Server) decideAdmittedApproval(ctx context.Context, done <-chan struct{}, user, convID, approvalID string, req approvalRequest) approvalDecision {
 	approval, err := s.store.GetApproval(ctx, user, approvalID)
 	if err != nil {
 		return approvalError(http.StatusInternalServerError, err.Error())
@@ -1808,18 +1824,6 @@ func (s *Server) decideApproval(ctx context.Context, done <-chan struct{}, user,
 		s.armApprovalStop(approvalID)
 	}
 	s.executingApprovals.register(execCtx, convID, user, approvalID)
-	// A chat that is changing owner runs nothing (docs/CHAT-TRANSFER.md).
-	// Checked after registering and before claiming: the transfer marks the
-	// chat and then looks for registered executions (beginTransfer), so
-	// whichever of the two gets there second sees the other, and nothing has
-	// been claimed yet if it is this one.
-	if s.transferInProgress(convID) {
-		s.executingApprovals.unregister(approvalID)
-		if stoppable {
-			s.disarmApprovalStop(approvalID)
-		}
-		return approvalError(http.StatusConflict, "this chat is changing owner; the action was not run. Try again in a moment.")
-	}
 	claimed, err := s.claimApproved(ctx, user, convID, approval, narrowing)
 	if err != nil || !claimed {
 		s.executingApprovals.unregister(approvalID)

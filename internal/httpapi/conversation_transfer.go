@@ -178,11 +178,11 @@ func (s *Server) beginTransfer(convID string) (end func(), idle bool) {
 		s.transferring = make(map[string]bool)
 	}
 	s.transferring[convID] = true
-	// An approved action being executed in the chat is as much "not idle" as
-	// a turn. It is looked for after the mark is set, and decideApproval
-	// checks the mark after it registers, so one of the two always sees the
-	// other.
-	if slices.Contains(s.executingApprovals.convIDs(), convID) {
+	// An approval being decided or an approved action being executed in the
+	// chat is as much "not idle" as a turn. Decisions are admitted under
+	// this same lock (beginApprovalDecision), so none starts once the mark
+	// is set.
+	if s.decidingApprovals[convID] > 0 || slices.Contains(s.executingApprovals.convIDs(), convID) {
 		delete(s.transferring, convID)
 		return nil, false
 	}
@@ -190,6 +190,28 @@ func (s *Server) beginTransfer(convID string) (end func(), idle bool) {
 		s.inflightMu.Lock()
 		delete(s.transferring, convID)
 		s.inflightMu.Unlock()
+	}, true
+}
+
+// beginApprovalDecision admits one approval decision for convID (approve,
+// reject, expire or dismiss) unless the chat is changing owner, and counts
+// it until end is called so a transfer does not begin under it.
+func (s *Server) beginApprovalDecision(convID string) (end func(), admitted bool) {
+	s.inflightMu.Lock()
+	defer s.inflightMu.Unlock()
+	if s.transferring[convID] {
+		return nil, false
+	}
+	if s.decidingApprovals == nil {
+		s.decidingApprovals = make(map[string]int)
+	}
+	s.decidingApprovals[convID]++
+	return func() {
+		s.inflightMu.Lock()
+		defer s.inflightMu.Unlock()
+		if s.decidingApprovals[convID]--; s.decidingApprovals[convID] <= 0 {
+			delete(s.decidingApprovals, convID)
+		}
 	}, true
 }
 
@@ -247,7 +269,10 @@ func (s *Server) purgeOwnerSkills(convID string) error {
 // they were a participant of convID out of their participant stash and into
 // the workspace, where an owner's attachments live, so links from their
 // earlier turns keep resolving. A name the workspace already holds is left in
-// the stash rather than overwritten. Best-effort: a failure is logged.
+// the stash rather than overwritten. The stash and the workspace can be on
+// different volumes (the Helm chart puts them on separate claims), so an
+// entry that cannot be renamed across is copied and then removed
+// (moveAcrossVolumes). Best-effort: a failure is logged.
 func (s *Server) promoteParticipantAttachments(ctx context.Context, convID, newOwner string) {
 	defer s.workspaceSwapLocks.lock(convID)()
 	stash, err := s.privateWorkspaceStashDir(convID)
@@ -269,10 +294,31 @@ func (s *Server) promoteParticipantAttachments(ctx context.Context, convID, newO
 		if _, err := os.Lstat(to); err == nil { //nolint:gosec // G703: the conversation's workspace attachments directory + a directory entry name read from the server's own stash
 			continue
 		}
-		if err := os.Rename(filepath.Join(src, e.Name()), to); err != nil { //nolint:gosec // G703: both paths are server-derived (stash and workspace roots, conversation id, directory entries of the stash)
+		if err := moveAcrossVolumes(filepath.Join(src, e.Name()), to); err != nil {
 			logging.From(ctx).Warn("conversations: transfer could not move an attachment of the new owner", "conv_id", safe.LogSafe(convID), "err", safe.LogSafe(err.Error()))
 		}
 	}
+}
+
+// moveAcrossVolumes moves the file or directory src to dst, which must not
+// exist. A rename is tried first; when it fails (EXDEV, when the two are on
+// different filesystems) src is copied beside dst, renamed into place there,
+// and only then removed, so dst never holds a partial copy.
+func moveAcrossVolumes(src, dst string) error {
+	if err := os.Rename(src, dst); err == nil { //nolint:gosec // G703: both paths are server-derived (stash and workspace roots, conversation id, directory entries of the stash)
+		return nil
+	}
+	tmp := dst + ".transfer-tmp"
+	_ = os.RemoveAll(tmp) //nolint:gosec // G703: server-derived staging path
+	if err := copyDirRecursive(src, tmp); err != nil {
+		_ = os.RemoveAll(tmp) //nolint:gosec // G703: server-derived staging path
+		return err
+	}
+	if err := os.Rename(tmp, dst); err != nil { //nolint:gosec // G703: same directory, server-derived
+		_ = os.RemoveAll(tmp) //nolint:gosec // G703: server-derived staging path
+		return err
+	}
+	return os.RemoveAll(src) //nolint:gosec // G703: server-derived source in the stash
 }
 
 // recoverWorkspaceForTransfer finishes a participant workspace swap that a

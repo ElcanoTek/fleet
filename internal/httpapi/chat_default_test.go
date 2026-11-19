@@ -719,6 +719,7 @@ func (s *fakeChatStore) TransferConversation(_ context.Context, ownerEmail, conv
 	c.TeamVisible, c.Multiplayer = false, false
 	c.MultiplayerParticipants, c.MultiplayerExcluded, c.MCPAccounts = nil, nil, nil
 	c.AutoApprove, c.ApprovalMode = false, store.ConversationApprovalManual
+	c.ApprovalTimeoutSeconds = nil
 	cp := *c
 	return &store.ConversationTransfer{Conversation: &cp, FromEmail: from, ToEmail: to}, nil
 }

@@ -29,14 +29,14 @@ the owner's private workspace subtrees swapped out, and moving the chat under
 one could hand them to the new owner when the turn puts them back. Idle is
 made to hold for the whole transfer:
 
-- `beginTransfer` refuses while a turn is running or an approved action is
-  being executed, and marks the chat as changing hands under the lock turn
-  registration takes, so no turn can register until the transfer has finished
-  (`registerTurnGated`). An approval decided while the chat is marked is
-  refused (409) before it is claimed, so it stays pending: `decideApproval`
-  registers its execution first and reads the mark second, and the transfer
-  sets the mark first and looks for executions second, so one of the two
-  always sees the other.
+- `beginTransfer` refuses while a turn is running, an approval is being
+  decided or an approved action is being executed, and marks the chat as
+  changing hands under the lock turn registration takes, so no turn can
+  register until the transfer has finished (`registerTurnGated`). A decision
+  on an approval card (approve, reject, an expiry noticed on click, or a
+  dismissal) is admitted under that same lock and counted until it returns
+  (`beginApprovalDecision`); one that arrives while the chat is marked is
+  refused (409) and the card stays pending.
 - The handler then takes the conversation's workspace lock, the one a turn or
   an approval being executed holds from preparing the workspace until it has
   put it back, waiting up to 10 seconds for it.
@@ -52,6 +52,7 @@ made to hold for the whole transfer:
 | Audience | The chat becomes private to the new owner: team sharing (`team_visible` and the team stamp), Multiplayer mode with its participant and exclusion lists, and the public link are cleared. Who can see a chat is its owner's decision, so the previous owner's audience does not carry over. |
 | Owner's arrangement | Pin, labels, project filing and connector account choices (`mcp_accounts`) are reset. |
 | Approval mode | Back to Manual (`auto_approve` off). Auto-approve and Autonomous are each owner's own choice, and Autonomous needs that person's acceptance. |
+| Approval timeout | The chat's own timeout override is cleared, so the new owner's approval cards use the default. |
 | Patrols and timers | The previous owner's active and paused schedules in the chat move to the new owner and are **paused**, as are any the new owner already had in the chat as a participant; a fire in flight is revoked. A patrol runs with its owner's connectors, so it runs again only when the new owner resumes it. |
 | Queue | Every queued input in the chat is cancelled. |
 
@@ -85,7 +86,9 @@ client that has gone away does not skip it) the handler:
   owner's first turn starts a fresh one.
 - moves the attachments the new owner uploaded while they were a participant
   out of the participant stash and into the workspace, where an owner's
-  attachments live, so links from their earlier turns keep resolving.
+  attachments live, so links from their earlier turns keep resolving. The
+  two can be on different volumes (they are in the Helm chart), so an entry
+  that cannot be renamed across is copied and then removed.
 
 A workspace file download that passed its access check just before the
 transfer is checked again once it holds the workspace swap lock (the lock the

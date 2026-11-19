@@ -107,6 +107,7 @@ func (s *Store) TransferConversation(ctx context.Context, ownerEmail, convID, to
 			multiplayer_participants = '[]', multiplayer_excluded = '[]',
 			mcp_accounts = '{}',
 			auto_approve = FALSE, approval_mode = 'manual',
+			approval_timeout_seconds = NULL,
 			updated_at = $2
 		WHERE id = $3
 		RETURNING `+conversationColumns, to, now, convID))
