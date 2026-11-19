@@ -762,11 +762,16 @@ func windowCompactionFutile(messages []fantasy.Message) bool {
 	if !ok {
 		return false
 	}
-	total := estimateModelMessagesTokens(messages[head:])
+	// Sized as the provider is sent it (wireTokens): an oversized stored
+	// payload goes out as a small envelope, and counting what is stored would
+	// misjudge either side of the cut.
+	sent := cloneFantasyMessages(messages[head:])
+	reduceHistoricalPayloadsToHardCap(sent, toolNamesByCallID(sent))
+	total := estimateModelMessagesTokens(sent)
 	if total <= 0 {
 		return false
 	}
-	gain := estimateModelMessagesTokens(messages[head : head+midpoint])
+	gain := estimateModelMessagesTokens(sent[:midpoint])
 	return float64(gain) < windowCompactionMinGainFraction*float64(total)
 }
 

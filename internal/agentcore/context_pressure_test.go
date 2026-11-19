@@ -3,6 +3,7 @@ package agentcore
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -728,17 +729,26 @@ func TestCheckContextPressure_FutileWindowCompactionIsNotBought(t *testing.T) {
 		summaries++
 		return fantasy.NewUserMessage(compactionSummaryPrefix + "] summary")
 	}
-	toolStep := func(id string) []fantasy.Message {
-		return []fantasy.Message{
-			{Role: fantasy.MessageRoleAssistant, Content: []fantasy.MessagePart{
-				fantasy.ToolCallPart{ToolCallID: id, ToolName: "report", Input: `{}`},
-			}},
-			{Role: fantasy.MessageRoleTool, Content: []fantasy.MessagePart{
-				fantasy.ToolResultPart{ToolCallID: id, Output: fantasy.ToolResultOutputContentText{Text: strings.Repeat("r", 400_000)}},
-			}},
-		}
+	// One step: an assistant message with four parallel calls and their four
+	// results, each under the hard cap a stored result is sent at.
+	toolResult := func(id string, chars int) fantasy.Message {
+		return fantasy.Message{Role: fantasy.MessageRoleTool, Content: []fantasy.MessagePart{
+			fantasy.ToolResultPart{ToolCallID: id, Output: fantasy.ToolResultOutputContentText{Text: strings.Repeat("r", chars)}},
+		}}
 	}
-	msgs := make([]fantasy.Message, 0, 7)
+	toolStep := func(id string) []fantasy.Message {
+		step := make([]fantasy.Message, 0, 5)
+		calls := make([]fantasy.MessagePart, 0, 4)
+		for i := 0; i < 4; i++ {
+			calls = append(calls, fantasy.ToolCallPart{ToolCallID: fmt.Sprintf("%s-%d", id, i), ToolName: "report", Input: `{}`})
+		}
+		step = append(step, fantasy.Message{Role: fantasy.MessageRoleAssistant, Content: calls})
+		for i := 0; i < 4; i++ {
+			step = append(step, toolResult(fmt.Sprintf("%s-%d", id, i), 100_000))
+		}
+		return step
+	}
+	msgs := make([]fantasy.Message, 0, 13)
 	msgs = append(msgs,
 		fantasy.NewUserMessage("first message of the chat"),
 		fantasy.NewUserMessage(compactionSummaryPrefix+"] what the earlier ticks did"),
@@ -763,8 +773,25 @@ func TestCheckContextPressure_FutileWindowCompactionIsNotBought(t *testing.T) {
 		t.Fatalf("checkpointThreshold = %d while stalled, want 0 (no more pauses)", e.checkpointThreshold(model))
 	}
 
+	// What the cut would drop is sized as the provider is sent it: a stored
+	// result over the hard cap goes out as a small envelope, so dropping it
+	// frees next to nothing however large it is on disk.
+	oversized := make([]fantasy.Message, 0, 14)
+	oversized = append(oversized,
+		msgs[0],
+		fantasy.Message{Role: fantasy.MessageRoleAssistant, Content: []fantasy.MessagePart{
+			fantasy.ToolCallPart{ToolCallID: "old", ToolName: "report", Input: `{}`},
+		}},
+		toolResult("old", 4*HardMaxToolOutputBytes),
+	)
+	oversized = append(oversized, msgs[2:]...)
+	if !windowCompactionFutile(oversized) {
+		t.Fatal("a cut that drops only an oversized stored result, sent as an envelope, must be futile")
+	}
+
 	// Older history worth summarizing is still compacted.
-	older := append([]fantasy.Message{msgs[0]}, fillerMessages(6, 400_000)...)
+	e.windowCompactionStalled = false
+	older := append([]fantasy.Message{msgs[0]}, fillerMessages(12, 100_000)...)
 	older = append(older, msgs[1:]...)
 	if windowCompactionFutile(older) {
 		t.Fatal("a cut that drops real history must not be futile")
