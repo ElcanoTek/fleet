@@ -93,9 +93,10 @@ func struggleFromHistory(history []agent.HistoryEntry, compactions int) turnStru
 		if strings.HasPrefix(text, "APPROVAL_REQUIRED") && strings.Contains(text, "approval_id=") {
 			t.stagedApproval = true
 		}
-		// A call held for the user's approval, or a model-switch suggestion,
-		// is marked as an error result but nothing failed: it is not part of
-		// a failure streak, and does not break one either.
+		// A call held for the user's approval, a model-switch suggestion, or a
+		// proposal or preview card is marked as an error result but nothing
+		// failed: it is not part of a failure streak, and does not break one
+		// either.
 		if isControlResult(text) {
 			continue
 		}
@@ -118,13 +119,18 @@ func struggleFromHistory(history []agent.HistoryEntry, compactions int) turnStru
 // refusals still count: those are the model trying something it shouldn't.)
 var controlResultPrefixes = []string{"APPROVAL_", "SUGGESTION_"}
 
+// isControlResult also takes the staging gates' successes from agentcore,
+// which owns their text: a staged memory, note or skill proposal, or an email
+// preview card (agentcore.IsStagedResult). A turn that proposed three memories
+// was offered the fallback model for "3 tool calls in a row failed" (live
+// 2026-11-19).
 func isControlResult(text string) bool {
 	for _, p := range controlResultPrefixes {
 		if strings.HasPrefix(text, p) {
 			return true
 		}
 	}
-	return false
+	return agentcore.IsStagedResult(text)
 }
 
 // strongest names the most telling signal that fired, with the reason the

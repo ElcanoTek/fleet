@@ -988,7 +988,7 @@ func (o *orchestrationState) checkMemoryProposal(toolName, rawInput string) (boo
 			return func(a memoryProposalArgs) (string, error) { return p.Propose(a.Content, a.Kind) }
 		},
 		func(id string) string {
-			return fmt.Sprintf("MEMORY_PROPOSED: this memory has been staged for user confirmation (proposal_id=%s). Summarize what you proposed and ask the user whether to save it. Do NOT retry the tool.", id)
+			return fmt.Sprintf(MemoryProposedPrefix+" this memory has been staged for user confirmation (proposal_id=%s). Summarize what you proposed and ask the user whether to save it. Do NOT retry the tool.", id)
 		})
 }
 
@@ -1013,7 +1013,7 @@ func (o *orchestrationState) checkNoteProposal(toolName, rawInput string) (bool,
 			return func(a noteProposalArgs) (string, error) { return p.Propose(a.Slug, a.Title, a.Body, a.Reason) }
 		},
 		func(id string) string {
-			return fmt.Sprintf("NOTE_PROPOSED: staged for admin review (proposal_id=%s). "+
+			return fmt.Sprintf(NoteProposedPrefix+" staged for admin review (proposal_id=%s). "+
 				"An admin will publish or reject it; the change is NOT live yet. Do NOT retry the tool.", id)
 		})
 }
@@ -1040,7 +1040,7 @@ func (o *orchestrationState) checkSkillProposal(toolName, rawInput string) (bool
 			}
 		},
 		func(id string) string {
-			return fmt.Sprintf("SKILL_PROPOSED: staged for the user's review on their Skills page (proposal_id=%s). "+
+			return fmt.Sprintf(SkillProposedPrefix+" staged for the user's review on their Skills page (proposal_id=%s). "+
 				"It is NOT active yet and will not exist in later turns unless the user approves it. Do NOT retry the tool.", id)
 		})
 }

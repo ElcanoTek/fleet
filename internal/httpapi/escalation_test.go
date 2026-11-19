@@ -62,6 +62,16 @@ func TestStruggleSignals(t *testing.T) {
 		{"session-policy denials are not failures", repeat(toolResult(t, "APPROVAL_DENIED: the user pre-denied bash for this conversation (session policy).", true), 3), 0, ""},
 		{"held behind another approval is not a failure", repeat(toolResult(t, "APPROVAL_BLOCKED: send_email already has a critical action awaiting the user's approval", true), 3), 0, ""},
 		{"approval inside a streak", []agent.HistoryEntry{fail, fail, toolResult(t, "APPROVAL_REQUIRED: x", true), fail}, 0, escalationSignalToolErrors},
+		// A staged proposal or preview card is the call working, not failing
+		// (three memory proposals in one turn were offered the fallback model,
+		// live 2026-11-19). A proposal that could not be staged still counts.
+		{"memory proposals are not failures", repeat(namedResult(t, "propose_memory", "MEMORY_PROPOSED: this memory has been staged for user confirmation (proposal_id=p1). Summarize what you proposed and ask the user whether to save it. Do NOT retry the tool.", true), 3), 0, ""},
+		{"note proposals are not failures", repeat(namedResult(t, "propose_note", "NOTE_PROPOSED: staged for admin review (proposal_id=n1).", true), 3), 0, ""},
+		{"skill proposals are not failures", repeat(namedResult(t, "propose_skill", "SKILL_PROPOSED: staged for the user's review on their Skills page (proposal_id=s1).", true), 3), 0, ""},
+		{"email previews are not failures", repeat(namedResult(t, "preview_email", "PREVIEW_DISPLAYED: the user is now viewing your draft (preview_id=v1).", true), 3), 0, ""},
+		{"memory proposal inside a streak", []agent.HistoryEntry{fail, fail, namedResult(t, "propose_memory", "MEMORY_PROPOSED: staged (proposal_id=p1).", true), fail}, 0, escalationSignalToolErrors},
+		{"failed memory proposals still count", repeat(namedResult(t, "propose_memory", "MEMORY_PROPOSAL_FAILED: could not stage proposal (db down).", true), 3), 0, escalationSignalToolErrors},
+		{"failed previews still count", repeat(namedResult(t, "preview_email", "PREVIEW_FAILED: could not render preview for display (boom).", true), 3), 0, escalationSignalToolErrors},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
