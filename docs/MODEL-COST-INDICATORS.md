@@ -1,28 +1,36 @@
-# Model cost indicators ($ … $$$$)
+# Model credit-usage meter
 
-Design note for the restaurant-style price tier shown next to each model in
-fleet's two model pickers. Honest scope: this is a **UI comparison aid** over
-the OpenRouter catalog's published prices. It does not change routing, spend
+Design note for the credit-usage level shown next to each model in fleet's two
+model pickers. Honest scope: this is a **UI comparison aid** over the
+OpenRouter catalog's published prices. It does not change routing, spend
 governance, or what a run actually costs.
+
+It replaced the earlier restaurant-style `$ … $$$$` glyphs when the UI moved to
+showing money as credits ([`CREDITS.md`](CREDITS.md)): the levels and their
+thresholds are unchanged, only how a level is drawn and worded.
 
 ## What shipped
 
-Both pickers render a four-glyph price indicator per model — one to four filled
-`$` against a dimmed remainder, so `$$` reads as *two of four* rather than as an
-unqualified "cheap-ish":
+Both pickers render a four-pip meter per model — the first one to four pips
+filled against a dimmed remainder, so a level reads as *N of four*. The filled
+pips take the level's colour (green, yellow-green, amber, red), so the level is
+carried twice, by count and by colour, and does not depend on colour vision.
+No currency glyph is drawn.
 
 - **Chat composer** (`web/src/app/chat/ui/Composer.tsx`) — on every row of the
   model listbox, in a meta cluster at the row's trailing edge next to the single
   existing status pill (`recommended` / `workspace` / `tested` / `✨ new` /
-  `experimental`), **and** on the collapsed model chip itself, so the price band
-  of the model you are about to spend money on is visible without opening the
-  picker.
+  `experimental`), **and** on the collapsed model chip itself (hidden below the
+  `sm` breakpoint), so the level of the model you are about to use is visible
+  without opening the picker.
 - **Operations center task form** (`web/src/app/shared/ui/ModelPicker.tsx`, used
   by `orchestrator/TaskCreateModal.tsx` for both the primary and the fallback
   model) — in each option's header row after the Workspace/Recommended badge.
 
-Hovering (or reading with a screen reader) gives the full sentence, e.g.
-`premium cost — about $6.00/M tokens blended ($$$ of $$$$)`.
+Hovering (or reading with a screen reader — the meter is `role="img"` with the
+sentence as its name) gives the full sentence, e.g.
+`High credit usage — about 6.00 credits/M tokens blended (level 3 of 4)`.
+An operator pin marked `free` reads **Free** instead of a meter.
 
 ## How the tier is computed
 
@@ -34,7 +42,7 @@ glance, so we collapse them into one **blended price per million tokens**,
 weighted **3 prompt : 1 completion**:
 
 ```
-blended$/M = ((prompt × 3 + completion × 1) / 4) × 1e6
+blended/M = ((prompt × 3 + completion × 1) / 4) × 1e6
 ```
 
 That is the conventional ratio for a single headline price, and it is the right
@@ -42,19 +50,21 @@ shape for fleet's agent loops specifically: each step re-sends a growing
 transcript and emits comparatively few output tokens, so prompt price dominates
 real spend.
 
-Tier thresholds (inclusive upper bounds, blended USD per 1M tokens):
+Level thresholds (inclusive upper bounds, blended credits per 1M tokens; one
+credit is one US dollar of provider price):
 
-| Tier   | Blended price   | Label      | Typical occupants                      |
-| ------ | --------------- | ---------- | -------------------------------------- |
-| `$`    | ≤ $1            | budget     | small/fast models, free tiers          |
-| `$$`   | ≤ $5            | moderate   | mid-tier workhorses                    |
-| `$$$`  | ≤ $15           | premium    | frontier chat models                   |
-| `$$$$` | > $15           | top tier   | reasoning flagships                    |
+| Level | Blended price | Name                   | Colour       | Typical occupants             |
+| ----- | ------------- | ---------------------- | ------------ | ----------------------------- |
+| 1     | ≤ 1           | Low credit usage       | green        | small/fast models, free tiers |
+| 2     | ≤ 5           | Moderate credit usage  | yellow-green | mid-tier workhorses           |
+| 3     | ≤ 15          | High credit usage      | amber        | frontier chat models          |
+| 4     | > 15          | Very high credit usage | red          | reasoning flagships           |
 
-Colour follows the tier (`--color-success` → `--color-warning` →
-`--color-danger`), defined once as `.model-cost*` in `globals.css` so the same
-component drops into the Tailwind-authored composer and the CSS-class-authored
-task form without a variant flag.
+Colour follows the level (`--color-success-strong` → a mix of success and
+warning → `--color-warning-strong` → `--color-danger-strong`), defined once as
+`.model-cost*` in `globals.css` so the same component drops into the
+Tailwind-authored composer and the CSS-class-authored task form without a
+variant flag.
 
 ## What it deliberately does **not** do
 
@@ -80,14 +90,14 @@ task form without a variant flag.
 
 - `web/src/app/shared/lib/modelCost.test.ts` — the blend, the thresholds, the
   formatting, and the unknown-pricing cases (including that `null` is *not*
-  coerced to a free $0).
+  coerced to a free zero price), and that no description carries a currency symbol.
 - `web/src/app/shared/ui/ModelPicker.test.tsx` — the task-form picker renders
-  the tier for a priced catalog model and renders nothing when prices are absent.
+  the meter (three of four pips for a level-3 model, no text) for a priced catalog model and renders nothing when prices are absent.
 - `web/src/app/shared/lib/models.test.ts` — the seed-enrichment join (curated
   name/`recommended` win, prices fill in, no duplicate row).
 - `web/e2e/mocked/model-cost.spec.ts` — mocked Playwright over both real
-  surfaces: one indicator per row with the expected tier in each picker, and
-  selecting a model carries its tier onto the composer chip. The default mocks
+  surfaces: one meter per row with the expected level in each picker, no `$` in the
+  listbox, and selecting a model carries its level onto the composer chip. The default mocks
   serve empty model lists, so every other spec keeps covering the
   no-pricing/no-indicator path.
 

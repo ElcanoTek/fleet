@@ -1496,7 +1496,7 @@ func persistRoundCapPartial(session *LogSession, res agentcore.Result) {
 	t := messageTypeRoundCapTruncated
 	session.AddMessageWithMetadata(roleUser, fmt.Sprintf(
 		"[truncated] Run stopped at the enforcement round cap after %d rounds without the agent "+
-			"finishing the task (%d prompt / %d completion tokens, $%.4f spent). %s",
+			"finishing the task (%d prompt / %d completion tokens, %.4f credits spent). %s",
 		res.Rounds, res.Usage.PromptTokens, res.Usage.CompletionTokens, res.Usage.CostUSD, tail,
 	), nil, nil, &t, nil, nil, "")
 	if text != "" {
@@ -1550,7 +1550,7 @@ func scheduledTerminalError(ctx context.Context, res agentcore.Result) error {
 		// left it empty) keep the historic wording.
 		reason := strings.TrimSpace(res.BudgetStopReason)
 		if reason == "" {
-			reason = fmt.Sprintf("run stopped after $%.4f spent, before it finished.", res.Usage.CostUSD)
+			reason = fmt.Sprintf("run stopped after %.4f credits spent, before it finished.", res.Usage.CostUSD)
 		}
 		return fmt.Errorf("%w: %s %s", agentcore.ErrCostCeilingExceeded, reason, budgetStopFacts(res))
 	case res.Cancelled:

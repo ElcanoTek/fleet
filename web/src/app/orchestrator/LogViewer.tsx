@@ -1,3 +1,4 @@
+import { formatCredits } from "@/app/shared/lib/credits";
 import { formatFixed } from "@/app/lib/i18n";
 import { rich } from "@/app/lib/i18n/rich";
 import { getLanguage } from "@/app/lib/i18n";
@@ -225,7 +226,7 @@ function SessionMetrics({ session }: { session: LogSession }) {
       label: tr("Cost"),
       value:
         typeof session.cost === "number" && session.cost > 0
-          ? `$${formatFixed(session.cost, 4)}`
+          ? formatCredits(session.cost, 4)
           : undefined,
     },
   ];

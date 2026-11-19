@@ -595,7 +595,7 @@ The toolbar beneath the message box keeps everyday controls upfront and groups s
 
 | Control | What it does |
 | --- | --- |
-| Model selector | Shows the model this conversation runs on, with a cost band from `$` to `$$$$` where its pricing is known. Click to change it. See [Picking the model](#picking-the-model). |
+| Model selector | Shows the model this conversation runs on, with a credit-usage meter (one to four pips, green for low through red for very high) where its pricing is known. Click to change it. See [Picking the model](#picking-the-model). |
 | Attach files | Add files to your next message. Dragging a file anywhere onto the conversation does the same. |
 | Tools | The wrench. Its badge counts the connectors on in this conversation, **Always on** ones included; hover it for "Tools, N on". See [Connectors in a conversation](#5-connectors-in-a-conversation). |
 | More options (`•••`) | Opens a labeled menu organized into three groups: **Prompt library**, **Email templates** (only when your deployment has any), **Persona** (active on any new or empty chat before the first message is sent, and shown disabled with *"Personas can only be changed in a new chat"* once chatting has started), and **Memories**; **Share this chat**, **Patrol & schedule**, **Approval mode** (**Manual**, **Auto-approve**, or **Autonomous**), and **Summarize earlier messages** (once a conversation has messages, showing how full the chat is); and **Show details**, **Dashboard view**, and **Send on Enter**. When a non-default persona, a patrol schedule, sharing (**Multiplayer**, team sharing, or a public link), **Auto-approve**, or **Autonomous** is active, **More options** shows an accent dot, and on desktop screens a quick status pill or indicator also appears directly on the toolbar so you can see or change it in one click. |
@@ -706,10 +706,13 @@ on routine pulls, checks, or formatting, you can switch to a cheaper or free
 model in the picker. Your admin can also pin models just below the two
 recommended frontier models, sometimes under their own name and with a tag such
 as **alpha** that marks a model still in trial.
-A pinned model can also show **Free** where its cost band would be. The rest of
-the list is marked by status (**tested**, **new**, or **experimental**), and a
-model whose pricing the deployment knows shows its cost band, so you can see
-what you are about to spend. No band means the price is unknown rather than zero
+A pinned model can also show **Free** where its credit-usage meter would be. The
+rest of the list is marked by status (**tested**, **new**, or **experimental**),
+and a model whose pricing the deployment knows shows a credit-usage meter: four
+pips, of which one to four are filled, coloured green for low usage through
+amber to red for very high. Hover it for the model's blended price in credits
+per million tokens, so you can see what you are about to spend. Costs are shown
+in credits throughout fleet. No meter means the price is unknown rather than zero
 — worth asking about before running something long on it.
 
 The picker uses your workspace's active model providers, including providers

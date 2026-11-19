@@ -98,7 +98,7 @@ const ADOPTION_REPORT = {
   },
   sources: ["tasks", "chat", "accounts"],
   note:
-    "Dollar figures cover only runs with model pricing available; token totals are complete " +
+    "Cost figures cover only runs with model pricing available; token totals are complete " +
     "regardless. Token volume measures how much someone uses the agents, not the quality of " +
     "what they produce with them — read this as an adoption signal, not a performance grade.",
 };

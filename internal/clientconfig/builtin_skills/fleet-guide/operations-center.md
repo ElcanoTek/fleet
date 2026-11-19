@@ -193,10 +193,10 @@ regardless.
 
 Administrators open **Analytics** from the account menu; it does not appear
 for other roles. The top of the page summarizes the current UTC month to date:
-token usage, the share used on included ($0) models, billed spend, the prompt
+token usage, the share used on included (zero-cost) models, billed spend, the prompt
 cache hit rate, and an advisory monthly spend limit you can set with **Set
 monthly spend limit** (**Edit monthly spend limit** once one is set). The
-limit is measured against billed spend, so included models count $0, and it
+limit is measured against billed spend, so included models count 0 credits, and it
 only colours this summary: nothing is refused when spend passes it.
 
 The tabs are **Models & Cost** (which models the spend went to), **Problem
@@ -212,7 +212,7 @@ tokens or cache hit %). The tiles show total cost split between tasks and
 chat, prompt and completion tokens, **Cache efficiency** (cached against
 uncached chat prompt tokens) and work units (task iterations plus chat
 turns). The table lists every group with the same numbers, including
-**Cached (chat)**, **Cache miss** and **Cache hit %**. Dollar figures cover
+**Cached (chat)**, **Cache miss** and **Cache hit %**. Cost figures, shown in credits, cover
 only models with a price; token totals are always complete, which the note
 under the tiles repeats. Rows such as **(unattributed)**, **(no API key)** and
 **(no project)** are real spend with nothing to group it by: for example, a
@@ -228,7 +228,7 @@ Adoption** has its own **Download CSV**, named the same way
 Below the table, **Budgets** limit one person (by their account email) or one
 API key (by its key ID) per **day**, **week** or **month**. Windows are UTC
 calendar windows; weeks start on Monday. A budget has a soft bound, a hard
-bound or both, in dollars, tokens or both. A user budget counts that person's
+bound or both, in credits, tokens or both. A user budget counts that person's
 chats and tasks; a key budget counts only the tasks created with that key,
 because chat turns are not recorded against an API key. Saving is refused,
 with a message saying why, when no account has that email, or when the key
@@ -305,7 +305,7 @@ applies.
 
 **Estimate Cost**, beneath the form, produces a **cost forecast** on demand: the
 token breakdown for the run you are describing and, where the model's pricing is
-known, a dollar estimate with a range, plus a warning when the estimate would
+known, an estimate in credits with a range, plus a warning when the estimate would
 exceed the deployment's cost ceiling. Nothing appears until you press it, and it
 never blocks the submit — but pressing it is the cheapest moment to notice that
 a daily job is about to be an expensive one.

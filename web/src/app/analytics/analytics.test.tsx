@@ -72,7 +72,7 @@ const SAMPLE_MODEL_REPORT = {
   from: "2026-11-01T00:00:00Z",
   to: "2026-11-10T00:00:00Z",
   sources: ["tasks", "chat"],
-  note: "Dollar figures cover only runs with model pricing available.",
+  note: "Cost figures cover only runs with model pricing available.",
   buckets: [
     {
       key: "openrouter/z-ai/glm-5.1",
@@ -254,7 +254,7 @@ afterEach(() => {
 });
 
 describe("AnalyticsPage", () => {
-  it("renders monthly allowance banner and splits Included ($0) vs Billed models", async () => {
+  it("renders monthly allowance banner and splits Included (0 credits) vs Billed models", async () => {
     render(<AnalyticsPage />);
 
     const banner = await screen.findByTestId("analytics-monthly-banner");
@@ -262,14 +262,14 @@ describe("AnalyticsPage", () => {
       expect(within(banner).getByTestId("monthly-total-tokens").textContent).toBe("12M");
     });
     expect(within(banner).getByTestId("monthly-included-share").textContent).toBe("83.3%");
-    expect(within(banner).getByTestId("monthly-billed-spend").textContent).toBe("$42.50");
-    expect(within(banner).getByText(/of \$100\.00 soft spend limit \(42\.5%\)/)).toBeTruthy();
+    expect(within(banner).getByTestId("monthly-billed-spend").textContent).toBe("42.50 credits");
+    expect(within(banner).getByText(/of 100\.00 credits soft spend limit \(42\.5%\)/)).toBeTruthy();
 
     const table = await screen.findByTestId("model-breakdown-table");
     const rows = within(table).getAllByTestId("model-breakdown-row");
     expect(rows).toHaveLength(2);
     expect(rows[0].textContent).toContain("openrouter/z-ai/glm-5.1");
-    expect(rows[0].textContent).toContain("Included ($0)");
+    expect(rows[0].textContent).toContain("Included (0 credits)");
     expect(rows[1].textContent).toContain("anthropic/claude-opus-4-6");
     expect(rows[1].textContent).toContain("Billed");
     expect(screen.getByTestId("model-attribution-note").textContent).toContain(
@@ -277,7 +277,7 @@ describe("AnalyticsPage", () => {
     );
   });
 
-  it("treats pinned free:true models as Included ($0) even when historical cost_usd > 0 and labels empty key clearly", async () => {
+  it("treats pinned free:true models as Included (0 credits) even when historical cost_usd > 0 and labels empty key clearly", async () => {
     mockPinnedModels = [
       { slug: "qwen/qwen3.6-plus", label: "Custom Zero Model", free: true },
     ];
@@ -327,16 +327,16 @@ describe("AnalyticsPage", () => {
 
     const banner = await screen.findByTestId("analytics-monthly-banner");
     await waitFor(() => {
-      expect(within(banner).getByTestId("monthly-billed-spend").textContent).toBe("$0.00");
+      expect(within(banner).getByTestId("monthly-billed-spend").textContent).toBe("0.00 credits");
     });
     expect(within(banner).getByTestId("monthly-included-share").textContent).toBe("80.0%");
-    expect(within(banner).getByText(/of \$100\.00 soft spend limit \(0\.0%\)/)).toBeTruthy();
+    expect(within(banner).getByText(/of 100\.00 credits soft spend limit \(0\.0%\)/)).toBeTruthy();
 
     const table = await screen.findByTestId("model-breakdown-table");
     const rows = within(table).getAllByTestId("model-breakdown-row");
     expect(rows[0].textContent).toContain("Custom Zero Model (openrouter/qwen/qwen3.6-plus)");
-    expect(rows[0].textContent).toContain("Included ($0)");
-    expect(rows[0].textContent).toContain("$0.00");
+    expect(rows[0].textContent).toContain("Included (0 credits)");
+    expect(rows[0].textContent).toContain("0.00 credits");
     expect(rows[1].textContent).toContain("(deleted chats & default-model turns)");
     expect(rows[1].textContent).toContain("No price data");
   });
@@ -383,7 +383,7 @@ describe("AnalyticsPage", () => {
     const userTable = await screen.findByTestId("outliers-user-signals-table");
     const userRow = within(userTable).getByTestId("outliers-user-signal-row");
     expect(userRow.textContent).toContain("alice@example.com");
-    expect(userRow.textContent).toContain("$18.25");
+    expect(userRow.textContent).toContain("18.25 credits");
   });
 
   it("honors ?tab=adoption, ?tab=usage, and ?tab=server deep links", async () => {

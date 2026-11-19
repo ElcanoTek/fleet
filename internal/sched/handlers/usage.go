@@ -36,9 +36,9 @@ var usageGroupByValues = map[string]bool{
 const usageMaxWindow = 366 * 24 * time.Hour
 
 // usagePricingNote is the honest-scope caveat (#289) every response carries:
-// dollar coverage depends on pricing configuration, token totals do not.
-const usagePricingNote = "Dollar figures cover only runs with model pricing available; " +
-	"native-provider runs accrue $0 cost unless a pricing override is configured (#289). " +
+// cost coverage depends on pricing configuration, token totals do not.
+const usagePricingNote = "Cost figures cover only runs with model pricing available; " +
+	"native-provider runs accrue no cost unless a pricing override is configured (#289). " +
 	"Token totals are complete regardless of pricing configuration."
 
 // ChatUsageProvider aggregates the chat store's turn_metrics over [from, to)

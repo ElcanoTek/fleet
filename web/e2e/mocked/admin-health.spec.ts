@@ -82,7 +82,7 @@ test("the admin Overview renders live system metrics inside the settings shell",
   // icon-only but reachable by its accessible name.
   await expect(page.getByRole("button", { name: "Refresh now" })).toBeVisible();
   await expect(panel).toContainText("test-9.9.9"); // version
-  await expect(panel).toContainText("$4.50"); // LLM spend today
+  await expect(panel).toContainText("4.50 credits"); // LLM spend today
   await expect(page.getByText("chat DB healthy")).toBeVisible(); // DB status badge
   await expect(panel).toContainText("256 MB"); // runtime memory
   await expect(page.getByText("email", { exact: true })).toBeVisible(); // MCP catalog chip

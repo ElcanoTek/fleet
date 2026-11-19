@@ -5,12 +5,6 @@ import { t as tr } from "@/app/lib/i18n";
 // they are pure functions with no React dependency, so they live in a plain
 // .ts module that vitest can import without a DOM.
 
-export function formatUsd(v: number): string {
-  if (!v) return "$0.00";
-  if (v < 0.01) return `$${formatFixed(v, 4)}`;
-  return `$${formatFixed(v, 2)}`;
-}
-
 export function formatDuration(ms: number): string {
   if (ms < 1000) return `${ms}ms`;
   if (ms < 60_000) return `${formatFixed((ms / 1000), 1)}s`;

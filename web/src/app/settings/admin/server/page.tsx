@@ -1,3 +1,4 @@
+import { formatCredits } from "@/app/shared/lib/credits";
 import { formatFixed } from "@/app/lib/i18n";
 import { rich } from "@/app/lib/i18n/rich";
 import { t as tr } from "@/app/lib/i18n";
@@ -87,12 +88,6 @@ type ServerStats = {
 
 const REFRESH_MS = 10_000;
 const plain = new Intl.NumberFormat(getLanguage());
-const usd = new Intl.NumberFormat(getLanguage(), {
-  style: "currency",
-  currency: "USD",
-  minimumFractionDigits: 2,
-  maximumFractionDigits: 2,
-});
 
 function percent(used: number, total: number): number {
   if (total <= 0) return 0;
@@ -217,7 +212,7 @@ export function ServerStatsView({ allowCleanup = true }: { allowCleanup?: boolea
         {
           title: tr("LLM calls today"),
           value: plain.format(ag.llm_calls_today),
-          sub: tr("{0} runtime spend today (UTC)", [usd.format(ag.llm_cost_today_usd)]),
+          sub: tr("{0} runtime spend today (UTC)", [formatCredits(ag.llm_cost_today_usd, 2)]),
         },
         {
           title: tr("Warm sandbox containers"),

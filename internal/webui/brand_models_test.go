@@ -265,7 +265,7 @@ func TestDiscussDigest(t *testing.T) {
 	}
 	var seed struct{ Title, Seed string }
 	_ = json.Unmarshal([]byte(e.chat.last(t).Body), &seed)
-	for _, want := range []string{"- ID: t1", "- Status: done", "- Cost: $0.1235", "## Result\nok", "## Artifacts\n- a.csv", "[user] hi", "[tool:bash (error)] boom"} {
+	for _, want := range []string{"- ID: t1", "- Status: done", "- Cost: 0.1235 credits", "## Result\nok", "## Artifacts\n- a.csv", "[user] hi", "[tool:bash (error)] boom"} {
 		if !strings.Contains(seed.Seed, want) {
 			t.Errorf("seed lacks %q:\n%s", want, seed.Seed)
 		}

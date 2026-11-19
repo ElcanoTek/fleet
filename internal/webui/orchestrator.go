@@ -78,7 +78,7 @@ func formatDigest(task discussTask, log discussLog) string {
 		add("- Completed: " + v)
 	}
 	if log.Cost != nil {
-		add(fmt.Sprintf("- Cost: $%.4f", *log.Cost))
+		add(fmt.Sprintf("- Cost: %.4f credits", *log.Cost))
 	}
 	add("- Prompt: " + clip(task.Prompt, digestPerMessageChars))
 	if v := deref(task.ErrorMessage); v != "" {

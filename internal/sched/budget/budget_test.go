@@ -361,7 +361,7 @@ func TestExceededErrorMessage(t *testing.T) {
 		WindowEnd: time.Date(2026, 7, 3, 0, 0, 0, 0, time.UTC),
 	}
 	msg := err.Error()
-	for _, want := range []string{"budget exceeded", "alice@example.com", "day window", "$10.00", "2026-07-03T00:00:00Z"} {
+	for _, want := range []string{"budget exceeded", "alice@example.com", "day window", "10.00-credit hard cap", "2026-07-03T00:00:00Z"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("message %q missing %q", msg, want)
 		}

@@ -1,3 +1,5 @@
+import { CreditsValue } from "@/app/shared/ui/CreditsValue";
+import { formatCredits } from "@/app/shared/lib/credits";
 import { runStateLabel } from "@/app/shared/ui/StatusChip";
 import { formatFixed } from "@/app/lib/i18n";
 import { rich } from "@/app/lib/i18n/rich";
@@ -111,27 +113,11 @@ type AdminSettingsResponse = {
   settings: AdminSettingItem[];
 };
 
-const usd = new Intl.NumberFormat(getLanguage(), {
-  style: "currency",
-  currency: "USD",
-  minimumFractionDigits: 2,
-  maximumFractionDigits: 2,
-});
-const usdFine = new Intl.NumberFormat(getLanguage(), {
-  style: "currency",
-  currency: "USD",
-  minimumFractionDigits: 2,
-  maximumFractionDigits: 4,
-});
 const compact = new Intl.NumberFormat(getLanguage(), {
   notation: "compact",
   maximumFractionDigits: 1,
 });
 const plain = new Intl.NumberFormat(getLanguage());
-
-function fmtUSD(v: number): string {
-  return v > 0 && v < 0.01 ? usdFine.format(v) : usd.format(v);
-}
 
 function fmtTokens(v: number): string {
   return compact.format(v);
@@ -364,12 +350,12 @@ function MonthlyAllowanceBanner() {
               }}
             >
               <label htmlFor="monthlySoftSpendLimitInput" className="sr-only">
-                {tr("Monthly soft spend limit (USD)")}</label>
+                {tr("Monthly soft spend limit (credits)")}</label>
               <Input
                 id="monthlySoftSpendLimitInput"
                 type="text"
                 inputMode="decimal"
-                placeholder={tr("e.g. 500 (USD, 0 = unlimited)")}
+                placeholder={tr("e.g. 500 (credits, 0 = unlimited)")}
                 value={limitDraft}
                 onChange={(e) => setLimitDraft(e.target.value)}
                 className="w-full max-w-full rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-surface-2)] px-2.5 py-1 font-[family-name:var(--font-code)] text-[0.8rem] text-[var(--color-text-primary)] sm:w-52"
@@ -439,7 +425,7 @@ function MonthlyAllowanceBanner() {
 
         <Card className="gap-0 rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-2)] p-3.5">
           <div className="text-[0.72rem] font-medium uppercase tracking-[0.06em] text-[var(--color-text-muted)]">
-            {tr("Included / $0-Cost Share")}</div>
+            {tr("Included / Zero-Cost Share")}</div>
           <div
             className="mt-1 font-[family-name:var(--font-code)] text-[1.35rem] font-bold text-[var(--color-text-primary)]"
             data-testid="monthly-included-share"
@@ -458,15 +444,15 @@ function MonthlyAllowanceBanner() {
             className="mt-1 font-[family-name:var(--font-code)] text-[1.35rem] font-bold text-[var(--color-text-primary)]"
             data-testid="monthly-billed-spend"
           >
-            {usageLoading && !monthUsage ? "…" : fmtUSD(billedCostUSD)}
+            {usageLoading && !monthUsage ? "…" : <CreditsValue value={billedCostUSD} />}
           </div>
           <div className="mt-1 text-[0.76rem] text-[var(--color-text-secondary)]">
-        {rich("Chat {0} · Tasks {1}", fmtUSD(billedChatCostUSD), fmtUSD(billedTaskCostUSD))}
+        {rich("Chat {0} · Tasks {1}", formatCredits(billedChatCostUSD), formatCredits(billedTaskCostUSD))}
       </div>
           <div className="mt-1 text-[0.76rem] text-[var(--color-text-secondary)]">
             {softLimit > 0 ? (
               <span>
-        {rich("of {0} soft spend limit ({1}%){2}", fmtUSD(softLimit), formatFixed(limitPct, 1), limitSource === "admin" ? tr(" · custom") : "")}
+        {rich("of {0} soft spend limit ({1}%){2}", formatCredits(softLimit), formatFixed(limitPct, 1), limitSource === "admin" ? tr(" · custom") : "")}
       </span>
             ) : (
               <span>{tr("Soft spend limit: Unlimited (advisory)")}</span>
@@ -635,9 +621,9 @@ function ModelUsageTab() {
         >
           <div className="flex items-center justify-between gap-2">
             <span className="text-[0.76rem] font-semibold uppercase tracking-[0.06em] text-[var(--color-success)]">
-              {tr("Included / $0-Cost Models")}</span>
+              {tr("Included / Zero-Cost Models")}</span>
             <Badge variant="success" className="font-[family-name:var(--font-code)] text-[0.74rem] font-semibold">
-              {tr("$0.00 billed")}
+              {rich("{0} billed", formatCredits(0))}
             </Badge>
           </div>
           <div className="mt-2 flex items-baseline gap-3">
@@ -649,7 +635,7 @@ function ModelUsageTab() {
       </span>
           </div>
           <p className="mt-1 text-[0.78rem] text-[var(--color-text-secondary)]">
-        {rich("{0} · {1} chat turns & task iterations absorbed at $0 direct cost", tr(includedBuckets.length === 1 ? "{0} model" : "{0} models", [includedBuckets.length]), plain.format(includedRuns))}
+        {rich("{0} · {1} chat turns & task iterations absorbed at no direct cost", tr(includedBuckets.length === 1 ? "{0} model" : "{0} models", [includedBuckets.length]), plain.format(includedRuns))}
       </p>
         </Card>
 
@@ -661,7 +647,7 @@ function ModelUsageTab() {
             <span className="text-[0.76rem] font-semibold uppercase tracking-[0.06em] text-[var(--color-text-secondary)]">
               {tr("Frontier / Billed Models")}</span>
             <Badge variant="outline" className="border-[var(--color-border-strong)] bg-[var(--color-surface-3)] font-[family-name:var(--font-code)] text-[0.74rem] font-semibold text-[var(--color-text-primary)]">
-        {rich("{0} billed", fmtUSD(billedCost))}
+        {rich("{0} billed", formatCredits(billedCost))}
       </Badge>
           </div>
           <div className="mt-2 flex items-baseline gap-3">
@@ -707,8 +693,8 @@ function ModelUsageTab() {
             </code>)}
       </li>
           <li>
-        {rich("{0} {1} models (pinned with {2} or a {3} pricing override) count 100% toward token volume and the monthly token allowance, and accrue {4} toward billed USD spend and USD budget lines. {5} models accrue metered provider or override rates. {6} indicates runs where no dollar rate was reported.", <strong className="text-[var(--color-text-primary)]">
-              {tr("Model Tiers & Budget Impact:")}</strong>, <strong>{tr("Included ($0)")}</strong>, <code className="font-[family-name:var(--font-code)] text-[0.75rem]">free: true</code>, <code className="font-[family-name:var(--font-code)] text-[0.75rem]">$0</code>, <strong>$0.00</strong>, <strong>{tr("Billed")}</strong>, <strong>{tr("No price data")}</strong>)}
+        {rich("{0} {1} models (pinned with {2} or a {3} pricing override) count 100% toward token volume and the monthly token allowance, and accrue {4} toward billed credit spend and credit budget lines. {5} models accrue metered provider or override rates. {6} indicates runs where no price was reported.", <strong className="text-[var(--color-text-primary)]">
+              {tr("Model Tiers & Budget Impact:")}</strong>, <strong>{tr("Included (0 credits)")}</strong>, <code className="font-[family-name:var(--font-code)] text-[0.75rem]">free: true</code>, <code className="font-[family-name:var(--font-code)] text-[0.75rem]">0</code>, <strong>{formatCredits(0)}</strong>, <strong>{tr("Billed")}</strong>, <strong>{tr("No price data")}</strong>)}
       </li>
         </ul>
       </details>
@@ -765,7 +751,7 @@ function ModelUsageTab() {
                   <TableCell>
                     {isIncluded ? (
                       <Badge variant="success" className="text-[0.7rem] font-semibold">
-                        {tr("Included ($0)")}</Badge>
+                        {tr("Included (0 credits)")}</Badge>
                     ) : isUnpriced ? (
                       <Badge variant="outline" className="bg-[var(--color-surface-2)] text-[0.7rem] font-medium text-[var(--color-text-muted)]">
                         {tr("No price data")}</Badge>
@@ -809,10 +795,10 @@ function ModelUsageTab() {
                   <TableCell className="num text-right tabular-nums">{plain.format(b.chat_turns)}</TableCell>
                   <TableCell className="num text-right tabular-nums">{plain.format(b.task_iterations)}</TableCell>
                   <TableCell className="num text-right tabular-nums">
-                    {isIncluded ? "$0.00" : isUnpriced ? "—" : fmtUSD(b.cost_usd)}
+                    {isIncluded ? formatCredits(0) : isUnpriced ? "—" : formatCredits(b.cost_usd)}
                   </TableCell>
                   <TableCell className="num text-right tabular-nums">
-                    {isIncluded ? "$0.00" : isUnpriced || totalSteps === 0 ? "—" : fmtUSD(avgCost)}
+                    {isIncluded ? formatCredits(0) : isUnpriced || totalSteps === 0 ? "—" : formatCredits(avgCost)}
                   </TableCell>
                 </TableRow>
               );
@@ -983,7 +969,7 @@ function OutliersAndFrictionTab() {
               value={convSort}
               onChange={(e) => setConvSort(e.target.value as ConvSort)}
             >
-              <NativeSelectOption value="cost">{tr("Cost ($ USD)")}</NativeSelectOption>
+              <NativeSelectOption value="cost">{tr("Cost (credits)")}</NativeSelectOption>
               <NativeSelectOption value="tokens">{tr("Total Tokens")}</NativeSelectOption>
               <NativeSelectOption value="turns">{tr("Turn Count")}</NativeSelectOption>
               <NativeSelectOption value="friction">{tr("Friction Signals")}</NativeSelectOption>
@@ -1089,7 +1075,7 @@ function OutliersAndFrictionTab() {
                         ? tr(c.advanced_switches === 1 ? "{0} frustrated · {1} struggles · {2} upgrade" : "{0} frustrated · {1} struggles · {2} upgrades", [c.frustrated_messages, c.struggle_signals, c.advanced_switches])
                         : "—"}
                     </TableCell>
-                    <TableCell className="num text-right tabular-nums">{fmtUSD(c.cost_usd)}</TableCell>
+                    <TableCell className="num text-right tabular-nums">{formatCredits(c.cost_usd)}</TableCell>
                   </TableRow>
                 );
               })}
@@ -1118,7 +1104,7 @@ function OutliersAndFrictionTab() {
               value={taskSort}
               onChange={(e) => setTaskSort(e.target.value as TaskSort)}
             >
-              <NativeSelectOption value="cost">{tr("Cost ($ USD)")}</NativeSelectOption>
+              <NativeSelectOption value="cost">{tr("Cost (credits)")}</NativeSelectOption>
               <NativeSelectOption value="tokens">{tr("Total Tokens")}</NativeSelectOption>
               <NativeSelectOption value="iterations">{tr("Iterations Used")}</NativeSelectOption>
               <NativeSelectOption value="failures">{tr("Failures & Dead Letters")}</NativeSelectOption>
@@ -1199,7 +1185,7 @@ function OutliersAndFrictionTab() {
                     <TableCell className="num text-right tabular-nums" title={plain.format(tok)}>
                       {fmtTokens(tok)}
                     </TableCell>
-                    <TableCell className="num text-right tabular-nums">{fmtUSD(t.cost_usd)}</TableCell>
+                    <TableCell className="num text-right tabular-nums">{formatCredits(t.cost_usd)}</TableCell>
                   </TableRow>
                 );
               })}
@@ -1285,7 +1271,7 @@ function OutliersAndFrictionTab() {
                       ? `${formatFixed(u.cache_hit_rate_pct, 0)}%`
                       : "—"}
                   </TableCell>
-                  <TableCell className="num text-right tabular-nums">{fmtUSD(u.total_cost_usd)}</TableCell>
+                  <TableCell className="num text-right tabular-nums">{formatCredits(u.total_cost_usd)}</TableCell>
                 </TableRow>
               ))}
             </TableBody>

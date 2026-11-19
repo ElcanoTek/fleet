@@ -405,7 +405,7 @@ func TestScheduledTerminalErrorBudgetStopCarriesFacts(t *testing.T) {
 		t.Fatalf("budget stop returned %v, want ErrCostCeilingExceeded", landed)
 	}
 	msg := landed.Error()
-	for _, want := range []string{"$8.2862", "1 critical action(s) completed", "no declared critical action is outstanding", "deliverable most likely landed", "had written its final summary", "end-of-run checks did not run", "not been rolled back"} {
+	for _, want := range []string{"8.2862 credits", "1 critical action(s) completed", "no declared critical action is outstanding", "deliverable most likely landed", "had written its final summary", "end-of-run checks did not run", "not been rolled back"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("reason %q should contain %q", msg, want)
 		}

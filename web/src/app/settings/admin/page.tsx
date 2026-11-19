@@ -1,3 +1,4 @@
+import { formatCredits } from "@/app/shared/lib/credits";
 import { formatFixed } from "@/app/lib/i18n";
 import { t as tr } from "@/app/lib/i18n";
 // Settings → Admin → Overview (fleet-unified settings pass): the operator's
@@ -19,7 +20,7 @@ import {
   fetchAdminStatsPayload,
   formatAgo,
   formatCompactTokens,
-  formatUSD,
+  formatSpend,
   formatUptime,
   type DailyCacheStat,
   type UserStat,
@@ -81,8 +82,8 @@ function healthItems(d: HealthSummary): AdminStat[] {
     { title: tr("DB pool"), value: `${d.db.in_use}/${d.db.pool_size}`, sub: tr("{0} idle", [d.db.idle]) },
     {
       title: tr("LLM today"),
-      value: `$${formatFixed(d.llm.cost_today_usd, 2)}`,
-      sub: tr("{0} calls · ${1}/call", [d.llm.calls_today, formatFixed(d.llm.avg_cost_per_call, 3)]),
+      value: formatCredits(d.llm.cost_today_usd, 2),
+      sub: tr("{0} calls · {1} credits/call", [d.llm.calls_today, formatFixed(d.llm.avg_cost_per_call, 3)]),
     },
     { title: tr("Active chats"), value: String(d.conversations_active) },
   ];
@@ -219,7 +220,7 @@ export default function AdminOverviewPage() {
     // All-time chat-side spend (GET /api/admin/stats sums turn_metrics only);
     // labeled as such so it can't be misread as the Operations Center Usage
     // tab's windowed chat+task total.
-    { title: tr("Chat spend (all-time)"), value: formatUSD(totalSpend) },
+    { title: tr("Chat spend (all-time)"), value: formatSpend(totalSpend) },
     {
       title: tr("Cache hit rate"),
       value: totalPromptTok > 0 ? `${formatFixed(overallHitPct, 1)}%` : "—",

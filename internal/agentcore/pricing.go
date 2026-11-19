@@ -186,7 +186,7 @@ func ForecastCost(model string, systemToks, toolToks, promptToks, maxIterations 
 	price, ok := LookupModelPrice(model)
 	if !ok {
 		fc.Note = "pricing for model " + model + " is unknown; cost fields are null. " +
-			"Add the slug to agentcore.KnownModelPricing to get a dollar estimate."
+			"Add the slug to agentcore.KnownModelPricing to get a cost estimate."
 		return fc
 	}
 	fc.PricingKnown = true

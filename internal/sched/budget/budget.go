@@ -127,7 +127,7 @@ type ExceededError struct {
 func (e *ExceededError) Error() string {
 	var reasons []string
 	if e.LimitUSD != nil {
-		reasons = append(reasons, fmt.Sprintf("spent $%.4f of the $%.2f hard cap", e.SpendUSD, *e.LimitUSD))
+		reasons = append(reasons, fmt.Sprintf("spent %.4f credits of the %.2f-credit hard cap", e.SpendUSD, *e.LimitUSD))
 	}
 	if e.LimitTokens != nil {
 		reasons = append(reasons, fmt.Sprintf("used %d of the %d-token hard cap", e.SpendTokens, *e.LimitTokens))
@@ -345,10 +345,10 @@ func (e *Enforcer) maybeSoftAlert(ctx context.Context, b models.Budget, ws time.
 // do not — plus what happens at the hard bound.
 func softAlertMessage(b models.Budget, spendUSD float64, spendTokens int64) string {
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "Spend for %s %q in the current %s window has crossed its soft budget: $%.4f",
+	fmt.Fprintf(&sb, "Spend for %s %q in the current %s window has crossed its soft budget: %.4f credits",
 		b.Scope, b.PrincipalID, b.Window, spendUSD)
 	if b.SoftUSD != nil {
-		fmt.Fprintf(&sb, " (soft $%.2f)", *b.SoftUSD)
+		fmt.Fprintf(&sb, " (soft %.2f credits)", *b.SoftUSD)
 	}
 	fmt.Fprintf(&sb, ", %d tokens", spendTokens)
 	if b.SoftTokens != nil {
@@ -358,7 +358,7 @@ func softAlertMessage(b models.Budget, spendUSD float64, spendTokens int64) stri
 	if b.HardUSD != nil || b.HardTokens != nil {
 		sb.WriteString(" New task creation will be refused at the hard bound")
 		if b.HardUSD != nil {
-			fmt.Fprintf(&sb, " $%.2f", *b.HardUSD)
+			fmt.Fprintf(&sb, " %.2f credits", *b.HardUSD)
 		}
 		if b.HardTokens != nil {
 			fmt.Fprintf(&sb, " %d tokens", *b.HardTokens)

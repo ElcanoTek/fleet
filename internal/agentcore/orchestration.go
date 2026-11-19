@@ -551,7 +551,7 @@ func (o *orchestrationState) checkCeilings() (bool, string) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if o.maxCostUSD > 0 && o.CostUSD >= o.maxCostUSD {
-		return true, fmt.Sprintf("COST_CEILING_REACHED: this turn has accumulated $%.4f which meets or exceeds the configured ceiling of $%.2f. Stop calling tools and end the turn with what you have.",
+		return true, fmt.Sprintf("COST_CEILING_REACHED: this turn has accumulated %.4f credits which meets or exceeds the configured ceiling of %.2f credits. Stop calling tools and end the turn with what you have.",
 			o.CostUSD, o.maxCostUSD)
 	}
 	if o.maxTotalTokens > 0 {
@@ -648,7 +648,7 @@ func isBudgetWindDownNotice(m fantasy.Message) bool {
 func (st budgetWindDownState) windDownNotice() string {
 	var parts []string
 	if st.maxCostUSD > 0 {
-		parts = append(parts, fmt.Sprintf("$%.2f of the $%.2f cost ceiling", st.spentCostUSD, st.maxCostUSD))
+		parts = append(parts, fmt.Sprintf("%.2f credits of the %.2f-credit cost ceiling", st.spentCostUSD, st.maxCostUSD))
 	}
 	if st.maxTokens > 0 {
 		parts = append(parts, fmt.Sprintf("%d of the %d uncached-token ceiling", st.spentTokens, st.maxTokens))

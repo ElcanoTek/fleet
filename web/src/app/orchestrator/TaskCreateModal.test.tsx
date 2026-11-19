@@ -905,7 +905,7 @@ describe("TaskCreateModal — edit mode", () => {
     renderModal();
     fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Expensive scan" } });
     fireEvent.click(screen.getByRole("button", { name: /Advanced/ }));
-    fireEvent.change(screen.getByLabelText("Max cost (USD)"), { target: { value: "12.50" } });
+    fireEvent.change(screen.getByLabelText("Max cost (credits)"), { target: { value: "12.50" } });
     fireEvent.click(screen.getByRole("button", { name: "Run task now" }));
     await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
     expect(createTask.mock.calls[0][0]).toMatchObject({ max_cost_usd: 12.5 });
@@ -917,7 +917,7 @@ describe("TaskCreateModal — edit mode", () => {
     renderModal();
     fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Do the thing" } });
     fireEvent.click(screen.getByRole("button", { name: /Advanced/ }));
-    fireEvent.change(screen.getByLabelText("Max cost (USD)"), { target: { value: "0" } });
+    fireEvent.change(screen.getByLabelText("Max cost (credits)"), { target: { value: "0" } });
     fireEvent.click(screen.getByRole("button", { name: "Run task now" }));
     expect(screen.getByTestId("error-max-cost-usd")).toHaveTextContent(/above 0/);
     expect(createTask).not.toHaveBeenCalled();
@@ -926,7 +926,7 @@ describe("TaskCreateModal — edit mode", () => {
   it("restores a stored per-task cost ceiling into the editor", () => {
     renderModal({ editTask: { ...baseEdit, max_cost_usd: 8 }, onUpdated: vi.fn() });
     fireEvent.click(screen.getByRole("button", { name: /Advanced/ }));
-    expect(screen.getByLabelText("Max cost (USD)")).toHaveValue(8);
+    expect(screen.getByLabelText("Max cost (credits)")).toHaveValue(8);
   });
 
   it("restores a stored thinking budget and guards unsaved changes to it", () => {

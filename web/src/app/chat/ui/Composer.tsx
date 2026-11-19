@@ -230,7 +230,7 @@ export type ComposerProps = {
   // shows — falling back to the raw slug/typed text. Resolved by
   // ChatExperience, which owns the catalog.
   selectedModelLabel: string;
-  // OpenRouter prices for the selected slug, driving the "$ … $$$$" cost tier
+  // OpenRouter prices for the selected slug, driving the credit-usage meter
   // on the chip. null whenever the slug has no catalog pricing (workspace
   // provider, half-typed custom slug) — the chip then shows no tier.
   selectedModelPrices: ModelPrices | null;

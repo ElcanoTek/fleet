@@ -27,7 +27,7 @@ it("localizes owned diagnostics separately from arbitrary error or user content"
   expect(localizeServerMessage("unit fleet", "pt")).toBe("unidade fleet");
   expect(localizeServerMessage("run on the box: journalctl -u fleet -n 100", "es"))
     .toBe("ejecuta en el servidor: journalctl -u fleet -n 100");
-  expect(localizeServerMessage("pricing for model my/model is unknown; cost fields are null. Add the slug to agentcore.KnownModelPricing to get a dollar estimate.", "es"))
+  expect(localizeServerMessage("pricing for model my/model is unknown; cost fields are null. Add the slug to agentcore.KnownModelPricing to get a cost estimate.", "es"))
     .toContain("modelo my/model");
   expect(localizeError("unit fleet", "pt")).toBe("unit fleet");
   expect(localizeError("my task is active", "es")).toBe("my task is active");

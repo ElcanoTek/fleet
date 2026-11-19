@@ -46,7 +46,7 @@ test("the composer fits the mobile viewport with no horizontal overflow", async 
 });
 
 // The composer toolbar used to wrap on a phone: the model chip carried the full
-// vendor-prefixed name plus the four cost glyphs, so the trailing controls (the
+// vendor-prefixed name plus the four-pip credit meter, so the trailing controls (the
 // context ring) dropped onto a second line. The chip is now the only elastic
 // item — it truncates — and everything else stays on one row.
 test("the composer toolbar keeps every control on one row", async ({ page }) => {

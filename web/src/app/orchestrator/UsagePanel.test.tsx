@@ -47,7 +47,7 @@ function report(overrides: Partial<UsageReport>): UsageReport {
     buckets: [],
     totals: bucket({}),
     sources: ["tasks", "chat"],
-    note: "Dollar figures cover only runs with model pricing available (#289).",
+    note: "Cost figures cover only runs with model pricing available (#289).",
     ...overrides,
   };
 }
@@ -105,8 +105,8 @@ describe("UsagePanel (#601)", () => {
     );
     render(<UsagePanel />);
     await screen.findByTestId("usage-totals");
-    expect(screen.getByText("$4.75")).toBeTruthy();
-    // Token totals sit beside dollars (the #289 honest-scope requirement).
+    expect(screen.getByTestId("usage-totals").textContent).toContain("4.75 credits");
+    // Token totals sit beside credits (the #289 honest-scope requirement).
     expect(screen.getByText("1.7K")).toBeTruthy();
     // The empty key is labeled honestly, not hidden.
     expect(screen.getAllByText("(unattributed)").length).toBeGreaterThan(0);
@@ -204,7 +204,7 @@ describe("UsagePanel (#601)", () => {
     fireEvent.change(screen.getByLabelText("Budget principal"), {
       target: { value: "alice@example.com" },
     });
-    fireEvent.change(screen.getByLabelText("Hard USD bound"), {
+    fireEvent.change(screen.getByLabelText("Hard credit bound"), {
       target: { value: "50" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Save budget" }));

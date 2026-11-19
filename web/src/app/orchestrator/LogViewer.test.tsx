@@ -366,7 +366,7 @@ describe("LogViewer task-detail modal", () => {
     expect(metrics).toHaveTextContent("507,240");
     expect(metrics).toHaveTextContent("58,225");
     expect(metrics).toHaveTextContent("2,412,434");
-    expect(metrics).toHaveTextContent("$1.0645");
+    expect(metrics).toHaveTextContent("1.0645 credits");
     expect(metrics).toHaveTextContent("4"); // messages
   });
 
