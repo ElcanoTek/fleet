@@ -341,6 +341,7 @@ func chatRoutes() []chatRoute {
 		{"POST /api/conversations/{id}/share-with-team", func(r *http.Request) string { return conv(r) + "/share-with-team" }, jsonBodyIfAny, textJSON},
 		{"POST /api/conversations/{id}/suggest-prompt", func(r *http.Request) string { return conv(r) + "/suggest-prompt" }, noBody, textJSON},
 		{"GET /api/conversations/{id}/team-link", func(r *http.Request) string { return conv(r) + "/team-link" }, noBody, passthroughJSON},
+		{"POST /api/conversations/{id}/transfer", func(r *http.Request) string { return conv(r) + "/transfer" }, jsonBodyIfAny, textJSON},
 		{"POST /api/conversations/{id}/truncate", func(r *http.Request) string { return withRawQuery(conv(r)+"/truncate", r) }, noBody, textOK},
 		{"GET /api/conversations/{id}/turns/{turnId}", func(r *http.Request) string {
 			return conv(r) + "/turns/" + p(r, "turnId")

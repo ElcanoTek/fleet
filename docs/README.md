@@ -269,6 +269,7 @@ above fails otherwise.
 - [`BUNDLE-STAGING.md`](BUNDLE-STAGING.md) — Staging the default bundle for a bare install on an SELinux host (#1655)
 - [`CHAT-EXPORT.md`](CHAT-EXPORT.md) — Downloading a chat
 - [`CHAT-PATROLS.md`](CHAT-PATROLS.md) — In-Chat Patrols & Timers (`chat_patrol`)
+- [`CHAT-TRANSFER.md`](CHAT-TRANSFER.md) — Transferring a chat, with its dashboard and patrols, to another person
 - [`CHAT-ORDER.md`](CHAT-ORDER.md) — your own order for pinned chats and for each project's chats, and the Temporary sort (Reorder mode; `GET`/`PUT /api/conversations/order`)
 - [`SIDEBAR.md`](SIDEBAR.md) — a sidebar of your own: pinned chats, dashboards, patrols, projects, tasks and pages, Home, presets, and the admin workspace default (`/api/sidebar`, `/api/admin/sidebar`)
 - [`SIDEBAR-SEARCH.md`](SIDEBAR-SEARCH.md) — the rail's search looks everywhere: own, team, project and archived chats in one list of results, whatever sections are hidden or folded

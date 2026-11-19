@@ -41,7 +41,12 @@ type steerMailbox struct {
 	convID   string
 	nonOwner bool
 	mpEpoch  uint64
-	slot     chan agentcore.SteerMessage
+	// ownerEpoch is the conversation's ownership epoch when this owner's
+	// submission was admitted (revalidateMultiplayerTurnAccess); ownerChecked
+	// says it was read. A transfer in between refuses the registration.
+	ownerChecked bool
+	ownerEpoch   uint64
+	slot         chan agentcore.SteerMessage
 }
 
 func newSteerMailbox(st chatStore, user, convID, turnID string, buf *turnBuffer) *steerMailbox {

@@ -71,6 +71,17 @@ func (s *Server) handleWorkspaceFile(w http.ResponseWriter, r *http.Request, con
 		}
 	}
 	defer releaseSwap()
+	// A chat that has changed owner in this process: the access check above
+	// may have been made just before the transfer, and the transfer moves
+	// private files around under this same lock (docs/CHAT-TRANSFER.md). So
+	// the check is made again now that the lock is held, and what is served
+	// is decided by who owns the chat now.
+	if s.currentOwnershipEpoch(convID) > 0 {
+		if conv, ok = s.conversationOr404(w, r, user, convID, true, "conversation not found"); !ok {
+			return
+		}
+		isOwner = strings.EqualFold(conv.UserEmail, user) || conv.UserEmail == ""
+	}
 	rawWsDir := tools.WorkspaceDirForConversation(convID)
 	baseRawDir := rawWsDir
 	cleanRel := filepath.ToSlash(filepath.Clean(relPath))

@@ -199,6 +199,13 @@ type chatStore interface {
 	// project with the account (ADR-0057). ProjectMemberEmails is the picker.
 	TransferProjectOwnership(ctx context.Context, projectID, newOwnerEmail, actingOwner string) (*store.Project, error)
 	ProjectMemberEmails(ctx context.Context, projectID string) ([]string, error)
+	// TransferConversation hands a chat to another person: it arrives
+	// private, on Manual approval, with the previous owner's patrols moved
+	// and paused (docs/CHAT-TRANSFER.md).
+	TransferConversation(ctx context.Context, ownerEmail, convID, toEmail string) (*store.ConversationTransfer, error)
+	// GetConversationOwnerAndMultiplayer reads a conversation by id with no
+	// access check; the caller gates it.
+	GetConversationOwnerAndMultiplayer(ctx context.Context, convID string) (*store.Conversation, error)
 
 	// Memories + memory proposals.
 	ListMemories(ctx context.Context, userEmail string) ([]store.Memory, error)

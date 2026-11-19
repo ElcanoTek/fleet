@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ElcanoTek/fleet/internal/store"
 )
 
 // TestWorkspaceFile_HappyPath: a file written into the per-conversation
@@ -260,5 +262,56 @@ func TestWorkspaceFile_PercentInName(t *testing.T) {
 		if w.Body.String() != "body of "+name {
 			t.Fatalf("get %q: served wrong file: %q", name, w.Body.String())
 		}
+	}
+}
+
+// TestWorkspaceFile_AfterTransfer: once a chat has changed owner, the file
+// route decides access again under the workspace swap lock
+// (docs/CHAT-TRANSFER.md), so the new owner is served and the previous one
+// is not.
+func TestWorkspaceFile_AfterTransfer(t *testing.T) {
+	s := serverFixture(t)
+	h := s.Routes()
+	w := do(t, h, http.MethodPost, "/conversations",
+		map[string]any{"persona": "victoria"}, "owner@example.com")
+	if w.Code != http.StatusOK {
+		t.Fatalf("create: %d %s", w.Code, w.Body.String())
+	}
+	var created struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil || created.ID == "" {
+		t.Fatalf("decode create: %v (%q)", err, w.Body.String())
+	}
+	wsRoot := t.TempDir()
+	t.Setenv("FLEET_WORKSPACE_ROOT", wsRoot)
+	convDir := filepath.Join(wsRoot, created.ID)
+	if err := os.MkdirAll(convDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(convDir, "report.csv"), []byte("a,b\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	st, ok := s.store.(*store.Store)
+	if !ok {
+		t.Fatalf("serverFixture store is %T, want *store.Store", s.store)
+	}
+	if _, err := st.CreateUser(t.Context(), "next@example.com", "correct horse battery staple"); err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	w = do(t, h, http.MethodPost, "/conversations/"+created.ID+"/transfer",
+		map[string]any{"to_email": "next@example.com"}, "owner@example.com")
+	if w.Code != http.StatusOK {
+		t.Fatalf("transfer: %d %s", w.Code, w.Body.String())
+	}
+	if s.currentOwnershipEpoch(created.ID) == 0 {
+		t.Fatal("a transfer did not advance the chat's ownership epoch")
+	}
+	path := "/conversations/" + created.ID + "/workspace/report.csv"
+	if w = do(t, h, http.MethodGet, path, nil, "next@example.com"); w.Code != http.StatusOK {
+		t.Errorf("new owner GET = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	if w = do(t, h, http.MethodGet, path, nil, "owner@example.com"); w.Code != http.StatusNotFound {
+		t.Errorf("previous owner GET = %d, want 404", w.Code)
 	}
 }

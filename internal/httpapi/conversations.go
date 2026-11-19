@@ -646,6 +646,11 @@ var conversationSubroutes = map[conversationSubroute]conversationSubrouteHandler
 	{sub: "multiplayer", method: http.MethodPost}: func(s *Server, w http.ResponseWriter, r *http.Request, user, id string) {
 		s.handleConversationMultiplayerSet(w, r, id, user)
 	},
+	// Hand the chat to another person (docs/CHAT-TRANSFER.md). Owner or
+	// admin; the handler gates it, because an admin does not own the chat.
+	{sub: "transfer", method: http.MethodPost}: func(s *Server, w http.ResponseWriter, r *http.Request, user, id string) {
+		s.handleConversationTransfer(w, r, id, user)
+	},
 	// Read a TEAMMATE's team-shared chat, read-only (ADR-0057). Deliberately
 	// NOT behind withOwnedConversation: this is the one conversation route a
 	// non-owner may reach, and its own two gates (shared team_id + the
