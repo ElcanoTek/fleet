@@ -1,9 +1,9 @@
 import { t as tr } from "@/app/lib/i18n";
 import { useState } from "react";
 import { CloseButton } from "@/app/shared/ui/CloseButton";
-import { iconHref } from "@/app/shared/ui/iconHref";
 import { FormFields } from "@/app/shared/ui/FormFields";
 import { cn } from "@/lib/utils";
+import { Icon } from "./Icon";
 import {
   formInitialValues,
   isPillReady,
@@ -12,17 +12,6 @@ import {
   type PillValues,
   type ProtocolPill,
 } from "./protocolPills";
-
-// Sprite-backed icon. Mirrors the (unexported) Icon in chat-experience.tsx;
-// duplicated here to keep the import graph acyclic — this module is a child
-// of chat-experience, not the other way around.
-function PillIcon({ name, className }: { name: string; className?: string }) {
-  return (
-    <svg className={className} aria-hidden="true">
-      <use href={iconHref(name)} />
-    </svg>
-  );
-}
 
 // ── empty-state card grid ──────────────────────────────────────────────────
 
@@ -59,7 +48,7 @@ function PillCard({ pill, onPick }: { pill: ProtocolPill; onPick: (id: string) =
       className="group flex items-start gap-3 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--gradient-surface-card)] p-3.5 text-left transition hover:border-[var(--color-accent)] hover:shadow-[var(--shadow-sm)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
     >
       <span className="flex size-9 shrink-0 items-center justify-center rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-overlay-soft)] text-[var(--color-accent)]">
-        <PillIcon name={pill.icon} className="size-[1.05rem]" />
+        <Icon name={pill.icon} className="size-[1.05rem]" />
       </span>
       <span className="min-w-0 flex-1">
         <span className="block text-[0.95rem] font-semibold leading-tight text-[var(--color-text-primary)]">
@@ -69,7 +58,7 @@ function PillCard({ pill, onPick }: { pill: ProtocolPill; onPick: (id: string) =
           {pill.desc}
         </span>
       </span>
-      <PillIcon
+      <Icon
         name="arrow-right"
         className="mt-0.5 size-4 shrink-0 text-[var(--color-text-muted)] transition group-hover:translate-x-0.5 group-hover:text-[var(--color-accent)]"
       />
@@ -111,7 +100,7 @@ export function ProtocolPillForm({
     <div className="grid w-full max-w-[44rem] gap-3 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--gradient-surface-card)] p-4 shadow-[var(--shadow-sm)] sm:p-5">
       <div className="flex items-center justify-between gap-3">
         <span className="inline-flex items-center gap-2 rounded-[var(--radius-pill)] border border-[var(--color-border-strong)] bg-[var(--color-overlay-soft)] px-2.5 py-1 text-[0.78rem] font-semibold text-[var(--color-text-primary)]">
-          <PillIcon name={pill.icon} className="size-4 text-[var(--color-accent)]" />
+          <Icon name={pill.icon} className="size-4 text-[var(--color-accent)]" />
           {pill.title}
         </span>
         <CloseButton label={tr("Cancel")} onClick={onCancel} />
@@ -136,7 +125,7 @@ export function ProtocolPillForm({
           className="inline-flex items-center gap-1 text-[0.8rem] text-[var(--color-text-secondary)] transition hover:text-[var(--color-text-primary)] focus-visible:rounded-[var(--radius-sm)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
         >
           {tr("Skip the form, start in Chat")}
-          <PillIcon name="arrow-right" className="size-3.5" />
+          <Icon name="arrow-right" className="size-3.5" />
         </button>
         <div className="flex items-center gap-2">
           <button
@@ -152,7 +141,7 @@ export function ProtocolPillForm({
             className="inline-flex items-center gap-1.5 rounded-[var(--radius-md)] bg-[image:var(--gradient-action-fill)] px-3.5 py-2 text-[0.85rem] font-semibold text-[var(--color-on-primary-fill)] transition enabled:hover:bg-[image:var(--gradient-action-fill-hover)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:cursor-not-allowed disabled:bg-none disabled:bg-[var(--color-surface-2)] disabled:text-[var(--color-text-muted)]"
           >
             {pill.cta}
-            <PillIcon name="arrow-right" className="size-4" />
+            <Icon name="arrow-right" className="size-4" />
           </button>
         </div>
       </div>

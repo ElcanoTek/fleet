@@ -24,6 +24,10 @@ import (
 // delivering a fire as a queued turn (DeliverChatScheduleFire).
 const chatSchedulesTable = config.SchedSchema + ".chat_schedules"
 
+// chatScheduleRunsTable is the schedules' run history (sched-owned; the chat
+// store only reads it, to tell an owner their patrol's slots are skipped).
+const chatScheduleRunsTable = config.SchedSchema + ".chat_schedule_runs"
+
 // deleteUserChatSchedulesTx erases a user's chat schedules (and, by sched's
 // cascade, their run history). The scheduler's table may not exist yet when a
 // chat-only CLI verb (fleet chat user del, fleet admin rm) runs before the
@@ -117,7 +121,33 @@ type ChatSchedule struct {
 	MaxRuns         int    `json:"max_runs,omitempty"`
 	CreatedAt       int64  `json:"created_at"`
 	UpdatedAt       int64  `json:"updated_at"`
+	// Skipped is set on an active recurring patrol whose latest scheduled
+	// slots were skipped because an approval card is still waiting on its
+	// owner (ListChatSchedules fills it): the chat tells the owner the
+	// patrol is held until they answer the card. Nil otherwise.
+	Skipped *ChatScheduleSkipped `json:"skipped,omitempty"`
 }
+
+// ChatScheduleSkipped describes a patrol's latest run of skipped slots.
+type ChatScheduleSkipped struct {
+	// Reason is why: models.ChatScheduleBusyApprovalPending (the only
+	// reason reported today).
+	Reason string `json:"reason"`
+	// Count is how many slots in a row were skipped.
+	Count int `json:"count"`
+	// Slots are the skipped slots' times (Unix seconds), oldest first: the
+	// newest maxSkippedSlots of them when Count is larger.
+	Slots []int64 `json:"slots"`
+}
+
+// maxSkippedSlots bounds ChatScheduleSkipped.Slots; Count still says how
+// many there were.
+const maxSkippedSlots = 6
+
+// patrolNonBlockingApprovalTools are the pending approval cards that do NOT
+// hold a scheduled patrol fire (an email preview, a model suggestion): every
+// other pending card of the owner's does (DeliverChatScheduleFire).
+const patrolNonBlockingApprovalTools = `('preview_email', 'suggest_advanced_model')`
 
 // ChatScheduleInput is the creation payload for CreateChatSchedule.
 type ChatScheduleInput struct {
@@ -408,7 +438,98 @@ func (s *Store) ListChatSchedules(ctx context.Context, userEmail, convID string,
 		}
 		out = append(out, item)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// Display data: a failed read leaves the list unannotated rather than
+	// failing every caller that only needs the schedules themselves.
+	if skipped, err := s.skippedForApproval(ctx, convID, out); err == nil {
+		for i := range out {
+			out[i].Skipped = skipped[out[i].ID]
+		}
+	}
+	return out, nil
+}
+
+// skippedForApproval reports, for each active recurring patrol in list, the
+// latest slots it skipped because an approval card is still waiting on the
+// patrol's owner. A scheduled fire skips its slot while such a card is
+// pending (DeliverChatScheduleFire: busy, reason approval_pending) — by
+// design, so a patrol never stacks turns behind an unanswered card — and
+// without this the owner had no way to know.
+//
+// The skipped slots are the trailing streak of the schedule's run history:
+// its busy approval_pending rows (or busy rows recorded before reasons were,
+// an empty reason) newer than its latest row of any other kind, and fired no
+// earlier than the oldest card still pending — so slots skipped behind a
+// card already answered are never pinned on the one waiting now. No pending
+// card, no entry: the next slot fires as usual once the owner answers.
+func (s *Store) skippedForApproval(ctx context.Context, convID string, list []ChatSchedule) (map[string]*ChatScheduleSkipped, error) {
+	ids := make([]string, 0, len(list))
+	for _, sc := range list {
+		if sc.Status == ChatScheduleStatusActive && sc.Kind == ChatScheduleKindPatrol {
+			ids = append(ids, sc.ID)
+		}
+	}
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, slot, n FROM (
+			SELECT cs.id,
+			       COALESCE(r.due_at, floor(EXTRACT(EPOCH FROM r.fired_at))::bigint) AS slot,
+			       r.id AS run_id,
+			       count(*) OVER (PARTITION BY cs.id) AS n,
+			       row_number() OVER (PARTITION BY cs.id ORDER BY r.id DESC) AS rn
+			  FROM `+chatSchedulesTable+` cs
+			  JOIN LATERAL (
+			        SELECT min(a.created_at) AS since
+			          FROM approvals a
+			         WHERE a.conversation_id = cs.conversation_id
+			           AND a.user_email = cs.user_email
+			           AND a.status = 'pending'
+			           AND a.tool_name NOT IN `+patrolNonBlockingApprovalTools+`
+			       ) pend ON pend.since IS NOT NULL
+			  JOIN `+chatScheduleRunsTable+` r ON r.schedule_id = cs.id
+			 WHERE cs.conversation_id = $1
+			   AND cs.id = ANY($2::text[])
+			   AND r.trigger_kind = 'schedule'
+			   AND r.outcome = 'busy'
+			   AND r.reason IN ($3, '')
+			   AND r.fired_at >= to_timestamp(pend.since)
+			   AND r.id > COALESCE((
+			        SELECT max(o.id) FROM `+chatScheduleRunsTable+` o
+			         WHERE o.schedule_id = cs.id
+			           AND NOT (o.outcome = 'busy' AND o.reason IN ($3, ''))
+			       ), 0)
+		) streak
+		 WHERE rn <= $4
+		 ORDER BY id, run_id`,
+		convID, ids, models.ChatScheduleBusyApprovalPending, maxSkippedSlots)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]*ChatScheduleSkipped{}
+	for rows.Next() {
+		var (
+			id      string
+			slot, n int64
+		)
+		if err := rows.Scan(&id, &slot, &n); err != nil {
+			return nil, err
+		}
+		sk := out[id]
+		if sk == nil {
+			sk = &ChatScheduleSkipped{Reason: models.ChatScheduleBusyApprovalPending, Count: int(n)}
+			out[id] = sk
+		}
+		sk.Slots = append(sk.Slots, slot)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // UserPatrol is one of a user's recurring patrols, summarised for the
@@ -773,9 +894,11 @@ func (s *Store) DeliverChatScheduleFire(ctx context.Context, fire models.ChatSch
 		return models.ChatScheduleDelivery{Outcome: models.ChatScheduleCoalesced, InputID: inFlight.ID}, tx.Commit()
 	}
 
-	busy := models.ChatScheduleDelivery{Outcome: models.ChatScheduleBusy}
+	busy := func(reason string) models.ChatScheduleDelivery {
+		return models.ChatScheduleDelivery{Outcome: models.ChatScheduleBusy, Reason: reason}
+	}
 	if hasInFlight {
-		return busy, tx.Commit()
+		return busy(models.ChatScheduleBusyPatrolInFlight), tx.Commit()
 	}
 	if !manual {
 		var hasPendingApproval bool
@@ -785,14 +908,14 @@ func (s *Store) DeliverChatScheduleFire(ctx context.Context, fire models.ChatSch
 				 WHERE conversation_id = $1
 				   AND user_email = $2
 				   AND status = 'pending'
-				   AND tool_name NOT IN ('preview_email', 'suggest_advanced_model')
+				   AND tool_name NOT IN `+patrolNonBlockingApprovalTools+`
 			)`,
 			fire.ConversationID, fire.UserEmail,
 		).Scan(&hasPendingApproval); err != nil {
 			return models.ChatScheduleDelivery{}, err
 		}
 		if hasPendingApproval {
-			return busy, tx.Commit()
+			return busy(models.ChatScheduleBusyApprovalPending), tx.Commit()
 		}
 	}
 	if maxPending > 0 {
@@ -807,9 +930,9 @@ func (s *Store) DeliverChatScheduleFire(ctx context.Context, fire models.ChatSch
 			if manual {
 				// Refused for good, not an error to retry: a retry would run
 				// the turn later, unasked, once the queue drained.
-				return models.ChatScheduleDelivery{Outcome: models.ChatScheduleRejected, Reason: "queue_full"}, tx.Commit()
+				return models.ChatScheduleDelivery{Outcome: models.ChatScheduleRejected, Reason: models.ChatScheduleBusyQueueFull}, tx.Commit()
 			}
-			return busy, tx.Commit()
+			return busy(models.ChatScheduleBusyQueueFull), tx.Commit()
 		}
 	}
 

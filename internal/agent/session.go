@@ -294,6 +294,40 @@ type toolResultSelection struct {
 	chosenOOO             map[string]bool
 	isOutOfBandResolution map[string]bool
 	firstSummaryIdx       map[string]int
+	// settledLate maps a staged call whose chosen result is its approval's
+	// out-of-band outcome to the note replay puts in front of that outcome
+	// (approvalOutcomeNote).
+	settledLate map[string]string
+}
+
+// approvalPlaceholderPrefix starts the inline result a staged (approval-gated)
+// call returns during its turn (agentcore interactive_gates.go,
+// orchestration.go). It is the only result the model saw for that call.
+const approvalPlaceholderPrefix = "APPROVAL_REQUIRED:"
+
+// approvalOutcomeNote is the header replay puts in front of a staged call's
+// approval outcome. The outcome is paired with the call (tool results must
+// follow their call on every provider), so it sits BEFORE whatever the model
+// wrote after staging — typically "I staged an approval card; nothing has
+// changed yet." Without this header the model reads the executed result first,
+// then its own claim, and on the next turn "corrects" an accurate statement by
+// saying the write had already run when it said it had not (seen live on a
+// critical_tool_resume turn). The header gives the real timeline and stays
+// inside the tool result, so the outcome keeps its untrusted tool-output
+// provenance rather than becoming a user message.
+//
+// afterTurn is true when the outcome row was written after the staging turn's
+// turn_summary, i.e. after every reply the model wrote in that turn. Otherwise
+// the card was settled while the turn was still running (the user clicked
+// before the turn was persisted), and the model still never saw the outcome.
+func approvalOutcomeNote(afterTurn bool) string {
+	const head = "[Fleet: approval outcome. During your turn this call was only staged for approval: it returned the approval placeholder and did not run. "
+	if afterTurn {
+		return head + "The approval card was settled after that turn ended, so the outcome below arrived after every reply you wrote in that turn. " +
+			"When you said the call was staged or that nothing had changed yet, that was accurate; do not correct it. Outcome recorded when the card was settled:]\n\n"
+	}
+	return head + "The approval card was settled out of band while that turn was still running, and you never saw the outcome during the turn, " +
+		"so what you said then about the call reflected only that it was staged. Outcome recorded when the card was settled:]\n\n"
 }
 
 // selectToolResults runs Pass 1 of replayHistory: it picks the authoritative
@@ -311,6 +345,11 @@ type toolResultSelection struct {
 // common case where the resolution is appended after the placeholder). Pass 2
 // then emits exactly one result per call, paired with the call, regardless of
 // where the rows physically sit.
+//
+// Pairing the outcome with the call puts it before the text the model wrote
+// after staging, so when the call's inline result was the approval placeholder
+// the outcome is marked in settledLate and replay prefixes it with
+// approvalOutcomeNote, which says when it actually arrived.
 func selectToolResults(effective []HistoryEntry) (toolResultSelection, error) {
 	sel := toolResultSelection{
 		chosen:                map[string]ToolResultContent{},
@@ -318,9 +357,14 @@ func selectToolResults(effective []HistoryEntry) (toolResultSelection, error) {
 		chosenOOO:             map[string]bool{},
 		isOutOfBandResolution: map[string]bool{},
 		firstSummaryIdx:       map[string]int{},
+		settledLate:           map[string]string{},
 	}
 	seenCall := map[string]bool{}
 	seenResult := map[string]bool{}
+	// inline is each call's first result written after the call: the one the
+	// model saw in its turn.
+	inline := map[string]ToolResultContent{}
+	inlineIdx := map[string]int{}
 	var pendingSummaryCalls []string
 	for i, e := range effective {
 		switch e.Type {
@@ -344,6 +388,10 @@ func selectToolResults(effective []HistoryEntry) (toolResultSelection, error) {
 			outOfOrder := !seenCall[c.ID]
 			alreadySawResult := seenResult[c.ID]
 			seenResult[c.ID] = true
+			if _, ok := inline[c.ID]; !ok && !outOfOrder {
+				inline[c.ID] = c
+				inlineIdx[c.ID] = i
+			}
 			// Keep the prior choice only when it's out-of-order and this one
 			// isn't; otherwise this result wins.
 			if prevOOO, exists := sel.chosenOOO[c.ID]; exists && prevOOO && !outOfOrder {
@@ -354,6 +402,16 @@ func selectToolResults(effective []HistoryEntry) (toolResultSelection, error) {
 			sel.chosenOOO[c.ID] = outOfOrder
 			sel.isOutOfBandResolution[c.ID] = outOfOrder || alreadySawResult
 		}
+	}
+	for id, res := range sel.chosen {
+		in, ok := inline[id]
+		if !ok || !sel.isOutOfBandResolution[id] || sel.chosenIdx[id] == inlineIdx[id] ||
+			!strings.HasPrefix(in.Text, approvalPlaceholderPrefix) || strings.HasPrefix(res.Text, approvalPlaceholderPrefix) {
+			continue
+		}
+		summaryIdx, ended := sel.firstSummaryIdx[id]
+		afterTurn := ended && !sel.chosenOOO[id] && sel.chosenIdx[id] > summaryIdx
+		sel.settledLate[id] = approvalOutcomeNote(afterTurn)
 	}
 	return sel, nil
 }
@@ -498,11 +556,12 @@ func replayHistory(ctx context.Context, entries []HistoryEntry, uploadsRoot stri
 			if !ok {
 				continue
 			}
+			text := sel.settledLate[tc.ToolCallID] + res.Text
 			var output fantasy.ToolResultOutputContent
 			if res.IsErr {
-				output = fantasy.ToolResultOutputContentError{Error: fmt.Errorf("%s", res.Text)}
+				output = fantasy.ToolResultOutputContentError{Error: fmt.Errorf("%s", text)}
 			} else {
-				output = fantasy.ToolResultOutputContentText{Text: res.Text}
+				output = fantasy.ToolResultOutputContentText{Text: text}
 			}
 			out = append(out, fantasy.Message{
 				Role: fantasy.MessageRoleTool,

@@ -1,3 +1,4 @@
+import { Icon } from "@/app/shared/ui/Icon";
 import { rich } from "@/app/lib/i18n/rich";
 import { t as tr } from "@/app/lib/i18n";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -190,18 +191,7 @@ export function FileUpload({
           className="file-attach-btn"
           onClick={() => inputRef.current?.click()}
         >
-          <svg
-            width="12"
-            height="12"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            aria-hidden="true"
-          >
-            <path d="M21.4 11.1l-8.5 8.5a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 1 1 5.7 5.7l-9.2 9.1a2 2 0 1 1-2.8-2.8l8.5-8.5" />
-          </svg>
+          <Icon name="paperclip" className="size-3 shrink-0" />
           {tr("Attach files")}
         </button>
         <span className="file-attach-hint">

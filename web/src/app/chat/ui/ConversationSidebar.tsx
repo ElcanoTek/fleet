@@ -55,7 +55,7 @@ import type {
 import type { Project } from "./ProjectsModal";
 import { previewNodes, type SearchResult } from "./SearchBar";
 import { isTemporaryChat } from "./deleteAllUnpinnedScope";
-import { HourglassGlyph, ShareGlyph, TeamGlyph, UnarchiveGlyph } from "./ShareGlyphs";
+import { ShareGlyph, TeamGlyph } from "./ShareGlyphs";
 import { teamLinkUrl } from "./teamSharing";
 import { copyText } from "@/app/shared/lib/clipboard";
 import { ChatReorderList } from "./ChatReorderList";
@@ -1161,7 +1161,7 @@ function ConvRow({
             ) : null}
             {temporary ? (
               <span data-testid="temporary-mark" aria-hidden="true" title={temporary}>
-                <HourglassGlyph className="size-3 shrink-0 text-[var(--color-text-muted)]" />
+                <Icon name="hourglass" className="size-3 shrink-0 text-[var(--color-text-muted)]" />
               </span>
             ) : null}
             {patrol ? <PatrolMark /> : null}
@@ -2396,7 +2396,7 @@ visibleProjectTree.map(({ project, chats }) => {
                             void toggleArchive(conversation, false)
                           }
                         >
-                          <UnarchiveGlyph className="size-3.5" />
+                          <Icon name="unarchive" className="size-3.5" />
                         </button>
                         <button
                           type="button"
@@ -3021,7 +3021,7 @@ visibleProjectTree.map(({ project, chats }) => {
                   {unified ? (
                     <Icon name="message" className="size-3 shrink-0 text-[var(--color-accent)]" />
                   ) : (
-                    <HourglassGlyph className="size-3 shrink-0 text-[var(--color-accent)]" />
+                    <Icon name="hourglass" className="size-3 shrink-0 text-[var(--color-accent)]" />
                   )}
                   {unified ? tr("Recent") : tr("Temporary")}
                   {unified ? (

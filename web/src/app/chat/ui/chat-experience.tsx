@@ -35,6 +35,7 @@ import { conversationApiUrl } from "@/app/lib/conversationApiUrl";
 import {
   createSchedule,
   deleteSchedule,
+  listSchedules,
   PatrolApiError,
   runScheduleNow,
   setScheduleAction,
@@ -109,6 +110,7 @@ import {
   formatCountdown,
   liveSchedules,
 } from "./PatrolBanner";
+import { countPatrolBlockingApprovals } from "./PatrolSkippedNote";
 import { PatrolsDialog, type CreatePatrolInput } from "./PatrolsDialog";
 import { readPatrolBarHidden, writePatrolBarHidden } from "./patrolBarPrefs";
 import { ProjectsModal, type Project } from "./ProjectsModal";
@@ -6569,6 +6571,67 @@ export function ChatExperience({
     return () => window.clearInterval(id);
   }, [activeConversationId, activePatrolCount, isStreaming, attachedConvIdsRef]);
 
+  // A scheduled run that cannot start — an approval card waiting on the
+  // owner, say — is skipped without a turn, so nothing streams to this tab
+  // and the poll above sees nothing. Re-read the schedules once the next
+  // active slot has passed, so the bar's countdown moves on and its
+  // "Patrol on hold" note (schedule.skipped) appears, and again just after
+  // the last waiting card is answered, so the note goes.
+  const queuePatrolCallRef = useRef(queuePatrolCall);
+  queuePatrolCallRef.current = queuePatrolCall;
+  const applyScheduleResponseRef = useRef(applyScheduleResponse);
+  applyScheduleResponseRef.current = applyScheduleResponse;
+  const [scheduleRefreshTick, setScheduleRefreshTick] = useState(0);
+  const refreshSchedules = useCallback((convId: string) => {
+    void queuePatrolCallRef.current(convId, () => listSchedules(convId))
+      .then((data) => applyScheduleResponseRef.current(convId, data))
+      .catch(() => {
+        /* Display data: the next slot or a reload tries again. */
+      })
+      .finally(() => setScheduleRefreshTick((n) => n + 1));
+  }, []);
+  const nextPatrolSlotAt = useMemo(() => {
+    let next = 0;
+    for (const s of activeSchedules) {
+      if (s.status !== "active" || !(s.next_run_at > 0)) continue;
+      if (!next || s.next_run_at < next) next = s.next_run_at;
+    }
+    return next;
+  }, [activeSchedules]);
+  useEffect(() => {
+    const convId = activeConversationId;
+    if (!convId || isPendingKey(convId) || !nextPatrolSlotAt) return;
+    // 20s after the slot leaves the scheduler time to settle the fire; a
+    // slot already past (the scheduler is behind) is re-read every minute.
+    const wait = nextPatrolSlotAt * 1000 + 20_000 - Date.now();
+    const id = window.setTimeout(
+      () => refreshSchedules(convId),
+      Math.min(wait > 0 ? wait : 60_000, 2_147_483_647),
+    );
+    return () => window.clearTimeout(id);
+  }, [activeConversationId, nextPatrolSlotAt, scheduleRefreshTick, refreshSchedules]);
+  // Only the cards that hold a patrol count here: an email preview and a
+  // model suggestion never do (store.patrolNonBlockingApprovalTools), so one
+  // left pending must not keep a settled hold's note on screen.
+  const pendingBlockingApprovalCount = useMemo(
+    () => countPatrolBlockingApprovals(messages),
+    [messages],
+  );
+  const prevBlockingApprovalsRef = useRef(pendingBlockingApprovalCount);
+  const anySkipped = activeSchedules.some((s) => s.skipped);
+  useEffect(() => {
+    const prev = prevBlockingApprovalsRef.current;
+    prevBlockingApprovalsRef.current = pendingBlockingApprovalCount;
+    const convId = activeConversationId;
+    if (!convId || isPendingKey(convId) || !anySkipped) return;
+    // Any blocking card answered: the server decides whether a hold remains.
+    if (!(pendingBlockingApprovalCount < prev)) return;
+    // A short delay lets the server record the decision first. Not cleared
+    // on a re-render: the transition happens once, and a late re-read of a
+    // chat's schedules is harmless.
+    window.setTimeout(() => refreshSchedules(convId), 1500);
+  }, [activeConversationId, pendingBlockingApprovalCount, anySkipped, refreshSchedules]);
+
   // Latest-callback refs for the two mount-once effects below. reattachToConv
   // and loadConversation are mutually recursive, so neither can be expressed
   // as a clean declared-before-use useCallback; refreshConversations and
@@ -8429,21 +8492,7 @@ export function ChatExperience({
                     type="button"
                     onClick={jumpToLatest}
                   >
-                    <svg
-                      aria-hidden="true"
-                      viewBox="0 0 20 20"
-                      className="size-4"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="1.8"
-                    >
-                      <path d="M10 4v10" strokeLinecap="round" />
-                      <path
-                        d="m5.5 10.5 4.5 4.5 4.5-4.5"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                    </svg>
+                    <Icon name="arrow-up" className="size-4 rotate-180" />
                   </button>
                 </div>
               ) : null}
