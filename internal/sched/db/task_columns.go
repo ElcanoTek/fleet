@@ -43,6 +43,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/ElcanoTek/fleet/internal/logging"
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
 
@@ -229,7 +230,10 @@ var taskColumnRegistry = []taskColumn{
 		read: true, insert: true, upsert: true, txUpdate: true, export: true,
 		// name joined UpdateTaskTx for import conflict=replace (#1104), the only
 		// tx write path that changes it: every other UpdateTaskTx caller writes
-		// back the value it scanned under the same row lock.
+		// back the value it scanned under the same row lock. It is the import
+		// key tasks are matched by, so it is stored exactly as given; the
+		// free-form columns (prompt, title, description, tags, result,
+		// error_message, output_json) lose U+0000 (internal/pgtext).
 		value:  func(t *models.Task) any { return t.Name },
 		dest:   func(b *taskScanBuf) any { return &b.name },
 		assign: func(b *taskScanBuf, t *models.Task) { t.Name = b.name },
@@ -237,7 +241,7 @@ var taskColumnRegistry = []taskColumn{
 	{
 		name: "prompt",
 		read: true, insert: true, upsert: true, txUpdate: true, export: true,
-		value:  func(t *models.Task) any { return t.Prompt },
+		value:  func(t *models.Task) any { return pgtext.Content(t.Prompt) },
 		dest:   func(b *taskScanBuf) any { return &b.prompt },
 		assign: func(b *taskScanBuf, t *models.Task) { t.Prompt = b.prompt },
 	},
@@ -386,7 +390,7 @@ var taskColumnRegistry = []taskColumn{
 		name: "result",
 		read: true, insert: true, upsert: true, txUpdate: true,
 		noExport: reasonRuntimeState,
-		value:    func(t *models.Task) any { return t.Result },
+		value:    func(t *models.Task) any { return contentPtr(t.Result) },
 		dest:     func(b *taskScanBuf) any { return &b.result },
 		assign: func(b *taskScanBuf, t *models.Task) {
 			if b.result.Valid {
@@ -398,7 +402,7 @@ var taskColumnRegistry = []taskColumn{
 		name: "error_message",
 		read: true, insert: true, upsert: true, txUpdate: true,
 		noExport: reasonRuntimeState,
-		value:    func(t *models.Task) any { return t.ErrorMessage },
+		value:    func(t *models.Task) any { return contentPtr(t.ErrorMessage) },
 		dest:     func(b *taskScanBuf) any { return &b.errorMessage },
 		assign: func(b *taskScanBuf, t *models.Task) {
 			if b.errorMessage.Valid {
@@ -565,14 +569,14 @@ var taskColumnRegistry = []taskColumn{
 	{
 		name: "description",
 		read: true, insert: true, upsert: true, txUpdate: true, export: true,
-		value:  func(t *models.Task) any { return nullableString(t.Description) },
+		value:  func(t *models.Task) any { return nullableString(pgtext.Content(t.Description)) },
 		dest:   func(b *taskScanBuf) any { return &b.description },
 		assign: func(b *taskScanBuf, t *models.Task) { t.Description = b.description.String },
 	},
 	{
 		name: "tags",
 		read: true, insert: true, upsert: true, txUpdate: true, export: true,
-		value: func(t *models.Task) any { return marshalTags(t.Tags) },
+		value: func(t *models.Task) any { return pgtext.JSON(marshalTags(t.Tags)) },
 		dest:  func(b *taskScanBuf) any { return &b.tags },
 		// tags is NOT NULL DEFAULT '[]', so it's always present; assign
 		// unconditionally (unmarshalStringSlice maps ""/"null" → empty safely).
@@ -838,7 +842,7 @@ var taskColumnRegistry = []taskColumn{
 		// output_json IS written post-run via UpdateTask→upsert, like result —
 		// both belong in the upsert (#244).
 		noExport: "run output (#244), not definition",
-		value:    func(t *models.Task) any { return marshalRawJSON(t.OutputJSON) },
+		value:    func(t *models.Task) any { return marshalContentJSON(t.OutputJSON) },
 		dest:     func(b *taskScanBuf) any { return &b.outputJSON },
 		assign:   func(b *taskScanBuf, t *models.Task) { t.OutputJSON = unmarshalRawJSON(b.outputJSON) },
 	},
@@ -1025,7 +1029,7 @@ var taskColumnRegistry = []taskColumn{
 	{
 		name: "title",
 		read: true, insert: true, upsert: true, txUpdate: true, export: true,
-		value:  func(t *models.Task) any { return t.Title },
+		value:  func(t *models.Task) any { return pgtext.Content(t.Title) },
 		dest:   func(b *taskScanBuf) any { return &b.title },
 		assign: func(b *taskScanBuf, t *models.Task) { t.Title = b.title },
 	},

@@ -205,3 +205,54 @@ func TestStaleInvalidOutputDoesNotBlockErrorTransition(t *testing.T) {
 		t.Errorf("status = %s, want error", got.Status)
 	}
 }
+
+// Structured output is cleaned of U+0000 before it is validated, so what is
+// validated is exactly what is stored. Keys that differ only by a trailing
+// \u0000 collapse into one when it is removed, and such an output — valid
+// with the extra keys, invalid once they collapse — is refused instead of
+// being stored with the values the schema forbids.
+func TestStructuredOutputIsValidatedAsStored(t *testing.T) {
+	t.Parallel()
+
+	const schema = `{
+	  "type":"object",
+	  "properties":{
+	    "amount":{"type":"number","maximum":1000},
+	    "status":{"type":"string","enum":["ok","fail"]}
+	  },
+	  "required":["amount","status"]
+	}`
+	const output = `{"amount":5,"amount\u0000":1000000,"status":"ok","status\u0000":"anything"}`
+	store, _ := newTestStore(t)
+	owner := uuid.New()
+	task := &models.Task{
+		ID: uuid.New(), Prompt: "structured task", Status: models.TaskStatusPending,
+		CreatedAt: time.Now().UTC(), OutputSchema: json.RawMessage(schema),
+	}
+	if _, err := store.AddTask(task); err != nil {
+		t.Fatal(err)
+	}
+	leased, err := store.leaseTaskToOwner(task.ID, owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpdateTaskStatusAtomic(leased.ID, owner, &models.StatusUpdate{
+		Status: models.TaskStatusSuccess, OutputJSON: json.RawMessage(output),
+	}); !errors.Is(err, ErrStructuredOutputContract) {
+		t.Errorf("status update with colliding keys: err = %v, want the output contract refusal", err)
+	}
+	if got, _ := store.GetTask(task.ID); got != nil && strings.Contains(string(got.OutputJSON), "1000000") {
+		t.Errorf("stored output %s holds a value the schema forbids", got.OutputJSON)
+	}
+
+	imported := &models.Task{
+		ID: uuid.New(), Prompt: "structured task", Status: models.TaskStatusSuccess,
+		CreatedAt: time.Now().UTC(), OutputSchema: json.RawMessage(schema), OutputJSON: json.RawMessage(output),
+	}
+	if _, err := store.AddTask(imported); !errors.Is(err, ErrStructuredOutputContract) {
+		t.Errorf("add with colliding keys: err = %v, want the output contract refusal", err)
+	}
+	if got, _ := store.GetTask(imported.ID); got != nil && strings.Contains(string(got.OutputJSON), "1000000") {
+		t.Errorf("stored output %s holds a value the schema forbids", got.OutputJSON)
+	}
+}

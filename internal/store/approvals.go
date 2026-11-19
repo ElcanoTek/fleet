@@ -1135,13 +1135,20 @@ func (s *Store) CountUserMessagesAfterTimestamp(ctx context.Context, convID stri
 // note is best-effort; without it the count falls back to messages strictly
 // after the answer's second, which can only leave a same-second message out
 // (a longer cooldown), never count one sent before the answer.
+//
+// content is TEXT holding JSON, and a row whose JSON holds the \u0000
+// sequence cannot be cast to jsonb (22P05). Postgres does not promise to
+// evaluate the other filters first, so the CASE casts only rows without the
+// sequence (CASE evaluates its condition before its result); a row with it is
+// never the note, which leaves the timestamp boundary.
 func (s *Store) CountUserMessagesAfterResolution(ctx context.Context, convID, callID string, resolvedAt int64) (int64, error) {
 	var n int64
 	err := s.db.QueryRowContext(ctx,
 		`WITH note AS (
 		   SELECT MAX(r.id) AS id FROM messages r
 		   WHERE r.conversation_id = $1 AND r.type = 'tool_result'
-		     AND r.created_at >= $3 AND r.content::jsonb->>'id' = $2)
+		     AND r.created_at >= $3
+		     AND CASE WHEN strpos(r.content, '\u0000') = 0 THEN r.content::jsonb->>'id' END = $2)
 		 SELECT COUNT(*) FROM messages m, note
 		 WHERE m.conversation_id = $1 AND m.role = 'user' AND m.type = 'text'
 		   AND CASE WHEN note.id IS NULL THEN m.created_at > $3

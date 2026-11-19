@@ -11,6 +11,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 	"golang.org/x/crypto/bcrypt"
+
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 )
 
 // Querier is what the identity reads and writes need: *sql.DB and *sql.Tx
@@ -315,8 +317,11 @@ func (s *Store) CreateAccount(ctx context.Context, a NewAccount) (*User, error) 
 
 // CreateAccount is Store.CreateAccount on any Querier (a transaction).
 func CreateAccount(ctx context.Context, q Querier, a NewAccount) (*User, error) {
-	a.Email = NormalizeEmail(a.Email)
-	if a.Email == "" {
+	email, ok := pgtext.CheckedEmail(a.Email)
+	if !ok {
+		return nil, inputErr("%s", RefusedEmailMessage)
+	}
+	if a.Email = email; a.Email == "" {
 		return nil, inputErr("email required")
 	}
 	if a.Role == "" {
@@ -360,8 +365,11 @@ func CreateAccount(ctx context.Context, q Querier, a NewAccount) (*User, error) 
 // and re-enabling it when it is disabled. It is the FLEET_ORCHESTRATOR_
 // BOOTSTRAP_ADMINS boot seed: config-authoritative and idempotent.
 func (s *Store) EnsureAdmin(ctx context.Context, email string) error {
-	email = NormalizeEmail(email)
-	if email == "" {
+	checked, ok := pgtext.CheckedEmail(email)
+	if !ok {
+		return inputErr("bootstrap admin %q: %s", email, RefusedEmailMessage)
+	}
+	if email = checked; email == "" {
 		return nil
 	}
 	now := time.Now().Unix()

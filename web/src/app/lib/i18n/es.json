@@ -4656,6 +4656,7 @@
   "invalid trigger slug {0}": "Slug de activador no válido: {0}",
   "invalid unshared_paths": "unshared_paths no válido",
   "invalid url: {0}": "URL no válida: {0}",
+  "invalid user identity": "Identidad de usuario no válida",
   "is a check the assistant runs on a schedule, using your connected tools. Each patrol has its own chat, and every run reports back there with what it found, what it recommends, and — if you let it — what it already fixed.": "es una comprobación que el asistente ejecuta según un horario con tus herramientas conectadas. Cada patrulla tiene su propio chat, donde cada ejecución informa de lo que ha encontrado, lo que recomienda y, si se lo permites, lo que ya ha solucionado.",
   "is armed, but its first check could not start right now — press": "está activada, pero su primera comprobación no ha podido empezar ahora; pulsa",
   "is armed. We couldn’t confirm its first check started — open the chat to see whether it is running before you press": "está activada. No hemos podido confirmar si ha empezado su primera comprobación; abre el chat para ver si se está ejecutando antes de pulsar",

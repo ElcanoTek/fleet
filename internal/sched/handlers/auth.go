@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/identity"
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
 
@@ -42,7 +43,13 @@ func (h *Handlers) CreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	username := identity.NormalizeEmail(req.Username)
+	// Checked as sent, then lowercased (pgtext.CheckedEmail): a look-alike
+	// would otherwise name, and promote, the ASCII account it lowercases to.
+	username, ok := pgtext.CheckedEmail(req.Username)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid user identity")
+		return
+	}
 	if len(username) < 3 || len(username) > 64 {
 		writeError(w, http.StatusBadRequest, "Username must be between 3 and 64 characters")
 		return
@@ -53,8 +60,8 @@ func (h *Handlers) CreateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	// Judge the parsed grant, not the raw string: "none" (in either
 	// vocabulary) is no access and has no place on a create.
-	scope, admin, ok := identity.ParseOpsRole(req.Role)
-	if !ok || (!admin && scope == identity.OpsNone) {
+	scope, admin, roleOK := identity.ParseOpsRole(req.Role)
+	if !roleOK || (!admin && scope == identity.OpsNone) {
 		writeError(w, http.StatusBadRequest, "Invalid role. Must be one of: admin, client, readonly")
 		return
 	}
@@ -77,6 +84,10 @@ func (h *Handlers) CreateUser(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusConflict, "Username already exists")
 			return
 		}
+	}
+	if identity.IsInputError(err) {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
 	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Failed to create user")

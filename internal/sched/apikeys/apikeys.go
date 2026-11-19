@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/logging"
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
 
@@ -525,7 +526,14 @@ func (m *Manager) CreateTypedKey(ctx context.Context, name string, kt KeyType, a
 // turns are limited as its person's are, by the chat's per-user limiter
 // (FLEET_CHAT_RATE_LIMIT_ENABLED, CHAT_RATE_PER_MIN, CHAT_RATE_PER_DAY).
 func (m *Manager) CreateUserKey(ctx context.Context, name, email string, rateLimit int, expiresInDays *int, description string) (*APIKey, string, error) {
-	email = strings.ToLower(strings.TrimSpace(email))
+	// Checked as given, then lowercased (pgtext.CheckedEmail): the key acts as
+	// this account on every request, so a look-alike must not become the
+	// ASCII address it lowercases to.
+	checked, ok := pgtext.CheckedEmail(email)
+	if !ok {
+		return nil, "", fmt.Errorf("a user key's email has a character an address may not hold")
+	}
+	email = checked
 	if email == "" || !strings.Contains(email, "@") {
 		return nil, "", fmt.Errorf("a user key needs the email of the account it acts as")
 	}

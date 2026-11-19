@@ -15,6 +15,7 @@ import (
 	"github.com/goccy/go-yaml"
 	"github.com/google/uuid"
 
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
 )
@@ -353,7 +354,7 @@ func createTaskFromRecordCLI(ctx context.Context, st definitionStore, rec models
 // package (which pulls in net/http + the full mux); the structural checks are
 // identical and small.
 func validateExportRecordCLI(rec models.TaskExportRecord) error {
-	if strings.TrimSpace(rec.Prompt) == "" {
+	if strings.TrimSpace(pgtext.Content(rec.Prompt)) == "" { // as it will be stored
 		return errors.New("prompt is required")
 	}
 	if err := models.ValidateExecutionRequirements(rec.Prompt); err != nil {

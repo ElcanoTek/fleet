@@ -16,6 +16,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/ElcanoTek/fleet/internal/logging"
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/webhooks"
@@ -215,7 +216,7 @@ func senderApproved(from string, approved []string) bool {
 		domain = addr[at+1:]
 	}
 	for _, entry := range approved {
-		e := strings.ToLower(strings.TrimSpace(entry))
+		e := pgtext.EmailKey(entry) // a look-alike entry stays as written: it matches no checked sender
 		if e == "" {
 			continue
 		}
@@ -255,12 +256,16 @@ func attachmentsExceedLimits(policy *models.EmailTriggerPolicy, atts []InboundAt
 
 // emailAddress extracts the bare, lowercased address from a From value that may
 // be "Name <addr@domain>". Falls back to the trimmed lowercased input when the
-// value does not parse.
+// value does not parse. An address pgtext.CheckedEmail refuses (checked as
+// sent, before lowercasing could turn a look-alike into an approved ASCII
+// address) yields "", which matches no approved sender.
 func emailAddress(from string) string {
-	if a, err := mail.ParseAddress(strings.TrimSpace(from)); err == nil {
-		return strings.ToLower(strings.TrimSpace(a.Address))
+	addr := strings.TrimSpace(from)
+	if a, err := mail.ParseAddress(addr); err == nil {
+		addr = a.Address
 	}
-	return strings.ToLower(strings.TrimSpace(from))
+	email, _ := pgtext.CheckedEmail(addr)
+	return email
 }
 
 // emailIdempotencyKey is the dedup key: the Message-ID when present, else a

@@ -22,6 +22,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/metrics"
 	"github.com/ElcanoTek/fleet/internal/migrations"
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/sched/db"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
@@ -202,7 +203,10 @@ func validateStoredOutputContract(task *models.Task) error {
 		if len(task.OutputSchema) == 0 {
 			return fmt.Errorf("%w: output_json requires output_schema", ErrStructuredOutputContract)
 		}
-		validated, err := structuredoutput.ValidateOutput(string(task.OutputJSON), task.OutputSchema)
+		// Cleaned before validation (pgtext.JSON), so what is validated is
+		// exactly what is stored: removing U+0000 afterwards could change the
+		// object's meaning (a key "amount\u0000" would collapse onto "amount").
+		validated, err := structuredoutput.ValidateOutput(pgtext.JSON(string(task.OutputJSON)), task.OutputSchema)
 		if err != nil {
 			return fmt.Errorf("%w: output_json: %w", ErrStructuredOutputContract, err)
 		}
@@ -318,7 +322,9 @@ func (s *Storage) EnqueueTask(ctx context.Context, tc models.TaskCreate) (uuid.U
 // a create path that drops the creator strands the human who asked for the task
 // — they can no longer read its transcript unless they are an admin.
 func (s *Storage) EnqueueTaskAs(ctx context.Context, tc models.TaskCreate, createdBy *uuid.UUID) (uuid.UUID, string, time.Time, error) {
-	tc.Prompt = strings.TrimSpace(tc.Prompt)
+	// Content loses U+0000 before any check (see validateTaskCreate).
+	tc.Prompt = strings.TrimSpace(pgtext.Content(tc.Prompt))
+	tc.Title, tc.Description = pgtext.Content(tc.Title), pgtext.Content(tc.Description)
 	if tc.Prompt == "" {
 		return uuid.Nil, "", time.Time{}, fmt.Errorf("prompt is required")
 	}
@@ -1009,6 +1015,9 @@ func TaskEditFromTask(t *models.Task) TaskEdit {
 // so an edit can never move a gated task (or a webhook template) off the
 // scheduler path. Returns ErrTaskNotEditable if no longer editable.
 func (s *Storage) UpdateEditableTask(ctx context.Context, taskID uuid.UUID, edit TaskEdit) (*models.Task, error) {
+	// Content loses U+0000 before any check (see validateTaskCreate).
+	edit.Prompt = pgtext.Content(edit.Prompt)
+	edit.Title, edit.Description = pgtext.Content(edit.Title), pgtext.Content(edit.Description)
 	// The same malformed-requirements check as create (#1601): an approved
 	// manage_tasks prompt edit reaches this seam without the HTTP handler.
 	if err := models.ValidateExecutionRequirements(edit.Prompt); err != nil {
@@ -1576,7 +1585,8 @@ func (s *Storage) UpdateTaskStatusAtomicWithContext(ctx context.Context, taskID 
 		if len(task.OutputSchema) == 0 {
 			return nil, fmt.Errorf("%w: output_json requires output_schema", ErrStructuredOutputContract)
 		}
-		validated, validationErr := structuredoutput.ValidateOutput(string(update.OutputJSON), task.OutputSchema)
+		// Cleaned before validation, as in validateStoredOutputContract.
+		validated, validationErr := structuredoutput.ValidateOutput(pgtext.JSON(string(update.OutputJSON)), task.OutputSchema)
 		if validationErr != nil {
 			return nil, fmt.Errorf("%w: output_json: %w", ErrStructuredOutputContract, validationErr)
 		}
@@ -1967,7 +1977,9 @@ func (s *Storage) ReplayDeadLetteredTaskWithPrompt(ctx context.Context, taskID u
 	if task.Status != models.TaskStatusDeadLettered {
 		return nil, ErrTaskNotDeadLettered
 	}
-	if replacement := strings.TrimSpace(prompt); replacement != "" {
+	// Judged as it will be stored, without U+0000: a replacement of nothing
+	// but 0x00 bytes keeps the task's prompt.
+	if replacement := strings.TrimSpace(pgtext.Content(prompt)); replacement != "" {
 		task.Prompt = replacement
 	}
 	if verr := models.ValidateExecutionRequirements(task.Prompt); verr != nil {

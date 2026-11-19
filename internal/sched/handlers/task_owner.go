@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/ElcanoTek/fleet/internal/logging"
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
@@ -157,6 +158,11 @@ func (h *Handlers) SetTaskOwner(w http.ResponseWriter, r *http.Request) {
 // lowercased (provisioned usernames are lowercased emails). nil, nil = no such
 // user.
 func (h *Handlers) lookupTaskOwner(ctx context.Context, username string) (*models.User, error) {
+	// A name pgtext.CheckedEmail refuses names no user: lowercasing it could
+	// otherwise find the ASCII account a look-alike lowercases to.
+	if _, ok := pgtext.CheckedEmail(username); !ok {
+		return nil, nil
+	}
 	candidates := []string{username}
 	if lower := strings.ToLower(username); lower != username {
 		candidates = append(candidates, lower)

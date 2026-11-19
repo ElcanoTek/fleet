@@ -32,10 +32,11 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 )
 
 // Role is a person's one Fleet role.
@@ -201,8 +202,14 @@ func IsInputError(err error) bool {
 }
 
 // NormalizeEmail lowercases and trims an email (or a legacy sched username):
-// every key into core.users goes through it.
-func NormalizeEmail(e string) string { return strings.ToLower(strings.TrimSpace(e)) }
+// every key into core.users goes through it. A value holding a look-alike of
+// an ASCII letter is only trimmed (pgtext.EmailKey), so it can never become
+// the key of another, ASCII account.
+func NormalizeEmail(e string) string { return pgtext.EmailKey(e) }
+
+// RefusedEmailMessage is the input error an email gets that pgtext.CheckedEmail
+// refuses where it enters.
+const RefusedEmailMessage = "email has a character an address may not hold: a control or format character, or a look-alike of an ASCII letter"
 
 // SessionEpochBytes is how much of the digest makes up a session epoch
 // (store.sessionEpochFor is the Go side of the same derivation).

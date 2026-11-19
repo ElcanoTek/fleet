@@ -122,6 +122,21 @@ func TestValidateIDToken(t *testing.T) {
 			t.Errorf("%s: got %q", name, r)
 		}
 	}
+	// An email or subject claim holding a control character names no account:
+	// refused with a reason before the account or its session generation is
+	// looked up with it.
+	for _, ctl := range []string{"\x00", "\x01", "\x1f", "\x7f", "\u200b", "\u212a", "\u017f"} {
+		c := base()
+		c["email"] = "alice@example.com" + ctl
+		if _, _, r := validateIDToken(c, cfg, doc, "n1", now); r != "email claim has a refused character" {
+			t.Errorf("email with %q: got %q", ctl, r)
+		}
+		c = base()
+		c["sub"] = "s1" + ctl
+		if _, _, r := validateIDToken(c, cfg, doc, "n1", now); r != "subject claim has a refused character" {
+			t.Errorf("subject with %q: got %q", ctl, r)
+		}
+	}
 	if _, _, r := validateIDToken(decodeJWTClaims("not.a"), cfg, doc, "n1", now); r != "unparseable id_token" {
 		t.Fatalf("%q", r)
 	}

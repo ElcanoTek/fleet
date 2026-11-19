@@ -64,3 +64,43 @@ func TestCountUserMessagesAfterResolution_SameSecond(t *testing.T) {
 		t.Errorf("count without a note = %d (err %v), want 1 (a later-second message counts)", n, err)
 	}
 }
+
+// message content is TEXT holding JSON, and a tool_result row whose JSON holds
+// the \u0000 sequence cannot be cast to jsonb. Such a row in the window does
+// not fail the count: the query casts only rows without the sequence, so the
+// answer's own note is still found, and a note holding the sequence leaves the
+// timestamp boundary.
+func TestCountUserMessagesAfterResolution_RowWithNULSequence(t *testing.T) {
+	t.Parallel()
+
+	s := newTestStore(t)
+	ctx := context.Background()
+	conv, err := s.CreateConversation(ctx, "alice@x.com", "t", "victoria", "m-1", false)
+	if err != nil {
+		t.Fatalf("CreateConversation: %v", err)
+	}
+	result := func(content string) agent.HistoryEntry {
+		return agent.HistoryEntry{Role: "tool", Type: "tool_result", Content: []byte(content)}
+	}
+	user := agent.HistoryEntry{Role: "user", Type: "text", Content: []byte(`{"text":"after"}`)}
+	resolvedAt := time.Now().Unix()
+	for _, batch := range [][]agent.HistoryEntry{
+		{result(`{"id":"call_other","text":"a\u0000b"}`)},
+		{result(`{"id":"call_1","name":"suggest_advanced_model","text":"dismissed"}`)},
+		{result(`{"id":"call_2","text":"x\u0000"}`)},
+		{user},
+	} {
+		if _, err := s.AppendHistory(ctx, conv.ID, batch); err != nil {
+			t.Fatalf("AppendHistory: %v", err)
+		}
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE messages SET created_at = $1 WHERE conversation_id = $2`, resolvedAt, conv.ID); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := s.CountUserMessagesAfterResolution(ctx, conv.ID, "call_1", resolvedAt); err != nil || n != 1 {
+		t.Fatalf("count after call_1 = %d, %v; want 1", n, err)
+	}
+	if n, err := s.CountUserMessagesAfterResolution(ctx, conv.ID, "call_2", resolvedAt); err != nil || n != 0 {
+		t.Fatalf("count after call_2 (note holds the sequence) = %d, %v; want 0 (the timestamp boundary)", n, err)
+	}
+}

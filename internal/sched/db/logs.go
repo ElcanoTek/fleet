@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
 
@@ -43,7 +44,8 @@ func archiveSupersededLog(ctx context.Context, tx *sql.Tx, taskID uuid.UUID) err
 // upsert would clobber (per-attempt history), then write the new payload live
 // (plaintext JSON in session_data); the archival columns are reset so a
 // re-write of a previously archived row returns it to the live, uncompressed
-// state.
+// state. The transcript is model-written content bound for jsonb, so it loses
+// U+0000 and the \u0000 sequence jsonb refuses (pgtext.JSON).
 func (db *Database) upsertLog(ctx context.Context, taskID uuid.UUID, sessionJSON []byte) error {
 	tx, err := db.conn.BeginTx(ctx, nil)
 	if err != nil {
@@ -61,7 +63,7 @@ func (db *Database) upsertLog(ctx context.Context, taskID uuid.UUID, sessionJSON
 			session_data = EXCLUDED.session_data,
 			session_data_gz = NULL,
 			session_compression = NULL`,
-		taskID, string(sessionJSON)); err != nil {
+		taskID, pgtext.JSON(string(sessionJSON))); err != nil {
 		return err
 	}
 	return tx.Commit()

@@ -24,6 +24,14 @@ func TestBootstrapAdmins(t *testing.T) {
 			want: []string{"a@x.com", "b@x.com"},
 		},
 		{
+			// U+212A KELVIN SIGN lowercases to k; such an entry is kept as
+			// written so EnsureAdmin refuses it (and the boot stops) instead
+			// of promoting kate@x.com.
+			name: "a refused entry is not lowercased",
+			raw:  "kate@x.com,\u212aate@x.com",
+			want: []string{"kate@x.com", "\u212aate@x.com"},
+		},
+		{
 			name: "dedupes case-insensitively, keeps first-seen order",
 			raw:  "lead@x.com,A@x.com,a@x.com,LEAD@x.com",
 			want: []string{"lead@x.com", "a@x.com"},

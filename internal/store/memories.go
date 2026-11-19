@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 )
 
 const maxMemoryContentRunes = 4000
@@ -82,8 +84,11 @@ func scanMemory(scanner interface{ Scan(...any) error }) (*Memory, error) {
 	return &m, nil
 }
 
+// normalizeMemoryContent is the one shaping of memory content every memory
+// writer applies (personal, proposed, project): trimmed, capped, and without
+// U+0000 (pgtext.Content).
 func normalizeMemoryContent(content string) string {
-	content = strings.TrimSpace(content)
+	content = strings.TrimSpace(pgtext.Content(content))
 	if content == "" {
 		return ""
 	}

@@ -98,7 +98,7 @@ there) and [`../.agents/skills/steward/SKILL.md`](../.agents/skills/steward/SKIL
 - **Reading auth facts from the spec** (`x-fleet-permission` per operation,
   `x-fleet-api-version`, `x-fleet-key-types`, the tests that pin them, and the
   manifest contract-checker fact → spec-path map): [`docs/MANIFEST-CONTRACT.md`](MANIFEST-CONTRACT.md)
-- **One database** (both stores in one Postgres database, one schema each; the two-database layout and `fleet db consolidate` were removed): [`docs/ONE-DATABASE.md`](ONE-DATABASE.md) + [ADR-0098](adr/0098-one-database-two-schemas.md)
+- **One database** (both stores in one Postgres database, one schema each; the two-database layout and `fleet db consolidate` were removed; which stored text loses U+0000 and which keys never change): [`docs/ONE-DATABASE.md`](ONE-DATABASE.md) + [ADR-0098](adr/0098-one-database-two-schemas.md)
 - **Links that survive sign-in** (a signed-out or expired visitor's link —
   `/chat?draft=…`, a team or task link, any page — parked in a `__Host-`
   cookie and redeemed on the landing every sign-in leg ends on; the

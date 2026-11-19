@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 )
 
 // Handing a chat to another person (docs/CHAT-TRANSFER.md).
@@ -52,8 +54,9 @@ type ConversationTransfer struct {
 // reconciles them (and any running turn) with the chat's new, private
 // audience. The target must be an enabled, non-viewer account.
 func (s *Store) TransferConversation(ctx context.Context, ownerEmail, convID, toEmail string) (*ConversationTransfer, error) {
-	from, to := normalizeEmail(ownerEmail), normalizeEmail(toEmail)
-	if to == "" || to == from {
+	from := normalizeEmail(ownerEmail)
+	to, ok := pgtext.CheckedEmail(toEmail) // the target is an identity entering here
+	if !ok || to == "" || to == from {
 		return nil, ErrTransferTarget
 	}
 	now := time.Now().Unix()

@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 )
 
 // User-authored personas (docs/USER-PERSONAS.md). DB-owned and per-user: a
@@ -140,12 +141,15 @@ func ValidUserPersonaName(name string) bool {
 }
 
 // normalizeUserPersonaInput trims and validates in, filling the defaults.
-// name is validated separately by the callers that set it.
+// name is validated separately by the callers that set it. The free-form
+// fields — display name, description, instructions, each patrol's title and
+// prompt — lose U+0000 (pgtext.Content); name, base persona, kind, autonomy,
+// cron and timezone are keys or fixed values and are validated as given.
 func normalizeUserPersonaInput(in UserPersonaInput) (UserPersonaInput, error) {
 	in.Name = strings.TrimSpace(in.Name)
-	in.DisplayName = strings.TrimSpace(in.DisplayName)
-	in.Description = strings.TrimSpace(in.Description)
-	in.Instructions = strings.TrimSpace(in.Instructions)
+	in.DisplayName = strings.TrimSpace(pgtext.Content(in.DisplayName))
+	in.Description = strings.TrimSpace(pgtext.Content(in.Description))
+	in.Instructions = strings.TrimSpace(pgtext.Content(in.Instructions))
 	in.BasePersona = strings.TrimSpace(in.BasePersona)
 	in.Kind = strings.TrimSpace(in.Kind)
 	in.Autonomy = strings.TrimSpace(in.Autonomy)
@@ -184,8 +188,8 @@ func normalizeUserPersonaInput(in UserPersonaInput) (UserPersonaInput, error) {
 	}
 	patrols := make([]UserPersonaPatrol, 0, len(in.Patrols))
 	for i, p := range in.Patrols {
-		p.Title = strings.TrimSpace(p.Title)
-		p.Prompt = strings.TrimSpace(p.Prompt)
+		p.Title = strings.TrimSpace(pgtext.Content(p.Title))
+		p.Prompt = strings.TrimSpace(pgtext.Content(p.Prompt))
 		p.Timezone = strings.TrimSpace(p.Timezone)
 		if p.Timezone == "" {
 			p.Timezone = userPersonaDefaultPatrolZone

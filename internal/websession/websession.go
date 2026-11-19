@@ -33,6 +33,8 @@ import (
 	"encoding/json"
 	"strings"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 )
 
 // CookieName is the HMAC session cookie fleet mints.
@@ -204,7 +206,9 @@ const errNoSecret = sentinelError("websession: APP_SESSION_SECRET is not configu
 //     signed for fourteen days flat; it is not grandfathered;
 //   - no epoch claim: the cookie predates per-user revocation and nothing
 //     downstream could check it (chat-server admits a request with no claim);
-//   - an oidc source without issuer and subject, or an unknown source.
+//   - an oidc source without issuer and subject, or an unknown source;
+//   - an email, issuer or subject pgtext.ValidIdentity refuses, which names
+//     no account.
 func (h *HMAC) Verify(token string) *Session {
 	if !h.Configured() || token == "" {
 		return nil
@@ -236,7 +240,7 @@ func (h *HMAC) Verify(token string) *Session {
 	now := float64(h.now().UnixMilli())
 	email, _ := claims["email"].(string)
 	exp, expOK := claims["exp"].(float64)
-	if email == "" || !expOK || exp*1000 < now {
+	if email == "" || !pgtext.ValidIdentity(email) || !expOK || exp*1000 < now {
 		return nil
 	}
 	idle, idleOK := claims["idle"].(float64)
@@ -258,7 +262,7 @@ func (h *HMAC) Verify(token string) *Session {
 		case src == "" || src == string(SourcePassword):
 			// "" is falsy in the TS check: treated as a password session.
 		case src == string(SourceOIDC):
-			if issuer == "" || subject == "" {
+			if issuer == "" || subject == "" || !pgtext.ValidIdentity(issuer) || !pgtext.ValidIdentity(subject) {
 				return nil
 			}
 			source = SourceOIDC
@@ -306,8 +310,9 @@ type elcanoPayload struct {
 // VerifyElcanoToken verifies a base64url(payloadJSON).base64url(ed25519Sig)
 // token against pub. The signature covers the base64url-encoded body STRING
 // (not the raw JSON), mirroring the auth service byte-for-byte. Returns nil on
-// any failure (bad key, encoding, signature, expiry, or missing email). The
-// email is lowercased: every downstream scope keys off the lowercase form.
+// any failure (bad key, encoding, signature, expiry, a missing email, or an
+// email or tenant holding a control character). The email is lowercased:
+// every downstream scope keys off the lowercase form.
 func VerifyElcanoToken(pub ed25519.PublicKey, token string) *ElcanoClaims {
 	return verifyElcanoAt(pub, token, time.Now())
 }
@@ -337,10 +342,12 @@ func verifyElcanoAt(pub ed25519.PublicKey, token string, now time.Time) *ElcanoC
 	if err := json.Unmarshal(raw, &c); err != nil {
 		return nil
 	}
-	if c.Email == "" || c.Exp <= now.Unix() {
+	// An identity internal/pgtext refuses names no account: no session.
+	email, ok := pgtext.CheckedEmail(c.Email)
+	if !ok || email == "" || !pgtext.ValidIdentity(c.Tenant) || c.Exp <= now.Unix() {
 		return nil
 	}
-	return &ElcanoClaims{Email: strings.ToLower(c.Email), Tenant: c.Tenant, Exp: c.Exp}
+	return &ElcanoClaims{Email: email, Tenant: c.Tenant, Exp: c.Exp}
 }
 
 // Resolver turns a request's cookies into a session: the HMAC cookie wins when

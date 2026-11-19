@@ -134,6 +134,21 @@ func TestResolve(t *testing.T) {
 			t.Fatalf("err = %v", err)
 		}
 	})
+	t.Run("an identity holding a control character is refused without a lookup", func(t *testing.T) {
+		for _, ctl := range []string{"\x00", "\x01", "\x1f", "\x7f", "\u200b", "\u212a", "\u017f"} {
+			before := dir.lookups
+			if _, _, err := Resolve(ctx, dir, Principal{Email: "a@x.com" + ctl, AuthMethod: MethodSession}, Enabled); !errors.Is(err, ErrNoIdentity) {
+				t.Fatalf("email with %q: err = %v", ctl, err)
+			}
+			if dir.lookups != before {
+				t.Fatalf("email with %q was looked up", ctl)
+			}
+			oidc := Principal{Email: "a@x.com", AuthMethod: MethodSession, Session: Session{Epoch: "ext-live", Source: SourceOIDC, Issuer: "https://auth", Subject: "sub-1" + ctl}}
+			if _, _, err := Resolve(ctx, dir, oidc, Enabled); !errors.Is(err, ErrSessionRevoked) {
+				t.Fatalf("subject with %q: err = %v", ctl, err)
+			}
+		}
+	})
 	t.Run("only a session principal carries a claim", func(t *testing.T) {
 		// A gateway leg or a key never had a cookie to revoke.
 		p := Principal{Email: "a@x.com", AuthMethod: MethodGateway, Session: Session{Epoch: "stale"}}

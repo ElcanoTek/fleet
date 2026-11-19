@@ -248,6 +248,12 @@ type RecoveredTurn struct {
 // repeated recovery (crash during recovery, double boot) a no-op. The entry
 // list is a deterministic function of the two ledgers.
 //
+// A turn whose recovery fails is skipped, not fatal: it stays 'running' for
+// the next boot, so do the later turns of its conversation, and the turns of
+// other conversations are still recovered (until ctx ends).
+// The returned error joins the per-turn failures, each naming its turn,
+// alongside the recovered turns; the caller logs it.
+//
 // Superseded (and removed) the old MarkRunningTurnsErrored startup path,
 // which flipped status but reconstructed nothing — the "answer disappears on
 // reload" path this issue closes.
@@ -332,15 +338,34 @@ func (s *Store) RecoverStrandedTurns(ctx context.Context) ([]RecoveredTurn, erro
 		_ = eRows.Close()
 	}
 
+	// One turn that cannot be recovered must not strand the rest: it stays
+	// 'running' (its transaction rolled back) for the next boot to retry, its
+	// error is collected, and recovery moves on to other conversations. The
+	// later turns of ITS conversation wait too: recovered now, a later turn
+	// would be newer traffic, and the earlier one would then be closed on the
+	// next boot without its journaled tool calls projected (the stale-turn
+	// guard in recoverOneTurn).
 	var out []RecoveredTurn
+	var failed []error
+	blocked := map[string]string{} // conversation → the turn that failed
 	for _, t := range todo {
+		if err := ctx.Err(); err != nil {
+			failed = append(failed, fmt.Errorf("stopped before turn %s: %w", t.turnID, err))
+			break
+		}
+		if first, ok := blocked[t.convID]; ok {
+			failed = append(failed, fmt.Errorf("turn %s waits for the next boot: earlier turn %s of its conversation was not recovered", t.turnID, first))
+			continue
+		}
 		rec, err := s.recoverOneTurn(ctx, t.turnID, t.convID, journalMap[t.turnID], eventsMap[t.turnID])
 		if err != nil {
-			return out, fmt.Errorf("recover turn %s: %w", t.turnID, err)
+			failed = append(failed, fmt.Errorf("recover turn %s: %w", t.turnID, err))
+			blocked[t.convID] = t.turnID
+			continue
 		}
 		out = append(out, rec)
 	}
-	return out, nil
+	return out, errors.Join(failed...)
 }
 
 func (s *Store) recoverOneTurn(ctx context.Context, turnID, convID string, journal []TurnJournalRow, events []TurnEvent) (RecoveredTurn, error) {

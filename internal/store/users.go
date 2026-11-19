@@ -18,6 +18,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/ElcanoTek/fleet/internal/identity"
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 )
 
 // User is a provisioned operator-added account. Passwords live here as
@@ -136,12 +137,18 @@ var ErrUserExists = errors.New("already exists")
 // ErrBadPassword is returned by VerifyUser when the hash check fails.
 var ErrBadPassword = errors.New("bad password")
 
+// errEmailControl refuses an email pgtext.CheckedEmail refuses: it would name
+// no account anyone can sign in as.
+const errEmailControl = identity.RefusedEmailMessage
+
 // normalizeEmail lowercases + trims whitespace. Case-insensitive
 // uniqueness is enforced at the app layer: every email goes through
 // this function before hitting the DB, so the plain TEXT PRIMARY KEY
-// is sufficient without depending on the CITEXT extension.
+// is sufficient without depending on the CITEXT extension. A value holding
+// a look-alike of an ASCII letter is only trimmed (pgtext.EmailKey), so a
+// lookup or write with it can never name another, ASCII account.
 func normalizeEmail(e string) string {
-	return strings.ToLower(strings.TrimSpace(e))
+	return pgtext.EmailKey(e)
 }
 
 // pgUniqueViolation reports whether err wraps a Postgres unique-
@@ -153,7 +160,10 @@ func pgUniqueViolation(err error) bool {
 
 // CreateUser inserts a new user. Errors if the email already exists.
 func (s *Store) CreateUser(ctx context.Context, email, plainPassword string) (*User, error) {
-	email = normalizeEmail(email)
+	email, ok := pgtext.CheckedEmail(email)
+	if !ok {
+		return nil, errInput(errEmailControl)
+	}
 	if email == "" {
 		return nil, errInput("email required")
 	}
@@ -983,25 +993,29 @@ func (s *Store) DeleteUser(ctx context.Context, email string) error {
 	// in other users' multiplayer conversations so a later account
 	// re-provisioned with the same email never inherits them.
 	mcpPrefix := MultiplayerMCPAccountPrefix(email)
+	// A list stored with the \u0000 sequence (an entry from before
+	// participants were checked) cannot be cast to jsonb, so the statement
+	// leaves such a list alone and scrubMultiplayerListsInGo removes the
+	// account from it below.
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE conversations
-		   SET multiplayer_participants = COALESCE((
+		   SET multiplayer_participants = CASE WHEN strpos(multiplayer_participants, '\u0000') = 0 THEN COALESCE((
 		         SELECT jsonb_agg(elem)
 		           FROM jsonb_array_elements_text(multiplayer_participants::jsonb) AS elem
 		          WHERE lower(elem) <> $1
-		       ), '[]'::jsonb)::text,
-		       multiplayer_excluded = COALESCE((
+		       ), '[]'::jsonb)::text ELSE multiplayer_participants END,
+		       multiplayer_excluded = CASE WHEN strpos(multiplayer_excluded, '\u0000') = 0 THEN COALESCE((
 		         SELECT jsonb_agg(elem)
 		           FROM jsonb_array_elements_text(multiplayer_excluded::jsonb) AS elem
 		          WHERE lower(elem) <> $1
-		       ), '[]'::jsonb)::text,
+		       ), '[]'::jsonb)::text ELSE multiplayer_excluded END,
 		       mcp_accounts = COALESCE((
 		         SELECT jsonb_object_agg(key, value)
 		           FROM jsonb_each(mcp_accounts)
 		          WHERE left(key, length($2)) <> $2
 		       ), '{}'::jsonb)
-		 WHERE (multiplayer_participants::jsonb ? $1)
-		    OR (multiplayer_excluded::jsonb ? $1)
+		 WHERE COALESCE(CASE WHEN strpos(multiplayer_participants, '\u0000') = 0 THEN multiplayer_participants::jsonb ? $1 END, FALSE)
+		    OR COALESCE(CASE WHEN strpos(multiplayer_excluded, '\u0000') = 0 THEN multiplayer_excluded::jsonb ? $1 END, FALSE)
 		    OR EXISTS (
 		         SELECT 1
 		           FROM jsonb_object_keys(mcp_accounts) AS k
@@ -1009,6 +1023,9 @@ func (s *Store) DeleteUser(ctx context.Context, email string) error {
 		       )`,
 		email, mcpPrefix,
 	); err != nil {
+		return fmt.Errorf("scrub multiplayer references: %w", err)
+	}
+	if err := scrubMultiplayerListsInGo(ctx, tx, email); err != nil {
 		return fmt.Errorf("scrub multiplayer references: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx,

@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/ElcanoTek/fleet/internal/logging"
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
 
@@ -451,7 +452,7 @@ func (h *Handlers) replaceTaskByName(r *http.Request, rec models.TaskExportRecor
 // structural checks up front keeps a bad payload from producing a partial
 // import plan.
 func validateExportRecord(rec models.TaskExportRecord) error {
-	if strings.TrimSpace(rec.Prompt) == "" {
+	if strings.TrimSpace(pgtext.Content(rec.Prompt)) == "" { // as it will be stored
 		return fmt.Errorf("prompt is required")
 	}
 	// Structural like the rest of this pass, so a dry run reports a malformed

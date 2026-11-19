@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/ElcanoTek/fleet/internal/identity"
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 	"github.com/ElcanoTek/fleet/internal/sched/apikeys"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
 )
@@ -105,7 +106,10 @@ func schedUserAdd(argv []string) int {
 	if err := fs.Parse(flagArgs); err != nil {
 		return 1
 	}
-	username = identity.NormalizeEmail(username)
+	username, ok := pgtext.CheckedEmail(username) // checked as typed, then lowercased
+	if !ok {
+		return errf(1, "%s", identity.RefusedEmailMessage)
+	}
 	if len(username) < 3 || len(username) > 64 {
 		return errf(1, "username must be 3-64 characters")
 	}

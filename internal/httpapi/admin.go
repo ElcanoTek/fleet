@@ -16,6 +16,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/identity"
 	"github.com/ElcanoTek/fleet/internal/logging"
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
@@ -296,6 +297,11 @@ func (s *Server) handleAdminUserItem(w http.ResponseWriter, r *http.Request) {
 	email := strings.TrimPrefix(r.URL.Path, "/admin/users/")
 	// The single sub-resource: /admin/users/{email}/password.
 	if rest, ok := strings.CutSuffix(email, "/password"); ok && rest != "" && !strings.Contains(rest, "/") {
+		// A password is for signing in, which such an identity cannot do.
+		if _, ok := pgtext.CheckedEmail(rest); !ok {
+			http.Error(w, "invalid user identity", http.StatusBadRequest)
+			return
+		}
 		if r.Method != http.MethodPut {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -305,6 +311,16 @@ func (s *Server) handleAdminUserItem(w http.ResponseWriter, r *http.Request) {
 	}
 	if email == "" || strings.Contains(email, "/") {
 		http.Error(w, "user email required", http.StatusBadRequest)
+		return
+	}
+	// PATCH and DELETE normalise the email (trim, lowercase) and then match
+	// that exact account, so an account stored before identities were
+	// checked — with a control character, or with U+017F, which is already
+	// lowercase — can still be changed or removed. A character that
+	// lowercasing turns into an ASCII letter (U+0130, U+212A) is refused: no
+	// stored email holds one, and lowercasing it would name the ASCII account.
+	if pgtext.LowercasesOntoASCII(email) {
+		http.Error(w, "invalid user identity", http.StatusBadRequest)
 		return
 	}
 	switch r.Method {
@@ -365,7 +381,7 @@ func (s *Server) handleAdminUserPatch(w http.ResponseWriter, r *http.Request, em
 	// The write only costs you access when it clears a users.role = 'admin' that
 	// is your sole grant; the env allowlist survives any column write.
 	if body.Role != nil && *body.Role != store.RoleAdmin &&
-		strings.EqualFold(strings.TrimSpace(email), strings.TrimSpace(userFromCtx(r.Context()))) {
+		sameAccount(email, userFromCtx(r.Context())) {
 		cur, err := s.store.GetUser(r.Context(), email)
 		if err != nil {
 			if errors.Is(err, store.ErrUserNotFound) {

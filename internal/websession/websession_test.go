@@ -343,3 +343,39 @@ func TestResolverRefusesPasswordSessions(t *testing.T) {
 		t.Errorf("elcano cookie refused: %+v", s)
 	}
 }
+
+// A cookie whose identity claims hold a control character yields no session,
+// on both verifiers: such an email, issuer, subject or tenant names no account.
+func TestCookieIdentityClaimsRefuseControlCharacters(t *testing.T) {
+	future := time.Now().Add(time.Hour).Unix()
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := NewHMAC(secret)
+	for _, ctl := range []string{"\x00", "\x01", "\x1f", "\x7f", "\u200b", "\u212a", "\u017f"} {
+		if s := h.Verify(signRaw(t, map[string]any{"email": "dave@x.com" + ctl, "exp": future, "idle": future, "epoch": "e1"})); s != nil {
+			t.Errorf("session cookie with email holding %q verified: %+v", ctl, s)
+		}
+		for _, claim := range []string{"issuer", "subject"} {
+			claims := map[string]any{"email": "dave@x.com", "exp": future, "idle": future, "epoch": "e1", "source": "oidc", "issuer": "https://auth.x.com", "subject": "s1"}
+			claims[claim] = claims[claim].(string) + ctl
+			if s := h.Verify(signRaw(t, claims)); s != nil {
+				t.Errorf("oidc session cookie with %s holding %q verified: %+v", claim, ctl, s)
+			}
+		}
+		if c := VerifyElcanoToken(pub, mintElcano(t, priv, map[string]any{"email": "carol@elcanotek.com" + ctl, "tenant": "elcanotek.com", "exp": future})); c != nil {
+			t.Errorf("elcano_auth cookie with email holding %q verified: %+v", ctl, c)
+		}
+		if c := VerifyElcanoToken(pub, mintElcano(t, priv, map[string]any{"email": "carol@elcanotek.com", "tenant": "elcanotek.com" + ctl, "exp": future})); c != nil {
+			t.Errorf("elcano_auth cookie with tenant holding %q verified: %+v", ctl, c)
+		}
+	}
+	// The same cookies without the character still verify.
+	if h.Verify(signRaw(t, map[string]any{"email": "dave@x.com", "exp": future, "idle": future, "epoch": "e1"})) == nil {
+		t.Error("clean session cookie refused")
+	}
+	if VerifyElcanoToken(pub, mintElcano(t, priv, map[string]any{"email": "carol@elcanotek.com", "tenant": "elcanotek.com", "exp": future})) == nil {
+		t.Error("clean elcano_auth cookie refused")
+	}
+}

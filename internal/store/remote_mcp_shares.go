@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 )
 
 // Sharing a remote MCP connection (#443 follow-up). A grant lets another user
@@ -50,6 +52,11 @@ func (s *Store) ownsRemoteMCPServer(ctx context.Context, ownerEmail, serverID st
 func (s *Store) ShareRemoteMCPServer(ctx context.Context, ownerEmail, serverID, grantee string) error {
 	owner := normalizeEmail(ownerEmail)
 	g := normalizeGrantee(grantee)
+	// A grantee is an identity entering here: checked as sent, before
+	// lowercasing could turn a look-alike into another, ASCII address.
+	if _, ok := pgtext.CheckedEmail(grantee); !ok && g != GranteeEveryone {
+		return fmt.Errorf("%w: %q (want a user email or %q)", ErrRemoteMCPShareInvalid, grantee, GranteeEveryone)
+	}
 	if g == "" || !strings.Contains(g, "@") && g != GranteeEveryone {
 		return fmt.Errorf("%w: %q (want a user email or %q)", ErrRemoteMCPShareInvalid, grantee, GranteeEveryone)
 	}

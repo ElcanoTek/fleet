@@ -36,6 +36,8 @@ import (
 	"sync"
 	"time"
 	"unicode/utf16"
+
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 )
 
 const (
@@ -243,10 +245,12 @@ func (g *Gateway) verifySignedEvent(raw, typ, issuer, audience string, now time.
 	sub, _ := claims["sub"].(string)
 	email, _ := claims["email"].(string)
 	ev.subject = strings.TrimSpace(sub)
-	ev.email = strings.ToLower(strings.TrimSpace(email))
+	var emailOK bool
+	ev.email, emailOK = pgtext.CheckedEmail(email)
 	at := strings.LastIndexByte(ev.email, '@')
-	if ev.subject == "" || jsLen(ev.subject) > 255 ||
-		ev.email == "" || jsLen(ev.email) > 254 || at <= 0 || at == len(ev.email)-1 {
+	if ev.subject == "" || jsLen(ev.subject) > 255 || !emailOK ||
+		ev.email == "" || jsLen(ev.email) > 254 || at <= 0 || at == len(ev.email)-1 ||
+		!pgtext.ValidIdentity(ev.subject) {
 		return nil, ev, errInvalidToken
 	}
 	return claims, ev, nil
