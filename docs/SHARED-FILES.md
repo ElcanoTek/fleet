@@ -160,7 +160,11 @@ resolution and no-follow policy `view_file` uses, so a CSV built in
   `shared_files_max_total_mb` like uploads. Past the cap the error says to
   start a new file (per month, per campaign).
 - One folder level (`folder/name`), as for uploads; a deeper path is refused,
-  never flattened. A name that would be sanitized differently is refused with
+  never flattened. Chat-created names and folders may use only letters,
+  digits, spaces and `. _ - ( ) + , = @ # & '`: every conversation sees these
+  paths inside the prompt's Markdown, so a backtick, bracket or asterisk from
+  one user's chat must not be able to break out of that formatting. (The block
+  also renders every path with a code-span fence its contents cannot close.) A name that would be sanitized differently is refused with
   the usable spelling, so a model never reads back a path it did not write.
 - Admin uploads (`origin = 'admin'`) are read-only to chats. Admins can rename
   and delete chat files from Settings → Shared files like any other.
@@ -186,6 +190,14 @@ naming its index file (`folder_index: true`) — or saying how to list the
 folder — so a folder of campaign logs cannot push every later file past the
 block's 50-entry cap. A library that holds only admin uploads renders exactly
 as it always has.
+
+**Staging is never older than the database.** Every restage of a chat file
+(after a write, a rename, or a reconciler pass) reads the row and its text in a
+transaction holding the row `FOR SHARE` and stages while still holding it
+(`store.StageChatSharedFileLocked`). A concurrent write, rename or delete —
+from this process or another replica — waits until that stage finishes, and
+its own restage runs after it; so a replica that read version 1 can never
+publish it over version 2.
 
 **Reconciling.** `Sync` stages a chat file from the database when its staged
 copy is missing, a different size, or a different sha256: chat files are

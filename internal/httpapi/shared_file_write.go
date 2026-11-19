@@ -128,31 +128,29 @@ func (s *Server) writeChatSharedFile(ctx context.Context, email, origin string, 
 }
 
 // restageChatSharedFileLocked restages one chat-written file from the
-// database. It re-reads the row and its text, so the stage always copies what
-// the database holds NOW — the newer version even if another replica wrote
-// after this call's commit. Caller holds sharedFilesMu.
+// database. The store reads the row and its text under a row lock (FOR SHARE)
+// and stages while still holding it, so the staged copy is never older than
+// the database when it finishes — even when another replica writes, renames or
+// deletes the file at the same moment: that writer waits for this stage and
+// restages after it. A row deleted in the meantime is not an error (whoever
+// deleted it unstaged it). Caller holds sharedFilesMu.
 func (s *Server) restageChatSharedFileLocked(ctx context.Context, id string) error {
-	f, err := s.store.GetSharedFile(ctx, id)
-	if err != nil {
-		return err
+	lib := s.sharedFilesLibrary()
+	err := s.store.StageChatSharedFileLocked(ctx, id, lib.StageContent)
+	if errors.Is(err, store.ErrSharedFileNotFound) {
+		return nil
 	}
-	return s.stageSharedFileLocked(ctx, s.sharedFilesLibrary(), f)
+	return err
 }
 
 // stageSharedFileLocked stages any row: an upload from its canonical bytes, a
-// chat-written file from its text in the database. Caller holds sharedFilesMu.
+// chat-written file from its text in the database (under the row lock — see
+// restageChatSharedFileLocked). Caller holds sharedFilesMu.
 func (s *Server) stageSharedFileLocked(ctx context.Context, lib sharedfiles.Library, f store.SharedFile) error {
 	if !f.IsChatWritten() {
 		return lib.Stage(f)
 	}
-	content, _, ok, err := s.store.SharedFileContent(ctx, f.ID)
-	if err != nil {
-		return err
-	}
-	if !ok {
-		return fmt.Errorf("chat-written shared file %s has no content", f.ID)
-	}
-	return lib.StageContent(f, content)
+	return s.restageChatSharedFileLocked(ctx, f.ID)
 }
 
 func sharedFileWriteResult(res store.ChatSharedFileWriteResult, path, mode string, staged bool) *tools.SharedFileWriteResult {

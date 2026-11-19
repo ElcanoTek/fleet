@@ -226,7 +226,7 @@ func PromptBlockWith(files []store.SharedFile, opts PromptOptions) string {
 				overflow++
 				continue
 			}
-			fmt.Fprintf(&b, "- `%s` (%s)", PromptPath(f), humanSize(f.SizeBytes))
+			fmt.Fprintf(&b, "- %s (%s)", codeSpan(PromptPath(f)), humanSize(f.SizeBytes))
 			if f.Description != "" {
 				fmt.Fprintf(&b, " — %s", f.Description)
 			}
@@ -281,9 +281,35 @@ func chatPromptLines(chat []store.SharedFile) []string {
 	return out
 }
 
+// codeSpan renders s as a Markdown code span its contents cannot close: the
+// fence is one backtick longer than the longest backtick run inside s
+// (CommonMark), padded with spaces when s starts or ends with one. A path
+// without backticks renders exactly as "`s`". Chat-created paths cannot
+// contain a backtick at all (ParseChatPath); this keeps any row — an admin
+// upload, or one written before that rule — from escaping the block's
+// formatting.
+func codeSpan(s string) string {
+	longest, run := 0, 0
+	for _, r := range s {
+		if r == '`' {
+			run++
+			if run > longest {
+				longest = run
+			}
+		} else {
+			run = 0
+		}
+	}
+	if longest == 0 {
+		return "`" + s + "`"
+	}
+	fence := strings.Repeat("`", longest+1)
+	return fence + " " + s + " " + fence
+}
+
 func chatFileLine(f store.SharedFile) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "- `%s` (%s", PromptPath(f), humanSize(f.SizeBytes))
+	fmt.Fprintf(&b, "- %s (%s", codeSpan(PromptPath(f)), humanSize(f.SizeBytes))
 	if f.UpdatedAt > 0 {
 		fmt.Fprintf(&b, ", updated %s", time.Unix(f.UpdatedAt, 0).UTC().Format("2006-01-02"))
 	}
@@ -309,14 +335,14 @@ func collapsedFolderLine(group []store.SharedFile) string {
 		}
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "- `%s/%s/` — %d files written by chats (%s)", tools.SharedFilesDirName, folder, len(group), humanSize(total))
+	fmt.Fprintf(&b, "- %s — %d files written by chats (%s)", codeSpan(tools.SharedFilesDirName+"/"+folder+"/"), len(group), humanSize(total))
 	if index != nil {
-		fmt.Fprintf(&b, "; start with `%s`", PromptPath(*index))
+		fmt.Fprintf(&b, "; start with %s", codeSpan(PromptPath(*index)))
 		if d := SanitizeChatDescription(index.Description); d != "" {
 			fmt.Fprintf(&b, " — %s", d)
 		}
 	} else {
-		fmt.Fprintf(&b, "; list them with `bash ls -l %s/%s/`", tools.SharedFilesDirName, folder)
+		fmt.Fprintf(&b, "; list them with %s", codeSpan("bash ls -l "+tools.SharedFilesDirName+"/"+folder+"/"))
 	}
 	b.WriteString("\n")
 	return b.String()
@@ -481,8 +507,11 @@ func (l Library) EnsureStagedRoot() error {
 	return os.MkdirAll(l.StagedRoot, 0o755) //nolint:gosec // read by the sandbox uid through the mount
 }
 
-// ChatContentFunc returns a chat-written row's current text from the database.
-type ChatContentFunc func(id string) (string, error)
+// ChatStageFunc restages one chat-written row from the database (the caller
+// reads the row and its text under a row lock and stages what it holds then —
+// see httpapi's restage — so a reconciler on one replica cannot publish a
+// version older than another replica's write).
+type ChatStageFunc func(f store.SharedFile) error
 
 // Sync reconciles the staged tree against the manifest: it stages every row
 // that is missing or has the wrong size, and removes every regular file the
@@ -495,8 +524,8 @@ type ChatContentFunc func(id string) (string, error)
 // A chat-written row is checked by content hash as well as size — an append
 // and a replace of the same length differ only in their bytes, and these
 // files are capped small enough (MaxChatFileBytes) to hash every pass — and
-// restaged from chatContent. A nil chatContent leaves chat rows alone.
-func (l Library) Sync(files []store.SharedFile, chatContent ChatContentFunc) error {
+// restaged through chatStage. A nil chatStage leaves chat rows alone.
+func (l Library) Sync(files []store.SharedFile, chatStage ChatStageFunc) error {
 	if err := l.EnsureStagedRoot(); err != nil {
 		return err
 	}
@@ -555,15 +584,12 @@ func (l Library) Sync(files []store.SharedFile, chatContent ChatContentFunc) err
 			}
 			continue
 		}
-		if chatContent == nil || (sizeOK && fileSHA256(p) == f.SHA256) {
+		if chatStage == nil || (sizeOK && fileSHA256(p) == f.SHA256) {
 			continue
 		}
-		content, cerr := chatContent(f.ID)
-		if cerr != nil {
-			note(fmt.Errorf("read chat file %s: %w", f.ID, cerr))
-			continue
+		if serr := chatStage(f); serr != nil {
+			note(fmt.Errorf("restage chat file %s: %w", f.ID, serr))
 		}
-		note(l.StageContent(f, content))
 	}
 
 	// Prune empty leftover folders, deepest first.

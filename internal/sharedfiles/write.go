@@ -68,7 +68,32 @@ func ParseChatPath(raw string) (folder, name string, err error) {
 		// its next read miss; refuse and name what is acceptable instead.
 		return "", "", fmt.Errorf("file name %q is not usable as is (try %q)", name, clean)
 	}
+	for _, seg := range []string{folder, clean} {
+		if err := checkChatPathChars(seg); err != nil {
+			return "", "", err
+		}
+	}
 	return folder, clean, nil
+}
+
+// checkChatPathChars allows a chat-created path segment only letters, digits,
+// spaces and . _ - ( ) + , = @ # & '. Every conversation on the server is shown
+// these paths inside the prompt's Markdown, so a backtick, bracket, asterisk or
+// similar delimiter written by one user's chat could break out of that
+// formatting in everyone else's; uploads (an admin's choice) keep the wider
+// SanitizeName rules.
+func checkChatPathChars(seg string) error {
+	for _, r := range seg {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			continue
+		}
+		switch r {
+		case ' ', '.', '_', '-', '(', ')', '+', ',', '=', '@', '#', '&', '\'':
+			continue
+		}
+		return fmt.Errorf("%q contains %q: shared file and folder names written by chats may use letters, digits, spaces and . _ - ( ) + , = @ # & ' only", seg, r)
+	}
+	return nil
 }
 
 // ChatPromptPath is ParseChatPath's inverse: the path the model reads a

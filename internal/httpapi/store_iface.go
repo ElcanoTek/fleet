@@ -423,6 +423,7 @@ type chatStore interface {
 	// tool's row-locked write, and the text a chat-written row stages from.
 	WriteChatSharedFile(ctx context.Context, w store.ChatSharedFileWrite) (store.ChatSharedFileWriteResult, error)
 	SharedFileContent(ctx context.Context, id string) (content, sha string, ok bool, err error)
+	StageChatSharedFileLocked(ctx context.Context, id string, stage func(f store.SharedFile, content string) error) error
 
 	// In-chat patrols and timers: recurring cron patrols and one-shot timers
 	// bound directly to a conversation. The rows are the scheduler's

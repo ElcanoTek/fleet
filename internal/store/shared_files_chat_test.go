@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func strp(s string) *string { return &s }
@@ -375,5 +376,72 @@ func TestSharedFileNamespaceRaceNeverLandsBoth(t *testing.T) {
 		if _, err := st.UpdateSharedFileMeta(ctx, "z1", takenFolder, "", ""); !errors.Is(err, ErrSharedFileNameIsFolder) {
 			t.Fatalf("rename onto a folder name err = %v", err)
 		}
+	}
+}
+
+// A restage holds the row FOR SHARE while it stages, so a concurrent write
+// (another replica's append) waits for it and can never be overwritten by the
+// older version this restage read.
+func TestStageChatSharedFileLockedHoldsOffWriters(t *testing.T) {
+	t.Parallel()
+	st := newTestStore(t)
+	ctx := context.Background()
+	w := chatWrite(SharedFileWriteCreate, "opt", "log.csv", "v1\n")
+	w.NewID, w.Description = "s1", strp("log")
+	if _, err := st.WriteChatSharedFile(ctx, w); err != nil {
+		t.Fatal(err)
+	}
+
+	staging := make(chan struct{})
+	release := make(chan struct{})
+	stageDone := make(chan error, 1)
+	var staged string
+	go func() {
+		stageDone <- st.StageChatSharedFileLocked(ctx, "s1", func(_ SharedFile, content string) error {
+			staged = content
+			close(staging)
+			<-release
+			return nil
+		})
+	}()
+	<-staging
+
+	writeDone := make(chan error, 1)
+	go func() {
+		_, err := st.WriteChatSharedFile(ctx, chatWrite(SharedFileWriteAppend, "opt", "log.csv", "v2\n"))
+		writeDone <- err
+	}()
+	select {
+	case err := <-writeDone:
+		t.Fatalf("write finished while a restage held the row (err %v)", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	close(release)
+	if err := <-stageDone; err != nil {
+		t.Fatalf("stage: %v", err)
+	}
+	if err := <-writeDone; err != nil {
+		t.Fatalf("write after stage: %v", err)
+	}
+	if staged != "v1\n" {
+		t.Fatalf("staged = %q", staged)
+	}
+	// The writer's own restage now sees v2.
+	if err := st.StageChatSharedFileLocked(ctx, "s1", func(_ SharedFile, content string) error {
+		staged = content
+		return nil
+	}); err != nil || staged != "v1\nv2\n" {
+		t.Fatalf("second stage = %q, %v", staged, err)
+	}
+
+	// Gone rows and admin rows.
+	if err := st.StageChatSharedFileLocked(ctx, "nope", func(SharedFile, string) error { return nil }); !errors.Is(err, ErrSharedFileNotFound) {
+		t.Fatalf("missing row err = %v", err)
+	}
+	if _, err := st.CreateSharedFile(ctx, SharedFile{ID: "adm", Name: "a.csv"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.StageChatSharedFileLocked(ctx, "adm", func(SharedFile, string) error { return nil }); err == nil {
+		t.Fatal("admin row staged as chat-written")
 	}
 }

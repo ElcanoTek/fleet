@@ -57,6 +57,12 @@ scheduled run write a TEXT file into the shared library:
   closes the cross-replica window SHARED-FILES.md used to list for uploads).
   The chat handler additionally holds the process's library mutex across the
   write and the restage, like every other library mutation.
+- **Never stage an old version:** every restage of a chat file reads the row
+  and stages it inside a transaction holding the row `FOR SHARE`, so a write,
+  rename or delete on another replica waits for it and restages after it.
+- **Paths are safe to show everyone:** chat-created names and folders use only
+  letters, digits, spaces and `. _ - ( ) + , = @ # & '`; the prompt block also
+  renders every path with a code-span fence its contents cannot close.
 - **Who:** any non-Viewer user, recorded as `updated_by` with the chat (or
   `task:<id>`) it came from. Admin uploads (`origin = 'admin'`) stay
   read-only to chats. The library is server-wide, exactly as admin uploads

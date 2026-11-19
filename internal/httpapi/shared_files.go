@@ -455,18 +455,13 @@ func (s *Server) SyncSharedFiles(ctx context.Context) error {
 	}
 	s.sharedFilesMu.Lock()
 	defer s.sharedFilesMu.Unlock()
-	// Chat-written rows restage from their text in the database (ADR-0114).
-	chatContent := func(id string) (string, error) {
-		content, _, ok, err := s.store.SharedFileContent(ctx, id)
-		if err != nil {
-			return "", err
-		}
-		if !ok {
-			return "", fmt.Errorf("shared file %s has no content", id)
-		}
-		return content, nil
+	// Chat-written rows restage from their text in the database, read under
+	// the row lock so this pass can never publish a version older than a
+	// concurrent write on another replica (ADR-0114).
+	chatStage := func(f store.SharedFile) error {
+		return s.restageChatSharedFileLocked(ctx, f.ID)
 	}
-	return s.sharedFilesLibrary().Sync(files, chatContent)
+	return s.sharedFilesLibrary().Sync(files, chatStage)
 }
 
 // appendSharedFilesBlock announces the library at the top of a turn, mirroring

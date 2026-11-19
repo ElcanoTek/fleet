@@ -369,3 +369,41 @@ func (s *Store) SharedFileContent(ctx context.Context, id string) (content, sha 
 	}
 	return c.String, sha, true, nil
 }
+
+// StageChatSharedFileLocked hands a chat-written row and its text to stage
+// while a transaction holds the row under FOR SHARE, so the staged copy can
+// never be older than the database when the stage finishes — on one replica or
+// several. A concurrent write (FOR UPDATE), rename or delete of the row waits
+// until stage returns and commits, and its own restage then runs after this
+// one. Returns ErrSharedFileNotFound when the row is gone (whoever deleted it
+// unstages it), and refuses an admin row (those stage from the data dir).
+func (s *Store) StageChatSharedFileLocked(ctx context.Context, id string, stage func(f SharedFile, content string) error) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var (
+		f SharedFile
+		c sql.NullString
+	)
+	err = tx.QueryRowContext(ctx, `
+		SELECT `+sharedFileSelect+`, content
+		FROM shared_files WHERE id = $1
+		FOR SHARE`, id).Scan(&f.ID, &f.Name, &f.Folder, &f.Description, &f.SizeBytes,
+		&f.ContentType, &f.SHA256, &f.UploadedBy, &f.CreatedAt, &f.UpdatedAt,
+		&f.Origin, &f.UpdatedBy, &f.UpdatedConversationID, &f.FolderIndex, &f.HasPrevious, &c)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrSharedFileNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if !c.Valid || f.Origin != SharedFileOriginChat {
+		return fmt.Errorf("shared file %s is not chat-written", id)
+	}
+	if err := stage(f, c.String); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
