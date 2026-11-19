@@ -366,6 +366,12 @@ func (a *approvalStager) expiryUnixFor(toolName string) int64 {
 // when this fails, because the entire justification for running without asking
 // is that the user still finds out.
 func (a *approvalStager) RecordAction(toolName, toolCallID, rawInput, undoHint string) error {
+	// A notify-mode call never reaches Stage, so the same refusal applies
+	// here: a call the server is certain to reject is not recorded as an
+	// action that ran.
+	if err := a.prevalidateMCPArguments(toolName, rawInput); err != nil {
+		return err
+	}
 	seat := a.seatFor(toolName)
 	// A record is not pending, so its expiry is only a column value; use the
 	// same resolution so the row shape is identical to every other approval.
@@ -870,6 +876,12 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 	// exists (#1601): the model learns the error now, and nobody is asked to
 	// approve a call that is certain to fail after they click Approve.
 	if err := prevalidateStagedTaskPrompt(toolName, rawInput); err != nil {
+		return "", err
+	}
+	// Likewise an MCP call the server is certain to reject (an `action` its
+	// schema does not list): refused before a card, and before a session or
+	// Autonomous pre-approval would run it.
+	if err := a.prevalidateMCPArguments(toolName, rawInput); err != nil {
 		return "", err
 	}
 	if sentinel, ok := a.tryPreResolveBeforeMaterialize(toolName, rawInput); ok {

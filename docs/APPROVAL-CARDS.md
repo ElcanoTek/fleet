@@ -307,6 +307,28 @@ turn and so needs a new approval. The raw result moves under **Details**. A
 readable pending card follows the designer's layout. See
 [APPROVAL-RESULT-CARDS.md](APPROVAL-RESULT-CARDS.md) and ADR-0084.
 
+## No card for a call the server is certain to reject
+
+A gated MCP call is checked against the tool's own input schema before a card
+is staged, and before a notify-mode call is recorded
+(`prevalidateStagedMCPArguments`, from `Stage` and `RecordAction`). The check is narrow on purpose: a
+top-level string argument whose value is outside the closed set the schema
+declares for it (`enum`, `const`, or a union of those, including a root
+`oneOf`/`anyOf` discriminated by that argument). That is the `action` of a
+multiplexed tool. The call is refused with the allowed values
+(`ARGUMENTS_REFUSED`), nothing is staged and nothing runs, and the model can
+call again.
+
+Why: in an Autonomous chat the model called Fast.io `storage` with an action
+that does not exist. The Autonomous floor only lets known read actions through
+without a card, so the unknown one became a card; the user approved it minutes
+later and the server rejected the arguments.
+
+Everything else stays the server's to judge: wrong types, missing required
+arguments, open strings, `$ref`/`allOf` declarations. A false refusal would
+block a legitimate call outright, which is worse than a card for a call that
+then fails.
+
 ## Honest scope / deliberately not done
 
 - **No approvals-table mode column.** Notify records are tagged by their

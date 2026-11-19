@@ -190,3 +190,26 @@ func TestNotifyRecordWithAnAmbiguousResultIsNotHandedOne(t *testing.T) {
 		t.Fatalf("results = %v, pending = %v; want none handed over and none left", sink.results, o.notifyRecordedCalls)
 	}
 }
+
+// A notify-mode call whose arguments the recorder refused (an `action` the MCP
+// tool's schema does not list) is not recorded, does not run, and does not
+// fall back to a card for a call that cannot succeed: the model is told what
+// is wrong.
+func TestNotifyModeReportsARefusedCallInsteadOfRunningOrStagingIt(t *testing.T) {
+	t.Cleanup(func() { ConfigureAgentPolicy(testFixturePolicy()) })
+	ConfigureAgentPolicy(AgentPolicy{
+		CriticalToolSuffixes: []string{"deploy_page"},
+		CriticalToolModes:    map[string]string{"deploy_page": ApprovalModeNotify},
+	})
+	sink := &recordingStager{stageID: "appr-1", recordErr: &StageRefusedError{Reason: `"nope" is not a valid action. Nothing was staged for approval and nothing ran`}}
+	o := newOrchestrationState(NewLogSession())
+	o.setApprovalSink(sink)
+
+	blocked, msg := o.checkCriticalToolApproval("mcp_pages_deploy_page", "call-1", `{"action":"nope"}`)
+	if !blocked || !strings.HasPrefix(msg, "ARGUMENTS_REFUSED: ") {
+		t.Fatalf("blocked=%v msg=%q, want an ARGUMENTS_REFUSED refusal", blocked, msg)
+	}
+	if strings.Contains(msg, "APPROVAL_REQUIRED") || len(sink.recorded) != 0 {
+		t.Fatalf("a refused notify-mode call was staged or recorded: msg=%q recorded=%v", msg, sink.recorded)
+	}
+}
