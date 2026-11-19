@@ -70,7 +70,8 @@ disk usage was invisible to admins.
 - **Hourly disk sweep** (`cmd/fleet/main.go`, ctx-bound `safe.Recover`
   goroutine): `store.SweepAttachments` (attachment uploads past the
   conversation TTL) + `handlers.CleanupTempFiles` (orchestrator
-  `temp_uploads`, which previously had **no caller**). The existing
+  `temp_uploads`, which previously had **no caller**; on its own clock,
+  `FLEET_SCRATCH_RETENTION_DAYS`, since [CHAT-RETENTION.md](CHAT-RETENTION.md)). The existing
   post-turn sweeps remain; the timer covers idle servers.
 - **Download partials**: the same pass removes `download_url` partial files
   (`.fleet-download-*.partial`) left untouched for an hour by a cancelled

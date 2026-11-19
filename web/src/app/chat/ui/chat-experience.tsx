@@ -139,6 +139,8 @@ import { TeamChatViewer } from "./TeamChatViewer";
 // Team links (B22/B23), branch banners (B20) and a branch's withheld files.
 import { TeamLinkNotice, type TeamLinkNoticeState } from "./TeamLinkNotice";
 import { BranchOriginBanner } from "./TeamBranchBanners";
+import { ExpiringChatBanner } from "./ExpiringChatBanner";
+import { expiresInDays, retentionPolicy, useNowSeconds } from "./chatRetention";
 import { WithheldFilesContext } from "./LockedFiles";
 import { DownloadChatDialog, type DownloadOptions } from "./DownloadChatDialog";
 import { useRailCollapse, keepFocusForDrawerShortcut } from "@/app/shared/ui/NavRail";
@@ -167,6 +169,7 @@ import { useChatModelCatalog } from "./useChatModelCatalog";
 import {
   afterDeleteAllUnpinned,
   countDeletedByDeleteAllUnpinned,
+  isTemporaryChat,
 } from "./deleteAllUnpinnedScope";
 import { Composer } from "./Composer";
 import { mergeComposerSkills, type SkillInfo } from "./skillSlash";
@@ -287,6 +290,12 @@ export type ServerConfig = {
   // deleted (CONVERSATION_TTL_DAYS), for the rail's wording. Absent on an
   // older server, where the rail states the default.
   conversationTtlDays?: number;
+  // conversationExpiryWarningDays: how many days before that deletion a chat
+  // is flagged (0 = no warning). conversationUnpinnedCap: the most temporary
+  // chats one person keeps. Both for the rail's and the chat's notices
+  // (chatRetention.ts); absent on a server that does not say.
+  conversationExpiryWarningDays?: number;
+  conversationUnpinnedCap?: number;
   teamChatsSharedByDefault?: boolean;
   autonomousAccepted?: boolean;
   autonomousPolicyVersion?: number;
@@ -301,6 +310,8 @@ export function parseServerConfigPayload(cfg: {
   lockdown_allowed_models?: string[] | null;
   upload_max_bytes?: number;
   conversation_ttl_days?: number;
+  conversation_expiry_warning_days?: number;
+  conversation_unpinned_cap?: number;
   team_chats_shared_by_default?: boolean;
   autonomous_accepted?: boolean;
   autonomous_policy_version?: number;
@@ -312,6 +323,16 @@ export function parseServerConfigPayload(cfg: {
     conversationTtlDays:
       typeof cfg.conversation_ttl_days === "number" && cfg.conversation_ttl_days > 0
         ? cfg.conversation_ttl_days
+        : undefined,
+    // 0 is a real value here (the warning is off), so only a missing or
+    // negative number falls back to the client default.
+    conversationExpiryWarningDays:
+      typeof cfg.conversation_expiry_warning_days === "number" && cfg.conversation_expiry_warning_days >= 0
+        ? cfg.conversation_expiry_warning_days
+        : undefined,
+    conversationUnpinnedCap:
+      typeof cfg.conversation_unpinned_cap === "number" && cfg.conversation_unpinned_cap > 0
+        ? cfg.conversation_unpinned_cap
         : undefined,
     // Older servers don't advertise the cap — keep the client-side default
     // rather than treating it as 0.
@@ -1433,6 +1454,22 @@ export function ChatExperience({
     }
     return kinds;
   }, [schedulesByConv]);
+  // The open chat, when it is one of the person's own temporary chats inside
+  // its warning window (docs/CHAT-RETENTION.md): the chat itself then says
+  // how long it has left. Read from the owner's own listing, so a teammate's
+  // chat, an archived chat and a chat that something keeps never show it.
+  const retention = retentionPolicy(serverConfig);
+  const retentionNow = useNowSeconds();
+  const expiringActiveChat = useMemo(() => {
+    const conversation = conversations.find((c) => c.id === activeConversationId);
+    if (!conversation || !isTemporaryChat(conversation, scheduleKindByConv)) return null;
+    const daysLeft = expiresInDays(
+      conversation.updated_at,
+      { ttlDays: retention.ttlDays, warningDays: retention.warningDays },
+      retentionNow,
+    );
+    return daysLeft === null ? null : { conversation, daysLeft };
+  }, [conversations, activeConversationId, scheduleKindByConv, retention.ttlDays, retention.warningDays, retentionNow]);
   // The memory manager's state and actions (useChatMemories, #2008).
   const memories = useChatMemories();
   // Projects modal state: null = closed; {} = open on the list; create opens
@@ -3703,11 +3740,17 @@ export function ChatExperience({
     const pinUrl = conversationApiUrl(conversation.id, "/pin");
     if (!pinUrl) return false;
     const nextPinned = !conversation.pinned;
-    // Optimistic update
+    // Optimistic update. The server counts a pin or an unpin as activity
+    // (it bumps updated_at), so the row's timestamp moves with it: a chat
+    // unpinned back into Temporary starts a full window, and its countdown
+    // must not be worked out from the time before it was pinned.
+    const touchedAt = Math.floor(Date.now() / 1000);
     setConversations((current) =>
       current
         .map((c) =>
-          c.id === conversation.id ? { ...c, pinned: nextPinned } : c,
+          c.id === conversation.id
+            ? { ...c, pinned: nextPinned, updated_at: Math.max(c.updated_at, touchedAt) }
+            : c,
         )
         .sort((a, b) => {
           if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
@@ -5389,6 +5432,15 @@ export function ChatExperience({
         setTitle(before.title);
         return false;
       }
+      // A rename is activity on the server (updated_at is bumped), which
+      // restarts a temporary chat's window; keep the row's timestamp, and so
+      // its countdown, in step without waiting for the next list read.
+      const renamedAt = Math.floor(Date.now() / 1000);
+      setConversations((current) =>
+        current.map((c) =>
+          c.id === conversationId ? { ...c, updated_at: Math.max(c.updated_at, renamedAt) } : c,
+        ),
+      );
       return true;
     } catch (err) {
       // A thrown fetch used to escape here as an unhandled rejection, and the
@@ -8224,6 +8276,18 @@ export function ChatExperience({
                   hideShareButton
                 />
               ) : null}
+            </div>
+          ) : null}
+
+          {/* A temporary chat inside its warning window says how long it has
+              left, and offers the keep action, where the person is reading. */}
+          {expiringActiveChat && !isStreaming && !fullPageOverlay && !dashboardActive ? (
+            <div className="px-4 pt-2 sm:px-6">
+              <ExpiringChatBanner
+                daysLeft={expiringActiveChat.daysLeft}
+                ttlDays={retention.ttlDays}
+                onPin={() => void togglePin(expiringActiveChat.conversation)}
+              />
             </div>
           ) : null}
 

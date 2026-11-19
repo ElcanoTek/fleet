@@ -546,9 +546,9 @@ describe("ConversationSidebar — one list for all chats", () => {
     // the patrol mark, never the hourglass.
     await waitFor(() => expect(titlesOf("patrol-mark")).toEqual(["Morning pacing patrol"]));
     expect(titlesOf("temporary-mark")).toEqual(["Budget pacing review"]);
-    expect(within(list).getAllByTestId("temporary-mark")[0].getAttribute("title")).toContain("14 days");
+    expect(within(list).getAllByTestId("temporary-mark")[0].getAttribute("title")).toContain("90 days");
     const row = screen.getByRole("button", { name: "Budget pacing review" });
-    expect(document.getElementById(row.getAttribute("aria-describedby") ?? "")?.textContent).toContain("14 days");
+    expect(document.getElementById(row.getAttribute("aria-describedby") ?? "")?.textContent).toContain("90 days");
     // Pinned chats are kept, so they carry no mark.
     expect(screen.getByTestId("pinned-section").querySelector('[data-testid="temporary-mark"]')).toBeNull();
     expect(screen.getByRole("button", { name: "About this list" })).toBeTruthy();
@@ -571,7 +571,79 @@ describe("ConversationSidebar — one list for all chats", () => {
     const marks = screen.getAllByTestId("temporary-mark");
     expect(marks.map((m) => m.closest("[data-rail-row]")?.getAttribute("title"))).toEqual(["Plain chat"]);
     expect(marks[0].getAttribute("title")).toContain("30 days");
-    expect(marks[0].getAttribute("title")).not.toContain("14 days");
+    expect(marks[0].getAttribute("title")).not.toContain("90 days");
+  });
+
+  // docs/CHAT-RETENTION.md: a temporary chat says how long it has left only
+  // near the end of its window, in either layout, and the list says how many.
+  describe("the warning before a temporary chat is deleted", () => {
+    const DAY = 86_400;
+    const idleFor = (days: number) => Math.floor(Date.now() / 1000) - days * DAY - 3600;
+    const retention = { ...SERVER_CONFIG, conversationTtlDays: 90, conversationExpiryWarningDays: 14 };
+    const mine = [
+      conv({ id: "fresh", title: "Started today", updated_at: idleFor(0) }),
+      conv({ id: "soon", title: "Idle for months", updated_at: idleFor(85) }),
+      conv({ id: "last-day", title: "Nearly gone", updated_at: idleFor(90) }),
+      // Just as idle, but kept: a pin and a timer both take a chat out.
+      conv({ id: "kept-pin", title: "Pinned and idle", pinned: true, updated_at: idleFor(88) }),
+      conv({ id: "kept-timer", title: "Timer and idle", has_schedule: true, updated_at: idleFor(88) }),
+    ];
+    const withRetention = (serverConfig: ServerConfig = retention) => ({
+      overrides: { ...overrides, conversations: mine, filteredConversations: mine, serverConfig },
+    });
+    const expiringTitles = () =>
+      screen.getAllByTestId("expiring-mark").map((m) => m.closest("[data-rail-row]")?.getAttribute("title"));
+
+    it("marks only the temporary chats inside the window, with the days left", async () => {
+      await renderRail(unifiedLayout(), withRetention());
+      expect(expiringTitles().sort()).toEqual(["Idle for months", "Nearly gone"]);
+      const mark = screen.getAllByTestId("expiring-mark").find((m) => m.closest('[title="Idle for months"]'));
+      expect(mark?.textContent).toBe("5d");
+      expect(mark?.getAttribute("title")).toContain("deleted in 5 days");
+      // The row keeps its name; the sentence is its description.
+      const row = screen.getByRole("button", { name: "Idle for months" });
+      expect(document.getElementById(row.getAttribute("aria-describedby") ?? "")?.textContent).toContain(
+        "deleted in 5 days",
+      );
+      const lastDay = screen.getAllByTestId("expiring-mark").find((m) => m.closest('[title="Nearly gone"]'));
+      expect(lastDay?.getAttribute("title")).toContain("within a day");
+      // A chat with months left keeps the plain mark.
+      expect(
+        screen.getAllByTestId("temporary-mark").map((m) => m.closest("[data-rail-row]")?.getAttribute("title")),
+      ).toEqual(["Started today"]);
+    });
+
+    it("counts them under the heading, and the count leads to the first", async () => {
+      await renderRail(unifiedLayout(), withRetention());
+      const notice = screen.getByTestId("expiring-chats-notice");
+      expect(notice.textContent).toContain("2 chats will be deleted soon.");
+      fireEvent.click(notice);
+      expect(document.activeElement?.getAttribute("title")).toBe("Idle for months");
+    });
+
+    it("marks them in separate lists too", async () => {
+      await renderRail(separateLayout(), withRetention());
+      expect(expiringTitles().sort()).toEqual(["Idle for months", "Nearly gone"]);
+      expect(screen.getByTestId("expiring-chats-notice")).toBeTruthy();
+    });
+
+    it("says nothing when the deployment turned the warning off, or nothing is close", async () => {
+      await renderRail(unifiedLayout(), withRetention({ ...retention, conversationExpiryWarningDays: 0 }));
+      expect(screen.queryByTestId("expiring-mark")).toBeNull();
+      expect(screen.queryByTestId("expiring-chats-notice")).toBeNull();
+      cleanup();
+      await renderRail(unifiedLayout(), withRetention({ ...retention, conversationTtlDays: 365 }));
+      expect(screen.queryByTestId("expiring-mark")).toBeNull();
+      expect(screen.queryByTestId("expiring-chats-notice")).toBeNull();
+    });
+
+    it("says so when the person is close to the most temporary chats they keep", async () => {
+      await renderRail(unifiedLayout(), withRetention({ ...retention, conversationUnpinnedCap: 4 }));
+      expect(screen.getByTestId("temporary-cap-notice").textContent).toContain("You have 3 temporary chats. Past 4");
+      cleanup();
+      await renderRail(unifiedLayout(), withRetention({ ...retention, conversationUnpinnedCap: 500 }));
+      expect(screen.queryByTestId("temporary-cap-notice")).toBeNull();
+    });
   });
 
   it("is the default, with no saved layout at all", async () => {

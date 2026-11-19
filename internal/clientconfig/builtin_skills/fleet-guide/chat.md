@@ -360,7 +360,7 @@ the rail**, below the table). Below that, conversations are grouped:
 | **Team chats** | Conversations shared with you or open in **Multiplayer mode** from teammates. By default they are listed in **Recent**, among your own chats, each with a team mark, the owner's short name and a **Live** badge when multiplayer is on; with **One list for all chats** switched off they have a **Team chats** list of their own. Each row's `⋮` menu holds **Add to sidebar** (not on a read-only **Viewer** account) and **Copy link**: for a chat shared with your team, the team link, which opens it for anyone on your team; for a chat you were added to in Multiplayer, its chat link, which opens it for the people in it. |
 | **Pinned** | Conversations you have chosen to keep. Pinned conversations never expire. With two or more, **Reorder** in the heading lets you put them in your own order (see [Ordering your chats](#ordering-your-chats)). |
 | **Labels** | Your labels, each a filter. Click one to show only conversations carrying it; click several to narrow further. |
-| **Recent** | Your other chats and your teammates' shared chats, in one list, most recently active first; the menu beside the heading can sort it by **Newest first** or **Title A–Z** instead. Each chat of yours that is temporary carries an hourglass: it is deleted after a period of inactivity (14 days on a default deployment), and the ⓘ beside the heading says so. Pin a chat or move it into a project to keep it; a chat with a patrol, and a chat you have shared, is kept too. **Delete temporary chats**, in red at the bottom of the sidebar, deletes them all at once after you confirm. With **One list for all chats** switched off, this group is headed **Temporary** and holds only your own chats. |
+| **Recent** | Your other chats and your teammates' shared chats, in one list, most recently active first; the menu beside the heading can sort it by **Newest first** or **Title A–Z** instead. Each chat of yours that is temporary carries an hourglass: it is deleted after a period without activity (90 days by default), and the ⓘ beside the heading says so. For the last part of that period (14 days by default) the hourglass turns amber and shows the days the chat has left, and a line under the heading counts the chats about to be deleted; click it to go to the first. Sending a message in a chat starts its period again. Pin a chat, move it into a project or archive it to keep it; a chat with a patrol, and a chat you have shared, is kept too. **Delete temporary chats**, in red at the bottom of the sidebar, deletes them all at once after you confirm. With **One list for all chats** switched off, this group is headed **Temporary** and holds only your own chats. |
 | **Archived** | Collapsed by default. Conversations you have put away but not deleted; open the group to bring one back. |
 
 **Searching the rail.** Type in the search field and the groups above step aside for one list of
@@ -514,8 +514,9 @@ A read-only **Viewer** account can open the panel but not change anything.
   teammates', sorted together (most recently active first, or by the sort
   you pick beside the heading). A teammate's row keeps its team mark and the
   owner's name. Each chat of yours that is temporary carries a small hourglass:
-  it is deleted after a period of inactivity (14 days on a default
-  deployment) unless you pin it or move it into a project. Chats in a
+  it is deleted after a period without activity (90 days by default)
+  unless you pin it, move it into a project or archive it, and the
+  hourglass shows the days it has left as that approaches. Chats in a
   project stay under their project. On by default; switch it off to give
   your teammates' chats a **Team chats** list of their own, with **Temporary**
   holding only your own chats. Hiding **Team chats** in this panel keeps
@@ -1406,11 +1407,17 @@ you hover over it (on a touch screen it is always shown). Here is everything in 
 | **Delete** | Remove the conversation and everything it produced. There is a confirmation, and no undo. For a chat shared with your team, the confirmation says what the team loses; teammates who branched it keep their copies. |
 
 > **What expires, and when.** An unpinned conversation that is not in a project,
-> not archived, and not shared is deleted after a period of inactivity — 14 days
-> unless your operator has set a different window. There is also a per-person cap
-> on how many unpinned conversations are kept at all, so on a busy account the
-> oldest can go before the clock runs out. Pinning, archiving, filing into a
-> project, or sharing exempts a conversation from both.
+> not archived, not shared, and has no patrol or timer is temporary: it is
+> deleted after a period without activity — 90 days by default. Sending a
+> message in it starts the period again. For the last part of the period (14
+> days by default) the chat is flagged: its row in the sidebar shows the days
+> it has left, a line above the list counts the chats about to be deleted, and
+> the chat itself carries a notice with a **Pin to keep** button. There is also
+> a per-person cap on how many temporary conversations are kept at all (500 by
+> default): past it the least recently active go first, and the sidebar tells
+> you when you are close. Pinning, archiving, filing into a project, or
+> sharing exempts a conversation from both. Nothing is sent by email, and a
+> deleted conversation cannot be brought back.
 
 ### Ordering your chats
 

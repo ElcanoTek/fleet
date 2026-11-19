@@ -74,7 +74,9 @@ had drifted. Corrected while porting:
 - **Expiry is a default, not a law.** Unpinned conversations are swept after
   `CONVERSATION_TTL_DAYS` (14), and a per-user cap
   (`CONVERSATION_UNPINNED_CAP`, 50) can evict the oldest before the clock runs
-  out. The draft stated 14 days flatly and omitted the cap.
+  out. The draft stated 14 days flatly and omitted the cap. (The defaults
+  have since moved to 90 days and 500, with a warning before deletion:
+  [CHAT-RETENTION.md](CHAT-RETENTION.md).)
 - **The shortcut table named three chords the app does not bind.** `⌘F`, `⌘N`
   and `⌘J` are deliberately left to the browser (Chrome will not even let a page
   intercept `⌘N`); the wired chords are `⌘⇧O` and `⇧Esc`. Worth recording how

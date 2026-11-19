@@ -831,3 +831,37 @@ func TestPersonas_MethodNotAllowed(t *testing.T) {
 		}
 	}
 }
+
+// /server-config carries the retention policy the rail and the chat quote
+// (docs/CHAT-RETENTION.md): the inactivity window, the warning window held
+// inside it, and the per-user cap.
+func TestServerConfig_RetentionPolicy(t *testing.T) {
+	s := serverFixture(t)
+	get := func() serverConfigResponse {
+		t.Helper()
+		w := do(t, s.Routes(), http.MethodGet, "/server-config", nil, "alice@x.com")
+		if w.Code != http.StatusOK {
+			t.Fatalf("status: %d body: %s", w.Code, w.Body.String())
+		}
+		var resp serverConfigResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		return resp
+	}
+
+	s.cfg.ConversationTTL = 90
+	s.cfg.ConversationExpiryWarningDays = 14
+	s.cfg.UnpinnedCap = 500
+	got := get()
+	if got.ConversationTTLDays != 90 || got.ConversationExpiryWarningDays != 14 || got.ConversationUnpinnedCap != 500 {
+		t.Fatalf("retention = %d/%d/%d, want 90/14/500",
+			got.ConversationTTLDays, got.ConversationExpiryWarningDays, got.ConversationUnpinnedCap)
+	}
+
+	// A warning as long as the window would flag every chat from creation.
+	s.cfg.ConversationTTL = 7
+	if got := get(); got.ConversationExpiryWarningDays != 6 {
+		t.Fatalf("warning with a 7-day window = %d, want 6", got.ConversationExpiryWarningDays)
+	}
+}
