@@ -381,7 +381,7 @@ func (o *orchestrationState) checkPreviewEmailSafety(toolName, toolCallID, rawIn
 		o.log().Error("preview stage failed (preview_email)", "err", err)
 		return true, fmt.Sprintf("PREVIEW_FAILED: could not render preview for display (%v).", err)
 	}
-	return true, fmt.Sprintf("PREVIEW_DISPLAYED: the user is now viewing your draft in an inbox-style preview card (preview_id=%s). Nothing was sent and no approval is needed. The card has a Dismiss button ONLY — there is no Send button. Do NOT tell the user to \"click Send\" or \"approve\" the card. Instead, describe what you drafted in your reply and wait for the user's next instruction. If they want changes, revise and call preview_email again. If they say \"send it\", call mcp_sendgrid_send_email.", id)
+	return true, fmt.Sprintf(PreviewDisplayedPrefix+" the user is now viewing your draft in an inbox-style preview card (preview_id=%s). Nothing was sent and no approval is needed. The card has a Dismiss button ONLY — there is no Send button. Do NOT tell the user to \"click Send\" or \"approve\" the card. Instead, describe what you drafted in your reply and wait for the user's next instruction. If they want changes, revise and call preview_email again. If they say \"send it\", call mcp_sendgrid_send_email.", id)
 }
 
 // checkScheduleTaskSafety intercepts schedule_task (interactive, #239): it always
