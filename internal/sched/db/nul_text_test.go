@@ -143,7 +143,7 @@ func TestSchedTextWithNULIsStoredWithoutIt(t *testing.T) {
 		}
 		// A webhook's slug is taken from its URL: one holding U+0000 matches
 		// no trigger.
-		if got, err := db.GetTriggerBySlug(ctx, "nul-slug\x00"); err == nil || got != nil {
+		if got, err := db.GetTriggerBySlug(ctx, models.TriggerKindWebhook, "nul-slug\x00"); err == nil || got != nil {
 			t.Fatalf("GetTriggerBySlug(slug + NUL) = %v, %v; want a failure", got, err)
 		}
 	})
