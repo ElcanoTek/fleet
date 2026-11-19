@@ -11,6 +11,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/identity"
 	"github.com/ElcanoTek/fleet/internal/logging"
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 	"github.com/ElcanoTek/fleet/internal/principal"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
@@ -68,11 +69,18 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		// Brad@x.com and brad@x.com both pass membership (the store
 		// normalizes for that check) but get disjoint conversation
 		// namespaces and separate rate-limit buckets.
-		p.Email = strings.ToLower(strings.TrimSpace(p.Email))
-		if p.Email == "" {
+		// An email pgtext.CheckedEmail refuses names no account; it is
+		// refused here, before any lookup is run with it.
+		email, ok := pgtext.CheckedEmail(p.Email)
+		if ok && email == "" {
 			http.Error(w, "missing user identity", http.StatusBadRequest)
 			return
 		}
+		if !ok {
+			http.Error(w, "invalid user identity", http.StatusBadRequest)
+			return
+		}
+		p.Email = email
 		next.ServeHTTP(w, r.WithContext(principal.With(r.Context(), p)))
 	})
 }

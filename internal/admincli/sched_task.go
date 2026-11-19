@@ -17,6 +17,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/cron"
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 	"github.com/ElcanoTek/fleet/internal/sched/db"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
@@ -483,7 +484,13 @@ func setTaskOwner(ctx context.Context, st taskOwnerStore, w io.Writer, taskID uu
 
 func setTaskOwnerWithOptions(ctx context.Context, st taskOwnerStore, w io.Writer, taskID uuid.UUID, username string, includeLineage bool) int {
 	var owner *models.User
-	for _, name := range []string{username, strings.ToLower(username)} {
+	// A name pgtext.CheckedEmail refuses is looked up as given only: its
+	// lowercased form could be another, ASCII account.
+	names := []string{username}
+	if _, ok := pgtext.CheckedEmail(username); ok {
+		names = append(names, strings.ToLower(username))
+	}
+	for _, name := range names {
 		user, err := st.GetUserByUsernameWithContext(ctx, name)
 		if err == nil && user != nil {
 			owner = user
@@ -954,7 +961,7 @@ func importTasks(ctx context.Context, st taskStore, r io.Reader, opts taskImport
 // a row this box does not have — importableTaskStatus bounds WHICH statuses,
 // the collision policy bounds WHEN an existing row's status may change.
 func validateImportedTask(t *models.Task) error {
-	if strings.TrimSpace(t.Prompt) == "" {
+	if strings.TrimSpace(pgtext.Content(t.Prompt)) == "" { // as it will be stored
 		return fmt.Errorf("prompt is required")
 	}
 	// Portable too (#1601): the declaration's shape is decided by the prompt

@@ -23,6 +23,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/metrics"
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/tools"
@@ -371,7 +372,9 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSONBody(w, r, &req) {
 		return
 	}
-	if strings.TrimSpace(req.Message) == "" {
+	// Judged without U+0000, which the stored text loses: a message of nothing
+	// but 0x00 bytes is empty.
+	if strings.TrimSpace(pgtext.Content(req.Message)) == "" {
 		http.Error(w, "message is required", http.StatusBadRequest)
 		return
 	}

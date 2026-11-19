@@ -75,6 +75,11 @@ func assertMalformedReplaysRefused(t *testing.T, store *Storage, id uuid.UUID, w
 	if _, err := store.ReplayDeadLetteredTaskWithPrompt(ctx, id, "Still wrong.\n"+models.ExecutionRequirementsMarker+"\n{bad}"); !errors.Is(err, ErrReplayMalformedRequirements) {
 		t.Fatalf("replay with a malformed replacement = %v, want ErrReplayMalformedRequirements", err)
 	}
+	// A replacement of nothing but 0x00 bytes is empty as it would be stored:
+	// the task's own prompt is kept, so the replay is refused as malformed.
+	if _, err := store.ReplayDeadLetteredTaskWithPrompt(ctx, id, "\x00\x00 \x00"); !errors.Is(err, ErrReplayMalformedRequirements) {
+		t.Fatalf("replay with a replacement of 0x00 bytes = %v, want ErrReplayMalformedRequirements", err)
+	}
 	after, err := store.GetTask(id)
 	if err != nil || after.Status != models.TaskStatusDeadLettered || after.RecurrenceParkedAt == nil || after.Prompt != malformedParkPrompt {
 		t.Fatalf("a refused replay must change nothing, got %+v %v", after, err)

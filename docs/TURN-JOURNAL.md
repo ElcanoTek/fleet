@@ -60,7 +60,13 @@ intent row (the barrier proves it was blocked before dispatch); append a
 model-visible interruption marker + a cancelled `turn_summary`; project with
 provenance; flip the turn to `error` with a synthetic `turn.error` SSE frame
 (its message names the restart). Idempotent across repeated/interrupted
-recoveries.
+recoveries. A turn whose recovery fails is rolled back and left `running`
+for the next boot, and so are the later stranded turns of its conversation
+(recovered now, one of them would be newer traffic, and the earlier turn
+would then be closed without its journaled tool calls projected). Recovery
+moves on to the other conversations, until the boot's two-minute recovery
+deadline stops the pass. The call returns every failure joined (each names
+its turn), and boot logs them as `stranded-turn recovery: failed`.
 
 Two guarded special cases: a turn whose history committed but whose process
 died before `FinishTurn` is flipped to `completed` (nothing to project — the

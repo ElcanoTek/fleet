@@ -38,6 +38,7 @@ import (
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 )
 
 // TeamSharedConversation is the read-only view a teammate gets of a
@@ -596,7 +597,10 @@ var transferAfterChecks func()
 // target is in that team. Every refusal is the same ErrNotAProjectMember, so
 // the route says nothing about which addresses have accounts.
 func (s *Store) TransferProjectOwnership(ctx context.Context, projectID, newOwnerEmail, actingOwner string) (*Project, error) {
-	newOwner := normalizeEmail(newOwnerEmail)
+	newOwner, ok := pgtext.CheckedEmail(newOwnerEmail) // the target is an identity entering here
+	if !ok {
+		return nil, ErrNotAProjectMember
+	}
 	if newOwner == "" {
 		return nil, errInput("new owner email required")
 	}

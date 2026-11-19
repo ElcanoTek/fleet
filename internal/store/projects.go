@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 )
 
 // Projects / Spaces (#509): the binding object that turns scattered
@@ -90,7 +92,10 @@ var ErrProjectNotOwner = errors.New("project not found (or not the owner)")
 // OWNER'S resolved team (the handler enforces this — a caller can never share
 // into a team it does not belong to).
 func (s *Store) CreateProject(ctx context.Context, p *Project) (*Project, error) {
-	p.Name = strings.TrimSpace(p.Name)
+	// Name and instructions are content (a project is found by id); the MCP
+	// server names are catalog keys and go to the database as given.
+	p.Name = strings.TrimSpace(pgtext.Content(p.Name))
+	p.Instructions = pgtext.Content(p.Instructions)
 	if p.Name == "" || len(p.Name) > maxProjectNameLen {
 		return nil, errInput("project name required (≤128 chars)")
 	}
@@ -272,14 +277,18 @@ func unfileChatsInInaccessibleProjectsTx(ctx context.Context, tx *sql.Tx, email,
 // else can see.
 func (s *Store) UpdateProject(ctx context.Context, ownerEmail, id string, patch ProjectPatch) (*Project, error) {
 	if patch.Name != nil {
-		n := strings.TrimSpace(*patch.Name)
+		n := strings.TrimSpace(pgtext.Content(*patch.Name))
 		if n == "" || len(n) > maxProjectNameLen {
 			return nil, errInput("project name required (≤128 chars)")
 		}
 		patch.Name = &n
 	}
-	if patch.Instructions != nil && len(*patch.Instructions) > maxProjectInstructionsLen {
-		return nil, errInput("project instructions too long (≤8000 chars)")
+	if patch.Instructions != nil {
+		in := pgtext.Content(*patch.Instructions)
+		if len(in) > maxProjectInstructionsLen {
+			return nil, errInput("project instructions too long (≤8000 chars)")
+		}
+		patch.Instructions = &in
 	}
 	var mcpsArg any
 	if patch.MCPServers != nil {
@@ -425,6 +434,7 @@ func lockAccessibleProjectTx(ctx context.Context, tx *sql.Tx, id, userEmail stri
 // before calling; the store re-checks access under the project row's lock
 // (lockAccessibleProjectTx).
 func (s *Store) CreateProjectConversation(ctx context.Context, userEmail, title, persona, model string, lockdown bool, projectID string, mcpServers []string) (*Conversation, error) {
+	title = pgtext.Content(title)
 	id := newConversationID(ctx)
 	now := time.Now().Unix()
 	if mcpServers == nil {

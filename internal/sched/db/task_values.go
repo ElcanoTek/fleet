@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/ElcanoTek/fleet/internal/logging"
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
 
@@ -328,6 +329,25 @@ func marshalRawJSON(raw json.RawMessage) any {
 		return nil
 	}
 	return []byte(raw)
+}
+
+// contentPtr maps an optional free-form text field (a run's result or error
+// message) to a nullable column value without U+0000: nil → SQL NULL.
+func contentPtr(p *string) any {
+	if p == nil {
+		return nil
+	}
+	return pgtext.Content(*p)
+}
+
+// marshalContentJSON is marshalRawJSON for a jsonb column holding a run's
+// output (#244), which is model-written content: it loses U+0000 and the
+// \u0000 sequence jsonb refuses (pgtext.JSON).
+func marshalContentJSON(raw json.RawMessage) any {
+	if len(raw) == 0 {
+		return nil
+	}
+	return pgtext.JSON(string(raw))
 }
 
 // unmarshalRawJSON reads a nullable raw-JSON column back. NULL/empty → nil so the

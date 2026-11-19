@@ -3,7 +3,9 @@ package storage
 import (
 	"context"
 	"fmt"
+	"strings"
 
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/google/uuid"
 )
@@ -118,8 +120,10 @@ func triggerRunCreate(template *models.Task, prompt string, inherit connectorInh
 
 	// An empty rendered prompt (no prompt_template configured) falls back to the
 	// template task's own prompt, so a trigger can be a pure fire-the-task signal.
-	if prompt != "" {
-		tc.Prompt = prompt
+	// Judged as it would be stored, without U+0000: a render of nothing but
+	// 0x00 bytes falls back too.
+	if rendered := pgtext.Content(prompt); strings.TrimSpace(rendered) != "" {
+		tc.Prompt = rendered
 	}
 
 	// A spawned run is a fresh one-shot that runs now, never another inert

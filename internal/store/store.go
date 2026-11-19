@@ -33,6 +33,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/dbtrace"
 	"github.com/ElcanoTek/fleet/internal/migrations"
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 	"github.com/ElcanoTek/fleet/internal/secretbox"
 )
 
@@ -386,6 +387,7 @@ func (s *Store) CreateConversation(ctx context.Context, userEmail, title, person
 func insertConversation(ctx context.Context, db interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
 }, id, userEmail, title, persona, model string, lockdown bool) (*Conversation, error) {
+	title = pgtext.Content(title) // a title is free-form content
 	now := time.Now().Unix()
 	// optional_mcp_servers_enabled gets the column default ('[]'::jsonb);
 	// we don't need to write it explicitly on insert.
@@ -432,6 +434,7 @@ func insertConversation(ctx context.Context, db interface {
 // brancher is a member of it, so a fork of a project chat lands back in the
 // project rather than in Temporary.
 func (s *Store) BranchConversation(ctx context.Context, userEmail, parentConvID string, branchPointMessageID int64, title string) (*Conversation, error) {
+	title = pgtext.Content(title)
 	// redact narrows the message copy to what a NON-OWNER was allowed to read.
 	// False for the owner's own branch, which copies the history verbatim.
 	redact := false
@@ -1216,6 +1219,7 @@ func (s *Store) SetPersona(ctx context.Context, userEmail, convID, persona strin
 // caller treats as a benign skip. A soft-deleted conversation is likewise
 // skipped (deleted_at IS NULL, #596).
 func (s *Store) UpdateTitle(ctx context.Context, userEmail, convID, title string) error {
+	title = pgtext.Content(title)
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE conversations SET title = $1, updated_at = $2 WHERE id = $3 AND user_email = $4 AND title_locked = FALSE AND deleted_at IS NULL`,
 		title, time.Now().Unix(), convID, userEmail,
@@ -1235,7 +1239,7 @@ func (s *Store) UpdateTitle(ctx context.Context, userEmail, convID, title string
 // always wins and pins the name against the auto-titler thereafter. A
 // soft-deleted conversation is not mutable (deleted_at IS NULL, #596).
 func (s *Store) RenameTitle(ctx context.Context, userEmail, convID, title string) error {
-	return s.updateOwnedConversation(ctx, userEmail, convID, "title = $1, title_locked = TRUE", title)
+	return s.updateOwnedConversation(ctx, userEmail, convID, "title = $1, title_locked = TRUE", pgtext.Content(title))
 }
 
 // SetPinned toggles the pin state for a conversation. A soft-deleted

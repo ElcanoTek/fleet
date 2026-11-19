@@ -188,3 +188,13 @@ func fillTaskNonZero(v reflect.Value) {
 		// interface / chan / func — no Task definition field uses these kinds.
 	}
 }
+
+// A rendered prompt of nothing but 0x00 bytes is empty as it would be stored,
+// so the run falls back to the template's own prompt.
+func TestTriggerRunCreateFallsBackOnANULOnlyRender(t *testing.T) {
+	t.Parallel()
+	template := models.Task{Prompt: "the template's own prompt"}
+	if got := triggerRunCreate(&template, "\x00\x00 \x00", connectorsDenied); got.Prompt != template.Prompt {
+		t.Fatalf("prompt = %q, want the template's", got.Prompt)
+	}
+}

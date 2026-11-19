@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 )
 
 const multiplayerMCPAccountPrefix = "mp-user:"
@@ -71,6 +73,32 @@ func scanEmailJSONArray(raw string) []string {
 	return normalizeEmailSlice(parsed, "")
 }
 
+// ValidateAccessEmails refuses, as an input error, an entry that would be
+// written into a multiplayer participant or excluded list (a participants,
+// excluded or add list) and that breaks the list rule, pgtext.ValidListEmail
+// (checked as sent, before lowercasing, which can map a character onto an
+// ASCII letter). Such an entry names no account, and the lists are stored as
+// JSON text that other people's listings cast to jsonb, which the \u0000
+// sequence breaks. Exported so a handler can check every list it will write
+// before the first write. A remove list is not checked: its entries are
+// normalised (trimmed, lowercased) and then matched exactly against the
+// stored entries, which is how an entry stored with a control character
+// before entries were checked is removed; one that breaks the list rule is
+// never written back as an exclusion.
+func ValidateAccessEmails(lists ...[]string) error {
+	for _, list := range lists {
+		for _, e := range list {
+			if !pgtext.ValidListEmail(strings.TrimSpace(e)) {
+				return errInputf("participant %q: %s", e, errListEntry)
+			}
+		}
+	}
+	return nil
+}
+
+// errListEntry refuses an entry pgtext.ValidListEmail refuses.
+const errListEntry = "a participant may not hold a control or format character, a backslash, or a look-alike of an ASCII letter"
+
 func normalizeEmailSlice(in []string, skipEmail string) []string {
 	skip := normalizeEmail(skipEmail)
 	seen := make(map[string]bool, len(in))
@@ -125,6 +153,9 @@ func containsEmail(list []string, target string) bool {
 //     belongs to a team so the conversation appears in team listings, without
 //     requiring the conversation to live inside a project first.
 func (s *Store) SetConversationMultiplayer(ctx context.Context, ownerEmail, convID string, multiplayer bool, participants, excluded []string) (*Conversation, error) {
+	if err := ValidateAccessEmails(participants, excluded); err != nil {
+		return nil, err
+	}
 	return s.mutateConversationMultiplayer(ctx, ownerEmail, convID, func(_ bool, curParticipants, curExcluded []string) (bool, []string, []string) {
 		nextParticipants := curParticipants
 		if participants != nil {
@@ -141,6 +172,9 @@ func (s *Store) SetConversationMultiplayer(ctx context.Context, ownerEmail, conv
 // UpdateConversationMultiplayerAccess adds and/or removes specific user emails
 // on a conversation's multiplayer access list atomically under a row lock.
 func (s *Store) UpdateConversationMultiplayerAccess(ctx context.Context, ownerEmail, convID string, addEmails, removeEmails []string) (*Conversation, error) {
+	if err := ValidateAccessEmails(addEmails); err != nil {
+		return nil, err
+	}
 	ownerEmail = normalizeEmail(ownerEmail)
 	return s.mutateConversationMultiplayer(ctx, ownerEmail, convID, func(curMultiplayer bool, curParticipants, curExcluded []string) (bool, []string, []string) {
 		partMap := make(map[string]bool)
@@ -165,6 +199,14 @@ func (s *Store) UpdateConversationMultiplayerAccess(ctx context.Context, ownerEm
 				continue
 			}
 			delete(partMap, e)
+			if !pgtext.ValidListEmail(e) {
+				// Only an entry the list rule admits is written as an
+				// exclusion: one stored before entries were checked is removed
+				// exactly as given, and any other refused value is only
+				// deleted — written back, it could read as a damaged list.
+				delete(exclMap, e)
+				continue
+			}
 			exclMap[e] = true
 		}
 		parts := make([]string, 0, len(partMap))
@@ -596,6 +638,13 @@ func (s *Store) ListSharedAndMultiplayerConversations(ctx context.Context, calle
 		return nil, err
 	}
 	callerTeam := strings.TrimSpace(u.TeamID)
+	// The participant and excluded lists are JSON text. A list stored with
+	// the \u0000 sequence (an entry written before participants were checked)
+	// cannot be cast to jsonb, and one such row would fail the whole query,
+	// so it is not cast: the CASE reads it the way that never grants access
+	// — an exclusion list excludes the caller, a participant list does not
+	// name them. The rows' exact lists are still decoded in Go
+	// (scanEmailJSONArray), which reads the sequence.
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT `+conversationColumns+`, COALESCE(c.team_shared_with, ''), c.team_shared_with_id
 		FROM conversations c
@@ -605,9 +654,9 @@ func (s *Store) ListSharedAndMultiplayerConversations(ctx context.Context, calle
 		  AND c.user_email <> $1
 		  AND (
 		    (c.multiplayer = TRUE
-		      AND NOT (c.multiplayer_excluded::jsonb ? $1)
+		      AND NOT COALESCE(CASE WHEN strpos(c.multiplayer_excluded, '\u0000') = 0 THEN c.multiplayer_excluded::jsonb ? $1 END, TRUE)
 		      AND (
-		        (c.multiplayer_participants::jsonb ? $1)
+		        COALESCE(CASE WHEN strpos(c.multiplayer_participants, '\u0000') = 0 THEN c.multiplayer_participants::jsonb ? $1 END, FALSE)
 		        OR COALESCE(c.team_shared_with, '') = ''
 		        OR ($2 <> '' AND c.team_shared_with = $2 AND (c.team_shared_with_id IS NULL OR c.team_shared_with_id = (SELECT t.id FROM teams t WHERE t.name = $2)))
 		      )
@@ -731,4 +780,72 @@ func (s *Store) ListActiveMultiplayerAndPendingConversationIDs(ctx context.Conte
 		}
 	}
 	return out, rows.Err()
+}
+
+// scrubMultiplayerListsInGo removes email from the multiplayer lists Postgres
+// cannot cast to jsonb (stored with the \u0000 sequence; see
+// ListSharedAndMultiplayerConversations),
+// which DeleteUser's statement leaves alone: it decodes them in Go, drops the
+// account's entries and writes the rest back, so an account later created with
+// the same email inherits no invitation or exclusion from them either.
+func scrubMultiplayerListsInGo(ctx context.Context, tx *sql.Tx, email string) error {
+	rows, err := tx.QueryContext(ctx, `
+		SELECT id, multiplayer_participants, multiplayer_excluded FROM conversations
+		 WHERE strpos(multiplayer_participants, '\u0000') > 0 OR strpos(multiplayer_excluded, '\u0000') > 0
+		 FOR UPDATE`)
+	if err != nil {
+		return err
+	}
+	type scrubbed struct {
+		id                     string
+		participants, excluded sql.NullString // NULL stays NULL
+	}
+	var changed []scrubbed
+	for rows.Next() {
+		var id string
+		var participants, excluded sql.NullString
+		if err := rows.Scan(&id, &participants, &excluded); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		var pChanged, eChanged bool
+		participants.String, pChanged = dropEmailFromJSONList(participants.String, email)
+		excluded.String, eChanged = dropEmailFromJSONList(excluded.String, email)
+		if pChanged || eChanged {
+			changed = append(changed, scrubbed{id, participants, excluded})
+		}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	_ = rows.Close()
+	for _, c := range changed {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE conversations SET multiplayer_participants = $2, multiplayer_excluded = $3 WHERE id = $1`,
+			c.id, c.participants, c.excluded); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// dropEmailFromJSONList returns the JSON email list raw without email's
+// entries, and whether any were removed; raw that does not decode is returned
+// unchanged.
+func dropEmailFromJSONList(raw, email string) (string, bool) {
+	var list []string
+	if strings.TrimSpace(raw) == "" || json.Unmarshal([]byte(raw), &list) != nil {
+		return raw, false
+	}
+	kept := list[:0]
+	for _, e := range list {
+		if normalizeEmail(e) != email {
+			kept = append(kept, e)
+		}
+	}
+	if len(kept) == len(list) {
+		return raw, false
+	}
+	return marshalEmailSlice(kept), true
 }

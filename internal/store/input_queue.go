@@ -14,6 +14,8 @@ import (
 	"errors"
 	"strings"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 )
 
 // Input queue modes and states (mirrors the 042 check constraints).
@@ -215,6 +217,9 @@ func (s *Store) insertInput(ctx context.Context, r InputQueueRow) (InputQueueRow
 // a multi-statement op (ClaimApprovalResume's claim + enqueue) can make the
 // queue row part of its own atomic unit. The caller commits or rolls back.
 func (s *Store) insertInputTx(ctx context.Context, tx *sql.Tx, r InputQueueRow) (InputQueueRow, bool, error) {
+	// The message is the user's text, content; client_input_id and
+	// submission_id are keys and are stored as given.
+	r.Message = pgtext.Content(r.Message)
 	now := time.Now().Unix()
 	r.CreatedAt, r.UpdatedAt = now, now
 	// Allocated before the insert, so a Stop that reads the counter after this

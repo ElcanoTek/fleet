@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
 )
@@ -121,7 +122,7 @@ func batchCreateTasks(ctx context.Context, st batchTaskStore, r io.Reader, atomi
 // re-evaluates at dispatch, and a CLI operator may legitimately import
 // historical/template definitions.
 func validateBatchTaskCreate(tc *models.TaskCreate) error {
-	tc.Prompt = strings.TrimSpace(tc.Prompt)
+	tc.Prompt = strings.TrimSpace(pgtext.Content(tc.Prompt)) // as it will be stored
 	if tc.Prompt == "" {
 		return errors.New("prompt is required")
 	}

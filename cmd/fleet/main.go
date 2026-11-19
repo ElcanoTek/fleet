@@ -62,6 +62,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/notify"
 	"github.com/ElcanoTek/fleet/internal/observability"
 	"github.com/ElcanoTek/fleet/internal/otelsetup"
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 	"github.com/ElcanoTek/fleet/internal/piiredact"
 	"github.com/ElcanoTek/fleet/internal/runner"
 	"github.com/ElcanoTek/fleet/internal/safe"
@@ -1400,8 +1401,9 @@ func seedBootstrapAdmins(schedStorage *storage.Storage, managedByAuth bool) erro
 
 // bootstrapAdmins parses FLEET_ORCHESTRATOR_BOOTSTRAP_ADMINS — a comma-separated
 // list of emails to provision (or promote) as orchestrator admins at boot (#458)
-// — returning the de-duplicated, lowercased, non-empty entries. Empty/unset =
-// no bootstrap.
+// — returning the de-duplicated, lowercased, non-empty entries (an entry
+// pgtext.CheckedEmail refuses is returned as written, for EnsureAdmin to
+// refuse). Empty/unset = no bootstrap.
 func bootstrapAdmins() []string {
 	raw := strings.TrimSpace(envreg.Get("FLEET_ORCHESTRATOR_BOOTSTRAP_ADMINS"))
 	if raw == "" {
@@ -1410,9 +1412,15 @@ func bootstrapAdmins() []string {
 	seen := make(map[string]struct{})
 	var out []string
 	for _, part := range strings.Split(raw, ",") {
-		email := strings.ToLower(strings.TrimSpace(part))
+		email := strings.TrimSpace(part)
 		if email == "" {
 			continue
+		}
+		// An entry pgtext.CheckedEmail refuses is kept as written, not
+		// lowercased: lowercasing could turn it into another, ASCII address,
+		// and EnsureAdmin refuses it, which stops the boot.
+		if checked, ok := pgtext.CheckedEmail(email); ok {
+			email = checked
 		}
 		if _, dup := seen[email]; dup {
 			continue
@@ -2198,7 +2206,10 @@ func (p scheduledSkillProposer) Propose(name, description, body, _ string) (stri
 // (unknown-outcome synthesized when missing), best-effort assistant text from
 // turn_events, one explicit interrupted turn per crash. A failure logs loudly
 // but does not abort boot: the DB may be degraded, and the affected turns stay
-// 'running' for the next boot to retry. See docs/TURN-JOURNAL.md + ADR-0039.
+// 'running' for the next boot to retry. A turn that fails on its own is
+// skipped by the store, so it never holds back the turns after it; its error
+// (naming the turn) is part of the one logged here.
+// See docs/TURN-JOURNAL.md + ADR-0039.
 func recoverStrandedTurns(chatStore *store.Store, inputQueueRetentionDays int) {
 	chatStore.RequireBootAutoSubmitRecovery(time.Now().UnixMilli())
 	recCtx, recCancel := context.WithTimeout(context.Background(), 2*time.Minute)

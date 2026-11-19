@@ -29,6 +29,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/logging"
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 	"github.com/ElcanoTek/fleet/internal/websession"
 )
 
@@ -243,15 +245,24 @@ func validateIDToken(claims map[string]any, cfg *OIDCConfig, doc *discoveryDoc, 
 	if nonce, _ := claims["nonce"].(string); nonce != expectedNonce || expectedNonce == "" {
 		return "", "", "nonce mismatch"
 	}
+	// The email and subject are the keys the account and its session
+	// generation are found by; one internal/pgtext refuses names no account
+	// and is refused before any lookup runs with it.
 	e, _ := claims["email"].(string)
-	email = strings.ToLower(strings.TrimSpace(e))
-	if email == "" {
+	email, emailOK := pgtext.CheckedEmail(e)
+	if emailOK && email == "" {
 		return "", "", "no email claim"
+	}
+	if !emailOK {
+		return "", "", "email claim has a refused character"
 	}
 	sub, _ := claims["sub"].(string)
 	subject = strings.TrimSpace(sub)
 	if subject == "" || len(subject) > 255 {
 		return "", "", "no subject claim"
+	}
+	if !pgtext.ValidIdentity(subject) {
+		return "", "", "subject claim has a refused character"
 	}
 	// An explicit email_verified:false is honored; absent counts as verified
 	// (not every IdP emits it).
@@ -418,6 +429,8 @@ func (g *Gateway) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	email, subject, reason := validateIDToken(decodeJWTClaims(idToken), cfg, doc, nonce, time.Now())
 	if reason != "" {
+		// reason is one of validateIDToken's fixed strings, never a claim.
+		logging.From(r.Context()).Warn("webui: oidc: id_token refused", "reason", reason)
 		fail("oidc_error")
 		return
 	}

@@ -8,6 +8,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 	"github.com/ElcanoTek/fleet/internal/truncate"
 )
 
@@ -144,7 +145,12 @@ func (r *ExecutionRequirements) RosterNarrowing() string {
 // roster, and what they mean, is decided at dispatch; Fleet interprets
 // nothing about them.
 func ParseExecutionRequirements(prompt string) (*ExecutionRequirements, error) {
-	lines := strings.Split(prompt, "\n")
+	// The prompt is read as it is stored, without U+0000 (pgtext.Content), so
+	// every reader — the save-time checks, NewTask's serialization key,
+	// dispatch — agrees on the declaration even when the caller passes the
+	// prompt before it was cleaned: a 0x00 byte cannot hide a marker from one
+	// of them.
+	lines := strings.Split(pgtext.Content(prompt), "\n")
 	var found *ExecutionRequirements
 	seen := false
 	for i, line := range lines {
@@ -187,7 +193,8 @@ func DeclaredSerializationKey(prompt string) string {
 
 // ValidateExecutionRequirements reports whether a task prompt's optional
 // EXECUTION REQUIREMENTS declaration is well-formed: ParseExecutionRequirements
-// without the result. A prompt with no marker is valid.
+// without the result, so it too reads the prompt as stored. A prompt with no
+// marker is valid.
 func ValidateExecutionRequirements(prompt string) error {
 	_, err := ParseExecutionRequirements(prompt)
 	return err

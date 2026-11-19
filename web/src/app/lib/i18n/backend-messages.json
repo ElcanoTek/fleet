@@ -243,6 +243,7 @@
     "invalid team rename",
     "invalid token",
     "invalid unshared_paths",
+    "invalid user identity",
     "items is required",
     "kind and id query params required",
     "labels must be non-empty",

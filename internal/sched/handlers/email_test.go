@@ -33,6 +33,15 @@ func TestSenderApproved(t *testing.T) {
 	if senderApproved("alerts@corp.com", nil) {
 		t.Error("empty allowlist should approve no one")
 	}
+	// An allowlist entry holding a look-alike of an ASCII letter (U+212A
+	// KELVIN SIGN) is not lowercased onto the ASCII address, and a sender
+	// holding one matches nothing: neither approves kate@corp.com's mail.
+	if senderApproved("kate@corp.com", []string{"\u212aate@corp.com"}) {
+		t.Error("a look-alike allowlist entry approved the ASCII sender")
+	}
+	if senderApproved("\u212aate@corp.com", []string{"kate@corp.com"}) {
+		t.Error("a look-alike sender matched the ASCII allowlist entry")
+	}
 }
 
 func TestCheckEmailPolicy(t *testing.T) {

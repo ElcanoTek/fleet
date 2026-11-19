@@ -228,3 +228,126 @@ runner (`internal/migrations`), one directory (`internal/migrations/sql`, the
 legacy files frozen under `legacy/chat` and `legacy/sched`) and one ledger,
 `core.schema_versions`, which adopts the two per-store ledgers on the first
 start.
+
+## Text Postgres cannot store: content is cleaned, keys are not
+
+Postgres refuses U+0000 in a text value (SQLSTATE 22021), and jsonb (not
+json) also refuses the JSON sequence `\u0000` (22P05). fleet stores free-form
+text it does not control — what a user types, what a model writes, a webhook
+payload — so the store layers remove the character from the **content**
+fields they write, through `internal/pgtext`: `pgtext.Content` for text and
+`pgtext.JSON` for JSON text bound for jsonb (0x00 bytes first, then the
+`\u0000` sequences; a doubled backslash followed by `u0000` is text and is
+kept). The character carries no meaning in text.
+
+| Store | Content fields cleaned |
+|---|---|
+| chat | the decoded message text the search index stores (`message_search_content`, written in the same transaction as a turn's history commit, a webhook's input commit and boot recovery), and the search query matched against it; conversation titles (create, auto-title, rename, branch, project chats, webhook chats); the input queue's message; memory content (personal, proposed, project); a project's name and instructions; a persona's display name, description, instructions and each patrol's title and prompt |
+| scheduler | a task's title, prompt, description and tags (jsonb); a run's result, error message and structured output (jsonb); the run log (`logs.session_data`, jsonb); a trigger's prompt template; an inbound email's subject |
+
+**Content is cleaned before it is checked.** A task's title, prompt and
+description lose U+0000 in the normalisation each create and edit path runs
+first: `validateTaskCreate` (every HTTP create, edit, batch, estimate and
+import path), `storage.EnqueueTaskAs` (an approved chat `schedule_task`, the
+`create_task` tool), `storage.UpdateEditableTask` (an approved `manage_tasks`
+edit), a trigger run's rendered prompt (`triggerRunCreate`: a render of
+nothing but 0x00 bytes falls back to the template's prompt) and a dead-letter
+replay's replacement prompt; the CLI and bundle imports check emptiness on
+the cleaned prompt. `models.ParseExecutionRequirements` itself reads a prompt
+without U+0000, so every reader — the save-time checks, the serialization key
+`NewTask` takes from the prompt, dispatch — agrees on the declaration even
+when it is handed the prompt before it was cleaned. A chat message of nothing
+but 0x00 bytes is refused as empty. A structured output is cleaned before it
+is validated against its schema (`storage.validateStoredOutputContract`,
+`UpdateTaskStatusAtomic`): removing the character afterwards could change
+the object (keys `amount` and `amount\u0000` would collapse into one), so
+what is validated is exactly what is stored.
+
+**Keys are not cleaned.** Ids, emails, issuers, subjects, slugs, tokens,
+idempotency keys and the names rows are looked up by — a task's name (the
+import key), a project's MCP server names (catalog keys), a persona's name, an
+input's client key, an inbound email's sender — go to Postgres without
+U+0000 being removed (an email is trimmed and lowercased, `pgtext.EmailKey`).
+A key holding U+0000 therefore fails its query: a lookup (an account by
+email, a share token, a trigger slug, an OAuth state) matches no row, and a
+write naming such a key fails.
+
+**Identity values are refused where they enter**, so they get a clear
+refusal instead of a failed query. Every email from outside goes through
+`pgtext.CheckedEmail`, which checks the trimmed value **as sent** and only
+then lowercases it. It refuses a Unicode control character (U+0000 among
+them) or format character (U+200B, U+202E, U+FEFF, and U+200C/U+200D, which
+IDNA2008 allows in some scripts' domain names), U+FFFD, text that is not
+UTF-8, and a non-ASCII character whose lowercase form or case-fold orbit
+holds an ASCII letter (U+212A KELVIN SIGN, U+017F LONG S, U+0130), which
+lowercasing would map onto another account's ASCII address. Subjects,
+issuers and tenants get the same check (`pgtext.ValidIdentity`). An email
+that reaches a store key some other way and holds such a look-alike is only
+trimmed, not lowercased (`pgtext.EmailKey`), so it matches no other account.
+This is a deliberate trade-off for Turkish addresses: an email typed with an
+uppercase İ (U+0130) is refused, so `İLKER@firma.com.tr` no longer signs in
+as `ilker@firma.com.tr`; typed in lowercase, it does.
+
+Entries written into a multiplayer participant or excluded list follow one
+more rule, the list rule (`pgtext.ValidListEmail`): no backslash. The lists
+are JSON text, and an entry with the characters `\u0000` would read there as
+the sequence of a damaged list. Signing in and resolving a principal do not
+refuse a backslash.
+
+| Entry point | Refusal |
+|---|---|
+| OIDC ID token: email and subject claims (`webui.validateIDToken`) | sign-in refused; the reason is logged |
+| Session cookies: `elcano_session` email, issuer, subject; `elcano_auth` email, tenant (`internal/websession`) | no session |
+| Central Auth's signed account events: email, subject (`webui.verifySignedEvent`) | event refused |
+| Password sign-in form email (`webui.handleLogin`) | the same answer as a wrong password |
+| Any chat request's principal (`httpapi.authMiddleware`) and Operations Center session principal (`sched/handlers.userPrincipal`) | 400 `invalid user identity` |
+| `principal.Resolve`: the email; an OIDC session's issuer and subject | not a member, with no lookup; session revoked, without the external-session lookup |
+| Account creation: `store.CreateUser` (admin create), `identity.CreateAccount`, the admin-key `POST /users` of the Operations Center, `fleet sched user add`, `store.ImportUser` and a legacy bundle's scheduler users | input error; 400 from the routes |
+| A legacy import's conversations and memories whose owner is refused | input error, reported by the import |
+| Bootstrap admins (`FLEET_ORCHESTRATOR_BOOTSTRAP_ADMINS`): a refused entry is not lowercased, `identity.EnsureAdmin` refuses it | boot stops with a message naming the entry |
+| `ADMIN_EMAILS` (`config.splitEmails`): a refused entry is kept as written | a warning at load; the entry makes no one an admin |
+| An admin password reset's path email; U+0130 or U+212A in the path of `PATCH`/`DELETE /admin/users/{email}` | 400 |
+| Entries written into a multiplayer chat's participant or excluded list (`participants`, `excluded`, `add` of `POST /conversations/{id}/multiplayer`), under the list rule | 400; every list in the request is checked before anything is written |
+| A remote MCP server's share grantee; the target of a conversation or project transfer | the route's invalid-grantee / invalid-target answer |
+| A user API key's account (`fleet sched apikey create --user`) | refused at creation |
+| An inbound email's sender; an email trigger's approved-sender entry (normalised with `pgtext.EmailKey`) | matches no approved sender / approves no one |
+
+`PATCH` and `DELETE /admin/users/{email}` and a multiplayer `remove`
+normalise their value (trim, lowercase) and then match it exactly, so an
+account or a participant entry stored before these checks — with a control
+character, or with U+017F, which is already lowercase — can still be changed
+or removed. A multiplayer `remove` writes an exclusion only for a value the
+list rule admits; any other value is only deleted from the lists. The admin routes compare the target with
+the signed-in admin by the same normalised form, so a look-alike cannot slip
+past the guards against deleting or demoting yourself.
+
+What this does not do:
+
+- `messages.content` is `TEXT` holding JSON, so a NUL in a chat message is
+  stored there as the JSON sequence `\u0000`, which text accepts; reloaded
+  history still carries U+0000. Only the decoded copy the search index
+  stores loses it.
+- A `\u0000` sequence stored in a `TEXT` column holding JSON still breaks a
+  `::jsonb` cast over that row (22P05), and Postgres does not promise to
+  evaluate a row's other filters first. The casts over such columns are
+  guarded: the message-content cast in `CountUserMessagesAfterResolution`
+  only casts a row without the sequence (a row with it falls back to the
+  timestamp boundary), and the multiplayer participant and excluded lists
+  stored with it before entries were checked are read the way that never
+  grants access — a participant list names nobody, an exclusion list excludes
+  everybody — by the shared-chat listing and search. Account deletion still
+  removes the deleted account from such a list, decoding it in Go. The lists
+  themselves are not rewritten.
+- The owner and sender comparisons that use `strings.EqualFold` (chat,
+  workspace files, the turn stream, history, the remote MCP OAuth user match)
+  are covered for ASCII look-alikes only: `strings.EqualFold` also equates
+  some non-ASCII pairs that lowercasing keeps apart (µ and μ, ς and σ, …),
+  and identities holding those are not refused.
+- Free-form fields not in the content table are stored as given and fail on
+  U+0000, for example: the turn journal's tool input (kept byte for byte as
+  the record of what ran), a chat patrol's own title and prompt, a task's
+  output schema, a paused task's question and answer (`pending_question`,
+  `pending_answer`), a run's error analysis (`error_analysis`), task memory
+  values, prompt library content, user skill bodies, notification settings.
+- A task's owner set by name is a lookup: a name holding U+0000 or a
+  look-alike matches no user.

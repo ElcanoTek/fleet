@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 )
 
 // This file holds the legacy-import write primitives used by `fleet import`
@@ -69,7 +71,10 @@ type ImportedMemory struct {
 // existing fleet account always wins so an import can never rotate someone's
 // password out from under them.
 func (s *Store) ImportUser(ctx context.Context, u ImportedUser) (bool, error) {
-	email := normalizeEmail(u.Email)
+	email, ok := pgtext.CheckedEmail(u.Email)
+	if !ok {
+		return false, errInputf("import user %q: %s", u.Email, errEmailControl)
+	}
 	if email == "" {
 		return false, fmt.Errorf("import user: empty email")
 	}
@@ -100,6 +105,13 @@ func (s *Store) ImportConversation(ctx context.Context, c ImportedConversation) 
 	if strings.TrimSpace(c.ID) == "" {
 		return false, fmt.Errorf("import conversation: empty id")
 	}
+	// The owner is an identity: refused as ImportUser refuses it, so the
+	// conversation is never filed under the ASCII account a look-alike
+	// lowercases to.
+	owner, ok := pgtext.CheckedEmail(c.UserEmail)
+	if !ok {
+		return false, errInputf("import conversation %s: owner %q: %s", c.ID, c.UserEmail, errEmailControl)
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return false, err
@@ -120,7 +132,7 @@ func (s *Store) ImportConversation(ctx context.Context, c ImportedConversation) 
 		    optional_mcp_servers_enabled, created_at, updated_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		 ON CONFLICT (id) DO NOTHING`,
-		c.ID, normalizeEmail(c.UserEmail), c.Title, c.Persona, c.Model,
+		c.ID, owner, c.Title, c.Persona, c.Model,
 		c.Pinned, c.Lockdown, string(mcpJSON), c.CreatedAt, c.UpdatedAt,
 	)
 	if err != nil {
@@ -178,6 +190,10 @@ func (s *Store) ImportMemory(ctx context.Context, m ImportedMemory, convExists b
 	if strings.TrimSpace(m.ID) == "" {
 		return false, fmt.Errorf("import memory: empty id")
 	}
+	owner, ok := pgtext.CheckedEmail(m.UserEmail) // as ImportConversation
+	if !ok {
+		return false, errInputf("import memory %s: owner %q: %s", m.ID, m.UserEmail, errEmailControl)
+	}
 	var convID any
 	if m.ConversationID != "" && convExists {
 		convID = m.ConversationID
@@ -187,7 +203,7 @@ func (s *Store) ImportMemory(ctx context.Context, m ImportedMemory, convExists b
 		   (id, user_email, content, source, conversation_id, created_at, updated_at, learned_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $6)
 		 ON CONFLICT (id) DO NOTHING`,
-		m.ID, normalizeEmail(m.UserEmail), m.Content, m.Source, convID, m.CreatedAt, m.UpdatedAt,
+		m.ID, owner, m.Content, m.Source, convID, m.CreatedAt, m.UpdatedAt,
 	)
 	if err != nil {
 		return false, fmt.Errorf("import memory %s: %w", m.ID, err)

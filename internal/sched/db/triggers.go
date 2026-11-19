@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/ElcanoTek/fleet/internal/logging"
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/google/uuid"
 )
@@ -55,13 +56,15 @@ func unmarshalEmailPolicy(ctx context.Context, ns sql.NullString) *models.EmailT
 }
 
 // CreateTrigger inserts a webhook/email trigger. The slug is UNIQUE; a collision
-// surfaces as a constraint error the caller can map to a 409.
+// surfaces as a constraint error the caller can map to a 409. The prompt
+// template is content and loses U+0000 (pgtext.Content); the slug and secret
+// are keys and are stored as given.
 func (db *Database) CreateTrigger(ctx context.Context, t *models.TaskTrigger) error {
 	kind := t.KindOrWebhook()
 	_, err := db.conn.ExecContext(ctx, `
 		INSERT INTO task_triggers (id, task_id, slug, secret, prompt_template, kind, email_policy)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-		t.ID, t.TaskID, t.Slug, t.Secret, t.PromptTemplate, string(kind), marshalEmailPolicy(t.EmailPolicy))
+		t.ID, t.TaskID, t.Slug, t.Secret, pgtext.Content(t.PromptTemplate), string(kind), marshalEmailPolicy(t.EmailPolicy))
 	return err
 }
 
@@ -140,7 +143,9 @@ func (db *Database) RotateTriggerSecret(ctx context.Context, id uuid.UUID, secre
 // RecordTriggerEvent inserts one accepted inbound event, enforcing idempotency:
 // a duplicate (trigger_id, idempotency_key) is a NO-OP that returns inserted=false
 // (the second delivery of the same email must not spawn a second run). On a fresh
-// insert it returns inserted=true and populates ev.ID/ev.CreatedAt.
+// insert it returns inserted=true and populates ev.ID/ev.CreatedAt. The subject
+// is the email's free text and loses U+0000; the idempotency key, sender and
+// message id are keys and are stored as given.
 func (db *Database) RecordTriggerEvent(ctx context.Context, ev *models.TriggerEvent) (bool, error) {
 	if ev.ID == uuid.Nil {
 		ev.ID = uuid.New()
@@ -150,7 +155,7 @@ func (db *Database) RecordTriggerEvent(ctx context.Context, ev *models.TriggerEv
 		VALUES ($1, $2, $3, $4, $5, $6)
 		ON CONFLICT (trigger_id, idempotency_key) DO NOTHING
 		RETURNING id, created_at`,
-		ev.ID, ev.TriggerID, ev.IdempotencyKey, ev.Sender, ev.Subject, ev.MessageID)
+		ev.ID, ev.TriggerID, ev.IdempotencyKey, ev.Sender, pgtext.Content(ev.Subject), ev.MessageID)
 	err := row.Scan(&ev.ID, &ev.CreatedAt)
 	if err == sql.ErrNoRows {
 		// Conflict: the event was already recorded — a duplicate delivery.

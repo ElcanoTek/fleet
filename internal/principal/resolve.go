@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/ElcanoTek/fleet/internal/identity"
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 )
 
 // Directory is the account lookup Resolve needs. *identity.Store satisfies
@@ -32,7 +33,9 @@ var (
 	// account. Backends answer 401 {"error":"session_revoked"} with
 	// X-Session-Revoked: 1, which makes the gateway drop the cookie.
 	ErrSessionRevoked = errors.New("principal: session revoked")
-	// ErrNoIdentity means the principal names no account to resolve.
+	// ErrNoIdentity means the principal names no account to resolve: no
+	// email, or one holding a control character (pgtext.ValidIdentity),
+	// which no account can have.
 	ErrNoIdentity = errors.New("principal: no identity")
 )
 
@@ -57,8 +60,8 @@ type Admit func(*identity.User) bool
 // it stays revocable there. The fleet-minted cookies this defends are refused
 // by the gateway outright when the claim is missing.
 func Resolve(ctx context.Context, dir Directory, p Principal, admit Admit) (Principal, *identity.User, error) {
-	email := identity.NormalizeEmail(p.Email)
-	if email == "" {
+	email, ok := pgtext.CheckedEmail(p.Email)
+	if !ok || email == "" {
 		return p, nil, ErrNoIdentity
 	}
 	u, err := dir.GetByEmail(ctx, email)
@@ -75,7 +78,7 @@ func Resolve(ctx context.Context, dir Directory, p Principal, admit Admit) (Prin
 		live := u.SessionEpoch
 		if p.Session.Source == SourceOIDC {
 			issuer, subject := strings.TrimSpace(p.Session.Issuer), strings.TrimSpace(p.Session.Subject)
-			if issuer == "" || subject == "" {
+			if issuer == "" || subject == "" || !pgtext.ValidIdentity(issuer) || !pgtext.ValidIdentity(subject) {
 				return p, u, ErrSessionRevoked
 			}
 			// Read-only: the row was created at the login mint. No row

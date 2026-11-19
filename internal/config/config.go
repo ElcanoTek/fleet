@@ -25,6 +25,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -33,6 +34,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/ElcanoTek/fleet/internal/creds"
 	"github.com/ElcanoTek/fleet/internal/mcp"
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 )
 
 // The canonical env prefix, owned by the configuration registry
@@ -1772,7 +1774,8 @@ func parseIPList(raw string) ([]net.IP, error) {
 	return out, nil
 }
 
-// splitEmails parses a comma-separated ADMIN_EMAILS value, normalized.
+// splitEmails parses a comma-separated ADMIN_EMAILS value, normalized; an
+// entry pgtext.CheckedEmail refuses is kept as written (and warned about).
 func splitEmails(raw string) []string {
 	if strings.TrimSpace(raw) == "" {
 		return nil
@@ -1780,10 +1783,21 @@ func splitEmails(raw string) []string {
 	parts := strings.Split(raw, ",")
 	out := make([]string, 0, len(parts))
 	for _, p := range parts {
-		p = strings.ToLower(strings.TrimSpace(p))
-		if p != "" {
-			out = append(out, p)
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
 		}
+		// Checked as written, then lowercased (pgtext.CheckedEmail). A refused
+		// entry is kept as written, not lowercased: lowercasing could turn a
+		// look-alike into another, ASCII address, and as written it matches
+		// no principal, since every principal email passes the same check.
+		checked, ok := pgtext.CheckedEmail(p)
+		if !ok {
+			slog.Warn("Warning: an ADMIN_EMAILS entry has a character an address may not hold and grants no one admin", "entry", strconv.QuoteToASCII(p))
+			out = append(out, p)
+			continue
+		}
+		out = append(out, checked)
 	}
 	return out
 }

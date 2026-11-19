@@ -90,6 +90,7 @@ var bareSlogAllowed = map[string]string{
 	"internal/config.Load":                              reasonConfig,
 	"internal/config.decodeAES256KeyEnv":                reasonConfig,
 	"internal/config.normalizePythonREPLMode":           reasonConfig,
+	"internal/config.splitEmails":                       reasonConfig,
 	"internal/config.warnRetiredEnvAliases":             reasonConfig,
 	"internal/config/envreg.unregistered":               "the configuration registry's own read of an undeclared variable: a programming-error report about the process, not a request",
 	"internal/httpapi.New":                              reasonBoot,

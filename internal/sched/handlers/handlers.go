@@ -32,6 +32,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/httpmw"
 	"github.com/ElcanoTek/fleet/internal/logging"
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 	"github.com/ElcanoTek/fleet/internal/ratelimit"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/sched/apikeys"
@@ -839,7 +840,7 @@ func (h *Handlers) validateTaskRouting(tc *models.TaskCreate) error {
 	// embedded newline is at best ignored and at worst breaks the row, and a
 	// caller pasting a multi-line prompt into the title field should be told so
 	// rather than silently getting a mangled label.
-	tc.Title = strings.TrimSpace(tc.Title)
+	tc.Title = strings.TrimSpace(pgtext.Content(tc.Title))
 	if strings.ContainsAny(tc.Title, "\r\n") {
 		return fmt.Errorf("title must be a single line")
 	}
@@ -848,6 +849,7 @@ func (h *Handlers) validateTaskRouting(tc *models.TaskCreate) error {
 	}
 	// Description (#281): optional operator documentation, bounded so it can't
 	// bloat the task row. Counted in runes (not bytes) to be Unicode-fair.
+	tc.Description = pgtext.Content(tc.Description)
 	if utf8.RuneCountInString(tc.Description) > maxTaskDescriptionChars {
 		return fmt.Errorf("description exceeds maximum length of %d characters", maxTaskDescriptionChars)
 	}
@@ -911,7 +913,10 @@ func requireAdminForRunIf(hasAdminPermission bool, runIf *models.RunIf) string {
 }
 
 func (h *Handlers) validateTaskCreate(tc *models.TaskCreate) error { //nolint:gocyclo // centralized fail-fast validation keeps every create path identical.
-	tc.Prompt = strings.TrimSpace(tc.Prompt)
+	// Title, prompt and description are content and are stored without
+	// U+0000 (internal/pgtext); they lose it here, before any check, so every
+	// check sees exactly what will be stored.
+	tc.Prompt = strings.TrimSpace(pgtext.Content(tc.Prompt))
 	if tc.Prompt == "" {
 		return fmt.Errorf("prompt is required")
 	}

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 )
 
 // SearchResult is one ranked full-text match (#308): a conversation whose title
@@ -36,6 +37,11 @@ func searchableType(typ string) bool {
 // extractSearchText pulls the plaintext to index from a history entry's JSON
 // content. Both TextContent and SummaryContent marshal a {"text": "..."} field.
 // Returns ("", false) for non-searchable types or empty text.
+//
+// The decoded text is content, so it loses U+0000 (pgtext.Content): the
+// message row keeps the JSON sequence, which TEXT accepts, but this copy is
+// raw text, and one NUL in it would roll back the history commit it is
+// written in.
 func extractSearchText(typ string, content []byte) (string, bool) {
 	if !searchableType(typ) {
 		return "", false
@@ -46,7 +52,7 @@ func extractSearchText(typ string, content []byte) (string, bool) {
 	if err := json.Unmarshal(content, &c); err != nil {
 		return "", false
 	}
-	t := strings.TrimSpace(c.Text)
+	t := strings.TrimSpace(pgtext.Content(c.Text))
 	return t, t != ""
 }
 
@@ -111,7 +117,9 @@ func insertSearchContent(ctx context.Context, tx *sql.Tx, convID string, now int
 // so a raw user string never errors the query. An empty/blank query returns no
 // results rather than every row.
 func (s *Store) SearchConversations(ctx context.Context, userEmail, query string, limit, offset int) ([]SearchResult, int, error) {
-	q := strings.TrimSpace(query)
+	// The query is matched against content, which is indexed without U+0000,
+	// so it loses the character too (it is a text search, not a key).
+	q := strings.TrimSpace(pgtext.Content(query))
 	if q == "" {
 		return nil, 0, nil
 	}

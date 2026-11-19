@@ -23,6 +23,7 @@ import (
 	"net/http"
 
 	"github.com/ElcanoTek/fleet/internal/identity"
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 	authn "github.com/ElcanoTek/fleet/internal/principal"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
@@ -65,6 +66,12 @@ func (h *Handlers) userPrincipal(w http.ResponseWriter, r *http.Request) (*model
 	}
 	if p.Email == "" {
 		writeError(w, http.StatusBadRequest, "missing user identity")
+		return nil, r, true
+	}
+	// An email pgtext.CheckedEmail refuses names no account; it is refused
+	// here, before any lookup is run with it.
+	if _, ok := pgtext.CheckedEmail(p.Email); !ok {
+		writeError(w, http.StatusBadRequest, "invalid user identity")
 		return nil, r, true
 	}
 	promptLibrary := isPromptLibraryPath(r.URL.Path)

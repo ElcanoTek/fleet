@@ -380,41 +380,65 @@ func (s *Server) handleConversationMultiplayerSet(w http.ResponseWriter, r *http
 	if body.Excluded != nil {
 		exclArg = *body.Excluded
 	}
-	var err error
+	// Every list this request writes is checked before the first write, so
+	// a refused entry can never leave the first change committed and the
+	// second refused (a remove list is not checked: its entries are normalised
+	// and then matched exactly against the stored ones).
+	if err := store.ValidateAccessEmails(partArg, exclArg, body.Add); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	var priorRoster []string
 	if conv.Multiplayer {
 		priorRoster, _ = s.store.ListMultiplayerRoster(r.Context(), user, convID)
 	}
 	updated := conv
+	// committed records that a write landed; revocation is enforced for it
+	// even when a later write of the same request fails.
+	committed := false
+	enforce := func(state *store.Conversation) ([]string, error) {
+		roster, rerr := s.store.ListMultiplayerRoster(r.Context(), user, convID)
+		reconcileSeeds := append([]string{}, priorRoster...)
+		reconcileSeeds = append(reconcileSeeds, roster...)
+		reconcileSeeds = append(reconcileSeeds, conv.MultiplayerParticipants...)
+		reconcileSeeds = append(reconcileSeeds, body.Remove...)
+		s.enforceMultiplayerRevocation(r.Context(), convID, state, reconcileSeeds)
+		return roster, rerr
+	}
+	fail := func(err error) {
+		if committed && updated != nil {
+			_, _ = enforce(updated)
+		}
+		switch {
+		case store.IsInputError(err):
+			http.Error(w, err.Error(), http.StatusBadRequest)
+		case errors.Is(err, store.ErrArchivedNotShareable):
+			http.Error(w, err.Error(), http.StatusConflict)
+		case errors.Is(err, store.ErrConversationNotFound):
+			http.Error(w, "not found", http.StatusNotFound)
+		default:
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+	}
 	if body.Multiplayer != nil || body.Participants != nil || body.Excluded != nil {
 		targetMultiplayer := conv.Multiplayer
 		if body.Multiplayer != nil {
 			targetMultiplayer = *body.Multiplayer
 		}
-		updated, err = s.store.SetConversationMultiplayer(r.Context(), user, convID, targetMultiplayer, partArg, exclArg)
+		next, err := s.store.SetConversationMultiplayer(r.Context(), user, convID, targetMultiplayer, partArg, exclArg)
 		if err != nil {
-			if errors.Is(err, store.ErrArchivedNotShareable) {
-				http.Error(w, err.Error(), http.StatusConflict)
-				return
-			}
-			if errors.Is(err, store.ErrConversationNotFound) {
-				http.Error(w, "not found", http.StatusNotFound)
-				return
-			}
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			fail(err)
 			return
 		}
+		updated, committed = next, true
 	}
 	if len(body.Add) > 0 || len(body.Remove) > 0 {
-		updated, err = s.store.UpdateConversationMultiplayerAccess(r.Context(), user, convID, body.Add, body.Remove)
+		next, err := s.store.UpdateConversationMultiplayerAccess(r.Context(), user, convID, body.Add, body.Remove)
 		if err != nil {
-			if errors.Is(err, store.ErrConversationNotFound) {
-				http.Error(w, "not found", http.StatusNotFound)
-				return
-			}
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			fail(err)
 			return
 		}
+		updated, committed = next, true
 	}
 	if updated == nil {
 		http.Error(w, "not found", http.StatusNotFound)
@@ -425,12 +449,7 @@ func (s *Server) handleConversationMultiplayerSet(w http.ResponseWriter, r *http
 			logging.From(r.Context()).Error("multiplayer: record has_shared_chat failed", "conv_id", safe.LogSafe(convID), "err", safe.LogSafe(err.Error()))
 		}
 	}
-	roster, err := s.store.ListMultiplayerRoster(r.Context(), user, convID)
-	reconcileSeeds := append([]string{}, priorRoster...)
-	reconcileSeeds = append(reconcileSeeds, roster...)
-	reconcileSeeds = append(reconcileSeeds, conv.MultiplayerParticipants...)
-	reconcileSeeds = append(reconcileSeeds, body.Remove...)
-	s.enforceMultiplayerRevocation(r.Context(), convID, updated, reconcileSeeds)
+	roster, err := enforce(updated)
 	if err != nil {
 		if errors.Is(err, store.ErrConversationNotFound) {
 			http.Error(w, "not found", http.StatusNotFound)

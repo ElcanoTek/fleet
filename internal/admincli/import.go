@@ -17,6 +17,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/cron"
 	"github.com/ElcanoTek/fleet/internal/identity"
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
 	"github.com/ElcanoTek/fleet/internal/store"
@@ -312,6 +313,11 @@ func loadChatCatalog(stats *importStats) chatCatalog {
 func importChatSection(ctx context.Context, chatStore *store.Store, sec *chatSection, dryRun bool, stats *importStats) error {
 	for _, u := range sec.Users {
 		if dryRun {
+			// The plan predicts the real run's refusal (store.ImportUser).
+			if _, ok := pgtext.CheckedEmail(u.Email); !ok {
+				stats.errorf("import user %q: %s", u.Email, identity.RefusedEmailMessage)
+				continue
+			}
 			exists, err := chatStore.IsUser(ctx, u.Email)
 			if err != nil {
 				return fmt.Errorf("check user %s: %w", u.Email, err)
@@ -351,6 +357,11 @@ func importChatSection(ctx context.Context, chatStore *store.Store, sec *chatSec
 	for _, c := range sec.Conversations {
 		noteCatalogMismatches(c)
 		if dryRun {
+			// The plan predicts the real run's refusal (store.ImportConversation).
+			if _, ok := pgtext.CheckedEmail(c.UserEmail); !ok {
+				stats.errorf("import conversation %s: owner %q: %s", c.ID, c.UserEmail, identity.RefusedEmailMessage)
+				continue
+			}
 			exists, err := chatStore.HasConversation(ctx, c.ID)
 			if err != nil {
 				return fmt.Errorf("check conversation %s: %w", c.ID, err)
@@ -398,6 +409,11 @@ func importChatSection(ctx context.Context, chatStore *store.Store, sec *chatSec
 			}
 		}
 		if dryRun {
+			// The plan predicts the real run's refusal (store.ImportMemory).
+			if _, ok := pgtext.CheckedEmail(m.UserEmail); !ok {
+				stats.errorf("import memory %s: owner %q: %s", m.ID, m.UserEmail, identity.RefusedEmailMessage)
+				continue
+			}
 			// Existence check so the plan's created/skipped split matches what
 			// the real run will do (#714) — previously every memory was counted
 			// "created" even when already present.
@@ -637,7 +653,7 @@ func buildImportedTask(st *storage.Storage, bt bundleTask, remap map[uuid.UUID]u
 	if bt.ID == uuid.Nil {
 		return nil, false, fmt.Errorf("missing id")
 	}
-	if strings.TrimSpace(bt.Prompt) == "" {
+	if strings.TrimSpace(pgtext.Content(bt.Prompt)) == "" { // as it will be stored
 		return nil, false, fmt.Errorf("empty prompt")
 	}
 	status := models.TaskStatus(bt.Status)
@@ -799,7 +815,14 @@ func importSchedUsers(ctx context.Context, st *storage.Storage, users []bundleSc
 	remap := make(map[uuid.UUID]uuid.UUID, len(users))
 	ids := st.Identity()
 	for _, u := range users {
-		username := identity.NormalizeEmail(u.Username)
+		// Checked as written in the bundle before it is lowercased
+		// (pgtext.CheckedEmail): a look-alike would otherwise be merged into
+		// the ASCII account it lowercases to.
+		username, ok := pgtext.CheckedEmail(u.Username)
+		if !ok {
+			stats.errorf("sched user %q (%s): %s", u.Username, u.ID, identity.RefusedEmailMessage)
+			continue
+		}
 		if username == "" || u.ID == uuid.Nil || strings.TrimSpace(u.PasswordHash) == "" {
 			stats.errorf("sched user %q (%s): username, id, and password_hash are all required", u.Username, u.ID)
 			continue

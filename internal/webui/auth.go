@@ -11,9 +11,9 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
-	"strings"
 
 	"github.com/ElcanoTek/fleet/internal/logging"
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 	"github.com/ElcanoTek/fleet/internal/websession"
 )
 
@@ -220,10 +220,16 @@ func (g *Gateway) handleLogin(w http.ResponseWriter, r *http.Request) {
 		back("missing")
 		return
 	}
-	email := strings.ToLower(strings.TrimSpace(r.PostFormValue("email")))
+	// An email pgtext.CheckedEmail refuses names no account: the same answer
+	// as a wrong password, and no lookup runs with it.
+	email, emailOK := pgtext.CheckedEmail(r.PostFormValue("email"))
 	password := r.PostFormValue("password")
-	if email == "" || password == "" {
+	if (emailOK && email == "") || password == "" {
 		back("missing")
+		return
+	}
+	if !emailOK {
+		back("invalid")
 		return
 	}
 
