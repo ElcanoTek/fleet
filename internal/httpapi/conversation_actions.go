@@ -254,7 +254,10 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, u
 		// in the shared listing), not the owner's. A failed read is "not
 		// pinned": the flag only places a row in the rail.
 		shown := *conv
-		shown.Pinned, _ = s.store.SharedPinned(r.Context(), user, id)
+		shown.Pinned = false
+		if pinned, err := s.store.SharedPinned(r.Context(), user, id); err == nil {
+			shown.Pinned = pinned
+		}
 		conv = &shown
 	}
 	var origin *store.BranchOrigin
