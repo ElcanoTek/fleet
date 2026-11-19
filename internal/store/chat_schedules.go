@@ -471,6 +471,13 @@ func (s *Store) skippedForApproval(ctx context.Context, convID string, list []Ch
 			ids = append(ids, sc.ID)
 		}
 	}
+	return s.skippedSchedules(ctx, convID, ids)
+}
+
+// skippedSchedules is skippedForApproval for a set of schedule IDs. convID
+// narrows it to one conversation; "" reads the IDs wherever they live (the
+// Patrols page lists a person's patrols across their chats).
+func (s *Store) skippedSchedules(ctx context.Context, convID string, ids []string) (map[string]*ChatScheduleSkipped, error) {
 	if len(ids) == 0 {
 		return nil, nil
 	}
@@ -491,7 +498,7 @@ func (s *Store) skippedForApproval(ctx context.Context, convID string, list []Ch
 			           AND a.tool_name NOT IN `+patrolNonBlockingApprovalTools+`
 			       ) pend ON pend.since IS NOT NULL
 			  JOIN `+chatScheduleRunsTable+` r ON r.schedule_id = cs.id
-			 WHERE cs.conversation_id = $1
+			 WHERE ($1 = '' OR cs.conversation_id = $1)
 			   AND cs.id = ANY($2::text[])
 			   AND r.trigger_kind = 'schedule'
 			   AND r.outcome = 'busy'
@@ -532,11 +539,12 @@ func (s *Store) skippedForApproval(ctx context.Context, convID string, list []Ch
 	return out, nil
 }
 
-// UserPatrol is one of a user's recurring patrols, summarised for the
-// Patrols index in the rail (docs/PATROL-LAUNCHPAD.md): just what the menu
-// shows and links to. The prompt stays out — it has no length bound and the
-// index never reads it. ConversationOwner is not serialised: the HTTP layer
-// uses it to re-check access to chats the caller does not own.
+// UserPatrol is one recurring patrol as the Patrols page and the sidebar list
+// it (docs/SIDEBAR.md, docs/PATROL-LAUNCHPAD.md): what a row shows and links
+// to. The listings leave the prompt out — it has no length bound and no row
+// reads it; GetUserPatrol fills it for the patrol's own creator.
+// ConversationOwner is not serialised: the HTTP layer uses it to re-check
+// access to chats the caller does not own.
 type UserPatrol struct {
 	ID                string `json:"id"`
 	ConversationID    string `json:"conversation_id"`
@@ -546,7 +554,59 @@ type UserPatrol struct {
 	Timezone          string `json:"timezone"`
 	Status            string `json:"status"`
 	NextRunAt         int64  `json:"next_run_at"`
+	LastRunAt         *int64 `json:"last_run_at,omitempty"`
+	RunCount          int    `json:"run_count"`
+	// ApprovalMode is the patrol's chat's approval mode ("manual", "auto" or
+	// "autonomous"): how much a run may do without stopping for a card.
+	ApprovalMode string `json:"approval_mode"`
+	// Mine is true for a patrol the caller set up (they can run, pause, edit
+	// and remove it). False is a teammate's patrol in a chat the caller can
+	// open: listed to read, and OwnerEmail says whose it is.
+	Mine       bool   `json:"mine"`
+	OwnerEmail string `json:"owner_email,omitempty"`
+	// Multiplayer and TeamVisible say how the patrol's chat is shared, so a
+	// teammate's row links to the page that opens for them: the chat itself
+	// (Multiplayer) or its read-only team view.
+	Multiplayer bool `json:"multiplayer,omitempty"`
+	TeamVisible bool `json:"team_visible,omitempty"`
+	// Skipped is set on the caller's own active patrol whose latest slots
+	// were skipped because an approval card is waiting on them.
+	Skipped *ChatScheduleSkipped `json:"skipped,omitempty"`
+	// Prompt is what each run is asked to do. Only GetUserPatrol sets it,
+	// and only for the patrol's own creator.
+	Prompt            string `json:"prompt,omitempty"`
 	ConversationOwner string `json:"-"`
+}
+
+// userPatrolCols selects a UserPatrol row from chat schedules cs joined to
+// their conversation c. The approval mode is the conversation's, reconciled
+// the way Conversation.EffectiveApprovalMode does for a row written before
+// approval_mode existed.
+const userPatrolCols = `cs.id, cs.conversation_id, cs.title, c.title, cs.cron_expr, cs.timezone,
+	cs.status, cs.next_run_at, cs.last_run_at, cs.run_count,
+	CASE WHEN COALESCE(c.approval_mode, '') IN ('auto', 'autonomous') THEN c.approval_mode
+	     WHEN c.auto_approve THEN 'auto' ELSE 'manual' END,
+	cs.user_email, c.user_email, c.multiplayer, c.team_visible`
+
+func scanUserPatrol(row rowScanner, caller string) (UserPatrol, error) {
+	var (
+		p       UserPatrol
+		lastRun sql.NullInt64
+		creator string
+	)
+	if err := row.Scan(&p.ID, &p.ConversationID, &p.Title, &p.ConversationTitle, &p.CronExpr,
+		&p.Timezone, &p.Status, &p.NextRunAt, &lastRun, &p.RunCount, &p.ApprovalMode,
+		&creator, &p.ConversationOwner, &p.Multiplayer, &p.TeamVisible); err != nil {
+		return UserPatrol{}, err
+	}
+	if lastRun.Valid {
+		p.LastRunAt = &lastRun.Int64
+	}
+	p.Mine = strings.EqualFold(creator, caller)
+	if !p.Mine {
+		p.OwnerEmail = creator
+	}
+	return p, nil
 }
 
 // ListUserPatrols returns the active and paused recurring patrols (not
@@ -561,8 +621,7 @@ func (s *Store) ListUserPatrols(ctx context.Context, userEmail string, limit, of
 		return []UserPatrol{}, nil
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT cs.id, cs.conversation_id, cs.title, c.title, cs.cron_expr, cs.timezone,
-		        cs.status, cs.next_run_at, c.user_email
+		`SELECT `+userPatrolCols+`
 		   FROM `+chatSchedulesTable+` cs
 		   JOIN conversations c ON c.id = cs.conversation_id
 		  WHERE cs.user_email = $1
@@ -580,12 +639,167 @@ func (s *Store) ListUserPatrols(ctx context.Context, userEmail string, limit, of
 
 	out := []UserPatrol{}
 	for rows.Next() {
-		var p UserPatrol
-		if err := rows.Scan(&p.ID, &p.ConversationID, &p.Title, &p.ConversationTitle, &p.CronExpr,
-			&p.Timezone, &p.Status, &p.NextRunAt, &p.ConversationOwner); err != nil {
+		p, err := scanUserPatrol(rows, userEmail)
+		if err != nil {
 			return nil, err
 		}
 		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// ListSharedPatrols returns the active and paused recurring patrols that
+// OTHER people run in chats userEmail can open: a teammate's chat shared
+// with their team or in Multiplayer (the set
+// ListSharedAndMultiplayerConversations gives, so the rule for "can open" is
+// that one rule), and their own chats where a participant set a patrol up.
+// Active first, soonest next run first, at most limit rows. These are for
+// reading: only its creator can run, pause, edit or remove a patrol.
+func (s *Store) ListSharedPatrols(ctx context.Context, userEmail string, limit int) ([]UserPatrol, error) {
+	if s == nil || s.db == nil || strings.TrimSpace(userEmail) == "" {
+		return []UserPatrol{}, nil
+	}
+	shared, err := s.ListSharedAndMultiplayerConversations(ctx, userEmail)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(shared))
+	for i := range shared {
+		ids = append(ids, shared[i].ID)
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT `+userPatrolCols+`
+		   FROM `+chatSchedulesTable+` cs
+		   JOIN conversations c ON c.id = cs.conversation_id
+		  WHERE cs.user_email <> $1
+		    AND (c.id = ANY($2::text[]) OR c.user_email = $1)
+		    AND c.deleted_at IS NULL
+		    AND c.archived_at IS NULL
+		    AND cs.cron_expr <> ''
+		    AND cs.status IN ('active', 'paused')
+		  ORDER BY (cs.status = 'active') DESC, cs.next_run_at ASC, cs.id ASC
+		  LIMIT $3`,
+		userEmail, ids, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []UserPatrol{}
+	for rows.Next() {
+		p, err := scanUserPatrol(rows, userEmail)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// PatrolSkips reports, for the given patrols (the caller's own, across
+// their chats), the latest slots each skipped because an approval card is
+// waiting: the same answer ListChatSchedules gives per chat. Display data;
+// the listings call it best-effort.
+func (s *Store) PatrolSkips(ctx context.Context, scheduleIDs []string) (map[string]*ChatScheduleSkipped, error) {
+	if s == nil || s.db == nil {
+		return nil, nil
+	}
+	return s.skippedSchedules(ctx, "", scheduleIDs)
+}
+
+// GetUserPatrol returns one active or paused recurring patrol by ID, or nil
+// when there is none. It does NOT check that userEmail may see it (the HTTP
+// layer does, with the same rules as the listings); it only decides whose it
+// is, and carries the prompt for its creator alone.
+func (s *Store) GetUserPatrol(ctx context.Context, userEmail, scheduleID string) (*UserPatrol, error) {
+	if s == nil || s.db == nil || scheduleID == "" {
+		return nil, nil
+	}
+	var prompt string
+	row := s.db.QueryRowContext(ctx,
+		`SELECT `+userPatrolCols+`, cs.prompt
+		   FROM `+chatSchedulesTable+` cs
+		   JOIN conversations c ON c.id = cs.conversation_id
+		  WHERE cs.id = $1
+		    AND c.deleted_at IS NULL
+		    AND cs.cron_expr <> ''
+		    AND cs.status IN ('active', 'paused')`,
+		scheduleID,
+	)
+	p, err := scanUserPatrol(patrolWithPrompt{row, &prompt}, userEmail)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if p.Mine {
+		p.Prompt = prompt
+	}
+	return &p, nil
+}
+
+// patrolWithPrompt scans userPatrolCols plus one trailing prompt column.
+type patrolWithPrompt struct {
+	row    rowScanner
+	prompt *string
+}
+
+func (r patrolWithPrompt) Scan(dest ...any) error {
+	return r.row.Scan(append(dest, r.prompt)...)
+}
+
+// PatrolRun is one entry of a patrol's run history, newest first: a run that
+// was queued into the chat, or a slot that was turned away and why.
+type PatrolRun struct {
+	// At is when the scheduler fired it (Unix seconds); DueAt the slot it
+	// was for, when recorded.
+	At    int64 `json:"at"`
+	DueAt int64 `json:"due_at,omitempty"`
+	// Trigger is "schedule" (the cadence) or "manual" (Run now).
+	Trigger string `json:"trigger"`
+	// Outcome is "queued" (a turn ran in the chat), "busy" (the slot was
+	// skipped; Reason says why) or "gone" (the chat was no longer there).
+	Outcome   string `json:"outcome"`
+	Reason    string `json:"reason,omitempty"`
+	RunNumber int    `json:"run_number,omitempty"`
+}
+
+// MaxPatrolRuns bounds one read of a patrol's run history.
+const MaxPatrolRuns = 20
+
+// ListPatrolRuns returns the newest limit entries of a patrol's run history
+// (sched.chat_schedule_runs, which the scheduler writes and prunes with the
+// tasks' history). It checks no access; the caller has.
+func (s *Store) ListPatrolRuns(ctx context.Context, scheduleID string, limit int) ([]PatrolRun, error) {
+	if s == nil || s.db == nil || scheduleID == "" {
+		return []PatrolRun{}, nil
+	}
+	if limit <= 0 || limit > MaxPatrolRuns {
+		limit = MaxPatrolRuns
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT floor(EXTRACT(EPOCH FROM fired_at))::bigint, COALESCE(due_at, 0), trigger_kind, outcome,
+		        reason, COALESCE(run_number, 0)
+		   FROM `+chatScheduleRunsTable+`
+		  WHERE schedule_id = $1
+		  ORDER BY id DESC
+		  LIMIT $2`,
+		scheduleID, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []PatrolRun{}
+	for rows.Next() {
+		var r PatrolRun
+		if err := rows.Scan(&r.At, &r.DueAt, &r.Trigger, &r.Outcome, &r.Reason, &r.RunNumber); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
 	}
 	return out, rows.Err()
 }

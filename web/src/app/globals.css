@@ -964,6 +964,97 @@
   background: var(--chip);
 }
 
+/* ── The sidebar (NavRail, docs/SIDEBAR.md) ──────────────────────────────
+   One scroller for the whole sidebar. Its bar is thin and is drawn only
+   while the pointer is over the sidebar or the keyboard is inside it, so a
+   long list does not put a permanent stripe down the page. The gutter is
+   reserved where a scrollbar takes room, so rows keep their width when a
+   list grows past the window. */
+.rail-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+  scrollbar-gutter: stable;
+}
+.rail:hover .rail-scroll,
+.rail:focus-within .rail-scroll {
+  scrollbar-color: var(--color-border-strong) transparent;
+}
+/* The icon strip (from sm up; a phone's drawer is never a strip) has no room
+   for a bar or its gutter: it scrolls without one, which keeps its icons
+   centred. */
+@media (width >= 40rem) {
+  .rail[data-collapsed] .rail-scroll {
+    scrollbar-width: none;
+    scrollbar-gutter: auto;
+  }
+}
+/* A teammate's initial, on the colour that is always theirs (--chip, from
+   the same name hash the label chips use). The fill is the colour darkened
+   until a near-white letter reads on it in both themes. */
+.rail-avatar {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 1.25rem;
+  height: 1.25rem;
+  border-radius: 999rem;
+  font-size: 0.62rem;
+  font-weight: 600;
+  line-height: 1;
+  background: color-mix(in srgb, var(--chip) 55%, black);
+  color: color-mix(in srgb, var(--chip) 10%, white);
+}
+/* The sidebar's edge. Nothing is drawn until it is pointed at, focused or
+   dragged; then a line shows where the grip is. */
+.rail-resize::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 3px;
+  width: 2px;
+  background: transparent;
+  transition: background var(--transition-fast);
+}
+.rail-resize:hover::after,
+.rail-resize:focus-visible::after,
+.rail-resize[data-dragging]::after {
+  background: var(--color-accent);
+}
+.rail-resize:focus-visible {
+  outline: none;
+}
+/* The collapsed strip's labels. The strip's body scrolls, and a scroller
+   clips anything drawn beside it, so these are placed by NavRail on the page
+   itself rather than as a [data-tip]::after inside it. Same look. */
+.rail-tip {
+  position: fixed;
+  z-index: 500;
+  width: max-content;
+  max-width: 13rem;
+  transform: translateY(-50%);
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border-strong);
+  color: var(--color-text-primary);
+  font-size: 0.72rem;
+  font-weight: 500;
+  line-height: 1.35;
+  padding: 0.3rem 0.55rem;
+  border-radius: 0.45rem;
+  box-shadow: var(--shadow-md);
+  pointer-events: none;
+  animation: rail-tip-in var(--transition-fast) 350ms both;
+}
+@keyframes rail-tip-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
 /* ── Tooltips ────────────────────────────────────────────────────────────
    Pure-CSS labels shown on hover AND keyboard focus after a short delay.
    data-tip places the label to the right of the control (collapsed-rail
@@ -1023,14 +1114,12 @@
   right: 0;
   transform: none;
 }
-/* The phone drawer's body is one scroller (NavRail's rail-body), and a side
-   label drawn beside a rail item — the collapsed strip's name for it, which
-   the drawer never needs: its items are always labelled — sat invisibly past
-   the drawer's edge and made the body scroll sideways. */
-@media (width < 40rem) {
-  [data-rail-body] [data-tip]::after {
-    display: none;
-  }
+/* The sidebar's body is one scroller (NavRail's rail-body), and a side label
+   drawn beside one of its items would be clipped by it (and, on a phone, sat
+   invisibly past the drawer's edge and made the body scroll sideways). The
+   collapsed strip's labels are drawn by NavRail instead (.rail-tip). */
+[data-rail-body] [data-tip]::after {
+  display: none;
 }
 [data-tip]:hover::after,
 [data-tip]:focus-visible::after,
@@ -4773,6 +4862,22 @@ tr.sla-row-fail {
   .seg-option:focus-visible {
     outline: none;
     box-shadow: inset 0 0 0 2px var(--color-accent);
+  }
+  /* A segmented control that fills its row in equal parts (the sidebar's
+     Customize panels: density, where teammates' chats go). */
+  .seg-fill > .seg {
+    display: grid;
+    grid-auto-columns: minmax(0, 1fr);
+    grid-auto-flow: column;
+    width: 100%;
+  }
+  .seg-fill > .seg > span {
+    display: flex;
+  }
+  .seg-fill .seg-option {
+    width: 100%;
+    min-height: 1.875rem;
+    font-size: 0.78rem;
   }
   /* Form-field size, for a segmented control that IS the field (the task
      modal's schedule mode and repeat editor). */

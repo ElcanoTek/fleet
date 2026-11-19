@@ -156,7 +156,7 @@ func TestIndexRenderedPerRequest(t *testing.T) {
 
 func TestClientRoutesAndNotFound(t *testing.T) {
 	e := newTestEnv(t)
-	for _, p := range []string{"/chat", "/orchestrator", "/settings", "/settings/connections", "/settings/personas", "/settings/memories", "/settings/prompts", "/settings/admin/users", "/help", "/help/chat", "/no-access"} {
+	for _, p := range []string{"/chat", "/patrols", "/orchestrator", "/settings", "/settings/connections", "/settings/personas", "/settings/memories", "/settings/prompts", "/settings/admin/users", "/help", "/help/chat", "/no-access"} {
 		res := e.do(signedIn(t, req("GET", p, "")))
 		body := readBody(t, res)
 		if res.StatusCode != 200 || !strings.Contains(body, `id="fleet-bootstrap"`) || bootstrapOf(t, body).NotFound {
@@ -168,6 +168,10 @@ func TestClientRoutesAndNotFound(t *testing.T) {
 		if res.StatusCode != 404 || !bootstrapOf(t, readBody(t, res)).NotFound {
 			t.Errorf("%s: %d", p, res.StatusCode)
 		}
+	}
+	// The Patrols page carries its own title.
+	if body := readBody(t, e.do(signedIn(t, req("GET", "/patrols", "")))); !strings.Contains(body, "<title>Patrols — Fleet</title>") {
+		t.Fatal("patrols title")
 	}
 	// Help pages carry their own titles.
 	body := readBody(t, e.do(signedIn(t, req("GET", "/help/operations-center", ""))))

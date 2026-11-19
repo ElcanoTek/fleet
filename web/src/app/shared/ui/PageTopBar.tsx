@@ -21,6 +21,10 @@ import { copyText } from "@/app/shared/lib/clipboard";
 
 export type PageTopBarProps = {
   title: string;
+  // One line under the title saying what the page is (Patrols).
+  subtitle?: string;
+  // A sprite icon in a tile before the title.
+  icon?: string;
   // Opens the off-canvas conversation/nav sidebar on narrow viewports.
   onMenu: () => void;
   // Right-aligned controls (Chat supplies its header buttons here; Ops omits).
@@ -38,7 +42,7 @@ function buildMailtoHref(contact: ClientSupportContact): string {
   return `mailto:${email}?subject=${encodeURIComponent(subject)}`;
 }
 
-export function PageTopBar({ title, onMenu, actions, support }: PageTopBarProps) {
+export function PageTopBar({ title, subtitle, icon, onMenu, actions, support }: PageTopBarProps) {
   const clientConfig = useClientConfig(false);
   const activeSupport = support ?? clientConfig?.branding?.support;
   const hasSupport = Boolean(
@@ -88,9 +92,25 @@ export function PageTopBar({ title, onMenu, actions, support }: PageTopBarProps)
           >
             <Icon name="menu" className="size-4" />
           </button>
-          <h1 className="truncate text-[1.05rem] font-semibold text-[var(--color-text-primary)]">
-            {title}
-          </h1>
+          {icon ? (
+            <span aria-hidden="true" className="picker-icon-tile hidden size-9 shrink-0 sm:inline-flex">
+              <Icon name={icon} className="size-[1.05rem]" />
+            </span>
+          ) : null}
+          {subtitle ? (
+            <div className="grid min-w-0 gap-px">
+              <h1 className="truncate text-[1.05rem] font-semibold leading-tight text-[var(--color-text-primary)]">
+                {title}
+              </h1>
+              <p className="m-0 hidden truncate text-[0.8125rem] leading-tight text-[var(--color-text-muted)] sm:block">
+                {subtitle}
+              </p>
+            </div>
+          ) : (
+            <h1 className="truncate text-[1.05rem] font-semibold text-[var(--color-text-primary)]">
+              {title}
+            </h1>
+          )}
         </div>
         {hasSupport || actions ? (
           <div className="flex min-w-0 items-center gap-1.5">

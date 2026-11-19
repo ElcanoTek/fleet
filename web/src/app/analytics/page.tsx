@@ -15,7 +15,8 @@ import { useOrchestratorSession } from "@/app/shared/hooks/useOrchestratorSessio
 import { useCancellableFetch } from "@/app/shared/hooks/useCancellableFetch";
 import { useClientConfig } from "@/app/lib/useClientConfig";
 import { Link } from "@/app/lib/Link";
-import { NavRail, useRailCollapse } from "@/app/shared/ui/NavRail";
+import { useRailCollapse } from "@/app/shared/ui/NavRail";
+import { AppSidebar } from "@/app/shared/sidebar/AppSidebar";
 import { PageTopBar } from "@/app/shared/ui/PageTopBar";
 import { ToastProvider } from "@/app/shared/ui/Toast";
 import { UsagePanel } from "@/app/orchestrator/UsagePanel";
@@ -1284,7 +1285,6 @@ function OutliersAndFrictionTab() {
 
 function AnalyticsInner() {
   const session = useOrchestratorSession();
-  const { branding } = useClientConfig();
   const railCollapse = useRailCollapse();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [tab, setTab] = useState<AnalyticsTab>(initialAnalyticsTab);
@@ -1303,17 +1303,12 @@ function AnalyticsInner() {
 
   return (
     <div className="grid h-[100dvh] grid-cols-[minmax(0,1fr)] overflow-hidden text-[var(--color-text-primary)] sm:grid-cols-[auto_minmax(0,1fr)]">
-      <NavRail
+      <AppSidebar
         activeView="analytics"
-        brandName={branding.app_name}
-        brandLogoSrc={branding.logo_url || undefined}
         sidebarOpen={sidebarOpen}
         setSidebarOpen={setSidebarOpen}
         collapse={railCollapse}
-        account={{
-          email: session.username ?? "",
-          onSignOut: () => void signOutAfter(session.logout()),
-        }}
+        onSignOut={() => void signOutAfter(session.logout())}
       />
 
       <main className="flex min-h-0 flex-col overflow-hidden">

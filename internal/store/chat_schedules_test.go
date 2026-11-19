@@ -768,3 +768,168 @@ func TestChatScheduleBusyForPatrolInFlightIsNotReportedAsApproval(t *testing.T) 
 		t.Fatalf("ListChatSchedules = %+v, %v; want no skipped-for-approval note", list, err)
 	}
 }
+
+// TestListSharedPatrols is the other half of the Patrols page: the patrols
+// teammates run in chats the caller can open. A teammate on the same team
+// sees a patrol in a chat shared with the team; someone on another team, or
+// on none, does not; and nobody's own patrols are in their shared half.
+func TestListSharedPatrols(t *testing.T) {
+	t.Parallel()
+
+	f := newTeamFixture(t)
+	patrol := func(owner, convID, title string) *ChatSchedule {
+		t.Helper()
+		sc, err := f.s.CreateChatSchedule(f.ctx, ChatScheduleInput{
+			ConversationID: convID, UserEmail: owner, Title: title, Prompt: "the private instructions", CronExpr: "0 8 * * 1-5", Timezone: "UTC",
+		})
+		if err != nil {
+			t.Fatalf("CreateChatSchedule: %v", err)
+		}
+		return sc
+	}
+	shared := f.sharedChat(t, "alice@x.com", f.project.ID, "Deal desk")
+	watch := patrol("alice@x.com", shared.ID, "Deal watch")
+	// Alice's patrol in a chat she shares with nobody.
+	private, err := f.s.CreateConversation(f.ctx, "alice@x.com", "Private notes", "victoria", "", false)
+	if err != nil {
+		t.Fatalf("CreateConversation: %v", err)
+	}
+	patrol("alice@x.com", private.ID, "Private watch")
+	// A one-shot timer in the shared chat is not a patrol.
+	if _, err := f.s.CreateChatSchedule(f.ctx, ChatScheduleInput{
+		ConversationID: shared.ID, UserEmail: "alice@x.com", Title: "Reminder", Prompt: "ping", DurationSeconds: 600,
+	}); err != nil {
+		t.Fatalf("CreateChatSchedule (timer): %v", err)
+	}
+
+	got, err := f.s.ListSharedPatrols(f.ctx, "bob@x.com", 100)
+	if err != nil {
+		t.Fatalf("ListSharedPatrols(bob): %v", err)
+	}
+	if len(got) != 1 || got[0].ID != watch.ID {
+		t.Fatalf("bob's shared patrols = %+v, want only %q", got, watch.Title)
+	}
+	p := got[0]
+	if p.Mine || p.OwnerEmail != "alice@x.com" || p.ConversationTitle != "Deal desk" || p.ConversationID != shared.ID {
+		t.Errorf("shared row = %+v, want alice's, in Deal desk, not mine", p)
+	}
+	if p.Prompt != "" {
+		t.Errorf("a listing must not carry the prompt, got %q", p.Prompt)
+	}
+	if p.ApprovalMode != ConversationApprovalManual {
+		t.Errorf("approval mode = %q, want manual for a chat that never changed it", p.ApprovalMode)
+	}
+
+	for _, outsider := range []string{"dana@x.com", "carol@x.com"} {
+		got, err := f.s.ListSharedPatrols(f.ctx, outsider, 100)
+		if err != nil {
+			t.Fatalf("ListSharedPatrols(%s): %v", outsider, err)
+		}
+		if len(got) != 0 {
+			t.Errorf("%s is not on the chat's team and must see none of its patrols, got %+v", outsider, got)
+		}
+	}
+	// Her own patrols are in her own listing, never her shared one.
+	if got, err := f.s.ListSharedPatrols(f.ctx, "alice@x.com", 100); err != nil || len(got) != 0 {
+		t.Errorf("alice's shared patrols = %+v, %v; want none", got, err)
+	}
+
+	// The chat stops being shared: the patrol leaves bob's listing.
+	if _, err := f.s.SetConversationTeamVisible(f.ctx, "alice@x.com", shared.ID, false); err != nil {
+		t.Fatalf("SetConversationTeamVisible off: %v", err)
+	}
+	if got, err := f.s.ListSharedPatrols(f.ctx, "bob@x.com", 100); err != nil || len(got) != 0 {
+		t.Errorf("after unsharing, bob's shared patrols = %+v, %v; want none", got, err)
+	}
+}
+
+// A patrol a participant set up in the caller's own Multiplayer chat runs in
+// the caller's chat, so it is in the caller's shared half.
+func TestListSharedPatrols_InOwnChatByAParticipant(t *testing.T) {
+	t.Parallel()
+
+	f := newTeamFixture(t)
+	conv, err := f.s.CreateConversation(f.ctx, "alice@x.com", "War room", "victoria", "", false)
+	if err != nil {
+		t.Fatalf("CreateConversation: %v", err)
+	}
+	if _, err := f.s.SetConversationMultiplayer(f.ctx, "alice@x.com", conv.ID, true, []string{"bob@x.com"}, nil); err != nil {
+		t.Fatalf("SetConversationMultiplayer: %v", err)
+	}
+	theirs, err := f.s.CreateChatSchedule(f.ctx, ChatScheduleInput{
+		ConversationID: conv.ID, UserEmail: "bob@x.com", Title: "Bob's sweep", Prompt: "check", CronExpr: "0 9 * * *", Timezone: "UTC",
+	})
+	if err != nil {
+		t.Fatalf("CreateChatSchedule: %v", err)
+	}
+	got, err := f.s.ListSharedPatrols(f.ctx, "alice@x.com", 100)
+	if err != nil {
+		t.Fatalf("ListSharedPatrols: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != theirs.ID || got[0].OwnerEmail != "bob@x.com" || got[0].Mine {
+		t.Fatalf("alice's shared patrols = %+v, want bob's sweep in her chat", got)
+	}
+}
+
+// GetUserPatrol carries the prompt for the patrol's creator alone, and a
+// patrol's run history comes back newest first.
+func TestGetUserPatrolAndRuns(t *testing.T) {
+	t.Parallel()
+
+	s := newTestStore(t)
+	ctx := context.Background()
+	const me, other = "me@elcanotek.com", "other@elcanotek.com"
+	conv, err := s.CreateConversation(ctx, me, "Deals chat", "victoria", "", false)
+	if err != nil {
+		t.Fatalf("CreateConversation: %v", err)
+	}
+	if err := s.SetApprovalMode(ctx, me, conv.ID, ConversationApprovalAuto); err != nil {
+		t.Fatalf("SetApprovalMode: %v", err)
+	}
+	sc, err := s.CreateChatSchedule(ctx, ChatScheduleInput{
+		ConversationID: conv.ID, UserEmail: me, Title: "Deal sweep", Prompt: "check the deals", CronExpr: "0 */2 * * *", Timezone: "UTC",
+	})
+	if err != nil {
+		t.Fatalf("CreateChatSchedule: %v", err)
+	}
+
+	mine, err := s.GetUserPatrol(ctx, me, sc.ID)
+	if err != nil || mine == nil {
+		t.Fatalf("GetUserPatrol(me) = %+v, %v", mine, err)
+	}
+	if !mine.Mine || mine.Prompt != "check the deals" || mine.OwnerEmail != "" || mine.ApprovalMode != ConversationApprovalAuto {
+		t.Errorf("my patrol = %+v, want mine, with its prompt, in an auto-approve chat", mine)
+	}
+	theirs, err := s.GetUserPatrol(ctx, other, sc.ID)
+	if err != nil || theirs == nil {
+		t.Fatalf("GetUserPatrol(other) = %+v, %v", theirs, err)
+	}
+	if theirs.Mine || theirs.Prompt != "" || theirs.OwnerEmail != me {
+		t.Errorf("someone else's read = %+v, want not mine, no prompt, the creator named", theirs)
+	}
+	if none, err := s.GetUserPatrol(ctx, me, "no-such-patrol"); err != nil || none != nil {
+		t.Errorf("an unknown ID = %+v, %v; want nil, nil", none, err)
+	}
+
+	// Two history rows: a run that was queued, then a slot skipped behind an
+	// approval card.
+	for _, row := range []struct {
+		outcome, reason string
+		run             any
+	}{{"queued", "", 1}, {"busy", "approval_pending", nil}} {
+		if _, err := s.db.ExecContext(ctx,
+			`INSERT INTO `+chatScheduleRunsTable+` (schedule_id, run_number, trigger_kind, outcome, reason, input_id, due_at)
+			 VALUES ($1, $2, 'schedule', $3, $4, '', $5)`,
+			sc.ID, row.run, row.outcome, row.reason, time.Now().Unix()); err != nil {
+			t.Fatalf("insert run: %v", err)
+		}
+	}
+	runs, err := s.ListPatrolRuns(ctx, sc.ID, 10)
+	if err != nil {
+		t.Fatalf("ListPatrolRuns: %v", err)
+	}
+	if len(runs) != 2 || runs[0].Outcome != "busy" || runs[0].Reason != "approval_pending" ||
+		runs[1].Outcome != "queued" || runs[1].RunNumber != 1 || runs[0].At == 0 {
+		t.Fatalf("runs = %+v, want the skipped slot first, then run #1", runs)
+	}
+}

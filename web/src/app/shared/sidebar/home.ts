@@ -57,7 +57,9 @@ export async function resolveEntryHome(timeoutMs: number): Promise<SidebarItem |
     Promise.race([p, new Promise<null>((resolve) => setTimeout(() => resolve(null), remaining()))]);
   if (!home) return null;
   const item = state.layout.items.find((i) => i.id === home);
-  if (!item || item.hidden || item.id === "chat" || item.id === "patrols") return null;
+  // A hidden shortcut is a start page that is not kept at the top of the
+  // sidebar; a hidden destination is one the person does not use.
+  if (!item || (item.hidden && item.kind === "builtin") || item.id === "chat" || item.id === "patrols") return null;
   const fromWorkspace = state.source !== "user";
   // Only its owner and admins can open a task, and only admins Analytics:
   // never a workspace Home.

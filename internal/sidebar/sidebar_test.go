@@ -14,7 +14,7 @@ func builtins() []Item {
 }
 
 func defaultSections() []Section {
-	return []Section{{ID: "projects"}, {ID: "chats"}, {ID: "team"}}
+	return []Section{{ID: "pinned"}, {ID: "projects"}, {ID: "chats"}, {ID: "team"}}
 }
 
 // TestParseContractExample round-trips the documented example layout.
@@ -44,7 +44,9 @@ func TestParseContractExample(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, _ := json.Marshal(l)
-	want := `{"version":1,"items":[{"id":"chat","kind":"builtin"},{"id":"patrols","kind":"builtin","hidden":true},{"id":"tasks","kind":"builtin","label":"Automations"},{"id":"s-k3j9x","kind":"chat","ref":"c-123","title":"Sales board","icon":"bar-chart","view":"dashboard"},{"id":"s-a1","kind":"project","ref":"p_1","title":"Roadmap"},{"id":"s-a2","kind":"task","ref":"1b4e28ba-2fa1-11d2-883f-0016d3cca427","title":"Nightly report"},{"id":"s-a3","kind":"page","ref":"analytics"}],"sections":[{"id":"chats","label":"Conversations"},{"id":"projects","hidden":true},{"id":"team","collapsed":true}],"home":"s-k3j9x","compact":true}`
+	// The example was saved before Pinned was a section of its own: it is
+	// given one, first (where pinned chats have always been drawn).
+	want := `{"version":1,"items":[{"id":"chat","kind":"builtin"},{"id":"patrols","kind":"builtin","hidden":true},{"id":"tasks","kind":"builtin","label":"Automations"},{"id":"s-k3j9x","kind":"chat","ref":"c-123","title":"Sales board","icon":"bar-chart","view":"dashboard"},{"id":"s-a1","kind":"project","ref":"p_1","title":"Roadmap"},{"id":"s-a2","kind":"task","ref":"1b4e28ba-2fa1-11d2-883f-0016d3cca427","title":"Nightly report"},{"id":"s-a3","kind":"page","ref":"analytics"}],"sections":[{"id":"pinned"},{"id":"chats","label":"Conversations"},{"id":"projects","hidden":true},{"id":"team","collapsed":true}],"home":"s-k3j9x","compact":true}`
 	if string(got) != want {
 		t.Errorf("normalized =\n %s\nwant\n %s", got, want)
 	}
@@ -79,6 +81,53 @@ func TestNormalizeKeepsSeparateLists(t *testing.T) {
 	}
 }
 
+// StatusOff and DatesOff (rows without their status mark; Chats as one run
+// instead of date groups) are view flags stored as the opposite of the
+// default: kept when set, omitted when not — so a layout saved before they
+// existed shows statuses and date groups — and stable under re-normalizing.
+func TestNormalizeKeepsRowOptions(t *testing.T) {
+	t.Parallel()
+	l, err := Parse([]byte(`{"version":1,"items":[],"sections":[],"status_off":true,"dates_off":true}`))
+	if err != nil || !l.StatusOff || !l.DatesOff {
+		t.Fatalf("Parse = %+v, %v; want both options", l, err)
+	}
+	got, _ := json.Marshal(l)
+	if !strings.Contains(string(got), `"status_off":true`) || !strings.Contains(string(got), `"dates_off":true`) {
+		t.Errorf("normalized layout dropped an option: %s", got)
+	}
+	again, err := Parse(got)
+	if err != nil || !reflect.DeepEqual(again, l) {
+		t.Errorf("re-normalize = %+v, %v; want %+v", again, err, l)
+	}
+	off, _ := Normalize(Layout{Version: 1})
+	if raw, _ := json.Marshal(off); strings.Contains(string(raw), "status_off") || strings.Contains(string(raw), "dates_off") {
+		t.Errorf("a layout without the options serializes them: %s", raw)
+	}
+}
+
+// Pinned is a section like the others: it keeps the place, the name and the
+// visibility a layout gives it, and a layout that does not name it (every
+// layout saved before it was a section) gets it first.
+func TestNormalizePinnedSection(t *testing.T) {
+	t.Parallel()
+	l, err := Normalize(Layout{Version: 1, Sections: []Section{{ID: "chats"}, {ID: "pinned", Hidden: true, Label: "Starred"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Section{{ID: "chats"}, {ID: "pinned", Hidden: true, Label: "Starred"}, {ID: "projects"}, {ID: "team"}}
+	if !reflect.DeepEqual(l.Sections, want) {
+		t.Errorf("sections = %+v, want %+v", l.Sections, want)
+	}
+	l, err = Normalize(Layout{Version: 1, Sections: []Section{{ID: "chats"}, {ID: "projects"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = []Section{{ID: "pinned"}, {ID: "chats"}, {ID: "projects"}, {ID: "team"}}
+	if !reflect.DeepEqual(l.Sections, want) {
+		t.Errorf("sections = %+v, want Pinned added first: %+v", l.Sections, want)
+	}
+}
+
 func TestNormalizeFillsDefaults(t *testing.T) {
 	t.Parallel()
 	l, err := Normalize(Layout{Version: 1})
@@ -102,7 +151,7 @@ func TestNormalizeFillsDefaults(t *testing.T) {
 	if !reflect.DeepEqual(l.Items, wantItems) {
 		t.Errorf("items = %+v, want %+v", l.Items, wantItems)
 	}
-	wantSecs := []Section{{ID: "team"}, {ID: "projects"}, {ID: "chats"}}
+	wantSecs := []Section{{ID: "pinned"}, {ID: "team"}, {ID: "projects"}, {ID: "chats"}}
 	if !reflect.DeepEqual(l.Sections, wantSecs) {
 		t.Errorf("sections = %+v, want %+v", l.Sections, wantSecs)
 	}
@@ -127,7 +176,8 @@ func TestNormalizeCleansText(t *testing.T) {
 	if got := l.Items[0].Title; got != strings.Repeat("é", 120) {
 		t.Errorf("title not truncated to 120 runes: %d", len([]rune(got)))
 	}
-	if got := l.Sections[0].Label; got != "Talk" {
+	// Sections[0] is Pinned, added for a layout that does not name it.
+	if got := l.Sections[1].Label; l.Sections[1].ID != "chats" || got != "Talk" {
 		t.Errorf("section label = %q", got)
 	}
 }
@@ -145,11 +195,11 @@ func TestNormalizeHome(t *testing.T) {
 		"":        "",
 		"chat":    "chat",
 		"s1":      "s1",
-		"patrols": "", // the patrols builtin is never home
-		"tasks":   "", // hidden
-		"s2":      "", // hidden
-		"gone":    "", // no such item
-		"BAD ID!": "", // not even a valid id: still just dropped
+		"patrols": "",   // the patrols builtin is never home
+		"tasks":   "",   // a hidden built-in: hiding a destination says it is not used
+		"s2":      "s2", // a hidden shortcut: a start page that is not kept at the top
+		"gone":    "",   // no such item
+		"BAD ID!": "",   // not even a valid id: still just dropped
 	} {
 		l, err := Normalize(Layout{Version: 1, Items: items, Home: home})
 		if err != nil {
@@ -252,7 +302,8 @@ func TestNormalizeRejects(t *testing.T) {
 		{"dashboard on chat", chat(func(i *Item) { i.View = ViewDashboard }), true},
 		{"dashboard on project", chat(func(i *Item) { i.Kind = KindProject; i.View = ViewDashboard }), false},
 		{"unknown view", chat(func(i *Item) { i.View = "board" }), false},
-		{"unknown section", Layout{Version: 1, Sections: []Section{{ID: "pinned"}}}, false},
+		{"unknown section", Layout{Version: 1, Sections: []Section{{ID: "starred"}}}, false},
+		{"duplicate pinned section", Layout{Version: 1, Sections: []Section{{ID: "pinned"}, {ID: "pinned"}}}, false},
 		{"duplicate section", Layout{Version: 1, Sections: []Section{{ID: "team"}, {ID: "team"}}}, false},
 		{"section label 40", Layout{Version: 1, Sections: []Section{{ID: "team", Label: strings.Repeat("x", 40)}}}, true},
 		{"section label 41", Layout{Version: 1, Sections: []Section{{ID: "team", Label: strings.Repeat("x", 41)}}}, false},

@@ -72,8 +72,8 @@ func localizedBranding(b Branding, locale string) Branding {
 
 func localizedPageTitle(title, locale string) string {
 	messages := map[string]map[string]string{
-		"es": {"Analytics": "Analítica", "Guides": "Guías", "Chat guide": "Guía del chat", "Background tasks guide": "Guía de tareas en segundo plano"},
-		"pt": {"Analytics": "Análise", "Guides": "Guias", "Chat guide": "Guia do chat", "Background tasks guide": "Guia de tarefas em segundo plano"},
+		"es": {"Analytics": "Analítica", "Guides": "Guías", "Patrols": "Patrullas", "Chat guide": "Guía del chat", "Background tasks guide": "Guía de tareas en segundo plano"},
+		"pt": {"Analytics": "Análise", "Guides": "Guias", "Patrols": "Patrulhas", "Chat guide": "Guia do chat", "Background tasks guide": "Guia de tarefas em segundo plano"},
 	}
 	if value := messages[locale][title]; value != "" {
 		return value

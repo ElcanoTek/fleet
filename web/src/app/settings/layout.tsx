@@ -1,9 +1,10 @@
 import { t as tr } from "@/app/lib/i18n";
 // Settings shell (fleet-unified settings pass): every /settings/* page renders
-// inside the SAME NavRail + PageTopBar chrome as Chat and the Operations
-// Center — settings is a third surface of the one app, not a separate island.
-// The topbar reads "Settings"; the rail shows neither surface active and the
-// account control below takes the `current` tint (the design's settings view).
+// inside the SAME sidebar + PageTopBar chrome as Chat and Background tasks —
+// settings is a surface of the one app, not a separate island. The sidebar is
+// the one every page has (AppSidebar: the person's pinned chats, projects and
+// chats, so there is always a way back to a chat); the topbar reads
+// "Settings", and the account control takes the `current` tint.
 //
 // Inside the shell: the design's .settings-wrap — a sticky left sub-nav
 // (SetNav) beside the .set-main content column. The content wrapper is keyed
@@ -15,12 +16,10 @@ import { t as tr } from "@/app/lib/i18n";
 // "Operations Center"/"Back to chat" pills); pages now own only their
 // .set-section content.
 
-import { signOut } from "@/app/shared/signOut";
 import { useState, type ReactNode } from "react";
-import { useSessionEmail } from "@/app/shared/hooks/useSessionEmail";
 import { usePathname } from "@/app/lib/navigation";
-import { useClientConfig } from "@/app/lib/useClientConfig";
-import { NavRail, useRailCollapse } from "@/app/shared/ui/NavRail";
+import { useRailCollapse } from "@/app/shared/ui/NavRail";
+import { AppSidebar } from "@/app/shared/sidebar/AppSidebar";
 import { PageTopBar } from "@/app/shared/ui/PageTopBar";
 import { SetNav } from "./SetNav";
 
@@ -28,19 +27,14 @@ export default function SettingsLayout({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const collapse = useRailCollapse();
-  const { branding } = useClientConfig();
-  const email = useSessionEmail();
 
   return (
     <div className="grid h-[100dvh] grid-cols-[minmax(0,1fr)] overflow-hidden text-[var(--color-text-primary)] sm:grid-cols-[auto_minmax(0,1fr)]">
-      <NavRail
+      <AppSidebar
         activeView="settings"
-        brandName={branding.app_name}
-        brandLogoSrc={branding.logo_url || undefined}
         sidebarOpen={sidebarOpen}
         setSidebarOpen={setSidebarOpen}
         collapse={collapse}
-        account={{ email, onSignOut: signOut }}
       />
       {/* min-h-0 + overflow-hidden keep this grid item at the track height
           (its min-height:auto would otherwise grow it to the content and

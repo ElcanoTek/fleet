@@ -420,10 +420,13 @@ export function MenuItem({
   className,
   testId,
   current,
+  title,
 }: {
   icon?: ReactNode;
   children: ReactNode;
   description?: ReactNode;
+  // A longer explanation shown on hover, for an item whose row stays one line.
+  title?: string;
   onClick?: (e: React.MouseEvent<HTMLButtonElement>) => void;
   danger?: boolean;
   disabled?: boolean;
@@ -441,6 +444,7 @@ export function MenuItem({
       type="button"
       role="menuitem"
       data-testid={testId}
+      title={title}
       aria-current={current ? "page" : undefined}
       disabled={disabled}
       aria-haspopup={ariaHasPopup}

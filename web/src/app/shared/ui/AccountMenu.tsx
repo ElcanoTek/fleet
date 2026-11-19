@@ -52,6 +52,17 @@ function Avatar({ email, className }: { email: string; className?: string }) {
   );
 }
 
+/**
+ * nameFromEmail reads a first name off a mailbox: "sam@…" and
+ * "sam.jones@…" are "Sam". An address with nothing name-like before the @
+ * gives "", and the account button shows the address alone.
+ */
+export function nameFromEmail(email: string): string {
+  const first = (email.split("@")[0] ?? "").split(/[._+-]/)[0] ?? "";
+  if (!/^\p{L}{2,}$/u.test(first)) return "";
+  return first.charAt(0).toLocaleUpperCase() + first.slice(1);
+}
+
 const THEME_OPTIONS = [
   { value: "system", label: tr("System") },
   { value: "light", label: tr("Light") },
@@ -107,6 +118,7 @@ export function AccountMenu({
   const isWorkspaceSettings = current && !isContextSettings && !isAdminSettings;
   const close = () => setOpen(false);
   const shown = email || tr("Loading…");
+  const name = nameFromEmail(email);
 
   // Collapsing the rail dismisses the menu (the design's setCollapsed
   // behavior) — the strip has no room for an anchored stretch menu.
@@ -119,7 +131,7 @@ export function AccountMenu({
   }
 
   return (
-    <div className="relative border-t border-[var(--color-border)] pt-2">
+    <div className="relative border-t border-[var(--color-border)] pt-1.5">
       <button
         ref={anchorRef}
         type="button"
@@ -136,24 +148,25 @@ export function AccountMenu({
         ].join(" ")}
       >
         <Avatar email={email} />
+        {/* Who is signed in: a first name read off the mailbox (fleet keeps
+            no display name), over the address itself. */}
         <span
           className={[
-            "min-w-0 flex-1 truncate text-[0.82rem]",
+            "flex min-w-0 flex-1 flex-col leading-tight",
             railCollapsed ? "sm:hidden" : "",
           ].join(" ")}
         >
-          {shown}
+          {name ? (
+            <span className="truncate text-[0.875rem] font-medium text-[var(--color-text-primary)]">{name}</span>
+          ) : null}
+          <span className={["truncate", name ? "text-[0.75rem] text-[var(--color-text-muted)]" : "text-[0.82rem]"].join(" ")}>
+            {shown}
+          </span>
         </span>
         {/* The name is the button's own text (WCAG 2.5.3 Label in Name): the
-            visible email, then what the button does, for screen readers. */}
+            visible name and email, then what the button does, for screen
+            readers. */}
         <span className="sr-only">{tr(", account menu")}</span>
-        <Icon
-          name="selector"
-          className={[
-            "size-4 shrink-0 text-[var(--color-text-muted)]",
-            railCollapsed ? "sm:hidden" : "",
-          ].join(" ")}
-        />
       </button>
 
       <Menu

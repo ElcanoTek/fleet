@@ -181,7 +181,7 @@ var helpGuides = map[string]string{"chat": "Chat", "operations-center": "Backgro
 // pagePaths are the client routes the SPA renders. Anything else gets the
 // SPA's not-found page with a 404 status.
 var pagePaths = map[string]bool{
-	"/chat": true, "/orchestrator": true, "/analytics": true, "/login": true, "/no-access": true,
+	"/chat": true, "/patrols": true, "/orchestrator": true, "/analytics": true, "/login": true, "/no-access": true,
 	"/settings": true, "/settings/admin": true, "/settings/admin/doctor": true,
 	"/settings/admin/features": true, "/settings/admin/sidebar": true,
 	"/settings/admin/providers": true, "/settings/admin/server": true,
@@ -309,6 +309,8 @@ func (g *Gateway) servePage(w http.ResponseWriter, r *http.Request, sess *webses
 			break
 		}
 		boot.Shared = body
+	case p == "/patrols":
+		title = "Patrols"
 	case p == "/analytics":
 		title = "Analytics"
 	case p == "/help":

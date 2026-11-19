@@ -1,5 +1,5 @@
 import { t as tr } from "@/app/lib/i18n";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Icon } from "./Icon";
 import type { ChatSchedule, ConversationApprovalMode } from "./history";
@@ -199,8 +199,22 @@ export function PatrolForm({
   onCancel,
   onSubmit,
   confirmAutonomous = false,
+  patrolOnly = false,
+  headingAction,
+  intro,
+  ready = true,
 }: {
   mode: "new" | "edit";
+  /** The Patrols page's form: a recurring patrol only (no one-shot timers),
+   *  starting from an empty task. */
+  patrolOnly?: boolean;
+  /** Beside the heading (the page's "Use guided setup"). */
+  headingAction?: ReactNode;
+  /** Above the task field (the page's "Runs in" choice). */
+  intro?: ReactNode;
+  /** False while something outside the form is still to be chosen (the
+   *  page's existing chat): Start stays disabled. */
+  ready?: boolean;
   /** A patrol in this chat is running: picking Autonomous asks once more. */
   confirmAutonomous?: boolean;
   /** The schedule being edited (edit mode). */
@@ -221,7 +235,7 @@ export function PatrolForm({
   const [timerAmount, setTimerAmount] = useState(start.timerAmount);
   const [timerUnit, setTimerUnit] = useState<"minutes" | "hours">(start.timerUnit);
   const [task, setTask] = useState<string>(() =>
-    schedule?.prompt ?? ((initialPrompt ?? "").trim() || DEFAULT_TASK),
+    schedule?.prompt ?? ((initialPrompt ?? "").trim() || (patrolOnly ? "" : DEFAULT_TASK)),
   );
   const [label, setLabel] = useState<string>(() => (isEdit ? schedule?.title ?? "" : ""));
   const [approval, setApproval] = useState<ConversationApprovalMode>(
@@ -250,7 +264,7 @@ export function PatrolForm({
     : kind === "timer"
       ? tr("Reminder")
       : tr("Recurring Patrol");
-  const canSubmit = task.trim().length > 0 && (kind === "timer" || Boolean(cron)) && !submitting;
+  const canSubmit = ready && task.trim().length > 0 && (kind === "timer" || Boolean(cron)) && !submitting;
   // A paused timer has no clock time to show: resuming starts its delay
   // over from then, so it reads as the bar does (Paused · One-shot (2h)).
   const pausedTimer = isEdit && schedule?.status === "paused";
@@ -318,10 +332,13 @@ export function PatrolForm({
         <span aria-hidden="true" className="picker-icon-tile size-7 shrink-0">
           <Icon name={isEdit ? "edit" : "plus"} className="size-3.5" />
         </span>
-        <h3 className="m-0 text-[0.9375rem] font-semibold text-[var(--color-text-primary)]">
-          {isEdit ? tr("Edit patrol") : tr("New patrol or timer")}
+        <h3 className="m-0 min-w-0 flex-1 text-[0.9375rem] font-semibold text-[var(--color-text-primary)]">
+          {isEdit ? tr("Edit patrol") : patrolOnly ? tr("New patrol") : tr("New patrol or timer")}
         </h3>
+        {headingAction}
       </div>
+
+      {intro}
 
       <label className="grid gap-2">
         <span className={LABEL_CLASS}>{tr("What to check & do each run")}</span>
@@ -330,7 +347,7 @@ export function PatrolForm({
           rows={3}
           value={task}
           onChange={(e) => setTask(e.target.value)}
-          placeholder={tr("e.g. Check pacing on active deals and flag anything under 90%")}
+          placeholder={patrolOnly ? DEFAULT_TASK : tr("e.g. Check pacing on active deals and flag anything under 90%")}
           className="min-h-[5.25rem] resize-y bg-[var(--color-surface-1)] px-3 py-2.5 text-[0.875rem] leading-[1.5]"
         />
       </label>
@@ -338,17 +355,21 @@ export function PatrolForm({
       <fieldset className="m-0 grid min-w-0 gap-3 border-0 p-0">
         <legend className={`${LABEL_CLASS} mb-2.5 p-0`}>{tr("Schedule")}</legend>
         <div className="grid gap-2">
-          <span className="text-[0.75rem] text-[var(--color-text-muted)]">{tr("Repeats")}</span>
+          {patrolOnly ? null : (
+            <span className="text-[0.75rem] text-[var(--color-text-muted)]">{tr("Repeats")}</span>
+          )}
           <div className="flex flex-wrap gap-2" role="group" aria-label={tr("Repeats")}>
             {REPEAT_PRESETS.map((p) => chip(p.id, p.label))}
           </div>
         </div>
-        <div className="grid gap-2">
-          <span className="text-[0.75rem] text-[var(--color-text-muted)]">{tr("Once (timer)")}</span>
-          <div className="flex flex-wrap gap-2" role="group" aria-label={tr("Once (timer)")}>
-            {ONCE_PRESETS.map((p) => chip(p.id, p.label))}
+        {patrolOnly ? null : (
+          <div className="grid gap-2">
+            <span className="text-[0.75rem] text-[var(--color-text-muted)]">{tr("Once (timer)")}</span>
+            <div className="flex flex-wrap gap-2" role="group" aria-label={tr("Once (timer)")}>
+              {ONCE_PRESETS.map((p) => chip(p.id, p.label))}
+            </div>
           </div>
-        </div>
+        )}
         {presetId === "custom" ? (
           <div data-testid="patrol-custom-builder">
             <PatrolSchedulePicker
@@ -518,7 +539,7 @@ export function PatrolForm({
   );
 }
 
-function ApprovalSegmented({
+export function ApprovalSegmented({
   value,
   onChange,
   labelledBy,

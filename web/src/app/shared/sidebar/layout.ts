@@ -19,8 +19,11 @@ export const LAYOUT_VERSION = 1;
 export const BUILTIN_IDS = ["chat", "patrols", "tasks"] as const;
 export type BuiltinId = (typeof BUILTIN_IDS)[number];
 
-/** The chat surface's sections, in their default order. */
-export const SECTION_IDS = ["projects", "chats", "team"] as const;
+/**
+ * The sidebar's lists, in their default order. "team" is teammates' shared
+ * chats as a list of their own, used only with `separate_lists`.
+ */
+export const SECTION_IDS = ["pinned", "projects", "chats", "team"] as const;
 export type SectionId = (typeof SECTION_IDS)[number];
 
 export const PAGE_REFS = ["analytics", "help", "settings"] as const;
@@ -66,6 +69,13 @@ export type SidebarLayout = {
    * section with the person's own (docs/SIDEBAR.md).
    */
   separate_lists?: boolean;
+  /**
+   * Rows say nothing but their title: no patrol next check, sharing, Live or
+   * days-left mark. Unset — the default — shows one status when it matters.
+   */
+  status_off?: boolean;
+  /** The Chats list is one run, not grouped under Today, Yesterday, This week, Older. */
+  dates_off?: boolean;
 };
 
 export const MAX_ITEMS = 60;
@@ -195,6 +205,10 @@ export function normalizeLayout(raw: unknown): SidebarLayout {
   for (const id of BUILTIN_IDS) {
     if (!seen.has(id)) items.push({ id, kind: "builtin" });
   }
+  // "chat" is in every layout and never a row (topItems): it rides first, so
+  // the top of the sidebar is exactly items[1:], in order.
+  const chatAt = items.findIndex((i) => i.id === "chat");
+  if (chatAt > 0) items.unshift(...items.splice(chatAt, 1));
   const sections: SidebarSection[] = [];
   const seenSections = new Set<string>();
   for (const one of Array.isArray(r.sections) ? r.sections : []) {
@@ -210,20 +224,31 @@ export function normalizeLayout(raw: unknown): SidebarLayout {
     if (s.collapsed === true) section.collapsed = true;
     sections.push(section);
   }
+  // A layout saved before Pinned was a section of its own gets it where it
+  // has always been drawn: first.
+  if (!seenSections.has("pinned")) sections.unshift({ id: "pinned" });
   for (const id of SECTION_IDS) {
-    if (!seenSections.has(id)) sections.push({ id });
+    if (id !== "pinned" && !seenSections.has(id)) sections.push({ id });
   }
   const layout: SidebarLayout = { version: LAYOUT_VERSION, items, sections, home: "" };
   if (r.compact === true) layout.compact = true;
   if (r.separate_lists === true) layout.separate_lists = true;
+  if (r.status_off === true) layout.status_off = true;
+  if (r.dates_off === true) layout.dates_off = true;
   layout.home = validHome(layout, typeof r.home === "string" ? r.home : "");
   return layout;
 }
 
+// The start page names an item. It need not be at the top of the sidebar: a
+// chat, project, task or page the person set as their start page from its
+// menu is kept in the layout hidden (not a top item) and is still where fleet
+// opens. A hidden Background tasks is not: hiding a destination says "I do
+// not use this". Patrols is never a start page.
 function validHome(layout: SidebarLayout, home: string): string {
   if (!home) return "";
   const item = layout.items.find((i) => i.id === home);
-  if (!item || item.hidden || item.id === "patrols") return "";
+  if (!item || item.id === "patrols") return "";
+  if (item.hidden && item.kind === "builtin") return "";
   return home;
 }
 
@@ -292,6 +317,60 @@ export function addShortcut(layout: SidebarLayout, target: ShortcutTarget): Side
   return normalizeLayout(next);
 }
 
+/** isKeptAtTop: this target is one of the sidebar's top items. */
+export function isKeptAtTop(layout: SidebarLayout, kind: ItemKind, ref: string): boolean {
+  const item = findShortcut(layout, kind, ref);
+  return Boolean(item && !item.hidden);
+}
+
+/** keepAtTop puts a target among the top items ("Move to the top"). */
+export function keepAtTop(layout: SidebarLayout, target: ShortcutTarget): SidebarLayout {
+  return addShortcut(layout, target);
+}
+
+/**
+ * removeFromTop takes a target out of the top items. One that is the start
+ * page stays in the layout, hidden, so fleet still opens there.
+ */
+export function removeFromTop(layout: SidebarLayout, kind: ItemKind, ref: string): SidebarLayout {
+  const item = findShortcut(layout, kind, ref);
+  if (!item) return normalizeLayout(layout);
+  if (layout.home === item.id) return updateItem(layout, item.id, { hidden: true });
+  return removeItem(layout, item.id);
+}
+
+/** isStartPage: fleet opens to this target. */
+export function isStartPage(layout: SidebarLayout, kind: ItemKind, ref: string): boolean {
+  const item = findShortcut(layout, kind, ref);
+  return Boolean(item && layout.home === item.id);
+}
+
+/**
+ * setStartPage makes a target the page fleet opens to, wherever it is in the
+ * sidebar. A target that is not a top item is added to the layout hidden: it
+ * becomes the start page without moving.
+ */
+export function setStartPage(layout: SidebarLayout, target: ShortcutTarget): SidebarLayout {
+  const next = cloneLayout(layout);
+  let item = findShortcut(next, target.kind, target.ref);
+  if (!item) {
+    if (next.items.length >= MAX_ITEMS) return normalizeLayout(next);
+    item = {
+      id: newItemId(next),
+      kind: target.kind,
+      ref: target.ref,
+      title: cleanText(target.title, MAX_TITLE) || undefined,
+      view: target.kind === "chat" ? target.view : undefined,
+      hidden: true,
+    };
+    next.items.push(item);
+  }
+  next.home = item.id;
+  // The item that was the start page, if it was kept only for that, goes.
+  next.items = next.items.filter((i) => i.kind === "builtin" || !i.hidden || i.id === next.home);
+  return normalizeLayout(next);
+}
+
 export function removeItem(layout: SidebarLayout, id: string): SidebarLayout {
   if (isBuiltinId(id)) return normalizeLayout(layout);
   const next = cloneLayout(layout);
@@ -332,21 +411,33 @@ export function moveItemTo(layout: SidebarLayout, id: string, to: number): Sideb
 }
 
 /**
- * setHome makes an item the place fleet opens to, and floats it to the top
- * of the rail (the person can move it again). "" clears it.
+ * setHome makes an item already in the layout the page fleet opens to. ""
+ * clears it: fleet then opens the last chat the person had open. The item
+ * stays where it is; a start page does not have to be at the top.
  */
 export function setHome(layout: SidebarLayout, id: string): SidebarLayout {
   const next = cloneLayout(layout);
-  if (!id) {
-    next.home = "";
-    return normalizeLayout(next);
-  }
-  const idx = next.items.findIndex((i) => i.id === id);
-  if (idx < 0 || id === "patrols") return normalizeLayout(next);
-  const [it] = next.items.splice(idx, 1);
-  it.hidden = undefined;
-  next.items.unshift(it);
-  next.home = id;
+  next.home = id && id !== "patrols" && next.items.some((i) => i.id === id) ? id : "";
+  // An item kept only to be the start page goes with the job.
+  next.items = next.items.filter((i) => i.kind === "builtin" || !i.hidden || i.id === next.home);
+  return normalizeLayout(next);
+}
+
+/**
+ * The teammates' shared chats, three ways: mixed into Chats with the
+ * person's own ("chats", the default), as a Team chats list of their own
+ * ("own"), or not listed at all ("hidden"; search still finds them).
+ */
+export type TeamChatsMode = "chats" | "own" | "hidden";
+
+export function teamChatsMode(layout: SidebarLayout): TeamChatsMode {
+  if (sectionOf(layout, "team").hidden) return "hidden";
+  return layout.separate_lists ? "own" : "chats";
+}
+
+export function setTeamChatsMode(layout: SidebarLayout, mode: TeamChatsMode): SidebarLayout {
+  const next = updateSection(layout, "team", { hidden: mode === "hidden" });
+  next.separate_lists = mode === "own" ? true : undefined;
   return normalizeLayout(next);
 }
 
@@ -373,13 +464,23 @@ export function moveSection(layout: SidebarLayout, id: SectionId, delta: number)
   return normalizeLayout(next);
 }
 
+/**
+ * topItems: what the top of the sidebar shows, in order — Patrols, Background
+ * tasks and the person's kept shortcuts, minus what they hid. The "chat"
+ * builtin stays in every layout (older clients and the server expect it) but
+ * is never a row: starting a chat is the pen button beside the search field.
+ */
+export function topItems(layout: SidebarLayout): SidebarItem[] {
+  return layout.items.filter((i) => !i.hidden && i.id !== "chat");
+}
+
 export function sectionOf(layout: SidebarLayout, id: SectionId): SidebarSection {
   return layout.sections.find((s) => s.id === id) ?? { id };
 }
 
 // ── Presets: starting points for the ways people use fleet. ───────────────
-// A preset rearranges the builtins and sections only; the person's own
-// shortcuts stay (placed where the preset puts shortcuts).
+// A preset rearranges the top items and the lists only. What the person
+// keeps at the top, what they pinned and their start page all stay.
 
 export type PresetId = "classic" | "chat" | "dashboards" | "automation" | "team";
 
@@ -397,15 +498,15 @@ function arrange(
     hide?: BuiltinId[];
     sections: SectionId[];
     hideSections?: SectionId[];
-    collapseSections?: SectionId[];
+    separateLists?: boolean;
     compact?: boolean;
-    home?: (l: SidebarLayout) => string;
   },
 ): SidebarLayout {
   const shortcuts = layout.items.filter((i) => i.kind !== "builtin");
   const builtins = new Map(layout.items.filter((i) => i.kind === "builtin").map((i) => [i.id, i]));
   const items: SidebarItem[] = [];
-  for (const slot of opts.order) {
+  // "chat" is in every layout and never a row (topItems); it rides first.
+  for (const slot of ["chat" as const, ...opts.order]) {
     if (slot === "shortcuts") items.push(...shortcuts);
     else {
       const b = { ...(builtins.get(slot) ?? { id: slot, kind: "builtin" as const }) };
@@ -420,82 +521,73 @@ function arrange(
     const label = oldSections.get(id)?.label;
     if (label) s.label = label;
     if (opts.hideSections?.includes(id)) s.hidden = true;
-    if (opts.collapseSections?.includes(id)) s.collapsed = true;
     return s;
   });
   const next: SidebarLayout = {
     version: LAYOUT_VERSION,
     items,
     sections,
-    home: "",
+    // The start page stays, unless the preset hides the destination it is.
+    home: layout.home && !opts.hide?.includes(layout.home as BuiltinId) ? layout.home : "",
     compact: opts.compact || undefined,
-    // One list or separate lists is the person's choice, like their
-    // shortcuts: a preset rearranges around it.
-    separate_lists: layout.separate_lists || undefined,
+    separate_lists: opts.separateLists || undefined,
+    // How much a row says is the person's choice, like their pins.
+    status_off: layout.status_off || undefined,
+    dates_off: layout.dates_off || undefined,
   };
-  next.home = opts.home ? opts.home(next) : layout.home && !opts.hide?.includes(layout.home as BuiltinId) ? layout.home : "";
   return normalizeLayout(next);
 }
-
-const firstDashboard = (l: SidebarLayout) => l.items.find((i) => i.kind === "chat" && i.view === "dashboard")?.id ?? "";
 
 export const PRESETS: Preset[] = [
   {
     id: "classic",
     name: tr("Classic"),
-    description: tr("Chat, patrols and background tasks, with projects and chats below. The way fleet comes."),
+    description: tr("Top items, then Pinned, Projects and Chats"),
     apply: (l) =>
-      arrange(l, { order: ["chat", "patrols", "tasks", "shortcuts"], sections: ["projects", "chats", "team"] }),
+      arrange(l, { order: ["patrols", "tasks", "shortcuts"], sections: ["pinned", "projects", "chats", "team"] }),
   },
   {
     id: "chat",
     name: tr("Just chat"),
-    description: tr("A clean assistant: your chats and nothing else in the way."),
+    description: tr("Your chats and pins, nothing else"),
     apply: (l) =>
       arrange(l, {
-        order: ["chat", "shortcuts", "patrols", "tasks"],
+        order: ["shortcuts", "patrols", "tasks"],
         hide: ["patrols", "tasks"],
-        sections: ["chats", "projects", "team"],
-        hideSections: ["projects"],
-        compact: true,
+        sections: ["pinned", "chats", "projects", "team"],
+        hideSections: ["projects", "team"],
       }),
   },
   {
     id: "dashboards",
     name: tr("Dashboards first"),
-    description: tr("Your boards up top, opened as live dashboards; chat is one click away."),
+    description: tr("Pinned boards up top, opened live"),
     apply: (l) =>
       arrange(l, {
-        order: ["shortcuts", "chat", "tasks", "patrols"],
-        hide: ["patrols"],
-        sections: ["chats", "projects", "team"],
-        hideSections: ["projects"],
+        order: ["shortcuts", "patrols", "tasks"],
+        sections: ["pinned", "chats", "projects", "team"],
         compact: true,
-        home: firstDashboard,
       }),
   },
   {
     id: "automation",
     name: tr("Automation"),
-    description: tr("Background tasks and patrols first, for people who run work on a schedule."),
+    description: tr("Background tasks and patrols lead"),
     apply: (l) =>
       arrange(l, {
-        order: ["tasks", "patrols", "shortcuts", "chat"],
-        sections: ["projects", "chats", "team"],
-        collapseSections: ["chats"],
-        home: () => "tasks",
+        order: ["tasks", "patrols", "shortcuts"],
+        sections: ["pinned", "projects", "chats", "team"],
       }),
   },
   {
     id: "team",
     name: tr("Team room"),
-    description: tr("Shared and multiplayer chats first, for a team working in one place."),
+    description: tr("Teammates' chats in their own list, first"),
     apply: (l) =>
       arrange(l, {
-        order: ["shortcuts", "chat", "patrols", "tasks"],
-        hide: ["tasks"],
-        sections: ["team", "chats", "projects"],
-        collapseSections: ["projects"],
+        order: ["patrols", "tasks", "shortcuts"],
+        sections: ["team", "pinned", "chats", "projects"],
+        separateLists: true,
       }),
   },
 ];
@@ -534,6 +626,8 @@ export function builtinSubtitle(id: BuiltinId): string {
 
 export function sectionName(id: SectionId): string {
   switch (id) {
+    case "pinned":
+      return tr("Pinned");
     case "projects":
       return tr("Projects");
     case "chats":
@@ -575,7 +669,7 @@ export function defaultIcon(item: Pick<SidebarItem, "id" | "kind" | "ref" | "vie
     case "chat":
       return item.view === "dashboard" ? "bar-chart" : isPatrol ? "activity" : "message";
     case "project":
-      return "folder";
+      return "briefcase";
     case "task":
       return "zap";
     case "page":

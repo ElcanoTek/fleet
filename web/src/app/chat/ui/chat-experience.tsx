@@ -184,6 +184,8 @@ import {
   type TurnStreamDeps,
 } from "./useTurnStream";
 import { readChatSession, writeChatSession } from "./chatSessionStore";
+import { takeChatHandoff, type ChatHandoff } from "@/app/shared/sidebar/chatHandoff";
+import { rememberSidebarLibrary } from "@/app/shared/sidebar/useSidebarLibrary";
 import { boardManifest } from "./dashboard/board";
 import { DashboardTranscriptContext } from "./dashboard/context";
 import { DashboardBoard, DashboardHud } from "./dashboard/DashboardView";
@@ -3346,9 +3348,11 @@ export function ChatExperience({
     });
   };
 
-  const enterSelectMode = (id: string) => {
+  // Entered from the Chats menu ("Select chats…") with nothing selected, or
+  // with one chat already ticked.
+  const enterSelectMode = (id?: string) => {
     setSelectMode(true);
-    setSelectedIds(new Set([id]));
+    setSelectedIds(new Set(id ? [id] : []));
   };
 
   const exitSelectMode = () => {
@@ -5683,8 +5687,8 @@ export function ChatExperience({
   // shared top-to-bottom order the sidebar renders — so what j/k walks always
   // matches what the user sees.
   const focusedConv = useMemo(
-    () => visibleOrder.find((c) => c.id === focusedConversationId) ?? null,
-    [visibleOrder, focusedConversationId],
+    () => conversations.find((c) => c.id === focusedConversationId) ?? null,
+    [conversations, focusedConversationId],
   );
 
   // moveFocus walks the cursor by `delta` rows through visibleOrder, clamping at
@@ -5695,19 +5699,27 @@ export function ChatExperience({
   // has mounted/opened.
   const moveFocus = useCallback(
     (delta: number) => {
-      if (visibleOrder.length === 0) return;
+      // The person's own rows, top to bottom, exactly as the sidebar draws
+      // them now: its chips, sort, date groups, folded sections and open
+      // projects all decide that, so the rows themselves are asked. Before
+      // the sidebar has drawn any, the computed order stands in.
+      const drawn = Array.from(
+        document.querySelectorAll<HTMLElement>("[data-rail-body] [data-own-row][data-conversation-id]"),
+      )
+        .map((row) => row.dataset.conversationId ?? "")
+        .filter(Boolean);
+      const order = drawn.length > 0 ? drawn : visibleOrder.map((c) => c.id);
+      if (order.length === 0) return;
       if (!sidebarOpen) keepFocusForDrawerShortcut();
       setSidebarOpen(true);
-      const idx = focusedConversationId
-        ? visibleOrder.findIndex((c) => c.id === focusedConversationId)
-        : -1;
+      const idx = focusedConversationId ? order.indexOf(focusedConversationId) : -1;
       const next =
         idx === -1
           ? delta > 0
             ? 0
-            : visibleOrder.length - 1
-          : Math.min(visibleOrder.length - 1, Math.max(0, idx + delta));
-      setFocusedConversationId(visibleOrder[next]?.id ?? null);
+            : order.length - 1
+          : Math.min(order.length - 1, Math.max(0, idx + delta));
+      setFocusedConversationId(order[next] ?? null);
     },
     [visibleOrder, focusedConversationId, sidebarOpen],
   );
@@ -6795,6 +6807,97 @@ export function ChatExperience({
     if (railSearching && bootstrapped && !archivedLoaded) void refreshConversationsRef.current();
   }, [railSearching, bootstrapped, archivedLoaded]);
 
+  // ── Actions handed over from another page's sidebar ──────────────────────
+  // The same sidebar is on every page (docs/SIDEBAR.md). What a row's menu
+  // offers there that needs one of this page's dialogs or confirmations is
+  // noted, and this page carries it out with the same handlers a click in
+  // its own sidebar runs (shared/sidebar/chatHandoff.ts). Taken once the
+  // lists are in hand: on a warm return that is at once.
+  const openPatrolsFor = (conversation: ConversationSummary) => {
+    setProjectHome(null);
+    setTeamChatView(null);
+    if (activeConversationIdRef.current === conversation.id) {
+      setPatrolsOpen(true);
+      return;
+    }
+    void loadConversationRef.current(conversation.id).then(() => {
+      if (activeConversationIdRef.current === conversation.id) setPatrolsOpen(true);
+    });
+  };
+  const runHandoff = (h: ChatHandoff) => {
+    switch (h.kind) {
+      case "new-chat":
+        clearConversation(h.sealed || serverConfig.lockdownOnly ? { lockdown: true } : undefined);
+        return;
+      case "new-project":
+        openNewProjectDialog();
+        return;
+      case "select":
+        enterSelectMode();
+        return;
+      case "delete-temporary":
+        setConfirmBulkDelete(true);
+        return;
+      case "move":
+        void moveConversationToProject(h.conversationId, h.projectId);
+        return;
+      case "project":
+        if (h.action === "delete") {
+          setPendingProjectDelete(h.projectId);
+        } else {
+          setTeamChatView(null);
+          setProjectHome(null);
+          void startProjectChat(h.projectId);
+        }
+        return;
+      case "chat": {
+        const c = h.conversation;
+        if (h.action === "share") openShareDialog(c);
+        else if (h.action === "download") void downloadConversation(c);
+        else if (h.action === "transfer") setTransferDialog({ id: c.id, title: c.title });
+        else if (h.action === "workflow") setPromptSaveTarget(c);
+        else if (h.action === "task") void promoteConversation(c);
+        else if (h.action === "patrol") openPatrolsFor(c);
+        else if (h.action === "delete") setPendingDeleteConversation({ id: c.id, title: c.title });
+        else void requestArchive(c, h.action === "archive");
+      }
+    }
+  };
+  const runHandoffRef = useRef(runHandoff);
+  useEffect(() => {
+    runHandoffRef.current = runHandoff;
+  });
+  useEffect(() => {
+    if (!bootstrapped || isLoadingHistory) return;
+    const handoff = takeChatHandoff();
+    if (handoff) runHandoffRef.current(handoff);
+  }, [bootstrapped, isLoadingHistory]);
+
+  // What this page's sidebar lists, left for the next page's first paint
+  // (useSidebarLibrary): leaving Chat for Background tasks or Settings shows
+  // the same chats and projects at once, then reads them again.
+  useEffect(() => {
+    if (!bootstrapped) return;
+    rememberSidebarLibrary({
+      conversations,
+      archivedConversations,
+      serverConfig,
+      ...(projectsLoaded ? { projects } : {}),
+      ...(teamSharedLoaded ? { teamSharedConversations: railTeamSharedConversations } : {}),
+      chatOrders,
+    });
+  }, [
+    bootstrapped,
+    conversations,
+    archivedConversations,
+    serverConfig,
+    projects,
+    projectsLoaded,
+    railTeamSharedConversations,
+    teamSharedLoaded,
+    chatOrders,
+  ]);
+
   // ── mount effects, hoisted below their callback dependencies ────────────
   // These three effects all kick off work via callbacks declared above
   // (loadCatalogModels, reattachToConv, refreshConversations,
@@ -7135,10 +7238,15 @@ export function ChatExperience({
     // another page (docs/SIDEBAR.md). Consumed and stripped like ?c=; the
     // project's home opens once the boot has settled.
     let projectLinkId: string | null = null;
+    // &settings=1: open the project's settings with its home (the sidebar's
+    // "Project settings…" and "Share…" from another page).
+    let projectLinkSettings = false;
     {
       const params = new URLSearchParams(window.location.search);
       const proj = params.get("project");
       if (proj !== null) {
+        projectLinkSettings = params.get("settings") === "1";
+        params.delete("settings");
         params.delete("project");
         const qs = params.toString();
         window.history.replaceState(
@@ -7358,7 +7466,7 @@ export function ChatExperience({
           const pendingHome = pendingHomeRef.current;
           pendingHomeRef.current = null;
           if (projectLinkId) {
-            setProjectHome({ id: projectLinkId });
+            setProjectHome({ id: projectLinkId, settings: projectLinkSettings || undefined });
           } else if (pendingHome) {
             openHomeElsewhere(pendingHome);
           }
@@ -7468,6 +7576,13 @@ export function ChatExperience({
           willLoadConversation = true;
           void loadConversationRef.current(id, {});
         });
+      }
+      // A project link followed from another page's sidebar arrives on a
+      // warm session too: the same sidebar is on every page, and moving
+      // between pages keeps this one's state.
+      if (projectLinkId) {
+        setTeamChatView(null);
+        setProjectHome({ id: projectLinkId, settings: projectLinkSettings || undefined });
       }
     } else {
       void loadInitialState();
@@ -7653,6 +7768,7 @@ export function ChatExperience({
           downloadConversation={downloadConversation}
           promoteConversation={promoteConversation}
           savePromptFromConversation={setPromptSaveTarget}
+          onOpenPatrols={openPatrolsFor}
           setPendingDeleteConversation={setPendingDeleteConversation}
           setConversationLabels={setConversationLabels}
           openShareDialog={openShareDialog}

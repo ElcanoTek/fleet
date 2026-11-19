@@ -122,17 +122,21 @@ func (s *Server) handlePatrolDraft(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// patrolsIndexMax bounds the Patrols index (a person with more live patrols
-// still finds the rest in Chat); patrolsIndexMaxPages bounds how far it reads
-// past rows the caller can no longer open.
+// patrolsIndexMax bounds each half of the Patrols index — the caller's own
+// patrols, and teammates' patrols shared with them (a person with more live
+// patrols still finds the rest in Chat); patrolsIndexMaxPages bounds how far
+// it reads past rows the caller can no longer open.
 const (
 	patrolsIndexMax      = 100
 	patrolsIndexMaxPages = 10
 )
 
-// handlePatrols backs GET /patrols: the caller's active and paused recurring
-// patrols across their chats, for the Patrols hub in the navigation rail. A
-// patrol lives in its chat; this is only the index of them.
+// handlePatrols backs GET /patrols: the index of patrols for the Patrols page
+// and the sidebar's row marks (docs/SIDEBAR.md). It lists the caller's own
+// active and paused recurring patrols across their chats ("mine": true),
+// then the patrols teammates run in chats the caller can open ("mine":
+// false, with "owner_email"). A patrol lives in its chat; this is only the
+// index of them, so it carries no prompt.
 func (s *Server) handlePatrols(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -170,7 +174,7 @@ func (s *Server) handlePatrols(w http.ResponseWriter, r *http.Request) {
 				if !seen {
 					conv, err := s.store.GetMultiplayerConversation(r.Context(), user, p.ConversationID)
 					if err != nil {
-						// An error is not "no access": answer 5xx so the rail
+						// An error is not "no access": answer 5xx so the page
 						// shows its load-failure state, never a false empty list.
 						http.Error(w, err.Error(), http.StatusInternalServerError)
 						return
@@ -188,5 +192,94 @@ func (s *Server) handlePatrols(w http.ResponseWriter, r *http.Request) {
 			break // no more rows
 		}
 	}
+	// Which of the caller's patrols are being skipped behind an approval
+	// card. Display data: a failed read leaves the rows unmarked.
+	ids := make([]string, 0, len(out))
+	for i := range out {
+		if out[i].Status == store.ChatScheduleStatusActive {
+			ids = append(ids, out[i].ID)
+		}
+	}
+	if skips, err := s.store.PatrolSkips(r.Context(), ids); err == nil {
+		for i := range out {
+			out[i].Skipped = skips[out[i].ID]
+		}
+	}
+	// Teammates' patrols, in chats shared with the caller. The store reads
+	// them from the same set of chats the sidebar lists as shared
+	// (ListSharedAndMultiplayerConversations), so nothing is listed here that
+	// the caller could not already open.
+	shared, err := s.store.ListSharedPatrols(r.Context(), user, patrolsIndexMax)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	out = append(out, shared...)
 	writeJSON(w, r, map[string]any{"patrols": out})
+}
+
+// handlePatrolByID backs GET /patrols/{id}: one patrol and its recent runs,
+// for the Patrols page's open row. The caller's own patrol comes with its
+// prompt. A teammate's patrol comes without it (what each run is asked to do
+// is read in the chat, which the caller can open) and only when it is in a
+// chat shared with the caller — the rule the index applies. Anything else is
+// the 404 an unknown ID gets.
+func (s *Server) handlePatrolByID(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", "GET")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	user := userFromCtx(r.Context())
+	id := strings.TrimPrefix(r.URL.Path, "/patrols/")
+	if id == "" || strings.Contains(id, "/") {
+		http.Error(w, "patrol not found", http.StatusNotFound)
+		return
+	}
+	p, err := s.store.GetUserPatrol(r.Context(), user, id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if p == nil {
+		http.Error(w, "patrol not found", http.StatusNotFound)
+		return
+	}
+	allowed := false
+	if p.Mine {
+		// The caller's own patrol, while they can still open its chat.
+		conv, err := s.getOwnedOrMultiplayerConversation(r.Context(), user, p.ConversationID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		allowed = conv != nil
+	} else {
+		shared, err := s.store.ListSharedPatrols(r.Context(), user, patrolsIndexMax)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		for i := range shared {
+			if shared[i].ID == p.ID {
+				allowed = true
+				break
+			}
+		}
+	}
+	if !allowed {
+		http.Error(w, "patrol not found", http.StatusNotFound)
+		return
+	}
+	if p.Mine && p.Status == store.ChatScheduleStatusActive {
+		if skips, err := s.store.PatrolSkips(r.Context(), []string{p.ID}); err == nil {
+			p.Skipped = skips[p.ID]
+		}
+	}
+	runs, err := s.store.ListPatrolRuns(r.Context(), p.ID, store.MaxPatrolRuns)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, r, map[string]any{"patrol": p, "runs": runs})
 }

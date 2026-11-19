@@ -455,3 +455,122 @@ func TestPatrols_AccessChecksOncePerTeammateChat(t *testing.T) {
 		t.Errorf("multiplayer access checks = %d, want 1 (one teammate chat; own chats need none)", calls)
 	}
 }
+
+// TestPatrols_ListsPatrolsSharedWithTheCaller is the Patrols page's second
+// half (docs/SIDEBAR.md): a teammate's patrol in a chat the caller can open is
+// listed, marked as not the caller's and naming whose it is, after the
+// caller's own — and a patrol in a chat the caller cannot open is not.
+func TestPatrols_ListsPatrolsSharedWithTheCaller(t *testing.T) {
+	t.Parallel()
+
+	s := serverFixture(t)
+	ctx := context.Background()
+	const me, mate = "viewer@x.com", "mate@x.com"
+	seedUser(t, s.concreteStore(t), me)
+	own := seedConv(t, s, me)
+	if _, err := s.store.CreateChatSchedule(ctx, store.ChatScheduleInput{
+		ConversationID: own.ID, UserEmail: me, Title: "My sweep", Prompt: "check", CronExpr: "0 8 * * 1-5", Timezone: "UTC",
+	}); err != nil {
+		t.Fatalf("CreateChatSchedule: %v", err)
+	}
+	room := seedConv(t, s, mate)
+	if _, err := s.store.SetConversationMultiplayer(ctx, mate, room.ID, true, []string{me}, nil); err != nil {
+		t.Fatalf("SetConversationMultiplayer: %v", err)
+	}
+	theirs, err := s.store.CreateChatSchedule(ctx, store.ChatScheduleInput{
+		ConversationID: room.ID, UserEmail: mate, Title: "Their watch", Prompt: "their instructions", CronExpr: "0 */4 * * *", Timezone: "UTC",
+	})
+	if err != nil {
+		t.Fatalf("CreateChatSchedule (theirs): %v", err)
+	}
+	closed := seedConv(t, s, mate)
+	hidden, err := s.store.CreateChatSchedule(ctx, store.ChatScheduleInput{
+		ConversationID: closed.ID, UserEmail: mate, Title: "Not shared", Prompt: "private", CronExpr: "0 9 * * *", Timezone: "UTC",
+	})
+	if err != nil {
+		t.Fatalf("CreateChatSchedule (hidden): %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/patrols", nil)
+	req = req.WithContext(asUser(req.Context(), me))
+	rec := httptest.NewRecorder()
+	s.handlePatrols(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Patrols []struct {
+			ID         string `json:"id"`
+			Title      string `json:"title"`
+			Mine       bool   `json:"mine"`
+			OwnerEmail string `json:"owner_email"`
+			RunCount   *int   `json:"run_count"`
+			Mode       string `json:"approval_mode"`
+		} `json:"patrols"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(body.Patrols) != 2 {
+		t.Fatalf("patrols = %+v, want mine then the shared one", body.Patrols)
+	}
+	if p := body.Patrols[0]; p.Title != "My sweep" || !p.Mine || p.OwnerEmail != "" || p.RunCount == nil || p.Mode != "manual" {
+		t.Errorf("first row = %+v, want my own patrol with its run count and mode", p)
+	}
+	if p := body.Patrols[1]; p.ID != theirs.ID || p.Mine || p.OwnerEmail != mate {
+		t.Errorf("second row = %+v, want the teammate's patrol, named as theirs", p)
+	}
+	if strings.Contains(rec.Body.String(), `"prompt"`) {
+		t.Error("the index must not carry patrol prompts")
+	}
+
+	// One patrol: mine comes with its prompt; a teammate's does not; one in a
+	// chat the caller cannot open is the 404 an unknown ID gets.
+	detail := func(id, user string) *httptest.ResponseRecorder {
+		t.Helper()
+		r := httptest.NewRequest(http.MethodGet, "/patrols/"+id, nil)
+		r = r.WithContext(asUser(r.Context(), user))
+		w := httptest.NewRecorder()
+		s.handlePatrolByID(w, r)
+		return w
+	}
+	var one struct {
+		Patrol struct {
+			ID     string `json:"id"`
+			Mine   bool   `json:"mine"`
+			Prompt string `json:"prompt"`
+		} `json:"patrol"`
+		Runs []json.RawMessage `json:"runs"`
+	}
+	rec = detail(body.Patrols[0].ID, me)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("my patrol: status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &one); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !one.Patrol.Mine || one.Patrol.Prompt != "check" || one.Runs == nil {
+		t.Errorf("my patrol = %+v (runs %v), want mine, with its prompt and a runs list", one.Patrol, one.Runs)
+	}
+	rec = detail(theirs.ID, me)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("shared patrol: status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "their instructions") || strings.Contains(rec.Body.String(), `"prompt"`) {
+		t.Errorf("a teammate's patrol must come without its prompt: %s", rec.Body.String())
+	}
+	for name, id := range map[string]string{"not shared": hidden.ID, "unknown": "nope", "nested": theirs.ID + "/runs"} {
+		if rec := detail(id, me); rec.Code != http.StatusNotFound {
+			t.Errorf("%s patrol: status = %d, want 404", name, rec.Code)
+		}
+	}
+	// The teammate reads their own with its prompt.
+	if rec := detail(theirs.ID, mate); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "their instructions") {
+		t.Errorf("the owner's read: status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	post := httptest.NewRecorder()
+	s.handlePatrolByID(post, httptest.NewRequest(http.MethodPost, "/patrols/"+theirs.ID, nil))
+	if post.Code != http.StatusMethodNotAllowed {
+		t.Errorf("POST status = %d, want 405", post.Code)
+	}
+}

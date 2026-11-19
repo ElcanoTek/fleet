@@ -2,6 +2,7 @@ import { t as tr } from "@/app/lib/i18n";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { useIsAdmin } from "@/app/settings/useIsAdmin";
 import { Button } from "@/components/ui/button";
+import { Link } from "@/app/lib/Link";
 import { SidebarEditor } from "./SidebarEditor";
 import { useCustomizeAccess } from "./useCanCustomize";
 import { isBuiltinLayout } from "./layout";
@@ -42,10 +43,33 @@ export function SidebarCustomizer() {
           className="w-full gap-0 p-0 sm:max-w-[27rem]"
         >
           <SheetHeader className="gap-1 border-b border-[var(--color-border)] px-5 pb-4 pt-5">
-            <SheetTitle>{tr("Customize your sidebar")}</SheetTitle>
+            <SheetTitle>{tr("Customize sidebar")}</SheetTitle>
             <SheetDescription className="text-[0.8rem] leading-snug">
-              {tr("Pin what you use, hide what you don't, and make fleet open where you work. Changes show in your sidebar as you make them.")}
+              {tr("Changes show in your sidebar as you make them.")}
             </SheetDescription>
+            {isAdmin ? (
+              // Two sidebars an admin can edit: their own (here) and the one
+              // everyone starts from (Settings → Admin → Sidebar).
+              <nav aria-label={tr("Which sidebar")} className="seg-fill mt-2" data-testid="sidebar-scope">
+                <span className="seg">
+                  <span>
+                    <span aria-current="page" aria-selected="true" className="seg-option inline-flex items-center justify-center">
+                      {tr("My sidebar")}
+                    </span>
+                  </span>
+                  <span>
+                    <Link
+                      href="/settings/admin/sidebar"
+                      data-testid="sidebar-scope-workspace"
+                      onClick={() => setSidebarCustomizerOpen(false)}
+                      className="seg-option inline-flex items-center justify-center no-underline"
+                    >
+                      {tr("Workspace default")}
+                    </Link>
+                  </span>
+                </span>
+              </nav>
+            ) : null}
             <p className="mt-1 flex flex-wrap items-center gap-2 text-[0.72rem] text-[var(--color-text-muted)]" data-testid="sidebar-save-state">
               {status === "loading" ? (
                 <span>{tr("Loading your sidebar…")}</span>
@@ -103,7 +127,7 @@ export function SidebarCustomizer() {
               ) : (
                 <span className="inline-flex items-center gap-1">
                   <span className="size-1.5 rounded-full bg-[var(--color-status-success-fg)]" aria-hidden="true" />
-                  {tr("Saved to your account — it follows you to any device.")}
+                  {tr("Saved to your account, on every device.")}
                 </span>
               )}
             </p>
