@@ -244,7 +244,7 @@ func (s *Server) workspaceUsage(r *http.Request, root string, n int) (storageTre
 			}
 			continue
 		}
-		sub := duTree(ctx, filepath.Join(root, e.Name()))
+		sub := duWorkspaceDir(ctx, root, e.Name())
 		total.Bytes += sub.Bytes
 		total.Files += sub.Files
 		// Only conversation workspace directories (UUID-named) belong in the
@@ -308,11 +308,38 @@ func diskUsage(path string) (total, available int64, err error) {
 // for a display that is about to be discarded anyway.
 func duTree(ctx context.Context, dir string) storageTreeStats {
 	out := storageTreeStats{Path: dir}
+	_ = filepath.WalkDir(dir, out.countingWalk(ctx))
+	return out
+}
+
+// duWorkspaceDir is duTree for one directory directly under the workspace
+// root (a conversation's, or tasks/, shared/, …). A sandbox can replace any of
+// them with a symbolic link, so the directory is opened without following
+// one (a link counts as nothing, and the opener logs it) and the walk goes
+// through that open directory (tools.WalkNoFollow: no link descended, names
+// that are not UTF-8 counted too).
+func duWorkspaceDir(ctx context.Context, root, name string) storageTreeStats {
+	out := storageTreeStats{Path: filepath.Join(root, name)}
+	dir, err := tools.OpenWorkspaceDir(ctx, root, out.Path)
+	if err != nil {
+		return out
+	}
+	defer dir.Close()
+	walk := out.countingWalk(ctx)
+	_ = tools.WalkNoFollow(dir.Root, func(rel string, d fs.DirEntry, _ *os.Root, err error) error {
+		return walk(rel, d, err)
+	})
+	return out
+}
+
+// countingWalk returns the walk function duTree and duWorkspaceDir share: it
+// adds every regular file's size to out and stops when ctx is done.
+func (out *storageTreeStats) countingWalk(ctx context.Context) fs.WalkDirFunc {
 	// Checking ctx on every entry would cost an atomic load per file; every
 	// few hundred entries bounds the overrun to microseconds of work.
 	const ctxCheckEvery = 256
 	seen := 0
-	_ = filepath.WalkDir(dir, func(_ string, d fs.DirEntry, err error) error {
+	return func(_ string, d fs.DirEntry, err error) error {
 		seen++
 		if seen%ctxCheckEvery == 0 && ctx.Err() != nil {
 			return filepath.SkipAll
@@ -328,8 +355,7 @@ func duTree(ctx context.Context, dir string) storageTreeStats {
 			out.Files++
 		}
 		return nil
-	})
-	return out
+	}
 }
 
 // sweepTempUploads removes regular files under dir older than age. Same

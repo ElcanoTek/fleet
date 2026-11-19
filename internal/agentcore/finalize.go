@@ -41,6 +41,18 @@ type FinalizeInput struct {
 	// recovery path.
 	RoundToolEvents int
 	RunToolEvents   int
+	// Redrive asks the loop to run one more ordinary round with nudge as its
+	// instruction instead of finishing, and reports whether it will. The hook
+	// then returns ("", nil). That round is the recovery for a round that
+	// produced nothing (no text, or only a tool call written as text): it runs
+	// under the same governance as any other — context checkpoints and
+	// compaction, the stream-error recovery and fallback, the first-chunk
+	// watchdog, the budget guard and the step cap — which a model call made
+	// from inside the hook has none of. nudge is injected like an enforcement
+	// message and is never persisted. Nil when the loop cannot offer it: the
+	// run already had its one re-drive, or it has committed a tool event (a
+	// hook must then degrade to a tool-less recovery, see RunToolEvents).
+	Redrive func(nudge string) bool
 	// CarryResult extracts the replay-safe assistant/tool transcript from a
 	// with-tools finalize retry's AgentResult (with out-of-roster explanations
 	// applied and Gemini thought signatures stripped, matching Messages). When a

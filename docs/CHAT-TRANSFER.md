@@ -72,7 +72,10 @@ skills from the workspace (`user-skills/`) and from the stash a participant's
 turn moves them to. If that fails, the transfer does not happen: the skills
 must be gone before the chat is anyone else's. Nothing is lost if the transfer
 is then refused, because skills are written into the workspace again at the
-start of each of their owner's turns.
+start of each of their owner's turns. The workspace copy is removed through the
+conversation directory opened without following a symbolic link (ADR-0036,
+2026-11-18 amendment): a conversation directory that is a link refuses the
+transfer, which answers `transfer failed`, and nothing it points at is touched.
 
 **After the transaction** (on a context detached from the request, so a
 client that has gone away does not skip it) the handler:
@@ -96,7 +99,14 @@ client that has gone away does not skip it) the handler:
   out of the participant stash and into the workspace, where an owner's
   attachments live, so links from their earlier turns keep resolving. The
   two can be on different volumes (they are in the Helm chart), so an entry
-  that cannot be renamed across is copied and then removed.
+  that cannot be renamed across is copied and then removed. The conversation
+  directory is opened without following a symbolic link and every rename or
+  copy goes through the opened directories. A symbolic link at
+  `attachments/` holds no attachment data and is replaced with a real
+  directory first. If the conversation directory itself is a symbolic link,
+  nothing moves: the files stay in the participant stash, which nothing reads
+  for an owner, so the new owner does not see them; they are not lost, and
+  are removed with the stash when the chat is deleted.
 
 A workspace file download that passed its access check just before the
 transfer is checked again once it holds the workspace swap lock (the lock the

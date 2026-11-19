@@ -296,7 +296,17 @@ func resolveWorkspace(override string, cfg *config.Config) (string, error) {
 		return "", fmt.Errorf("create per-run workspace: %w", err)
 	}
 	// MkdirTemp mints 0o700 — unreadable to the container user (see above).
-	if err := os.Chmod(dir, 0o755); err != nil { //nolint:gosec // see comment above — readable to the lockdown container user
+	// The mode is changed through the directory opened without following a
+	// symbolic link: base may be the workspace root, whose children a running
+	// chat sandbox can rename, and a chmod must never land on whatever a link
+	// swapped in there points at.
+	opened, err := tools.OpenRunDir(context.Background(), base, dir)
+	if err != nil {
+		return "", fmt.Errorf("open per-run workspace to the sandbox user: %w", err)
+	}
+	err = opened.Chmod(".", 0o755)
+	_ = opened.Close()
+	if err != nil {
 		return "", fmt.Errorf("open per-run workspace to the sandbox user: %w", err)
 	}
 	abs, err := filepath.Abs(dir)

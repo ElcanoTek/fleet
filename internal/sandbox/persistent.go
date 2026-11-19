@@ -2,12 +2,18 @@ package sandbox
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/safe"
@@ -136,10 +142,38 @@ func (p *Pool) newPersistentSandbox(ctx context.Context, convID string) (*Sandbo
 		if ctx == nil {
 			ctx = context.Background()
 		}
-		convDir := filepath.Join(p.cfg.Container.WorkspaceHostDir, convID)
-		if err := os.MkdirAll(convDir, 0o755); err != nil { //nolint:gosec // readable by rootless container user
+		root := p.cfg.Container.WorkspaceHostDir
+		convDir := filepath.Join(root, convID)
+		// The directory becomes this container's read-write mount, and podman
+		// follows a symbolic link in a volume source. A whole-root sandbox
+		// (another conversation's per-turn sandbox, an approval, a worktree
+		// run) can rename it and leave a link in its place, so it is created
+		// without following a link (Mkdir never follows one at the name it
+		// creates), opened through descriptors that refuse a link at every
+		// level below the root, and a marker file placed through that
+		// descriptor must be visible inside the started container. That
+		// rules out a mount of any directory nobody could put the marker in:
+		// a whole-root sandbox that read the marker's name could create it in
+		// a directory it can already write, but only in one of those, so a
+		// swap still cannot mount anything it could not reach before. A
+		// marker rather than a device/inode compare, because under a VM
+		// runtime (kata, libkrun) the mount reaches a guest kernel whose
+		// device numbers differ.
+		if err := os.MkdirAll(root, 0o755); err != nil { //nolint:gosec // readable by rootless container user
 			return nil, func() {}, fmt.Errorf("prepare persistent conversation workspace %s: %w", convDir, err)
 		}
+		if err := os.Mkdir(convDir, 0o755); err != nil && !errors.Is(err, fs.ErrExist) { //nolint:gosec // readable by rootless container user
+			return nil, func() {}, fmt.Errorf("prepare persistent conversation workspace %s: %w", convDir, err)
+		}
+		marker, err := placeMountMarker(root, convDir)
+		if err != nil {
+			var linkErr *symlinkLevelError
+			if errors.As(err, &linkErr) {
+				return nil, func() {}, fmt.Errorf("prepare persistent conversation workspace: %w (a conversation directory that is a symbolic link is refused, not followed)", err)
+			}
+			return nil, func() {}, fmt.Errorf("prepare persistent conversation workspace: %w", err)
+		}
+		defer marker.remove()
 		cfg := p.warmContainerConfig()
 		cfg.WorkspaceHostDir = convDir
 		startCtx, cancel := context.WithTimeout(ctx, p.startTimeoutFor(cfg)+5*time.Second)
@@ -148,6 +182,10 @@ func (p *Pool) newPersistentSandbox(ctx context.Context, convID string) (*Sandbo
 		if err != nil {
 			return nil, func() {}, err
 		}
+		if verr := marker.verifyMounted(startCtx, sb); verr != nil {
+			sb.Close()
+			return nil, func() {}, verr
+		}
 		if p.isClosed() {
 			sb.Close()
 			return nil, func() {}, ErrClosed
@@ -155,6 +193,96 @@ func (p *Pool) newPersistentSandbox(ctx context.Context, convID string) (*Sandbo
 		return sb, sb.Close, nil
 	}
 	return p.Take(ctx)
+}
+
+// mountMarkerPrefix names every marker, so a marker a killed process left
+// behind is recognised and removed the next time one is placed.
+const mountMarkerPrefix = ".fleet-mount-check-"
+
+// mountMarker is a random-named dot-file created, through a descriptor opened
+// without following a symbolic link at any level below the workspace root, in
+// the directory a persistent sandbox is about to mount. Finding it inside the
+// started container (the workspace is mounted at the same absolute path
+// inside the container as on the host) shows, on any runtime, that the
+// container mounted that directory or one a process that could already write
+// there made to look like it — never a directory out of everyone's reach.
+type mountMarker struct {
+	dirfd int
+	name  string
+	dir   string
+}
+
+// placeMountMarker opens dir beneath root with no link followed (a link at any
+// level is a *symlinkLevelError) and creates the marker in it. Through the
+// same descriptor it first makes the directory 0o755 — the mode every turn's
+// EnsureConversationDir re-asserts, which a persistent sandbox's first turn
+// has not reached yet: user code may have made its directory read-only
+// (`chmod a-w .`), and the marker cannot be created in that — and removes
+// any marker a killed process left behind.
+func placeMountMarker(root, dir string) (*mountMarker, error) {
+	fd, err := openNoSymlinks(root, dir)
+	if err != nil {
+		return nil, err
+	}
+	if err := unix.Fchmod(fd, 0o755); err != nil {
+		_ = unix.Close(fd)
+		return nil, &os.PathError{Op: "chmod", Path: dir, Err: err}
+	}
+	removeStaleMountMarkers(fd)
+	var b [12]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		_ = unix.Close(fd)
+		return nil, err
+	}
+	name := mountMarkerPrefix + hex.EncodeToString(b[:])
+	f, err := unix.Openat(fd, name, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0o600)
+	if err != nil {
+		_ = unix.Close(fd)
+		return nil, &os.PathError{Op: "create mount marker", Path: filepath.Join(dir, name), Err: err}
+	}
+	_ = unix.Close(f)
+	return &mountMarker{dirfd: fd, name: name, dir: dir}, nil
+}
+
+// removeStaleMountMarkers unlinks, through dirfd, every leftover marker in
+// the directory it names. Best-effort: a marker that stays is only a dot-file.
+func removeStaleMountMarkers(dirfd int) {
+	listfd, err := unix.Openat(dirfd, ".", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return
+	}
+	dir := os.NewFile(uintptr(listfd), ".")
+	names, _ := dir.Readdirnames(-1)
+	_ = dir.Close()
+	for _, name := range names {
+		if strings.HasPrefix(name, mountMarkerPrefix) {
+			_ = unix.Unlinkat(dirfd, name, 0)
+		}
+	}
+}
+
+// verifyMounted checks, inside the started container, that the directory
+// mounted at m.dir holds the marker. Anything else — a directory swapped in
+// while the container started, or a check that cannot run — fails closed.
+func (m *mountMarker) verifyMounted(ctx context.Context, sb *Sandbox) error {
+	res, err := sb.RunBash(ctx, BashRequest{
+		Command: "test -e " + shellSingleQuote(filepath.Join(m.dir, m.name)),
+		Timeout: 30 * time.Second,
+	})
+	if err != nil {
+		return fmt.Errorf("persistent sandbox: verify the mounted workspace %q: %w", m.dir, err)
+	}
+	if res.ExitCode != 0 {
+		return fmt.Errorf("persistent sandbox: the directory mounted at %q is not the one prepared (its marker is missing, exit %d) — it was replaced while the sandbox started (fail-closed)", m.dir, res.ExitCode)
+	}
+	return nil
+}
+
+// remove deletes the marker through the same descriptor it was created
+// through and releases it.
+func (m *mountMarker) remove() {
+	_ = unix.Unlinkat(m.dirfd, m.name, 0)
+	_ = unix.Close(m.dirfd)
 }
 
 // borrow returns the per-turn cleanup for a claimed entry. It captures the

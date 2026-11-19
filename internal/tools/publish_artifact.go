@@ -3,7 +3,6 @@ package tools
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -68,15 +67,22 @@ func NewPublishArtifactTool(rec ArtifactRecorder, workspaceRoot string) fantasy.
 			if workdir == "" {
 				return fantasy.NewTextErrorResponse("publish_artifact: no workspace is configured for this run."), nil
 			}
-			// SafeWorkspaceJoin rejects an absolute path, any ".." component, and a
-			// symlink that escapes the workspace; it also resolves symlinks, so it
-			// fails when the file does not exist — exactly the "publish an existing
-			// workspace file" contract we want.
-			abs, err := SafeWorkspaceJoin(workdir, rel)
+			// The run's directory is opened without following a symbolic link
+			// below the workspace root (a whole-root sandbox can replace a
+			// worktree directory with one), and the path is resolved through it:
+			// an absolute path, any ".." component and a symlink that leaves the
+			// workspace are refused, and a missing file fails — exactly the
+			// "publish an existing workspace file" contract we want.
+			dir, err := OpenRunDir(ctx, workspaceRootForContainment(), workdir)
+			if err != nil {
+				return fantasy.NewTextErrorResponse(fmt.Sprintf("publish_artifact: the run's workspace could not be opened (%v).", err)), nil
+			}
+			defer dir.Close()
+			canon, err := dir.Resolve(rel)
 			if err != nil {
 				return fantasy.NewTextErrorResponse(fmt.Sprintf("publish_artifact: %q is not a readable file inside the workspace (%v). Write the file first, then publish its workspace-relative path.", rel, err)), nil
 			}
-			info, err := os.Stat(abs)
+			info, err := dir.Stat(canon)
 			if err != nil {
 				return fantasy.NewTextErrorResponse(fmt.Sprintf("publish_artifact: cannot stat %q: %v", rel, err)), nil
 			}

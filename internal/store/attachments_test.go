@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -272,6 +273,49 @@ func TestRemoveWorkspaceTreeSymlinkCannotEscape(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(victim, "keep.txt")); err != nil {
 		t.Errorf("file outside the workspace was removed: %v", err)
+	}
+}
+
+// An orphan directory swapped for a FIFO between its Lstat and its open (the
+// permission-repair pass, after a first removal failed) must not hang the
+// sweep: the open of a FIFO with no writer would block forever.
+func TestRemoveWorkspaceTreeFIFOSwappedInDoesNotHang(t *testing.T) {
+	root := t.TempDir()
+	const name = "8b1e2c4d-5f6a-4b7c-8d9e-0f1a2b3c4d5e"
+	dir := filepath.Join(root, name)
+	locked := filepath.Join(dir, "locked")
+	if err := os.MkdirAll(locked, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(locked, "keep.txt"), []byte("x"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	// A read-only subdirectory makes the first RemoveAll fail, so the
+	// repair pass (Lstat, then open) runs.
+	if err := os.Chmod(locked, 0o550); err != nil {
+		t.Fatal(err)
+	}
+	moved := dir + ".moved"
+	t.Cleanup(func() { _ = os.Chmod(filepath.Join(moved, "locked"), 0o750) })
+	removeTreeAfterLstat = func(string) {
+		if err := os.Rename(dir, moved); err != nil {
+			t.Errorf("rename: %v", err)
+			return
+		}
+		if err := syscall.Mkfifo(dir, 0o644); err != nil {
+			t.Errorf("mkfifo: %v", err)
+		}
+	}
+	t.Cleanup(func() { removeTreeAfterLstat = nil })
+	done := make(chan error, 1)
+	go func() { done <- removeWorkspaceTree(root, name) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		if w, err := os.OpenFile(dir, os.O_WRONLY|syscall.O_NONBLOCK, 0); err == nil {
+			_ = w.Close()
+		}
+		t.Fatal("removeWorkspaceTree blocked on a FIFO swapped in for the orphan directory")
 	}
 }
 

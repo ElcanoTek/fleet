@@ -3,6 +3,7 @@ package agentcore
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -709,5 +710,95 @@ func TestCheckContextPressure_PatrolWithResendBudgetOffTakesInteractiveCaps(t *t
 	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "80000")
 	if got := patrol.windowCompactionTokens(1_000_000); got != 900_000 {
 		t.Fatalf("patrol, budget on: windowCompactionTokens = %d, want 900000", got)
+	}
+}
+
+// Inside a turn of few, large tool steps the "oldest half" a window compaction
+// may cut is one short message: the cut cannot split a tool exchange, so it
+// falls back to the summary an earlier compaction left. Summarizing that frees
+// nothing. A production patrol turn bought sixteen such summaries in twelve
+// minutes. The compaction is not bought, and the checkpoint goes inert like it
+// does when nothing is compactible at all.
+func TestCheckContextPressure_FutileWindowCompactionIsNotBought(t *testing.T) {
+	const slug = "ctx-1m-futile-compaction"
+	recordContextMaxForModel(context.Background(), &namedMockModel{name: slug}, 1_000_000)
+	model := &namedMockModel{name: slug}
+	e := newMockEngine(t, model)
+	summaries := 0
+	e.compactionSummarizer = func(_ context.Context, _ CompactionSummarizeInput) fantasy.Message {
+		summaries++
+		return fantasy.NewUserMessage(compactionSummaryPrefix + "] summary")
+	}
+	// One step: an assistant message with four parallel calls and their four
+	// results, each under the hard cap a stored result is sent at.
+	toolResult := func(id string, chars int) fantasy.Message {
+		return fantasy.Message{Role: fantasy.MessageRoleTool, Content: []fantasy.MessagePart{
+			fantasy.ToolResultPart{ToolCallID: id, Output: fantasy.ToolResultOutputContentText{Text: strings.Repeat("r", chars)}},
+		}}
+	}
+	toolStep := func(id string) []fantasy.Message {
+		step := make([]fantasy.Message, 0, 5)
+		calls := make([]fantasy.MessagePart, 0, 4)
+		for i := 0; i < 4; i++ {
+			calls = append(calls, fantasy.ToolCallPart{ToolCallID: fmt.Sprintf("%s-%d", id, i), ToolName: "report", Input: `{}`})
+		}
+		step = append(step, fantasy.Message{Role: fantasy.MessageRoleAssistant, Content: calls})
+		for i := 0; i < 4; i++ {
+			step = append(step, toolResult(fmt.Sprintf("%s-%d", id, i), 100_000))
+		}
+		return step
+	}
+	msgs := make([]fantasy.Message, 0, 13)
+	msgs = append(msgs,
+		fantasy.NewUserMessage("first message of the chat"),
+		fantasy.NewUserMessage(compactionSummaryPrefix+"] what the earlier ticks did"),
+		fantasy.NewUserMessage("run the patrol"),
+	)
+	msgs = append(msgs, toolStep("c1")...)
+	msgs = append(msgs, toolStep("c2")...)
+	if !windowCompactionFutile(msgs) {
+		t.Fatal("a cut that drops only the earlier summary and the instruction must be futile")
+	}
+
+	obs := &captureObserver{}
+	e.logSession.LastStepPromptTokens = 360_000
+	res := e.checkContextPressure(context.Background(), msgs, model, newStreamSink(obs), false)
+	if summaries != 0 || hasEvent(obs.events, evtContextCompacted) || len(res.messages) != len(msgs) {
+		t.Fatalf("futile compaction was bought: summaries=%d events=%v len=%d want %d", summaries, obs.events, len(res.messages), len(msgs))
+	}
+	if !e.windowCompactionStalled || !res.warned || !hasEvent(obs.events, evtContextPressure) {
+		t.Fatalf("futile compaction must stall the checkpoint and warn: stalled=%t warned=%t events=%v", e.windowCompactionStalled, res.warned, obs.events)
+	}
+	if e.checkpointThreshold(model) != 0 {
+		t.Fatalf("checkpointThreshold = %d while stalled, want 0 (no more pauses)", e.checkpointThreshold(model))
+	}
+
+	// What the cut would drop is sized as the provider is sent it: a stored
+	// result over the hard cap goes out as a small envelope, so dropping it
+	// frees next to nothing however large it is on disk.
+	oversized := make([]fantasy.Message, 0, 14)
+	oversized = append(oversized,
+		msgs[0],
+		fantasy.Message{Role: fantasy.MessageRoleAssistant, Content: []fantasy.MessagePart{
+			fantasy.ToolCallPart{ToolCallID: "old", ToolName: "report", Input: `{}`},
+		}},
+		toolResult("old", 4*HardMaxToolOutputBytes),
+	)
+	oversized = append(oversized, msgs[2:]...)
+	if !windowCompactionFutile(oversized) {
+		t.Fatal("a cut that drops only an oversized stored result, sent as an envelope, must be futile")
+	}
+
+	// Older history worth summarizing is still compacted.
+	e.windowCompactionStalled = false
+	older := append([]fantasy.Message{msgs[0]}, fillerMessages(12, 100_000)...)
+	older = append(older, msgs[1:]...)
+	if windowCompactionFutile(older) {
+		t.Fatal("a cut that drops real history must not be futile")
+	}
+	obs = &captureObserver{}
+	res = e.checkContextPressure(context.Background(), older, model, newStreamSink(obs), false)
+	if summaries != 1 || !hasEvent(obs.events, evtContextCompacted) || len(res.messages) >= len(older) || e.windowCompactionStalled {
+		t.Fatalf("worthwhile compaction skipped: summaries=%d events=%v len=%d stalled=%t", summaries, obs.events, len(res.messages), e.windowCompactionStalled)
 	}
 }

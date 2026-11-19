@@ -424,3 +424,75 @@ func TestWorkspaceZip_OnlyRegularFilesInsideTheWorkspace(t *testing.T) {
 		t.Fatal("zip carries content from outside the workspace")
 	}
 }
+
+// A whole-root sandbox can rename a scheduled run's directory under the
+// workspace root (a worktree under .fleet-worktrees/, or that parent itself)
+// and leave a symbolic link to a directory outside the root in its place. The
+// browser refuses it — the same 404 as a directory that is gone — and never
+// lists, serves or archives what the link points at.
+func TestWorkspaceBrowserRefusesLinkedRunDirectory(t *testing.T) {
+	const marker = "OUTSIDE-MARKER-41aa"
+	for _, tc := range []struct {
+		name string
+		link func(t *testing.T, root, outside string) string // returns the recorded workspace path
+	}{
+		{"the run directory is a link", func(t *testing.T, root, outside string) string {
+			parent := filepath.Join(root, ".fleet-worktrees")
+			if err := os.MkdirAll(parent, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			run := filepath.Join(parent, "task-run")
+			if err := os.Symlink(outside, run); err != nil {
+				t.Fatal(err)
+			}
+			return run
+		}},
+		{"a parent of the run directory is a link", func(t *testing.T, root, outside string) string {
+			if err := os.MkdirAll(filepath.Join(outside, "task-run"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(outside, "task-run", "report.md"), []byte(marker), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(outside, filepath.Join(root, ".fleet-worktrees")); err != nil {
+				t.Fatal(err)
+			}
+			return filepath.Join(root, ".fleet-worktrees", "task-run")
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			t.Setenv("FLEET_WORKSPACE_ROOT", root)
+			outside := t.TempDir()
+			if err := os.WriteFile(filepath.Join(outside, "report.md"), []byte(marker), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			wsPath := tc.link(t, root, outside)
+
+			h, store := setupTest(t)
+			task := &models.Task{
+				ID:            uuid.New(),
+				Prompt:        "produce a report",
+				Status:        models.TaskStatusSuccess,
+				CreatedAt:     time.Now().UTC(),
+				WorkspacePath: &wsPath,
+			}
+			if _, err := store.AddTask(task); err != nil {
+				t.Fatalf("add task: %v", err)
+			}
+			r := workspaceRouter(h)
+			for _, p := range []string{"/workspace", "/workspace?format=zip", "/workspace/report.md", "/workspace/task-run/report.md"} {
+				req := httptest.NewRequest("GET", "/tasks/"+task.ID.String()+p, nil)
+				req.Header.Set("X-API-Key", "admin-key")
+				w := httptest.NewRecorder()
+				r.ServeHTTP(w, req)
+				if w.Code != http.StatusNotFound || !strings.Contains(w.Body.String(), "Workspace directory no longer exists") {
+					t.Errorf("GET %s: %d %s, want the missing-workspace 404", p, w.Code, w.Body.String())
+				}
+				if strings.Contains(w.Body.String(), marker) || strings.Contains(w.Body.String(), "report.md") {
+					t.Errorf("GET %s showed the outside directory: %s", p, w.Body.String())
+				}
+			}
+		})
+	}
+}

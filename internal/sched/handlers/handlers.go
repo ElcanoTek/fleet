@@ -17,7 +17,6 @@ import (
 	"net/mail"
 	"os"
 	"path/filepath"
-	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -442,12 +441,8 @@ func (h *Handlers) CreateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Lineage is server-authoritative (#277): created_by_task_id is set ONLY by
-	// the in-process create_task tool when a scheduled run spawns a follow-up. An
-	// external client must not be able to forge a spawn lineage, so clear any
-	// value it supplied on the public create path.
-	tc.CreatedByTaskID = nil
-
+	// A client-supplied created_by_task_id is cleared by admitCreate: lineage
+	// is server-authoritative (#277).
 	task, err := h.createTaskGoverned(r.Context(), creator, tc)
 	if err != nil {
 		var refusal *createRefusalError
@@ -493,13 +488,19 @@ func isTaskNameConflict(err error) bool {
 	return errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == taskNameUniqueIndex
 }
 
+// taskNameTaken is the 409 refusal for an insert isTaskNameConflict matched.
+func taskNameTaken(name string) *createRefusalError {
+	return &createRefusalError{status: http.StatusConflict, detail: fmt.Sprintf("a task named %q already exists; choose another name, or permanently delete that task to reuse it", name)}
+}
+
 // createTaskGoverned is the ONE create pipeline behind POST /tasks and the A2A
-// SendMessage method: validate → run_if admin gate → per-principal budget gate
-// → models.NewTask + creator attribution → per-key priority ceiling → persist.
-// Extracted so a second protocol surface cannot become a weaker route to task
-// creation — the storage.EnqueueTask* seams skip validateTaskCreate entirely
-// (see the hand-patched model gating in cmd/fleet's approval-card adapter for
-// what bypassing this costs). Refusals return *createRefusalError; a budget
+// SendMessage method: the gates of Handlers.admitCreate (validate → ceiling
+// and run_if admin gates → per-principal budget gate → models.NewTask +
+// creator attribution → mcp_selection check → per-key priority ceiling), then
+// persist. Every protocol surface that creates a task calls it, so each applies
+// the same gates; the storage.EnqueueTask* seams do not run validateTaskCreate
+// (cmd/fleet's approval-card adapter applies its own model gating for that
+// reason). Refusals return *createRefusalError; a budget
 // refusal returns the budget gate's own error so each caller can render it
 // (writeBudgetRefusal's 402 + Retry-After, or A2A's retry metadata).
 //
@@ -521,66 +522,19 @@ type rerunLineage struct {
 	sourceLineage uuid.UUID
 }
 
-// createTaskGovernedFrom is createTaskGoverned with an optional rerun lineage.
-// It is the same pipeline in the same order — rerun/clone used to run
-// validateTaskCreate and then insert directly, skipping the run_if admin gate
-// (so any create_task principal could attach a host-side command as a rerun
-// "override"), the per-principal budget gate and the per-key priority ceiling.
-//
-// With a lineage the run_if gate is edit-shaped, exactly UpdateTask's rule: a
-// non-admin may keep the source's gate (normalized comparison, so a lossy
-// client echo is not a change) but may not add, change, or remove one; an
-// admin's override is authoritative.
+// createTaskGovernedFrom is createTaskGoverned with an optional rerun lineage:
+// it runs Handlers.admitCreate, the gate list batch and import also run, and
+// persists the admitted task. A re-run or clone is a create like any other, so
+// its overrides (run_if and priority among them) meet the same gates as a
+// POST /tasks body.
 func (h *Handlers) createTaskGovernedFrom(ctx context.Context, creator taskCreator, tc models.TaskCreate, lineage *rerunLineage) (*models.Task, error) {
-	if err := h.validateTaskCreate(&tc); err != nil {
-		return nil, &createRefusalError{status: http.StatusBadRequest, detail: err.Error()}
-	}
-	if msg := h.requireAdminForCeilingsAboveDeployment(creator.hasAdminPermission, &tc); msg != "" {
-		return nil, &createRefusalError{status: http.StatusForbidden, detail: msg}
-	}
-	if lineage == nil {
-		if msg := requireAdminForRunIf(creator.hasAdminPermission, tc.RunIf); msg != "" {
-			return nil, &createRefusalError{status: http.StatusForbidden, detail: msg}
-		}
-	} else if !creator.hasAdminPermission && !reflect.DeepEqual(tc.RunIf.Normalized(), lineage.sourceRunIf.Normalized()) {
-		return nil, &createRefusalError{status: http.StatusForbidden, detail: "run_if: a host-side pre-run gate can only be changed by an admin"}
-	}
-
-	// Per-principal rolling budget (#601 part 2): the SAME budgetCapError gate
-	// the batch and chat schedule_task paths run. At a hard bound the create is
-	// refused; a soft crossing fires its once-per-window alert inside the gate.
-	if err := h.budgetCapError(ctx, creator); err != nil {
+	task, err := h.admitCreate(ctx, taskGatesFor(creator), &tc, lineage)
+	if err != nil {
 		return nil, err
 	}
-
-	task := models.NewTask(tc)
-	creator.attribute(task)
-	if lineage != nil {
-		sourceID := lineage.sourceID
-		task.SourceTaskID = &sourceID
-		if lineage.sourceLineage != uuid.Nil {
-			task.LineageID = lineage.sourceLineage
-		}
-	}
-
-	// A selection the run would refuse is refused now, against the owner the
-	// run will resolve hosted connections for (task.CreatedBy, just stamped),
-	// instead of dead-lettering every occurrence at dispatch.
-	if err := h.checkTaskMCPSelection(ctx, task); err != nil {
-		return nil, &createRefusalError{status: http.StatusBadRequest, detail: err.Error()}
-	}
-
-	// Per-key priority ceiling (#230): a scoped key capped at max_priority may not
-	// submit a task MORE urgent (lower integer) than that. task.Priority is the
-	// post-default value (0→Normal), so the comparison reflects what would run.
-	// Shares priorityCapError with the batch path so the two can't drift.
-	if err := priorityCapError(creator.creatorKeyMaxPriority, task.Priority); err != nil {
-		return nil, &createRefusalError{status: http.StatusForbidden, detail: err.Error()}
-	}
-
 	if _, err := h.storage.AddTaskWithContext(ctx, task); err != nil {
 		if isTaskNameConflict(err) {
-			return nil, &createRefusalError{status: http.StatusConflict, detail: fmt.Sprintf("a task named %q already exists; choose another name, or permanently delete that task to reuse it", task.Name)}
+			return nil, taskNameTaken(task.Name)
 		}
 		return nil, &createRefusalError{status: http.StatusInternalServerError, detail: "Failed to create task"}
 	}
@@ -1917,57 +1871,22 @@ func (h *Handlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 		tc.Timezone = task.Timezone
 	}
 
-	if err := h.validateTaskCreate(&tc); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	// The create gates, edit-shaped (Handlers.admitEdit, shared with import
+	// conflict=replace): validation, the ceiling and run_if admin rules, the
+	// key's priority ceiling and the mcp_selection check.
+	if err := h.admitEdit(r.Context(), taskGatesFor(creatorFromPrincipal(p)), task, &tc, taskEditScope{priorityPresent: hasPriority}); err != nil {
+		var refusal *createRefusalError
+		if errors.As(err, &refusal) {
+			writeError(w, refusal.status, refusal.detail)
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "Failed to update task")
 		return
 	}
-	// Same privilege boundary as create, but edit-shaped: a principal without
-	// PermissionAdmin editing a task may keep an existing (admin-authorized)
-	// gate — clients echo the record, modulo defaultable fields, hence the
-	// normalized comparison — but may not add, change, or remove one. An
-	// admin-permission principal's payload is authoritative (SetRunIf below),
-	// so an admin edit that changes or removes the gate actually persists.
+	// An admin-permission principal's run_if is authoritative (SetRunIf below),
+	// so an admin edit that changes or removes the gate actually persists. A
+	// non-admin's echo already passed admitEdit's unchanged-gate check.
 	canAuthorRunIf := p.hasPermission(models.PermissionAdmin)
-	if msg := h.requireAdminForCeilingsAboveDeployment(canAuthorRunIf, &tc); msg != "" {
-		writeError(w, http.StatusForbidden, msg)
-		return
-	}
-	if p.apiKey != nil && hasPriority {
-		if err := priorityCapError(p.apiKey.MaxPriority, models.NormalizePriority(tc.Priority)); err != nil {
-			writeError(w, http.StatusForbidden, err.Error())
-			return
-		}
-	}
-	runIfChanged := !reflect.DeepEqual(tc.RunIf.Normalized(), task.RunIf.Normalized())
-	if !canAuthorRunIf && runIfChanged {
-		writeError(w, http.StatusForbidden, "run_if: a host-side pre-run gate can only be changed by an admin")
-		return
-	}
-	// A gate is evaluated only at the scheduled→pending promotion
-	// (models.RunIf's enforcement contract), and a pending task is already
-	// past that point: honoring a new or changed gate would have the
-	// dispatch-state recompute (models.DeriveDispatchState, applied in
-	// UpdateEditableTask) yank the imminent dispatch back onto the scheduler
-	// path. Refuse instead, so that change stays explicit — edit the gate
-	// while the task is scheduled, or cancel and recreate it. Removing the
-	// gate (tc.RunIf == nil) stays allowed: absence needs no evaluation point.
-	if runIfChanged && tc.RunIf != nil && task.Status == models.TaskStatusPending {
-		writeError(w, http.StatusConflict, "run_if: task is already pending dispatch, so its gate can no longer be evaluated for this run; change the gate while the task is scheduled, or cancel and recreate it")
-		return
-	}
-	// A changed mcp_selection gets the create path's check, against the task's
-	// owner (an edit keeps it). An unchanged one is not re-checked: an edit of
-	// some other field must not be refused because a connection lapsed since.
-	if tc.MCPSelection != nil && !reflect.DeepEqual(tc.MCPSelection, task.MCPSelection) {
-		allowlist := task.CredentialAllowlist
-		if tc.CredentialAllowlist != nil {
-			allowlist = tc.CredentialAllowlist
-		}
-		if err := h.checkMCPSelectionForOwner(r.Context(), task.CreatedBy, tc.MCPSelection, allowlist); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-	}
 
 	if err := refreshEditedRecurrenceSchedule(h.storage.Location(), task, &tc); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())

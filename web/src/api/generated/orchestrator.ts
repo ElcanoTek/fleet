@@ -2129,7 +2129,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Import task definitions from a previously exported envelope; creates tasks in a single batch with per-task conflict handling (#238). */
+        /**
+         * Import task definitions from a previously exported envelope; creates tasks in a single batch with per-task conflict handling (#238).
+         * @description Every record the import creates or replaces runs the same checks as POST /tasks: validation, the admin-only rules for run_if and for a max_cost_usd / max_total_tokens above the deployment ceiling, the key's priority ceiling and the connector check. The two admin-only rules are checked for those records before any write, dry runs included: one offending record refuses the whole import with 403 naming it. The budget is checked once when the import creates at least one task (402). A record conflict=skip leaves alone is neither checked nor charged. Same auth + rate limiter as POST /tasks; the scoped API key's hourly cap is charged at least one token: one per record the import creates or replaces (one by the auth check, the rest by the handler), so a dry run or an import that only skips costs one.
+         */
         post: {
             parameters: {
                 query?: {
@@ -2186,8 +2189,19 @@ export interface paths {
                     };
                     content?: never;
                 };
+                400: components["responses"]["Error"];
+                /** @description The principal's rolling budget is at a hard bound; Retry-After names the window rollover. Checked only when the import creates at least one task, never on a dry run. */
+                402: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
                 403: components["responses"]["Error"];
                 409: components["responses"]["Error"];
+                429: components["responses"]["Error"];
             };
         };
         delete?: never;
@@ -3226,7 +3240,7 @@ export interface paths {
         put?: never;
         /**
          * Fire a webhook-triggered task run.
-         * @description Spawns a one-shot run cloned from the trigger's template task, with the rendered prompt_template as the prompt. Authenticated SOLELY by the per-trigger HMAC-SHA256 secret over the raw body (GitHub-compatible X-Hub-Signature-256, or X-Fleet-Signature-256), OR by a typed fleet_webhook_ API key whose allowed trigger slugs include this slug (#190), sent as X-API-Key or Authorization: Bearer — never the admin API key or any other key type. A valid webhook key that does not list this slug is a definitive 403. Unknown slug and bad signature both return 401 (indistinguishable, with equalized HMAC work) to prevent slug enumeration. A leaked secret or key lets a caller inject the spawned run's prompt under the template's seat (network/MCP/files); the sandbox remains the execution boundary. Rotate the secret with `fleet sched trigger rotate`.
+         * @description Spawns a one-shot run cloned from the trigger's template task, with the rendered prompt_template as the prompt. Authenticated SOLELY by the per-trigger HMAC-SHA256 secret over the raw body (GitHub-compatible X-Hub-Signature-256, or X-Fleet-Signature-256), OR by a typed fleet_webhook_ API key whose allowed trigger slugs include this slug (#190), sent as X-API-Key or Authorization: Bearer — never the admin API key or any other key type. A valid webhook key that does not list this slug is a definitive 403. An unknown slug and the slug of an email-kind trigger (fired only by POST /triggers/email/{slug}) both get the same 401 as a bad signature sent without a webhook key, whether a signature or a webhook key listing the slug was sent (indistinguishable, with equalized HMAC work), to prevent slug and kind enumeration. A leaked secret or key lets a caller inject the spawned run's prompt under the template's seat (network/MCP/files); the sandbox remains the execution boundary. Rotate the secret with `fleet sched trigger rotate`.
          */
         post: {
             parameters: {

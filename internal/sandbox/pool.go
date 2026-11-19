@@ -610,26 +610,9 @@ func (d dirIdentity) String() string {
 // a real directory reached without following anything below root. root itself
 // is operator configuration and may be a symlink (e.g. /opt/fleet/workspace).
 func pinNoSymlinks(root, path string) (dirIdentity, error) {
-	rel, err := filepath.Rel(root, path)
-	if err != nil || rel == "." || !filepath.IsLocal(rel) {
-		return dirIdentity{}, fmt.Errorf("%q is not strictly inside %q", path, root)
-	}
-	fd, err := unix.Open(root, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	fd, err := openNoSymlinks(root, path)
 	if err != nil {
-		return dirIdentity{}, &os.PathError{Op: "open", Path: root, Err: err}
-	}
-	cur := root
-	for _, part := range strings.Split(rel, string(filepath.Separator)) {
-		cur = filepath.Join(cur, part)
-		next, oerr := unix.Openat(fd, part, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
-		_ = unix.Close(fd)
-		if oerr != nil {
-			if errors.Is(oerr, unix.ELOOP) {
-				return dirIdentity{}, fmt.Errorf("%q is a symlink", cur)
-			}
-			return dirIdentity{}, &os.PathError{Op: "openat", Path: cur, Err: oerr}
-		}
-		fd = next
+		return dirIdentity{}, err
 	}
 	defer func() { _ = unix.Close(fd) }()
 	var st unix.Stat_t
@@ -637,6 +620,46 @@ func pinNoSymlinks(root, path string) (dirIdentity, error) {
 		return dirIdentity{}, &os.PathError{Op: "fstat", Path: path, Err: err}
 	}
 	return dirIdentity{dev: uint64(st.Dev), ino: st.Ino}, nil //nolint:unconvert // st.Dev is not uint64 on every unix
+}
+
+// symlinkLevelError is openNoSymlinks' refusal of a symbolic link at a
+// component below the root.
+type symlinkLevelError struct{ path string }
+
+func (e *symlinkLevelError) Error() string { return fmt.Sprintf("%q is a symlink", e.path) }
+
+// openNoSymlinks is pinNoSymlinks' walk: it returns the final directory's
+// descriptor (the caller closes it) instead of its identity, for a caller
+// that must act inside that very directory.
+func openNoSymlinks(root, path string) (int, error) {
+	rel, err := filepath.Rel(root, path)
+	if err != nil || rel == "." || !filepath.IsLocal(rel) {
+		return -1, fmt.Errorf("%q is not strictly inside %q", path, root)
+	}
+	fd, err := unix.Open(root, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return -1, &os.PathError{Op: "open", Path: root, Err: err}
+	}
+	cur := root
+	for _, part := range strings.Split(rel, string(filepath.Separator)) {
+		cur = filepath.Join(cur, part)
+		next, oerr := unix.Openat(fd, part, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+		if oerr != nil {
+			// A link fails with ELOOP, or with ENOTDIR on kernels that check
+			// O_DIRECTORY first: tell a link from any other non-directory.
+			var st unix.Stat_t
+			isLink := errors.Is(oerr, unix.ELOOP) ||
+				(unix.Fstatat(fd, part, &st, unix.AT_SYMLINK_NOFOLLOW) == nil && st.Mode&unix.S_IFMT == unix.S_IFLNK)
+			_ = unix.Close(fd)
+			if isLink {
+				return -1, &symlinkLevelError{path: cur}
+			}
+			return -1, &os.PathError{Op: "openat", Path: cur, Err: oerr}
+		}
+		_ = unix.Close(fd)
+		fd = next
+	}
+	return fd, nil
 }
 
 // resolveWorkspaceScope validates a requested scope against the workspace root

@@ -2,10 +2,10 @@ package httpapi
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
+	"io/fs"
 	"regexp"
 	"sort"
 	"strings"
@@ -18,7 +18,8 @@ import (
 // Composer context handles (#517): a chat message may inline `@url:<url>` and
 // `@file:"path"` handles; the server expands them (concurrently) into the turn
 // context BEFORE the run — @url via the SSRF-guarded host-side fetcher, @file
-// read from the conversation workspace and path-gated by SafeWorkspaceJoin. This
+// read through the conversation workspace opened without following a symbolic
+// link (tools.OpenDirNoFollow, WorkspaceDir.OpenResolved). This
 // is a host-side I/O pass that prepares the model's input; the sandbox remains
 // the execution boundary and credentials never enter the prompt. Expansion NEVER
 // fails the turn — a bad handle degrades to a notice appended for the model +
@@ -113,7 +114,7 @@ func expandContextHandles(ctx context.Context, message, workspaceRoot string) (b
 					eh.block = fmt.Sprintf("**Fetched @url:%s**\n\n%s", mt.arg, text)
 				}
 			case "file":
-				eh.block, eh.notice = expandFileHandle(workspaceRoot, mt.arg)
+				eh.block, eh.notice = expandFileHandle(ctx, workspaceRoot, mt.arg)
 			}
 		}(i, mt)
 	}
@@ -150,53 +151,37 @@ collect:
 	return blocks, notices
 }
 
-// expandFileHandle reads relPath from the conversation workspace, path-gated by
-// SafeWorkspaceJoin (rejects absolute paths, "..", and symlink escapes), opened
-// through os.Root and required to be a regular file on the opened descriptor,
-// and size-capped. Returns (block, notice); exactly one is non-empty.
-func expandFileHandle(workspaceRoot, relPath string) (block, notice string) {
+// expandFileHandle reads relPath from the conversation workspace: the
+// workspace directory is opened without following a symbolic link at its own
+// name (the sandbox can replace it with one), relPath is resolved inside it
+// (absolute paths, "..", and links that leave it are refused) and opened with
+// no link followed at any component, required to be a regular file on the
+// opened descriptor, and size-capped. Returns (block, notice); exactly one is
+// non-empty.
+func expandFileHandle(ctx context.Context, workspaceRoot, relPath string) (block, notice string) {
 	if strings.TrimSpace(workspaceRoot) == "" {
 		return "", fmt.Sprintf("@file is unavailable for this conversation: %s", relPath)
 	}
-	// Syntactic gate first, so a legitimately MISSING file reads as "not found"
-	// rather than SafeWorkspaceJoin's existence-dependent symlink resolution
-	// error. filepath.IsLocal rejects absolute paths and any ".."/root escape;
-	// it is also the barrier CodeQL's path-injection query recognizes, so the
-	// existence-probe join below is provably confined on rescan. A NUL byte is
-	// outside IsLocal's contract, so it is rejected separately.
-	if !filepath.IsLocal(relPath) || strings.ContainsRune(relPath, 0) {
+	// Syntactic gate first, so a path that is not allowed reads as such
+	// rather than as "not found".
+	if tools.CheckRelativePath(relPath) != nil {
 		return "", fmt.Sprintf("@file path not allowed: %s", relPath)
 	}
-	// relPath is syntactically gated (local, no NUL) above, so this join stays
-	// under workspaceRoot; it is only an existence probe (SafeWorkspaceJoin does the
-	// authoritative symlink-safe resolution below).
-	if info, statErr := os.Stat(filepath.Join(workspaceRoot, relPath)); statErr != nil || !info.Mode().IsRegular() {
+	wsDir, err := tools.OpenDirNoFollow(ctx, workspaceRoot)
+	if err != nil {
+		if errors.Is(err, tools.ErrWorkspaceDirLink) {
+			return "", fmt.Sprintf("@file could not be read: %s", relPath)
+		}
 		return "", fmt.Sprintf("@file not found: %s", relPath)
 	}
-	// Existence + syntactic safety confirmed → resolve symlinks safely (catches a
-	// symlink inside the workspace that escapes it).
-	full, err := tools.SafeWorkspaceJoin(workspaceRoot, relPath)
-	if err != nil {
+	defer wsDir.Close()
+	f, _, _, err := wsDir.OpenResolved(relPath)
+	switch {
+	case errors.Is(err, tools.ErrPathEscapesWorkspace), errors.Is(err, tools.ErrUnsafePath):
 		return "", fmt.Sprintf("@file path not allowed: %s", relPath)
-	}
-	// The workspace stays writable by the sandbox, so open the resolved path
-	// through os.Root (the open cannot leave the workspace) and check the type
-	// on the opened descriptor.
-	wsDir, err := tools.SafeWorkspaceJoin(workspaceRoot, ".")
-	if err != nil {
-		return "", fmt.Sprintf("@file could not be read: %s", relPath)
-	}
-	rel, err := filepath.Rel(wsDir, full)
-	if err != nil || !filepath.IsLocal(rel) {
-		return "", fmt.Sprintf("@file path not allowed: %s", relPath)
-	}
-	root, err := os.OpenRoot(wsDir)
-	if err != nil {
-		return "", fmt.Sprintf("@file could not be read: %s", relPath)
-	}
-	defer root.Close()
-	f, _, err := tools.OpenRegularInRoot(root, rel)
-	if err != nil {
+	case errors.Is(err, fs.ErrNotExist), errors.Is(err, tools.ErrNotRegularFile):
+		return "", fmt.Sprintf("@file not found: %s", relPath)
+	case err != nil:
 		return "", fmt.Sprintf("@file could not be read: %s", relPath)
 	}
 	defer f.Close()

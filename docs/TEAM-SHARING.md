@@ -365,8 +365,8 @@ the `304` and its `ETag` through.
 **Branch contents.** A teammate's branch gets every output shared at the moment
 of branching, copied into its own workspace at the same relative path, as the
 brancher's own files (0644 files, 0755 directories, written through an
-`os.Root` on the new workspace; the source is read with the same no-symlink
-opener as downloads; a file whose size or modification time changed while it
+`os.Root` on the new workspace, which is opened without following a symbolic
+link; the source is read with the same no-symlink opener as downloads; a file whose size or modification time changed while it
 was being copied — truncated, or rewritten in place to the same length — is
 withheld rather than copied as a mix of two versions). The team gate is
 re-checked before each file: once the owner stops sharing (or archives) mid-copy,

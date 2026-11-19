@@ -1,11 +1,12 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"mime"
-	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -511,10 +512,10 @@ var cidPattern = regexp.MustCompile(`(?i)cid:([^\s"'<>]+)\b`)
 // cid: form so SendGrid's MIME assembler still attaches the images
 // for the real send.
 //
-// Path validation mirrors the workspace file API: relative paths
-// resolve under the per-conversation workspace root, EvalSymlinks +
-// has-prefix check rejects escapes. We refuse to read anything
-// larger than 4 MiB (the same per-attachment cap the email pipeline
+// Path validation mirrors the workspace file API: the conversation
+// directory is opened without following a symbolic link, and relative paths
+// are resolved and opened inside it (links that leave it are refused). We
+// refuse to read anything larger than 4 MiB (the same per-attachment cap the email pipeline
 // enforces elsewhere) so a misbehaving agent can't blow up the
 // approval row's summary payload.
 func expandCidImagesToDataURLs(html string, args map[string]any, convID string) string {
@@ -522,17 +523,16 @@ func expandCidImagesToDataURLs(html string, args map[string]any, convID string) 
 	if !ok || len(atts) == 0 || html == "" {
 		return html
 	}
-	wsDir, err := filepath.Abs(tools.WorkspaceDirForConversation(convID))
+	// The conversation directory is opened without following a symbolic link
+	// (the sandbox can replace it with one), and every read goes through it:
+	// a path is resolved inside it and opened with no link followed, so
+	// nothing outside the workspace can be inlined, whatever the agent
+	// supplied.
+	wsDir, err := tools.OpenConversationDir(context.Background(), convID)
 	if err != nil {
 		return html
 	}
-	// Every read goes through an os.Root on the workspace dir: it refuses any
-	// path that resolves outside it, whatever the agent supplied.
-	root, err := os.OpenRoot(wsDir)
-	if err != nil {
-		return html
-	}
-	defer func() { _ = root.Close() }()
+	defer func() { _ = wsDir.Close() }()
 	const maxAttachmentBytes = 4 << 20
 
 	cidMap := make(map[string]string)
@@ -547,43 +547,32 @@ func expandCidImagesToDataURLs(html string, args map[string]any, convID string) 
 		if cid == "" || path == "" {
 			continue
 		}
-		// Resolve to an absolute path safely. Refuse anything that
-		// escapes the workspace dir so a hostile agent can't get
-		// /etc/passwd inlined into the preview card.
-		var full string
+		// Nothing outside the workspace dir is inlined into the preview card
+		// (no /etc/passwd, whatever the agent wrote): an absolute path must
+		// already name a place inside it, and the resolution below refuses a
+		// link that leaves it.
+		rel := filepath.FromSlash(path)
 		if filepath.IsAbs(path) {
-			full = path
-		} else {
-			full = filepath.Join(wsDir, filepath.FromSlash(path))
+			r, ok := wsDir.RelOf(path)
+			if !ok {
+				continue
+			}
+			rel = r
 		}
-		resolved, err := filepath.EvalSymlinks(full)
+		f, info, canon, err := wsDir.OpenResolved(rel)
 		if err != nil {
 			continue
 		}
-		resolvedAbs, err := filepath.Abs(resolved)
-		if err != nil {
+		if info.Size() > maxAttachmentBytes {
+			_ = f.Close()
 			continue
 		}
-		// Confine the symlink-resolved path to the workspace dir. filepath.Rel +
-		// filepath.IsLocal is the containment check CodeQL's path-injection query
-		// recognizes: Rel's nil-error result sanitizes resolvedAbs, and IsLocal
-		// rejects a "../" escape that Rel would otherwise return with a nil error.
-		// This keeps a hostile agent from getting /etc/passwd inlined into the
-		// preview card; the root.Stat / root.ReadFile below are confined again by
-		// the os.Root.
-		rel, relErr := filepath.Rel(wsDir, resolvedAbs)
-		if relErr != nil || !filepath.IsLocal(rel) {
+		data, err := io.ReadAll(io.LimitReader(f, maxAttachmentBytes+1))
+		_ = f.Close()
+		if err != nil || len(data) > maxAttachmentBytes {
 			continue
 		}
-		info, err := root.Stat(rel)
-		if err != nil || info.IsDir() || info.Size() > maxAttachmentBytes {
-			continue
-		}
-		data, err := root.ReadFile(rel)
-		if err != nil {
-			continue
-		}
-		mimeType := mime.TypeByExtension(filepath.Ext(resolvedAbs))
+		mimeType := mime.TypeByExtension(filepath.Ext(canon))
 		if mimeType == "" {
 			mimeType = "application/octet-stream"
 		}

@@ -86,8 +86,8 @@ func creatorFromPrincipal(p principal) taskCreator {
 
 // priorityCapError returns a non-nil error when a task's (post-default) priority
 // is MORE urgent (lower integer) than the authorizing key's ceiling (#230); nil
-// cap = no limit. Shared by the single-task and batch create paths so the two
-// cannot drift on how the per-key ceiling is enforced.
+// cap = no limit. Applied by admitCreate and admitEdit (task_gates.go), so every
+// create and edit path enforces the per-key ceiling the same way.
 func priorityCapError(maxPriority *int, priority int) error {
 	if maxPriority != nil && priority < *maxPriority {
 		return fmt.Errorf("priority %d exceeds this API key's ceiling (the most urgent it may submit is %d)", priority, *maxPriority)
@@ -203,10 +203,12 @@ func (h *Handlers) resolveTaskCreator(w http.ResponseWriter, r *http.Request) (t
 // CreateTaskBatch handles POST /tasks/batch (#227): it accepts a slice of
 // TaskCreate recipes and creates them in a single API call.
 //
-// In atomic mode (default false), the whole slice is validated up front; if ANY
-// task fails validation NONE are created and the response is 422 with every
-// per-task error. In non-atomic mode, valid tasks are inserted while invalid
-// ones are skipped, yielding a 207 Multi-Status with per-task results.
+// Every task goes through the same create gates as POST /tasks
+// (Handlers.admitCreate). In atomic mode (default false), the whole slice is
+// checked up front; if ANY task is refused NONE are created and the response
+// is 422 with every per-task error. In non-atomic mode, admitted tasks are
+// inserted while refused ones are skipped, yielding a 207 Multi-Status with
+// per-task results.
 //
 // Rate-limit accounting: the SchedRateLimitMiddleware already charges one token
 // for the HTTP request; the handler additionally charges (len(tasks)-1) tokens
@@ -235,29 +237,20 @@ func (h *Handlers) CreateTaskBatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Per-principal rolling budget (#601 part 2): the SAME budgetCapError gate
-	// the single-task and chat schedule_task paths run, checked up front for
-	// the whole batch — the budget bounds the principal, not any one task, so
-	// an exhausted window refuses the request before any row is created.
-	if err := h.budgetCapError(r.Context(), creator); err != nil {
+	// Per-principal rolling budget (#601 part 2): checked up front for the
+	// whole batch — the budget bounds the principal, not any one task, so an
+	// exhausted window refuses the request before any row is created.
+	gates := taskGatesFor(creator)
+	if err := h.checkBudget(r.Context(), gates); err != nil {
 		writeBudgetRefusal(w, err)
 		return
 	}
 
-	// Lineage is server-authoritative (#277), identical to the single-task path:
-	// clear any forged created_by_task_id on the public create path.
-	for i := range req.Tasks {
-		req.Tasks[i].CreatedByTaskID = nil
-	}
-
-	// Rate-limit accounting: charge the remaining (N-1) tokens so a batch of N
-	// costs N total. ValidateKey already charged 1; the admin/cookie paths have
-	// no per-key counter to charge.
-	if creator.creatorKey != nil {
-		if !h.apiKeys.ConsumeN(*creator.creatorKey, len(req.Tasks)-1) {
-			writeError(w, http.StatusTooManyRequests, "Rate limit exceeded")
-			return
-		}
+	// Rate-limit accounting: a batch of N costs N tokens on the key's hourly
+	// counter. The admin/cookie paths have no per-key counter to charge.
+	if !h.chargeRecords(gates, len(req.Tasks)) {
+		writeError(w, http.StatusTooManyRequests, "Rate limit exceeded")
+		return
 	}
 
 	var (
@@ -267,32 +260,15 @@ func (h *Handlers) CreateTaskBatch(w http.ResponseWriter, r *http.Request) {
 		validationFailed bool
 	)
 
+	// Every record runs the SAME gates as POST /tasks (Handlers.admitCreate):
+	// validation, the ceiling and run_if admin rules, the mcp_selection check
+	// and the key's priority ceiling. A refusal is a per-task failure carrying
+	// POST /tasks's message (atomic → the whole batch aborts; non-atomic →
+	// just this one is skipped), so a task /tasks/batch accepts is one
+	// POST /tasks would accept from the same caller.
 	for i := range req.Tasks {
-		tc := &req.Tasks[i]
-		if err := h.validateTaskCreate(tc); err != nil {
-			failedList = append(failedList, models.BatchFailed{Index: i, Error: err.Error()})
-			validationFailed = true
-			continue
-		}
-		if msg := requireAdminForRunIf(creator.hasAdminPermission, tc.RunIf); msg != "" {
-			failedList = append(failedList, models.BatchFailed{Index: i, Error: msg})
-			validationFailed = true
-			continue
-		}
-		t := models.NewTask(*tc)
-		// Per-key priority ceiling (#230): enforce the SAME cap as the single-task
-		// path, treating an over-cap task as a per-task failure (atomic → whole
-		// batch aborts; non-atomic → just this one is skipped) so /tasks/batch
-		// can't be a weaker route around the key's max_priority.
-		if err := priorityCapError(creator.creatorKeyMaxPriority, t.Priority); err != nil {
-			failedList = append(failedList, models.BatchFailed{Index: i, Error: err.Error()})
-			validationFailed = true
-			continue
-		}
-		creator.attribute(t)
-		// The single-task path's mcp_selection check, per task like the
-		// priority ceiling above.
-		if err := h.checkTaskMCPSelection(r.Context(), t); err != nil {
+		t, err := h.admitCreate(r.Context(), gates, &req.Tasks[i], nil)
+		if err != nil {
 			failedList = append(failedList, models.BatchFailed{Index: i, Error: err.Error()})
 			validationFailed = true
 			continue

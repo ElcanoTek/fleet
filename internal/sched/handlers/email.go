@@ -79,21 +79,20 @@ func (h *Handlers) HandleEmailTrigger(w http.ResponseWriter, r *http.Request) {
 		sigHeader = r.Header.Get("X-Fleet-Signature-256")
 	}
 
-	// Look up the trigger only for well-formed slugs, and only ACCEPT it when it
-	// is an email-kind trigger. A malformed slug, an unknown slug, or a
-	// webhook-kind slug all leave trig nil → the dummy-HMAC miss path below → an
-	// identical, timing-equalized 401, so neither existence nor kind leaks.
+	// Look up the trigger only for well-formed slugs, and only as an email-kind
+	// trigger: the lookup names the kind, so a webhook-kind slug comes back as no
+	// row. A malformed slug, an unknown slug, or a webhook-kind slug all leave
+	// trig nil → the dummy-HMAC miss path below → an identical, timing-equalized
+	// 401, so neither existence nor kind is revealed.
 	var trig *models.TaskTrigger
 	if triggerSlugShape.MatchString(slug) {
-		t, lookupErr := h.storage.GetTriggerBySlug(r.Context(), slug)
+		t, lookupErr := h.storage.GetTriggerBySlug(r.Context(), models.TriggerKindEmail, slug)
 		if lookupErr != nil && !errors.Is(lookupErr, sql.ErrNoRows) {
 			logging.From(r.Context()).Error("email trigger lookup error", "slug", safe.LogSafe(slug), "err", lookupErr)
 			writeError(w, http.StatusInternalServerError, "internal error")
 			return
 		}
-		if t != nil && t.KindOrWebhook() == models.TriggerKindEmail {
-			trig = t
-		}
+		trig = t // nil on ErrNoRows
 	}
 
 	// Always compute one HMAC — against the real secret when an email trigger
