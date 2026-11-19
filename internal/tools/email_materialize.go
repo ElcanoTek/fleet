@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -44,8 +45,10 @@ func IsEmailToolName(toolName string) bool {
 // matching the tool descriptions and the MCP sendgrid server's behavior.
 //
 // The path is contained to the conversation workspace (#573): no $VAR or ~
-// expansion, absolute paths outside the workspace are rejected, and the final
-// resolution goes through SafeWorkspaceJoin (".." + symlink-escape reject).
+// expansion, absolute paths outside the workspace are rejected, the
+// conversation directory is opened without following a symbolic link, and the
+// file is resolved and opened through it ("..", and links that leave it, are
+// refused).
 func MaterializeContentFile(convID, rawInput string) (string, error) {
 	var args map[string]any
 	if err := json.Unmarshal([]byte(rawInput), &args); err != nil {
@@ -88,40 +91,43 @@ func MaterializeContentFileMap(convID string, args map[string]any) error {
 	// content_file is model-controlled (steerable via prompt injection), and its
 	// bytes become an OUTBOUND email body, so containment here stops an agent
 	// from inlining host secrets (/proc/self/environ, ~/.aws/credentials) into
-	// mail (#573). Three rules, mirroring SafeWorkspaceJoin:
-	//   1. No $VAR / ~ expansion: an attacker-supplied path resolves literally,
+	// mail (#573). Four rules:
+	//   1. No $VAR / ~ expansion: a model-authored path resolves literally,
 	//      never through the fleet process environment.
-	//   2. An absolute path must already live under the conversation workspace;
+	//   2. The conversation directory is opened without following a symbolic
+	//      link (OpenConversationDir): the sandbox can replace it with one.
+	//   3. An absolute path must already live under the conversation workspace;
 	//      anything else is rejected outright.
-	//   3. The (now relative) path goes through SafeWorkspaceJoin, which rejects
-	//      ".." components and symlink escapes.
-	workspace, err := filepath.Abs(WorkspaceDirForConversation(convID))
+	//   4. The (now relative) path is resolved and opened through that
+	//      directory (OpenResolved): ".." components and links that leave it are
+	//      refused, and nothing that changes after the resolution is followed.
+	dir, err := OpenConversationDir(context.Background(), convID)
 	if err != nil {
-		return fmt.Errorf("resolve workspace for content_file %q: %w", file, err)
+		return fmt.Errorf("read content_file %q: %w", file, err)
 	}
+	defer dir.Close()
 	rel := file
 	if filepath.IsAbs(file) {
-		r, err := filepath.Rel(workspace, filepath.Clean(file))
-		if err != nil || r == ".." || strings.HasPrefix(r, ".."+string(filepath.Separator)) {
-			return fmt.Errorf("content_file %q is outside the conversation workspace %s", file, workspace)
+		r, ok := dir.RelOf(file)
+		if !ok {
+			return fmt.Errorf("content_file %q is outside the conversation workspace %s", file, dir.Path())
 		}
 		rel = r
 	}
-	path, err := SafeWorkspaceJoin(workspace, rel)
+	f, info, _, err := dir.OpenResolved(rel)
 	if err != nil {
 		return fmt.Errorf("read content_file %q: %w", file, err)
 	}
-
-	info, err := os.Stat(path)
-	if err != nil {
-		return fmt.Errorf("read content_file %q: %w", file, err)
-	}
+	defer f.Close()
 	if info.Size() > MaxInlinedContentBytes {
 		return fmt.Errorf("content_file %q is %d bytes, exceeds %d-byte inline cap", file, info.Size(), MaxInlinedContentBytes)
 	}
-	data, err := os.ReadFile(path) //nolint:gosec // path validated by SafeWorkspaceJoin to live under the conversation workspace
+	data, err := io.ReadAll(io.LimitReader(f, MaxInlinedContentBytes+1))
 	if err != nil {
 		return fmt.Errorf("read content_file %q: %w", file, err)
+	}
+	if len(data) > MaxInlinedContentBytes {
+		return fmt.Errorf("content_file %q is over the %d-byte inline cap", file, MaxInlinedContentBytes)
 	}
 
 	args["content"] = string(data)
@@ -245,11 +251,14 @@ func forEachAttachmentPath(args map[string]any, fn func(path string) (string, er
 // `shared` link and mounted into both kinds of sandbox). The library is a
 // legitimate source because the shared-files prompt block tells agents to use
 // `shared/<name>`. root is the workspace root they live under, which the
-// attachment copies must stay out of.
+// attachment copies must stay out of. openConv opens the working directory
+// without following a symbolic link (the sandbox can replace it with one); its
+// path is only ever used lexically.
 type attachmentBases struct {
-	conv   string
-	shared string
-	root   string
+	conv     string
+	shared   string
+	root     string
+	openConv func() (*WorkspaceDir, error)
 }
 
 func attachmentBasesFor(convID string) (attachmentBases, error) {
@@ -262,7 +271,10 @@ func attachmentBasesFor(convID string) (attachmentBases, error) {
 	}
 	shared := SharedFilesDir(workspaceRootForContainment())
 	conv = filepath.Clean(conv)
-	return attachmentBases{conv: conv, shared: filepath.Clean(shared), root: filepath.Dir(conv)}, nil
+	return attachmentBases{
+		conv: conv, shared: filepath.Clean(shared), root: filepath.Dir(conv),
+		openConv: func() (*WorkspaceDir, error) { return OpenConversationDir(context.Background(), convID) },
+	}, nil
 }
 
 // attachmentBasesForDir is attachmentBases for a run whose working directory
@@ -280,7 +292,11 @@ func attachmentBasesForDir(workspaceRoot, workDir string) (attachmentBases, erro
 	if err != nil {
 		return attachmentBases{}, fmt.Errorf("resolve workspace root for attachments: %w", err)
 	}
-	return attachmentBases{conv: filepath.Clean(dir), shared: filepath.Clean(SharedFilesDir(root)), root: filepath.Clean(root)}, nil
+	dir, root = filepath.Clean(dir), filepath.Clean(root)
+	return attachmentBases{
+		conv: dir, shared: filepath.Clean(SharedFilesDir(root)), root: root,
+		openConv: func() (*WorkspaceDir, error) { return OpenRunDir(context.Background(), root, dir) },
+	}, nil
 }
 
 // lexical anchors a model-authored path: relative paths are joined onto the
@@ -348,27 +364,21 @@ func outsideErr(path string) error {
 }
 
 // checkStaged is the staging-time check: lexical containment always, and for
-// an existing entry, symlink resolution plus a regular-file check.
+// an existing entry, resolution through the opened directory plus a
+// regular-file check.
 func (b attachmentBases) checkStaged(path string) error {
 	if !within(b.conv, path) && !within(b.shared, path) {
 		return outsideErr(path)
 	}
-	if _, err := os.Lstat(path); err != nil {
+	dir, rel, err := b.source(path)
+	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil // need not exist yet; SnapshotEmailAttachments checks again before sending
 		}
-		return fmt.Errorf("attachment %q: %w", path, err)
-	}
-	base, rel, err := b.resolve(path)
-	if err != nil {
 		return err
 	}
-	root, err := os.OpenRoot(base)
-	if err != nil {
-		return fmt.Errorf("attachment %q: %w", path, err)
-	}
-	defer root.Close()
-	info, err := root.Stat(rel)
+	defer dir.Close()
+	info, err := dir.Stat(rel)
 	if err != nil {
 		return fmt.Errorf("attachment %q: %w", path, err)
 	}
@@ -378,37 +388,66 @@ func (b attachmentBases) checkStaged(path string) error {
 	return nil
 }
 
-// resolve follows path's symlinks and returns the base directory it resolves
-// under (the conversation workspace or the shared library, as they resolve
-// themselves) and the path relative to that base. A path that resolves
-// anywhere else is refused.
-func (b attachmentBases) resolve(path string) (base, rel string, err error) {
-	resolved, err := filepath.EvalSymlinks(path)
+// source resolves path to the directory it lives in — the run's working
+// directory, opened without following a symbolic link, or the shared library —
+// and its canonical name there. A path under the working directory that
+// leads, through a symbolic link, into the shared library (the seeded
+// `shared` link) resolves there; anything that resolves anywhere else is
+// refused. The caller closes the returned directory.
+func (b attachmentBases) source(path string) (*WorkspaceDir, string, error) {
+	if within(b.conv, path) {
+		rel, err := filepath.Rel(b.conv, path)
+		if err != nil {
+			return nil, "", outsideErr(path)
+		}
+		dir, err := b.openConv()
+		if err != nil {
+			return nil, "", fmt.Errorf("attachment %q: %w", path, err)
+		}
+		canon, err := dir.Resolve(rel)
+		if err == nil && canon != "." {
+			return dir, canon, nil
+		}
+		_ = dir.Close()
+		if err == nil {
+			return nil, "", outsideErr(path)
+		}
+		if target := OutsideTarget(err); target != "" && within(b.shared, target) {
+			return b.sharedSource(target, path)
+		}
+		if errors.Is(err, ErrPathEscapesWorkspace) {
+			return nil, "", outsideErr(path)
+		}
+		return nil, "", fmt.Errorf("attachment %q: %w", path, err)
+	}
+	if within(b.shared, path) {
+		return b.sharedSource(path, path)
+	}
+	return nil, "", outsideErr(path)
+}
+
+// sharedSource resolves target inside the shared library. The library is
+// mounted read-only into every sandbox (a mount point no sandbox can rename),
+// so it is opened as a host directory.
+func (b attachmentBases) sharedSource(target, path string) (*WorkspaceDir, string, error) {
+	dir, err := OpenHostDir(b.shared)
 	if err != nil {
-		return "", "", fmt.Errorf("attachment %q: %w", path, err)
+		return nil, "", fmt.Errorf("attachment %q: %w", path, err)
 	}
-	resolved, err = filepath.Abs(resolved)
-	if err != nil {
-		return "", "", fmt.Errorf("attachment %q: %w", path, err)
+	rel, ok := dir.RelOf(target)
+	if !ok || rel == "." {
+		_ = dir.Close()
+		return nil, "", outsideErr(path)
 	}
-	for _, dir := range []string{b.conv, b.shared} {
-		dirResolved, derr := filepath.EvalSymlinks(dir)
-		if derr != nil {
-			continue
+	canon, err := dir.Resolve(rel)
+	if err != nil || canon == "." {
+		_ = dir.Close()
+		if err == nil || errors.Is(err, ErrPathEscapesWorkspace) {
+			return nil, "", outsideErr(path)
 		}
-		if dirResolved, derr = filepath.Abs(dirResolved); derr != nil {
-			continue
-		}
-		if !within(dirResolved, resolved) || resolved == dirResolved {
-			continue
-		}
-		r, rerr := filepath.Rel(dirResolved, resolved)
-		if rerr != nil || !filepath.IsLocal(r) {
-			continue
-		}
-		return dirResolved, r, nil
+		return nil, "", fmt.Errorf("attachment %q: %w", path, err)
 	}
-	return "", "", outsideErr(path)
+	return dir, canon, nil
 }
 
 // OutboundAttachmentStagingDir is where SnapshotEmailAttachments puts the
@@ -440,9 +479,10 @@ const MaxEmailAttachmentBytes = 30 << 20
 
 // SnapshotEmailAttachments is the send-time half of attachment handling. For
 // each attachment path in args it re-resolves the path against the
-// conversation's workspace (or the shared library), opens it through os.Root so
-// the open itself cannot leave that directory, requires a regular file on the
-// opened descriptor, and copies at most MaxEmailAttachmentBytes in total into
+// conversation's workspace — opened without following a symbolic link — or
+// the shared library, opens it through that directory with no link followed
+// at any component (OpenNoFollow), requires a regular file on the opened
+// descriptor, and copies at most MaxEmailAttachmentBytes in total into
 // a fresh private directory under stagingParent. args is rewritten in place to
 // name those copies (keeping each file's base name, which the connector uses as
 // the attachment name), so the connector reads files nothing else can change
@@ -510,13 +550,14 @@ func snapshotAttachments(bases attachmentBases, args map[string]any, stagingPare
 		if !within(bases.conv, path) && !within(bases.shared, path) {
 			return "", outsideErr(path)
 		}
-		base, rel, err := bases.resolve(path)
+		src, rel, err := bases.source(path)
 		if err != nil {
 			return "", err
 		}
 		n++
 		dst := filepath.Join(dir, strconv.Itoa(n), filepath.Base(rel))
-		copied, err := copyFromRoot(base, rel, dst, MaxEmailAttachmentBytes-total)
+		copied, err := copyFromDir(src, rel, dst, MaxEmailAttachmentBytes-total)
+		_ = src.Close()
 		if err != nil {
 			return "", fmt.Errorf("attachment %q: %w", path, err)
 		}
@@ -530,20 +571,16 @@ func snapshotAttachments(bases attachmentBases, args map[string]any, stagingPare
 	return cleanup, nil
 }
 
-// copyFromRoot copies base/rel to dst, opening the source through os.Root and
-// requiring a regular file on the opened descriptor. It refuses a source larger
-// than budget bytes and never copies more than that.
-func copyFromRoot(base, rel, dst string, budget int64) (int64, error) {
-	root, err := os.OpenRoot(base)
+// copyFromDir copies rel inside src to dst, opening the source with no
+// symbolic link followed at any component (rel is the canonical name source
+// returned) and requiring a regular file on the opened descriptor. It refuses
+// a source larger than budget bytes and never copies more than that.
+func copyFromDir(src *WorkspaceDir, rel, dst string, budget int64) (int64, error) {
+	in, info, err := OpenNoFollow(src.Root, rel)
 	if err != nil {
 		return 0, err
 	}
-	defer root.Close()
-	src, info, err := OpenRegularInRoot(root, rel)
-	if err != nil {
-		return 0, err
-	}
-	defer src.Close()
+	defer in.Close()
 	if info.Size() > budget {
 		return 0, fmt.Errorf("attachments exceed the %d-byte limit for one email", MaxEmailAttachmentBytes)
 	}
@@ -554,7 +591,7 @@ func copyFromRoot(base, rel, dst string, budget int64) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	n, err := io.Copy(out, io.LimitReader(src, budget+1))
+	n, err := io.Copy(out, io.LimitReader(in, budget+1))
 	if cerr := out.Close(); err == nil {
 		err = cerr
 	}

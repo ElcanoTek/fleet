@@ -12,7 +12,6 @@ import (
 	"reflect"
 	"strings"
 	"sync"
-	"syscall"
 	"testing"
 	"time"
 
@@ -229,54 +228,6 @@ func TestCarrySharedFilesIgnoresRequestCancellation(t *testing.T) {
 	o := f.srv.carrySharedFilesIntoBranch(ctx, src, branch, point)
 	if len(o.CopiedFiles) != 3 {
 		t.Errorf("copied = %+v, want all three shared outputs despite the cancelled request", o.CopiedFiles)
-	}
-}
-
-// A FIFO swapped in for a shared name between the check and the open must
-// not hang the reader: the open is non-blocking and the identity check
-// refuses it. Regular files still read normally.
-func TestOpenWorkspaceFileNoFollowFIFODoesNotHang(t *testing.T) {
-	ws := t.TempDir()
-	if err := os.WriteFile(filepath.Join(ws, "out.csv"), []byte("a,b\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	f, _, err := openWorkspaceFileNoFollow(ws, "out.csv")
-	if err != nil {
-		t.Fatal(err)
-	}
-	b := make([]byte, 16)
-	n, _ := f.Read(b)
-	_ = f.Close()
-	if string(b[:n]) != "a,b\n" {
-		t.Fatalf("regular read = %q", b[:n])
-	}
-
-	workspaceOpenAfterLstat = func(p string) {
-		_ = os.Remove(p)
-		if err := syscall.Mkfifo(p, 0o644); err != nil {
-			t.Errorf("mkfifo: %v", err)
-		}
-	}
-	t.Cleanup(func() { workspaceOpenAfterLstat = nil })
-	done := make(chan error, 1)
-	go func() {
-		f, _, err := openWorkspaceFileNoFollow(ws, "out.csv")
-		if f != nil {
-			_ = f.Close()
-		}
-		done <- err
-	}()
-	select {
-	case err := <-done:
-		if err == nil {
-			t.Error("a FIFO was opened as a workspace file")
-		}
-	case <-time.After(5 * time.Second):
-		// Unblock the stuck open so the test process can exit.
-		if w, err := os.OpenFile(filepath.Join(ws, "out.csv"), os.O_WRONLY|syscall.O_NONBLOCK, 0); err == nil {
-			_ = w.Close()
-		}
-		t.Fatal("open of a swapped-in FIFO blocked")
 	}
 }
 

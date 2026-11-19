@@ -4,6 +4,7 @@ import (
 	"context"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -171,7 +172,14 @@ func runPythonWithSandbox(ctx context.Context, sb *sandbox.Sandbox, params RunPy
 
 	workspaceDir := ""
 	if convID := ConversationIDFromContext(ctx); convID != "" {
-		if dir, err := EnsureWorkspaceDir(convID); err == nil {
+		dir, err := EnsureWorkspaceDir(convID)
+		if errors.Is(err, ErrWorkspaceDirLink) {
+			// Same refusal as bash: a conversation directory that is a
+			// symbolic link is never used, and the call does not quietly run
+			// in the sandbox's default directory instead.
+			return "", fmt.Errorf("conversation workspace unavailable: %w", err)
+		}
+		if err == nil {
 			if abs, absErr := filepath.Abs(dir); absErr == nil {
 				workspaceDir = abs
 			} else {

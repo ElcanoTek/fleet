@@ -22,8 +22,11 @@ the turn always proceeds.
   (including redirect targets), the response is capped at 5 MiB, and non-UTF-8
   content is rejected.
 - **`@file` is path-gated.** Paths resolve **only** against the conversation's
-  workspace via `SafeWorkspaceJoin` — absolute paths, `..` components, and symlink
-  escapes are rejected, so `@file` cannot read arbitrary host files. Each file is
+  workspace, which is opened without following a symbolic link (a conversation
+  directory that is a link is refused) and read through that open directory
+  (`tools.OpenDirNoFollow`, `WorkspaceDir.OpenResolved`) — absolute paths, `..`
+  components, and symlinks that lead out of the workspace are rejected, so
+  `@file` cannot read arbitrary host files. Each file is
   capped at 256 KiB (larger files are truncated with a marker).
 - **Bounded.** At most 8 handles per message; extras are ignored with a notice.
 - The expanded context enters the model prompt exactly like a manual attachment;

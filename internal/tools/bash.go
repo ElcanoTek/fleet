@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -690,6 +691,11 @@ func resolveBashWorkingDir(ctx context.Context, requested string) (string, error
 	}
 	if convID := ConversationIDFromContext(ctx); convID != "" {
 		dir, err := EnsureWorkspaceDir(convID)
+		if errors.Is(err, ErrWorkspaceDirLink) {
+			// The conversation directory is a symbolic link: never run in it,
+			// and never fall back to another directory as if nothing happened.
+			return "", fmt.Errorf("conversation workspace unavailable: %w", err)
+		}
 		if err != nil {
 			wd, wdErr := os.Getwd()
 			if wdErr != nil {

@@ -166,11 +166,26 @@ func removeWorkspaceTree(root, name string) error {
 		return nil
 	}
 	// The orphan dir first, through the parent root: an unreadable (0111,
-	// 0000) dir cannot be opened to walk until its own mode is repaired.
-	if info, lerr := r.Lstat(name); lerr == nil && info.IsDir() {
-		_ = r.Chmod(name, info.Mode().Perm()|0o700)
+	// 0000) dir cannot be opened to walk until its own mode is repaired. A
+	// symbolic link at name is never repaired or walked; the walk only runs
+	// in the very directory that was Lstat'ed (os.SameFile), so a link swapped
+	// in between cannot point it at another directory.
+	info, lerr := r.Lstat(name)
+	if lerr != nil || !info.IsDir() {
+		return r.RemoveAll(name)
 	}
-	if sub, oerr := r.OpenRoot(name); oerr == nil {
+	_ = r.Chmod(name, info.Mode().Perm()|0o700)
+	if removeTreeAfterLstat != nil {
+		removeTreeAfterLstat(name)
+	}
+	// "<name>/." opens name with O_DIRECTORY (and "." relative to it), so a
+	// FIFO swapped in for the directory fails at once instead of blocking
+	// the sweep forever with no writer.
+	if sub, oerr := r.OpenRoot(name + string(filepath.Separator) + "."); oerr == nil {
+		if got, serr := sub.Stat("."); serr != nil || !os.SameFile(info, got) {
+			_ = sub.Close()
+			return r.RemoveAll(name)
+		}
 		_ = fs.WalkDir(sub.FS(), ".", func(path string, d fs.DirEntry, err error) error {
 			if err != nil || !d.IsDir() {
 				return nil //nolint:nilerr // best effort: an unreadable entry just stays unreadable; the RemoveAll below reports what is left.
@@ -184,6 +199,10 @@ func removeWorkspaceTree(root, name string) error {
 	}
 	return r.RemoveAll(name)
 }
+
+// removeTreeAfterLstat is a test seam run between the orphan directory's
+// Lstat and its open in removeWorkspaceTree; nil in production.
+var removeTreeAfterLstat func(name string)
 
 // liveConversationIDs returns the set of conversation ids currently in the DB
 // (including soft-deleted tombstones within their restore window, until

@@ -154,7 +154,7 @@ func TestResolveWorkspacePathNoConvIDUnchanged(t *testing.T) {
 }
 
 // TestWorkspaceDirForConversation_ConfinesID pins the id-side half of the
-// path-confinement invariant (the relPath side lives in SafeWorkspaceJoin): a
+// path-confinement invariant (the relPath side lives in WorkspaceDir.Resolve): a
 // conversation id may only ever name a lexically-local segment under the
 // workspace root. A non-local id (absolute, "..", or an escape) must fall back to
 // the shared root rather than widen the resolved path, while a normal

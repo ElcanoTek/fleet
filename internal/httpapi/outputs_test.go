@@ -371,7 +371,7 @@ func TestOpenWorkspaceFileNoFollow(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	f, info, err := openWorkspaceFileNoFollow(ws, "out/ok.csv")
+	f, info, err := openWorkspaceFileNoFollow(context.Background(), ws, "out/ok.csv")
 	if err != nil {
 		t.Fatalf("regular file: %v", err)
 	}
@@ -380,7 +380,7 @@ func TestOpenWorkspaceFileNoFollow(t *testing.T) {
 		t.Errorf("size = %d", info.Size())
 	}
 	for _, rel := range []string{"escape.csv", "inner.csv", "dirlink/ok.csv", "out", "../x", "out/../out/ok.csv", "missing"} {
-		if f, _, err := openWorkspaceFileNoFollow(ws, rel); err == nil {
+		if f, _, err := openWorkspaceFileNoFollow(context.Background(), ws, rel); err == nil {
 			_ = f.Close()
 			t.Errorf("open(%q) succeeded, want refusal", rel)
 		}

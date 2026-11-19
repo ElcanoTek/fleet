@@ -102,9 +102,11 @@ host-brokered credentials/network that by invariant never enter the sandbox:
   credentials and the egress-proxy/allowlist posture; running them in the sandbox would either leak
   credentials in or lose the host broker.
 - **Host workspace staging** (path-validated legacy exception):
-  `publish_artifact` stats a confined path and records a pointer rather than
-  opening arbitrary content. It invokes no shell, dynamic import, or template
-  executor; every model-selected path passes the workspace/pathsec allowlist. This class
+  `publish_artifact` stats a confined path — resolved through the run's
+  directory, opened without following a symbolic link below the workspace
+  root — and records a pointer rather than opening arbitrary content. It
+  invokes no shell, dynamic import, or template executor; every
+  model-selected path passes the workspace/pathsec allowlist. This class
   originally also covered `download_url` (writing fetched bytes),
   `generate_image` (reading reference images, writing provider output), and
   `xlsx` (a host zip read/rewrite) — those three were migrated in #1083: they
@@ -126,7 +128,15 @@ host-brokered credentials/network that by invariant never enter the sandbox:
   selected it; inline email previews similarly read validated upload/workspace
   attachments. These reads are fixed broker code needed before an approved host
   send, not a general file API. They remain a documented check-then-read host
-  exception and are candidates for FileOp migration.
+  exception and are candidates for FileOp migration. The host opens the
+  conversation directory without following a symbolic link — the sandbox owns
+  the workspace mount and can rename that directory and leave a link in its
+  place — and reads only through the opened directory
+  (`tools.OpenConversationDir`, `internal/tools/workspacedir.go`): a
+  conversation directory that is a symbolic link is refused, never followed,
+  and a link swapped in after the open is not followed either. The file itself
+  is resolved inside that directory and opened with no link followed at any
+  component.
 - **Host datastore / control state**: `task_tracker`, `notes`, `memory`,
   `publish_artifact`, `enable_mcp_connectors`, and `connector_studio`
   (`search_catalog`, `connect_mcp`, `create_custom_connector`) write governed
@@ -221,6 +231,37 @@ Neither addition weakens the invariant: the sandbox is still mandatory for every
 agent tool call's data-plane execution, and neither of these is an agent tool.
 What changes is that the enumeration is now actually complete, so "is this
 exception in the ADR?" is a question with a reliable answer.
+
+**Amended 2026-11-18 (how the host opens a conversation directory).** Apart
+from the three exceptions at the end of this paragraph, every host-side read,
+write, listing, mkdir, chmod, copy or removal inside a conversation's workspace
+— the classes above, and the control-plane code that serves and stages
+workspace files (the workspace file route, `@file` context handles, attachment
+staging, the multiplayer private-workspace swap, team files and branch copies,
+the chat transfer's skill purge and attachment move, the Sources listing, the
+admin storage report, user-skill materialization, the seeded supporting-doc
+links) — opens the conversation directory through
+`tools.OpenConversationDir` / `EnsureConversationDir`: the name is `Lstat`ed,
+opened, and proven to be the directory that was `Lstat`ed, and all further work
+goes through that open directory. A conversation directory that is a symbolic
+link is refused (the browser gets the same 404 as a missing file, a tool gets an
+error, the server logs it) and is never followed, chmodded or written through.
+The directories of scheduled runs below the workspace root (a worktree, which a
+whole-root sandbox can rename) are opened the same way, with no link followed at
+any level, and a persistent conversation sandbox's mount source is opened the
+same way and checked with a marker file placed through that descriptor, which
+must be found inside the started container. A process that can read the
+marker's name could recreate it in a directory it can already write, so the
+check does not single out the prepared directory; it does rule out podman
+mounting a directory nothing in the workspace could reach. Three things still
+work by path. The file tools' input validation (`ValidatePath` / `ValidatePathForRead`, `internal/tools/pathsec.go`)
+resolves the model's path with `EvalSymlinks` and `os.Stat` on the host before
+the operation runs in the sandbox: it opens no file and returns no content, and
+the operation itself is confined by the sandbox's file-op anchor, but the
+validation itself still goes by path. And two pathname
+consumers are other processes: host-side connectors handed the conversation
+directory as `${FLEET_WORKSPACE}` (checked to be a real directory when the turn
+or approval scope opens, not afterwards), and `git` operating on a worktree.
 
 ## Consequences
 

@@ -2,6 +2,8 @@ package tools
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -139,6 +141,13 @@ func TaskWorkspaceDir(root, lineageID string) string {
 // os.Open(join(dir, rel))s is provably confined even though the id arrives as a
 // request path segment. A non-local id (including "") falls back to the shared
 // root rather than escaping it.
+//
+// The result is a PATH: it names whatever is at that name now, and a sandbox
+// can replace the conversation directory with a symbolic link. Hand it to the
+// sandbox, a prompt or a message; host-side code that reads, lists, writes,
+// chmods, copies or removes inside a conversation's workspace opens it with
+// OpenConversationDir / EnsureConversationDir instead.
+// TestConversationPathCallersAreReviewed lists every caller with its reason.
 func WorkspaceDirForConversation(conversationID string) string {
 	root := fleetEnv("WORKSPACE_ROOT")
 	if root == "" {
@@ -152,9 +161,18 @@ func WorkspaceDirForConversation(conversationID string) string {
 
 // EnsureWorkspaceDir creates the per-conversation workspace directory
 // (and the supporting-docs symlinks inside it) if they don't already
-// exist. Best-effort: returns an error so callers can surface it, but
-// they should generally fall back to the shared root rather than
-// failing the tool call.
+// exist, and returns its path. Best-effort: returns an error so callers can
+// surface it, but they should generally fall back to the shared root rather
+// than failing the tool call — except for ErrWorkspaceDirLink, which means
+// the directory is a symbolic link and must not be used at all.
+//
+// The directory is created and opened through EnsureConversationDir, so a
+// conversation directory that is a symbolic link is refused rather than
+// followed, and neither the mode change nor the seeded links can land
+// anywhere else. The returned path is for the sandbox (its working
+// directory, the file-op root), prompts and messages: host-side code that
+// reads or writes the directory opens it with OpenConversationDir /
+// EnsureConversationDir instead of using this path.
 //
 // We also drop symlinks inside the scoped workspace pointing at the
 // agent's supporting docs (protocols, personas, system_prompts, skills).
@@ -162,30 +180,25 @@ func WorkspaceDirForConversation(conversationID string) string {
 // bare paths in the system prompt ("protocols/foo.yaml",
 // "skills/<name>/SKILL.md") would fail to resolve. Using absolute targets
 // means the symlinks keep working even if the scoped dir is moved around.
+//
+// 0o755 because the per-turn sandbox container runs as uid 1000
+// (sandbox), while chat-server creates this dir as the chat host
+// user. Under rootless podman, host-chat maps to container-root,
+// so a 0o750 dir owned by chat appears as root:root 0o750 inside
+// the container — and the sandbox user can neither chdir nor read
+// it, breaking every bash + run_python call in lockdown mode. The
+// data here is per-conversation already (isolation enforced at the
+// DB row layer); other-readable on the host costs nothing because
+// the workspace tree is single-user-owned. Older chat-server versions
+// created this dir with 0o750, so the mode is re-asserted on every call
+// (on the opened directory, never through a path).
 func EnsureWorkspaceDir(conversationID string) (string, error) {
-	dir := WorkspaceDirForConversation(conversationID)
-	// 0o755 because the per-turn sandbox container runs as uid 1000
-	// (sandbox), while chat-server creates this dir as the chat host
-	// user. Under rootless podman, host-chat maps to container-root,
-	// so a 0o750 dir owned by chat appears as root:root 0o750 inside
-	// the container — and the sandbox user can neither chdir nor read
-	// it, breaking every bash + run_python call in lockdown mode. The
-	// data here is per-conversation already (isolation enforced at the
-	// DB row layer); other-readable on the host costs nothing because
-	// the workspace tree is single-user-owned.
-	if err := os.MkdirAll(dir, 0o755); err != nil { //nolint:gosec // see comment above — readable to the lockdown container user
-		return dir, err
+	d, err := EnsureConversationDir(context.Background(), conversationID)
+	if err != nil {
+		return WorkspaceDirForConversation(conversationID), err
 	}
-	// Older chat-server versions created this dir with 0o750. MkdirAll
-	// is a no-op on existing dirs, so without an explicit Chmod
-	// in-flight conversations on upgraded boxes would stay at 0o750
-	// and keep failing in lockdown until rotated. Chmod is best-effort:
-	// if the operator deliberately tightened perms, the next turn just
-	// re-asserts our default — they can lock down via container
-	// userns instead, which is the right layer for that.
-	_ = os.Chmod(dir, 0o755) //nolint:gosec // see comment above
-	SeedSupportingDocSymlinks(dir)
-	return dir, nil
+	_ = d.Close()
+	return WorkspaceDirForConversation(conversationID), nil
 }
 
 // SeedSupportingDocSymlinks plants the supporting-doc symlinks inside dir so
@@ -204,6 +217,57 @@ func EnsureWorkspaceDir(conversationID string) (string, error) {
 // (`bundle_docs_in_image`, ADR-0049) and the skills tree staged INSIDE the
 // workspace claim every pod mounts (StagedSkillsDir, ADR-0055).
 func SeedSupportingDocSymlinks(dir string) {
+	// The links are created through a descriptor for dir, opened without
+	// following a symbolic link anywhere below the workspace root when dir is
+	// inside it (a scheduled job's directory, a worktree): a whole-root
+	// sandbox could have replaced one of those levels with a link, and the
+	// seeding must not plant (or remove) links wherever it points. A dir
+	// outside the workspace root (a `fleet task run --workspace` directory) is
+	// opened as given — no sandbox mounts its parent.
+	d, err := openSeedDir(dir)
+	if err != nil {
+		return // skip supporting-doc links; absolute paths still work
+	}
+	defer d.Close()
+	seedSupportingDocSymlinksIn(d.Root, d.Path())
+}
+
+// openSeedDir opens dir for SeedSupportingDocSymlinks.
+func openSeedDir(dir string) (*WorkspaceDir, error) {
+	return OpenRunDir(context.Background(), workspaceRootForContainment(), dir)
+}
+
+// OpenRunDir opens a run's working directory: without following a symbolic
+// link at any level below workspaceRoot when dir lies under it (a
+// conversation's directory, a scheduled job's, a worktree, or the root
+// itself), and as given when it does not (a `fleet task run --workspace`
+// directory, which no sandbox's writable mount contains). "Under it" is judged
+// against the root as configured and against the root with its own symlinks
+// resolved, so a dir spelled through either path gets the no-follow open.
+func OpenRunDir(ctx context.Context, workspaceRoot, dir string) (*WorkspaceDir, error) {
+	if strings.TrimSpace(workspaceRoot) != "" {
+		rootAbs, rerr := filepath.Abs(workspaceRoot)
+		dirAbs, derr := filepath.Abs(dir)
+		if rerr == nil && derr == nil {
+			bases := []string{rootAbs}
+			if resolved, err := filepath.EvalSymlinks(rootAbs); err == nil && resolved != rootAbs {
+				bases = append(bases, resolved)
+			}
+			for _, base := range bases {
+				if rel, err := filepath.Rel(base, dirAbs); err == nil && (rel == "." || filepath.IsLocal(rel)) {
+					return OpenWorkspaceDir(ctx, rootAbs, filepath.Join(rootAbs, rel))
+				}
+			}
+		}
+	}
+	return OpenHostDir(dir)
+}
+
+// seedSupportingDocSymlinksIn is SeedSupportingDocSymlinks on an opened
+// directory: every Lstat, Readlink, Remove and Symlink goes through dirRoot,
+// so none of them can act anywhere but in that directory. dirAbs is its
+// absolute host path, used only to recognise a self-referential link.
+func seedSupportingDocSymlinksIn(dirRoot *os.Root, dirAbs string) {
 	// Resolve absolute paths for each supporting-doc dir. We prefer
 	// the ones at /opt/chat root (which themselves are symlinks to
 	// server/* — see scripts/bootstrap.sh) because those are stable
@@ -219,27 +283,23 @@ func SeedSupportingDocSymlinks(dir string) {
 	// registered the library dir: it has no legacy $CWD fallback, because a
 	// stray ./shared dir in a dev checkout must not masquerade as the library.
 	for _, name := range []string{"protocols", "personas", "system_prompts", SkillsDirName, SharedFilesDirName} {
-		link := filepath.Join(dir, name)
 		// A non-worktree scheduled run seeds the shared workspace ROOT — where
 		// the staged shared-file library (and, on kubernetes, the staged skills
 		// tree) itself lives — so a configured target can BE the link path.
 		// Never plant (or repoint through) a self-referential symlink.
 		// Registered dirs are absolute (SetSupportingDocDirs absolutizes), so
 		// compare absolutes.
-		linkAbs := link
-		if a, aerr := filepath.Abs(link); aerr == nil {
-			linkAbs = a
-		}
+		linkAbs := filepath.Join(dirAbs, name)
 		// Don't replace an existing file — could be a real file the
 		// agent wrote. Only create the symlink if nothing is there.
-		if _, err := os.Lstat(link); err == nil {
+		if _, err := dirRoot.Lstat(name); err == nil {
 			// A stale link from before a boot-time dir change (e.g. the
 			// merged skills dir moved) is repointed; a real file is never
 			// touched.
 			if configured := configuredSupportingDocDir(name); configured != "" && configured != linkAbs {
-				if cur, lerr := os.Readlink(link); lerr == nil && cur != configured {
-					_ = os.Remove(link)
-					_ = os.Symlink(configured, link)
+				if cur, lerr := dirRoot.Readlink(name); lerr == nil && cur != configured {
+					_ = dirRoot.Remove(name)
+					_ = dirRoot.Symlink(configured, name)
 				}
 			}
 			continue
@@ -249,7 +309,7 @@ func SeedSupportingDocSymlinks(dir string) {
 		// the legacy cwd-relative convention.
 		if target := configuredSupportingDocDir(name); target != "" {
 			if target != linkAbs {
-				_ = os.Symlink(target, link)
+				_ = dirRoot.Symlink(target, name)
 			}
 			continue
 		}
@@ -265,7 +325,7 @@ func SeedSupportingDocSymlinks(dir string) {
 				continue
 			}
 		}
-		_ = os.Symlink(target, link)
+		_ = dirRoot.Symlink(target, name)
 	}
 }
 
@@ -387,6 +447,9 @@ func resolveWorkspacePath(ctx context.Context, path string) (string, error) {
 		}
 	}
 	dir, err := EnsureWorkspaceDir(convID)
+	if errors.Is(err, ErrWorkspaceDirLink) {
+		return "", fmt.Errorf("conversation workspace unavailable: %w", err)
+	}
 	if err != nil {
 		dir = WorkspaceDirForConversation(convID)
 	}

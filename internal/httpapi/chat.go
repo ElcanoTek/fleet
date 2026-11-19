@@ -608,7 +608,12 @@ func (s *Server) prepareRegisteredTurn(ctx context.Context, user string, conv *s
 		return false
 	}
 	if err := s.activateTurnPrivateWorkspace(conv, user); err != nil {
-		abort(http.StatusInternalServerError, fmt.Errorf("isolate conversation workspace: %w", err))
+		// The detail can name host paths: log it (a link refusal is already
+		// logged by the opener), answer with a fixed message.
+		if !errors.Is(err, tools.ErrWorkspaceDirLink) {
+			logging.From(ctx).Error("chat: isolate conversation workspace failed", "conv_id", safe.LogSafe(conv.ID), "err", safe.LogSafe(err.Error()))
+		}
+		abort(http.StatusInternalServerError, fmt.Errorf("isolate conversation workspace: %w", errWorkspaceUnavailable))
 		return false
 	}
 	return true

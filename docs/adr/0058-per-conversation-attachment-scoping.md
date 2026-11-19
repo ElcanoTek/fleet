@@ -185,3 +185,10 @@ an empty bubble standing in for content the copy is not allowed to carry.
   conversation: they are not in copied messages, and they name a directory the
   brancher was never told about. See
   [docs/ATTACHMENT-SCOPING.md](../ATTACHMENT-SCOPING.md) for the honest scope.
+  The same read-write mount lets a sandbox rename its own conversation
+  directory and leave a symbolic link in its place; host-side code opens
+  conversation directories without following one
+  ([ADR-0036](0036-sandboxed-file-tools-and-host-io-exceptions.md)'s
+  2026-11-18 amendment), apart from the three exceptions that amendment names:
+  the file tools' host-side path validation, and two other processes that are
+  handed the path.

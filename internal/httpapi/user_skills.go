@@ -3,8 +3,8 @@ package httpapi
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -144,11 +144,32 @@ func (s *Server) materializeUserSkills(ctx context.Context, user, conversationID
 	if err != nil {
 		return nil
 	}
-	wsDir, err := tools.EnsureWorkspaceDir(conversationID)
+	// Every write and removal goes through the conversation directory opened
+	// without following a symbolic link, and through os.Root below it. A
+	// conversation directory that is a link is refused, and a link at
+	// user-skills/ or a skill's directory that leads out of the workspace is
+	// refused too. A link that stays inside the workspace (user-skills ->
+	// out) is followed, so the skills land in, and stale entries are removed
+	// from, that directory of the sandbox's own: nothing the sandbox could
+	// not already write or delete itself.
+	ws, err := tools.EnsureConversationDir(ctx, conversationID)
 	if err != nil {
 		return nil
 	}
-	root := filepath.Join(wsDir, userSkillsRoot)
+	defer ws.Close()
+	for _, sk := range skills {
+		if sk.Status == store.UserSkillStatusActive {
+			if err := ws.MkdirAll(userSkillsRoot, 0o755); err != nil {
+				return nil
+			}
+			break
+		}
+	}
+	root, err := ws.OpenRoot(userSkillsRoot)
+	if err != nil {
+		return nil // no active skill and nothing materialized earlier
+	}
+	defer root.Close()
 	want := map[string]bool{}
 	var entries []agent.UserSkillPromptEntry
 	for _, sk := range skills {
@@ -156,14 +177,13 @@ func (s *Server) materializeUserSkills(ctx context.Context, user, conversationID
 			continue
 		}
 		want[sk.Name] = true
-		dir := filepath.Join(root, sk.Name)
-		if err := os.MkdirAll(dir, 0o755); err != nil { //nolint:gosec // workspace content, sandbox-readable by design (see tools/workspace.go)
+		if err := root.MkdirAll(sk.Name, 0o755); err != nil { // workspace content, sandbox-readable by design (see tools/workspace.go)
 			continue
 		}
 		md := store.RenderUserSkillMarkdown(&sk)
-		path := filepath.Join(dir, "SKILL.md")
-		if cur, rerr := os.ReadFile(path); rerr != nil || string(cur) != md { //nolint:gosec // G304/G703: path = workspace root + server-generated conv UUID + store-validated skill name — no request-authored path segment
-			if werr := os.WriteFile(path, []byte(md), 0o644); werr != nil { //nolint:gosec // G306/G703: non-secret instructions under the validated workspace path above
+		path := filepath.Join(sk.Name, "SKILL.md")
+		if cur, rerr := root.ReadFile(path); rerr != nil || string(cur) != md {
+			if werr := root.WriteFile(path, []byte(md), 0o644); werr != nil { // non-secret instructions, sandbox-readable
 				continue
 			}
 		}
@@ -173,20 +193,14 @@ func (s *Server) materializeUserSkills(ctx context.Context, user, conversationID
 			Path:        userSkillsRoot + "/" + sk.Name + "/SKILL.md",
 		})
 	}
-	// Remove stale materializations (renamed/disabled/deleted skills).
-	// os.Root confines each removal to root (d.Name comes from ReadDir of
-	// that root), so no entry can reach outside it. It also keeps the line off
-	// gosec's interprocedural G703 taint path, whose verdict here changed with
-	// unrelated edits elsewhere in the package and left a nolint directive
-	// alternately needed and unused.
-	if dirs, err := os.ReadDir(root); err == nil {
-		if rootDir, rerr := os.OpenRoot(root); rerr == nil {
-			for _, d := range dirs {
-				if !want[d.Name()] {
-					_ = rootDir.RemoveAll(d.Name())
-				}
+	// Remove stale materializations (renamed/disabled/deleted skills). The
+	// names come from listing the opened user-skills/ root itself, and each
+	// removal goes through it, so no entry can reach outside it.
+	if dirs, err := fs.ReadDir(root.FS(), "."); err == nil {
+		for _, d := range dirs {
+			if !want[d.Name()] {
+				_ = root.RemoveAll(d.Name())
 			}
-			_ = rootDir.Close()
 		}
 	}
 	return entries

@@ -235,7 +235,7 @@ func (s *Server) handleTeamFile(w http.ResponseWriter, r *http.Request, user, co
 		notFound()
 		return
 	}
-	f, info, err := openWorkspaceFileNoFollow(tools.WorkspaceDirForConversation(convID), relPath)
+	f, info, err := openWorkspaceFileNoFollow(r.Context(), tools.WorkspaceDirForConversation(convID), relPath)
 	if err != nil {
 		notFound()
 		return
@@ -296,8 +296,10 @@ const maxBranchCopyBytes int64 = 1 << 30
 // returns what was copied and what was withheld (unchecked by the owner, or
 // not copyable).
 //
-// The source is read with openWorkspaceFileNoFollow (no symlinks anywhere);
-// the destination is written through an os.Root on the fresh workspace with
+// The source is read with openWorkspaceFileNoFollow (no symlinks anywhere,
+// the source conversation's own directory included); the destination is
+// written through an os.Root on the fresh workspace, opened without following
+// a symbolic link, with
 // O_EXCL, 0o644 files and 0o755 directories (the sandbox uid must read them).
 // A destination path that would traverse one of the workspace's seeded
 // bundle symlinks is refused by the root and the file is withheld.
@@ -325,23 +327,20 @@ func copySharedOutputsIntoBranch(ctx context.Context, srcConvID, dstConvID strin
 	if len(shared) == 0 {
 		return copied, withheld
 	}
-	dstDir, err := tools.EnsureWorkspaceDir(dstConvID)
+	// The branch's directory is created and opened without following a
+	// symbolic link, and every write goes through that open root.
+	dstDir, err := tools.EnsureConversationDir(ctx, dstConvID)
 	if err != nil {
-		logging.From(ctx).Error("branch files: workspace failed", "dst_conv_id", safe.LogSafe(dstConvID), "err", safe.LogSafe(err.Error()))
+		if !errors.Is(err, tools.ErrWorkspaceDirLink) { // a link refusal is logged by the opener
+			logging.From(ctx).Error("branch files: workspace failed", "dst_conv_id", safe.LogSafe(dstConvID), "err", safe.LogSafe(err.Error()))
+		}
 		for _, o := range shared {
 			withheld = append(withheld, o.Path)
 		}
 		return copied, withheld
 	}
-	dst, err := os.OpenRoot(dstDir)
-	if err != nil {
-		logging.From(ctx).Error("branch files: open workspace failed", "dst_conv_id", safe.LogSafe(dstConvID), "err", safe.LogSafe(err.Error()))
-		for _, o := range shared {
-			withheld = append(withheld, o.Path)
-		}
-		return copied, withheld
-	}
-	defer dst.Close()
+	defer dstDir.Close()
+	dst := dstDir.Root
 	srcDir := tools.WorkspaceDirForConversation(srcConvID)
 	var budget = maxBranchCopyBytes
 	closed := false
@@ -475,7 +474,7 @@ func copyOneOutput(ctx context.Context, srcDir string, dst *os.Root, rel string,
 // descriptors closed when ctx ends), and every failure removes the partial
 // destination.
 func copyOneOutputSync(ctx context.Context, srcDir string, dst *os.Root, rel string, budget int64) (int64, error) {
-	in, info, err := openWorkspaceFileNoFollow(srcDir, rel)
+	in, info, err := openWorkspaceFileNoFollow(ctx, srcDir, rel)
 	if err != nil {
 		return 0, err
 	}
