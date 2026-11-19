@@ -196,7 +196,7 @@ mirroring the `priorityCapError` shared-helper discipline:
 | chat `schedule_task` (approval seam) | `taskSchedulerProvider` in `cmd/fleet`, before `EnqueueTaskAs` | user = the approving chat user's email (`TaskScheduleRequest.RequestedBy`) |
 | `POST /tasks/{id}/rerun` and `/clone` (added after part 2) | `createTaskGovernedFrom`, the same helper | user or key |
 | A2A `POST /a2a` (added after part 2) | `createTaskGoverned`, the same helper | user or key |
-| `POST /tasks/import` (added after part 2) | same helper, once per import, skipped on `dry_run` | user or key |
+| `POST /tasks/import` (added after part 2) | same helper, once per import, only when the import creates at least one task: skipped on `dry_run` and on an import that only replaces or skips | user or key |
 
 - **Hard bound reached** → the create is refused with **402 Payment Required**
   plus `Retry-After` at the window rollover (the chat path surfaces the same

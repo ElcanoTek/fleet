@@ -2257,6 +2257,8 @@ paths:
   /tasks/import:
     post:
       summary: "Import task definitions from a previously exported envelope; creates tasks in a single batch with per-task conflict handling (#238)."
+      description: |
+        Every record the import creates or replaces runs the same checks as POST /tasks: validation, the admin-only rules for run_if and for a max_cost_usd / max_total_tokens above the deployment ceiling, the key's priority ceiling and the connector check. The two admin-only rules are checked for those records before any write, dry runs included: one offending record refuses the whole import with 403 naming it. The budget is checked once when the import creates at least one task (402). A record conflict=skip leaves alone is neither checked nor charged. Same auth + rate limiter as POST /tasks; the scoped API key's hourly cap is charged at least one token: one per record the import creates or replaces (one by the auth check, the rest by the handler), so a dry run or an import that only skips costs one.
       security:
         - adminApiKey: []
         - scopedApiKey: []
@@ -2340,9 +2342,19 @@ paths:
                           type: string
         "207":
           description: Multi-status — one or more records errored but others succeeded.
+        "402":
+          description: The principal's rolling budget is at a hard bound; Retry-After names the window rollover. Checked only when the import creates at least one task, never on a dry run.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "400":
+          $ref: "#/components/responses/Error"
         "409":
           $ref: "#/components/responses/Error"
         "403":
+          $ref: "#/components/responses/Error"
+        "429":
           $ref: "#/components/responses/Error"
   /tasks/model:
     post:

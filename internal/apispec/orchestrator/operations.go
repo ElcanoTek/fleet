@@ -309,6 +309,18 @@ var Operations = map[string]apispec.Operation{
 	"POST /tasks/import": {
 		Summary: "Import task definitions from a previously exported envelope; creates " +
 			"tasks in a single batch with per-task conflict handling (#238).",
+		Description: "Every record the import creates or replaces runs the same checks as " +
+			"POST /tasks: validation, the admin-only rules for run_if and for a " +
+			"max_cost_usd / max_total_tokens above the deployment ceiling, the " +
+			"key's priority ceiling and the connector check. The two admin-only " +
+			"rules are checked for those records before any write, dry runs " +
+			"included: one offending record refuses the whole import with 403 " +
+			"naming it. The budget is checked once when the import creates at least " +
+			"one task (402). A record conflict=skip leaves alone is neither checked " +
+			"nor charged. Same auth + rate limiter as POST /tasks; the scoped API " +
+			"key's hourly cap is charged at least one token: one per record the " +
+			"import creates or replaces (one by the auth check, the rest by the " +
+			"handler), so a dry run or an import that only skips costs one.\n",
 		Security:   adminScopedOrSession,
 		Permission: "create_task",
 		Parameters: []apispec.Parameter{
@@ -347,8 +359,11 @@ var Operations = map[string]apispec.Operation{
 				))),
 			))),
 			apispec.OK("207", "Multi-status — one or more records errored but others succeeded."),
+			apispec.OK("402", "The principal's rolling budget is at a hard bound; Retry-After names the window rollover. Checked only when the import creates at least one task, never on a dry run.", apispec.JSON(apispec.Ref("ErrorResponse"))),
+			apispec.RefResponse("400", "Error"),
 			apispec.RefResponse("409", "Error"),
 			apispec.RefResponse("403", "Error"),
+			apispec.RefResponse("429", "Error"),
 		},
 	},
 	"GET /tasks/{task_id}": {

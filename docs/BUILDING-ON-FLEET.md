@@ -78,6 +78,19 @@ Useful create-time fields (see `TaskCreate` in openapi.yaml for all of them):
 Batch up to 100 at once with `POST /tasks/batch` (`atomic: true` for
 all-or-nothing), estimate cost first with `POST /tasks/estimate`, and version
 your job definitions in git via `fleet task export` / `import` (JSON or YAML).
+`POST /tasks/batch` runs the same checks as `POST /tasks` on every task, and
+`POST /tasks/import` on every task it creates or replaces: validation, the
+admin-only rules for `run_if` and for a `max_cost_usd` / `max_total_tokens`
+above the deployment ceiling, your key's priority ceiling, the connector
+check, and your key's hourly request limit. Your budget applies when they
+create tasks; an import that only replaces or skips is not budget-checked (a
+replace edits an existing task, as `PUT /tasks/{id}` does). A batch of N tasks
+counts as N requests. An import counts at least one request: one per record
+it creates or replaces, and records `conflict=skip` leaves alone add nothing.
+An import dry run (`?dry_run=true`) writes nothing and counts as one request;
+it checks each record's structure, duplicate and existing names, and the two
+admin-only rules, but not validation, the budget, the priority ceiling or the
+connector check.
 
 ## 3. Watch it run, consume the result
 
