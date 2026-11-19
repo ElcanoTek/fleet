@@ -74,9 +74,12 @@ presented in its replies — except the ones the owner unchecked.**
    `GetTeamVisibleConversation` gate (the owner's opt-in, the caller's team is
    the audience the owner named, not archived or deleted); (b) `<path>` is,
    by exact string match, a CURRENT output; (c) it is not excluded. The bytes
-   are then read component by component with each directory proven to be the
-   real directory that was `Lstat`ed and the leaf opened `O_NOFOLLOW` and
-   proven to be the file that was `Lstat`ed — so the owner's sandbox, which can
+   are then read component by component — starting with the conversation
+   directory itself — with each directory proven to be the
+   real directory that was `Lstat`ed and the leaf opened non-blocking and
+   proven to be the file that was `Lstat`ed (`os.Root` follows an
+   in-workspace link even when asked not to; the identity check is what
+   refuses one) — so the owner's sandbox, which can
    write this tree, cannot swap a shared name for a link to an upload or an
    unchecked output between check and read. `os.Root` alone would have
    followed a symlink that stays inside the workspace. Every refusal is a 404.

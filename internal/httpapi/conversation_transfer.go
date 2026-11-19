@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -82,7 +83,7 @@ func (s *Server) handleConversationTransfer(w http.ResponseWriter, r *http.Reque
 	// first, and a failure stops the transfer. Nothing is lost if the
 	// transfer is then refused, because skills are written into the workspace
 	// again at the start of each of their turns (materializeUserSkills).
-	if err := s.purgeOwnerSkills(convID); err != nil {
+	if err := s.purgeOwnerSkills(ctx, convID); err != nil {
 		logging.From(ctx).Error("conversations: transfer could not clear user skills", "conv_id", safe.LogSafe(convID), "err", safe.LogSafe(err.Error()))
 		http.Error(w, "transfer failed", http.StatusInternalServerError)
 		return
@@ -249,16 +250,25 @@ func (s *Server) currentOwnershipEpoch(convID string) uint64 {
 
 // purgeOwnerSkills removes the owner's personal skills from both places a
 // conversation keeps them: the workspace, and the stash a participant's turn
-// moves the owner's copy to.
-func (s *Server) purgeOwnerSkills(convID string) error {
+// moves the owner's copy to. The workspace is opened without following a
+// symbolic link (the sandbox can replace the conversation directory with one):
+// a conversation directory that is a link is refused, which stops the
+// transfer, and nothing is removed wherever it points. A conversation that
+// never wrote a file has no directory and nothing to remove there.
+func (s *Server) purgeOwnerSkills(ctx context.Context, convID string) error {
 	defer s.workspaceSwapLocks.lock(convID)()
-	dirs := []string{filepath.Join(tools.WorkspaceDirForConversation(convID), userSkillsRoot)}
-	if stash, err := s.privateWorkspaceStashDir(convID); err == nil {
-		dirs = append(dirs, filepath.Join(stash, "owner", userSkillsRoot))
-	}
 	var firstErr error
-	for _, dir := range dirs {
-		if err := os.RemoveAll(dir); err != nil && firstErr == nil { //nolint:gosec // G703: workspace or stash root + the id of a conversation the store found + constant directory names — no request-authored path segment
+	ws, err := tools.OpenConversationDir(ctx, convID)
+	switch {
+	case err == nil:
+		firstErr = ws.RemoveAll(userSkillsRoot)
+		_ = ws.Close()
+	case errors.Is(err, fs.ErrNotExist):
+	default:
+		firstErr = err
+	}
+	if stash, err := s.privateWorkspaceStashDir(convID); err == nil {
+		if err := os.RemoveAll(filepath.Join(stash, "owner", userSkillsRoot)); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
@@ -272,54 +282,108 @@ func (s *Server) purgeOwnerSkills(convID string) error {
 // the stash rather than overwritten. The stash and the workspace can be on
 // different volumes (the Helm chart puts them on separate claims), so an
 // entry that cannot be renamed across is copied and then removed
-// (moveAcrossVolumes). Best-effort: a failure is logged.
+// (moveAcrossVolumes).
+//
+// The conversation directory is opened without following a symbolic link,
+// and every move goes through the opened directories. A symbolic link at
+// attachments/ holds no attachment data and is replaced with a real directory
+// before anything moves, as a turn's private-directory swap does. If the
+// conversation directory itself is a symbolic link, nothing moves: the files
+// stay in the participant stash, which nothing reads for an owner, so the new
+// owner does not see them; they are removed with the stash when the chat is
+// deleted. Best-effort: a failure is logged (the refusal of a linked
+// conversation directory by the opener, every other failure here).
 func (s *Server) promoteParticipantAttachments(ctx context.Context, convID, newOwner string) {
 	defer s.workspaceSwapLocks.lock(convID)()
 	stash, err := s.privateWorkspaceStashDir(convID)
 	if err != nil {
 		return
 	}
-	src := filepath.Join(stash, "participants", participantDigest(newOwner), uploadsDir)
-	entries, err := os.ReadDir(src)
-	if err != nil {
+	src, err := openStashDirIfPresent(filepath.Join(stash, "participants", participantDigest(newOwner), uploadsDir))
+	if err != nil || src == nil {
 		return // nothing stashed for them
 	}
-	dst := filepath.Join(tools.WorkspaceDirForConversation(convID), uploadsDir)
-	if err := os.MkdirAll(dst, 0o755); err != nil { //nolint:gosec // G301/G703: the conversation's own workspace attachments directory, same mode as the rest of the workspace
-		logging.From(ctx).Warn("conversations: transfer could not move the new owner's attachments", "conv_id", safe.LogSafe(convID), "err", safe.LogSafe(err.Error()))
+	defer src.Close()
+	listing, err := src.Open(".")
+	if err != nil {
 		return
 	}
+	entries, err := listing.ReadDir(-1)
+	_ = listing.Close()
+	if err != nil {
+		return
+	}
+	warn := func(msg string, err error) {
+		logging.From(ctx).Warn(msg, "conv_id", safe.LogSafe(convID), "err", safe.LogSafe(err.Error()))
+	}
+	ws, err := tools.EnsureConversationDir(ctx, convID)
+	if err != nil {
+		if !errors.Is(err, tools.ErrWorkspaceDirLink) { // a linked conversation directory is logged by the opener
+			warn("conversations: transfer could not move the new owner's attachments", err)
+		}
+		return
+	}
+	defer ws.Close()
+	dst, err := openRealSubdir(ws.Root, uploadsDir)
+	if err != nil {
+		warn("conversations: transfer could not move the new owner's attachments", err)
+		return
+	}
+	defer dst.Close()
 	for _, e := range entries {
-		to := filepath.Join(dst, e.Name())
-		if _, err := os.Lstat(to); err == nil { //nolint:gosec // G703: the conversation's workspace attachments directory + a directory entry name read from the server's own stash
+		if _, err := dst.Lstat(e.Name()); err == nil {
 			continue
 		}
-		if err := moveAcrossVolumes(filepath.Join(src, e.Name()), to); err != nil {
-			logging.From(ctx).Warn("conversations: transfer could not move an attachment of the new owner", "conv_id", safe.LogSafe(convID), "err", safe.LogSafe(err.Error()))
+		if err := moveAcrossVolumes(src, e.Name(), dst, e.Name()); err != nil {
+			warn("conversations: transfer could not move an attachment of the new owner", err)
 		}
 	}
 }
 
-// moveAcrossVolumes moves the file or directory src to dst, which must not
-// exist. A rename is tried first; when it fails (EXDEV, when the two are on
-// different filesystems) src is copied beside dst, renamed into place there,
-// and only then removed, so dst never holds a partial copy.
-func moveAcrossVolumes(src, dst string) error {
-	if err := os.Rename(src, dst); err == nil { //nolint:gosec // G703: both paths are server-derived (stash and workspace roots, conversation id, directory entries of the stash)
+// openRealSubdir opens the directory name inside parent, creating it (0o755,
+// the mode of the rest of the workspace) if it is missing and replacing a
+// symbolic link found there — a link holds no data — with a real directory.
+// The directory is opened without following a link, so if one is put back in
+// between, the open is refused rather than followed.
+func openRealSubdir(parent *os.Root, name string) (*os.Root, error) {
+	if info, err := parent.Lstat(name); err == nil && info.Mode()&fs.ModeSymlink != 0 {
+		if err := parent.Remove(name); err != nil {
+			return nil, err
+		}
+	}
+	if err := parent.Mkdir(name, 0o755); err != nil && !errors.Is(err, fs.ErrExist) {
+		return nil, err
+	}
+	return tools.OpenSubdirNoFollow(parent, name)
+}
+
+// moveAcrossVolumes moves the file or directory srcName inside src to dstName
+// inside dst, which must not exist; both are directories the caller opened,
+// and both names are single path components. A rename is tried first; when it
+// fails (EXDEV, when the two are on different filesystems) the entry is copied
+// beside dstName (copyEntryBetween, no link followed), renamed into place
+// there, and only then removed from src, so dstName never holds a partial
+// copy.
+func moveAcrossVolumes(src *os.Root, srcName string, dst *os.Root, dstName string) error {
+	if err := moveRename(src, srcName, dst, dstName); err == nil {
 		return nil
 	}
-	tmp := dst + ".transfer-tmp"
-	_ = os.RemoveAll(tmp) //nolint:gosec // G703: server-derived staging path
-	if err := copyDirRecursive(src, tmp); err != nil {
-		_ = os.RemoveAll(tmp) //nolint:gosec // G703: server-derived staging path
+	tmp := dstName + ".transfer-tmp"
+	_ = dst.RemoveAll(tmp)
+	if err := copyEntryBetween(src, srcName, dst, tmp); err != nil {
+		_ = dst.RemoveAll(tmp)
 		return err
 	}
-	if err := os.Rename(tmp, dst); err != nil { //nolint:gosec // G703: same directory, server-derived
-		_ = os.RemoveAll(tmp) //nolint:gosec // G703: server-derived staging path
+	if err := dst.Rename(tmp, dstName); err != nil {
+		_ = dst.RemoveAll(tmp)
 		return err
 	}
-	return os.RemoveAll(src) //nolint:gosec // G703: server-derived source in the stash
+	return src.RemoveAll(srcName)
 }
+
+// moveRename is the rename moveAcrossVolumes tries first (renameBetween); a
+// test replaces it to run the copy that follows a rename across filesystems.
+var moveRename = renameBetween
 
 // recoverWorkspaceForTransfer finishes a participant workspace swap that a
 // crashed process left behind (recoverInterruptedParticipantWorkspace), under
@@ -330,5 +394,5 @@ func (s *Server) recoverWorkspaceForTransfer(convID string) error {
 	if err != nil {
 		return err
 	}
-	return recoverInterruptedParticipantWorkspace(tools.WorkspaceDirForConversation(convID), stash)
+	return recoverInterruptedParticipantWorkspace(convID, stash)
 }

@@ -233,7 +233,7 @@ conversation inside it. `bash`/`run_python` in conversation B can therefore
 still read `<WorkspaceRoot>/<conversation A>/…` — including A's staged
 attachments — and can enumerate the conversation directories with `ls`.
 
-Three things to keep straight about that:
+Four things to keep straight about that:
 
 - It is **pre-existing and general**: it applies to every file an agent
   generates, not to attachments. `EnsureWorkspaceDir` has always said the
@@ -243,6 +243,15 @@ Three things to keep straight about that:
 - What ADR-0058 changes is that those paths are no longer *handed* to another
   conversation. They are not in copied messages, exports, or shared
   transcripts, and they name a directory the other party was never told about.
+- The same mount lets a sandbox rename a conversation directory and leave a
+  symbolic link in its place. Host-side code opens the conversation directory
+  without following a link for every read, write, listing or staging step,
+  with three exceptions that ADR-0036's 2026-11-18 amendment names: the file
+  tools' input validation, which resolves the model's path on the host and
+  reads nothing, and two other processes that are handed the path —
+  host-side connectors and `git`. A conversation whose directory is a link is
+  refused — its files answer 404, its turns fail to prepare their workspace —
+  until an operator removes the link.
 
 Closing it properly means per-conversation mounts, which means per-conversation
 containers — the warm pool builds one container config at boot and hands warm

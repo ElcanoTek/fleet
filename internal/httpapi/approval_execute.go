@@ -344,6 +344,15 @@ func (s *Server) approvalMCPScope(ctx context.Context, approval *store.Approval)
 		return overlay.CallBroker(), overlay.Catalog, overlay.Close, nil
 	}
 	workspace := tools.WorkspaceDirForConversation(approval.ConversationID)
+	// The path goes to host-side connectors as ${FLEET_WORKSPACE}, which they
+	// use by pathname. Hand it over only while it is a real directory, the
+	// same check every turn makes before its own scope (EnsureWorkspaceDir):
+	// a conversation directory that is a symbolic link fails the approval.
+	if dir, derr := tools.OpenConversationDir(ctx, approval.ConversationID); derr == nil {
+		_ = dir.Close()
+	} else if errors.Is(derr, tools.ErrWorkspaceDirLink) {
+		return nil, nil, nil, fmt.Errorf("open approval MCP scope for %s: %w", approvalSeatLabel(approval), derr)
+	}
 	// The approving user: ClaimApproval matches the row's user_email against
 	// the authenticated caller, so approval.UserEmail IS the person who just
 	// clicked approve — and the one whose turn staged the card (ADR-0087).
@@ -608,7 +617,12 @@ func (s *Server) takeApprovalSandbox(ctx context.Context, approval *store.Approv
 			return nil, func() {}, fmt.Errorf("resolve conversation for approval workspace: conversation %s not found", approval.ConversationID)
 		}
 		if err := s.activateTurnPrivateWorkspace(conv, approval.UserEmail); err != nil {
-			return nil, func() {}, fmt.Errorf("isolate participant workspace for approval: %w", err)
+			// The detail can name host paths: log it (a link refusal is
+			// already logged by the opener), return a fixed message.
+			if !errors.Is(err, tools.ErrWorkspaceDirLink) {
+				logging.From(ctx).Error("approval: isolate participant workspace failed", "conv_id", safe.LogSafe(conv.ID), "err", safe.LogSafe(err.Error()))
+			}
+			return nil, func() {}, fmt.Errorf("isolate participant workspace for approval: %w", errWorkspaceUnavailable)
 		}
 		s.materializeUserSkills(ctx, approval.UserEmail, approval.ConversationID)
 		isolatedConv = conv

@@ -37,11 +37,9 @@ import (
 	"net/url"
 	"os"
 	"path"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
-	"syscall"
 
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
@@ -447,99 +445,51 @@ func isPrivateWorkspacePath(rel string) bool {
 // it, or swapped out from under the check.
 var errNotAWorkspaceFile = errors.New("not a regular workspace file")
 
-// openWorkspaceFileNoFollow opens rel inside wsDir for reading, refusing a
-// symlink at ANY component — not just a symlink that escapes the workspace.
+// openWorkspaceFileNoFollow opens rel inside the conversation workspace wsDir
+// for reading, refusing a symbolic link at ANY component — the workspace
+// directory's own name included — not just a symbolic link that leads out of
+// the workspace.
 //
 // os.Root alone confines resolution to the workspace, but it follows symlinks
 // that stay inside it. For a file served to SOMEONE OTHER than the owner that
 // is not enough: the owner's sandbox can write into this tree, so a shared
 // `out/report.csv` swapped for a symlink to `attachments/<upload>` (or to an
 // unchecked output) would hand a teammate exactly the bytes the owner held
-// back, without escaping anything. So each directory is Lstat'ed (must be a
-// real directory), opened, and proven to be the SAME directory that was
-// Lstat'ed; the leaf is Lstat'ed (must be a regular file), opened with
-// O_NOFOLLOW, and proven to be that same file. A swap between check and open
-// fails the identity check rather than redirecting the read.
-func openWorkspaceFileNoFollow(wsDir, rel string) (*os.File, fs.FileInfo, error) {
+// back, without leaving the workspace at all. And the sandbox can rename the
+// conversation directory itself and leave a link in its place. So the
+// directory is opened with tools.OpenDirNoFollow and the file with
+// tools.OpenNoFollow: every directory is Lstat'ed, opened and proven to be
+// the one Lstat'ed, and the leaf is opened non-blocking and proven to be the
+// regular file that was Lstat'ed. A swap between check and open fails the
+// identity check rather than redirecting the read. ctx carries the request's
+// correlation into the log line of a refused directory.
+func openWorkspaceFileNoFollow(ctx context.Context, wsDir, rel string) (*os.File, fs.FileInfo, error) {
 	if !store.ValidOutputPath(rel) {
 		return nil, nil, errNotAWorkspaceFile
 	}
-	root, err := os.OpenRoot(wsDir)
+	dir, err := tools.OpenDirNoFollow(ctx, wsDir)
 	if err != nil {
 		return nil, nil, err
 	}
-	roots := []*os.Root{root}
-	defer func() {
-		for _, r := range roots {
-			_ = r.Close()
-		}
-	}()
-	segs := strings.Split(rel, "/")
-	cur := root
-	for _, dir := range segs[:len(segs)-1] {
-		want, err := cur.Lstat(dir)
-		if err != nil {
-			return nil, nil, err
-		}
-		if !want.IsDir() { // a symlink's Lstat mode is ModeSymlink, never a dir
-			return nil, nil, errNotAWorkspaceFile
-		}
-		next, err := cur.OpenRoot(dir)
-		if err != nil {
-			return nil, nil, err
-		}
-		roots = append(roots, next)
-		got, err := next.Stat(".")
-		if err != nil {
-			return nil, nil, err
-		}
-		if !os.SameFile(want, got) {
-			return nil, nil, errNotAWorkspaceFile
-		}
-		cur = next
-	}
-	leaf := segs[len(segs)-1]
-	want, err := cur.Lstat(leaf)
-	if err != nil {
-		return nil, nil, err
-	}
-	if !want.Mode().IsRegular() {
-		return nil, nil, errNotAWorkspaceFile
-	}
-	if workspaceOpenAfterLstat != nil {
-		workspaceOpenAfterLstat(filepath.Join(wsDir, filepath.FromSlash(rel)))
-	}
-	// O_NONBLOCK: the leaf was a regular file when Lstat'ed, but the owner's
-	// sandbox can swap it for a FIFO before the open, and a blocking open of
-	// a FIFO with no writer never returns — a request (or a branch copy)
-	// hung for good. Non-blocking, the open returns at once and the SameFile
-	// + IsRegular check below refuses it. For a regular file O_NONBLOCK is a
-	// no-op on Linux: reads behave exactly as before.
-	f, err := cur.OpenFile(leaf, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
-	if err != nil {
-		return nil, nil, err
-	}
-	got, err := f.Stat()
-	if err != nil || !got.Mode().IsRegular() || !os.SameFile(want, got) {
-		_ = f.Close()
-		return nil, nil, errNotAWorkspaceFile
-	}
-	return f, got, nil
+	defer dir.Close()
+	return openOutputIn(dir.Root, rel)
 }
 
-// workspaceOpenAfterLstat is a test seam run between the leaf's Lstat and
-// its open in openWorkspaceFileNoFollow; nil in production.
-var workspaceOpenAfterLstat func(fullPath string)
-
-// statWorkspaceFileNoFollow is openWorkspaceFileNoFollow for a listing: the
-// same no-symlink rule, the descriptor closed straight away.
-func statWorkspaceFileNoFollow(wsDir, rel string) (fs.FileInfo, bool) {
-	f, info, err := openWorkspaceFileNoFollow(wsDir, rel)
-	if err != nil {
-		return nil, false
+// openOutputIn is openWorkspaceFileNoFollow inside a conversation directory the
+// caller already opened (tools.OpenConversationDir), for a caller that reads
+// many paths from one directory.
+func openOutputIn(ws *os.Root, rel string) (*os.File, fs.FileInfo, error) {
+	if !store.ValidOutputPath(rel) {
+		return nil, nil, errNotAWorkspaceFile
 	}
-	_ = f.Close()
-	return info, true
+	f, info, err := tools.OpenNoFollow(ws, rel)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, nil, err
+		}
+		return nil, nil, errNotAWorkspaceFile
+	}
+	return f, info, nil
 }
 
 // conversationOutputsCtx is conversationOutputsUntil made abandonable: the stats run on their own goroutine and the caller returns
@@ -616,7 +566,17 @@ func conversationOutputsUntil(ctx context.Context, convID string, history []agen
 	if len(presented) == 0 {
 		return out, truncated
 	}
-	wsDir := tools.WorkspaceDirForConversation(convID)
+	// One open of the conversation directory (no symbolic link followed) for
+	// the whole listing; each path is then opened under it with no link
+	// followed at any component, and closed straight away.
+	ws, err := tools.OpenConversationDir(ctx, convID)
+	if err != nil {
+		// A conversation that never wrote a file has no directory, and one
+		// whose directory is a symbolic link is refused (the opener logs
+		// that, once per listing at most): either way, no outputs.
+		return out, truncated
+	}
+	defer ws.Close()
 	for _, rel := range presented {
 		if ctx.Err() != nil {
 			return out, truncated
@@ -624,10 +584,11 @@ func conversationOutputsUntil(ctx context.Context, convID string, history []agen
 		if outputStatHook != nil {
 			outputStatHook(rel)
 		}
-		info, ok := statWorkspaceFileNoFollow(wsDir, rel)
-		if !ok {
+		f, info, oerr := openOutputIn(ws.Root, rel)
+		if oerr != nil {
 			continue
 		}
+		_ = f.Close()
 		out = append(out, outputFile{
 			Path:       rel,
 			Name:       path.Base(rel),

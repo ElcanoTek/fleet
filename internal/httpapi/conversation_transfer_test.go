@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -291,15 +294,31 @@ func TestMoveAcrossVolumes(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// copyDirRecursive is the cross-volume half: a plain file and a tree.
-	if err := copyDirRecursive(filepath.Join(src, "a.csv"), filepath.Join(dst, "copied.csv")); err != nil {
+	srcRoot, err := os.OpenRoot(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srcRoot.Close()
+	dstRoot, err := os.OpenRoot(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dstRoot.Close()
+	// copyEntryBetween is the cross-volume half: a plain file and a tree.
+	if err := copyEntryBetween(srcRoot, "a.csv", dstRoot, "copied.csv"); err != nil {
 		t.Fatalf("copy a file: %v", err)
 	}
 	if got, _ := os.ReadFile(filepath.Join(dst, "copied.csv")); string(got) != "a" {
 		t.Errorf("copied file = %q, want a", got)
 	}
+	if err := copyEntryBetween(srcRoot, "dir", dstRoot, "copied-dir"); err != nil {
+		t.Fatalf("copy a tree: %v", err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dst, "copied-dir", "sub", "b.txt")); string(got) != "b" {
+		t.Errorf("copied tree file = %q, want b", got)
+	}
 	for _, name := range []string{"a.csv", "dir"} {
-		if err := moveAcrossVolumes(filepath.Join(src, name), filepath.Join(dst, name)); err != nil {
+		if err := moveAcrossVolumes(srcRoot, name, dstRoot, name); err != nil {
 			t.Fatalf("move %s: %v", name, err)
 		}
 		if _, err := os.Lstat(filepath.Join(src, name)); !os.IsNotExist(err) {
@@ -308,5 +327,150 @@ func TestMoveAcrossVolumes(t *testing.T) {
 	}
 	if got, _ := os.ReadFile(filepath.Join(dst, "dir", "sub", "b.txt")); string(got) != "b" {
 		t.Errorf("moved tree file = %q, want b", got)
+	}
+}
+
+// TestMoveAcrossVolumesCopyFallback runs the copy moveAcrossVolumes falls back
+// to when the rename fails (across filesystems): a file and a tree arrive
+// with the workspace's modes, a stale <name>.transfer-tmp is replaced, a
+// symbolic link is refused and stays in the source, and no .transfer-tmp is
+// left behind.
+func TestMoveAcrossVolumesCopyFallback(t *testing.T) {
+	moveRename = func(*os.Root, string, *os.Root, string) error { return syscall.EXDEV }
+	t.Cleanup(func() { moveRename = renameBetween })
+	src, dst := t.TempDir(), t.TempDir()
+	if err := os.MkdirAll(filepath.Join(src, "dir", "sub"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{"a.csv": "a", filepath.Join("dir", "sub", "b.txt"): "b"} {
+		if err := os.WriteFile(filepath.Join(src, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink("a.csv", filepath.Join(src, "link")); err != nil {
+		t.Fatal(err)
+	}
+	// Leftovers of an earlier, interrupted copy.
+	if err := os.MkdirAll(filepath.Join(dst, "dir.transfer-tmp"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dst, "dir.transfer-tmp", "junk"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dst, "a.csv.transfer-tmp"), []byte("junk"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	srcRoot, err := os.OpenRoot(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srcRoot.Close()
+	dstRoot, err := os.OpenRoot(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dstRoot.Close()
+
+	for _, name := range []string{"a.csv", "dir"} {
+		if err := moveAcrossVolumes(srcRoot, name, dstRoot, name); err != nil {
+			t.Fatalf("move %s: %v", name, err)
+		}
+		if _, err := os.Lstat(filepath.Join(src, name)); !os.IsNotExist(err) {
+			t.Errorf("%s is still in the source after the move", name)
+		}
+	}
+	for rel, want := range map[string]struct {
+		mode fs.FileMode
+		body string
+	}{
+		"a.csv":                              {0o644, "a"},
+		"dir":                                {fs.ModeDir | 0o755, ""},
+		filepath.Join("dir", "sub"):          {fs.ModeDir | 0o755, ""},
+		filepath.Join("dir", "sub", "b.txt"): {0o644, "b"},
+	} {
+		info, err := os.Lstat(filepath.Join(dst, rel))
+		if err != nil {
+			t.Fatalf("%s: %v", rel, err)
+		}
+		if info.Mode() != want.mode {
+			t.Errorf("%s mode = %v, want %v", rel, info.Mode(), want.mode)
+		}
+		if want.body != "" {
+			if b, _ := os.ReadFile(filepath.Join(dst, rel)); string(b) != want.body {
+				t.Errorf("%s = %q, want %q", rel, b, want.body)
+			}
+		}
+	}
+	if _, err := os.Lstat(filepath.Join(dst, "dir", "junk")); !os.IsNotExist(err) {
+		t.Error("the stale copy's content ended up in the moved tree")
+	}
+	if err := moveAcrossVolumes(srcRoot, "link", dstRoot, "link"); err == nil {
+		t.Error("a symbolic link was moved")
+	}
+	if _, err := os.Lstat(filepath.Join(src, "link")); err != nil {
+		t.Errorf("the refused link left the source: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(dst, "link")); !os.IsNotExist(err) {
+		t.Errorf("the refused link arrived anyway: %v", err)
+	}
+	entries, err := os.ReadDir(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".transfer-tmp") {
+			t.Errorf("left behind: %s", e.Name())
+		}
+	}
+}
+
+// The copy's new names are created exclusively: a symbolic link already at
+// the destination name — a file's or a directory's — is refused, never
+// written through.
+func TestCopyEntryBetweenRefusesAnExistingDestination(t *testing.T) {
+	t.Parallel()
+	src, dst := t.TempDir(), t.TempDir()
+	if err := os.MkdirAll(filepath.Join(src, "dir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "dir", "f.txt"), []byte("f"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "a.csv"), []byte("a"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dst, "elsewhere"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dst, "kept.csv"), []byte("kept"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("elsewhere", filepath.Join(dst, "dir.tmp")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("kept.csv", filepath.Join(dst, "a.tmp")); err != nil {
+		t.Fatal(err)
+	}
+	srcRoot, err := os.OpenRoot(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srcRoot.Close()
+	dstRoot, err := os.OpenRoot(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dstRoot.Close()
+	if err := copyEntryBetween(srcRoot, "dir", dstRoot, "dir.tmp"); err == nil {
+		t.Error("a tree was copied onto a symbolic link")
+	}
+	if err := copyEntryBetween(srcRoot, "a.csv", dstRoot, "a.tmp"); err == nil {
+		t.Error("a file was copied onto a symbolic link")
+	}
+	if _, err := os.Stat(filepath.Join(dst, "elsewhere", "f.txt")); !os.IsNotExist(err) {
+		t.Errorf("the tree was written through the link: %v", err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dst, "kept.csv")); string(b) != "kept" {
+		t.Errorf("the file was written through the link: %q", b)
 	}
 }

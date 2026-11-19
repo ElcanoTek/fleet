@@ -36,7 +36,7 @@ func TestExpandContextHandles_FileTraversalBlocked(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	// A path escaping the workspace must be rejected by SafeWorkspaceJoin.
+	// A path leaving the workspace must be rejected by WorkspaceDir.Resolve.
 	blocks, notices := expandContextHandles(context.Background(), `@file:"../../etc/passwd"`, dir)
 	if len(blocks) != 0 {
 		t.Errorf("traversal must not produce a block: %v", blocks)

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"mime/multipart"
 	"net/http"
 	"os"
@@ -467,20 +468,22 @@ func stageAttachmentsIntoWorkspace(ctx context.Context, uploadsRoot, convID stri
 		return atts
 	}
 	root = filepath.Clean(root)
-	convDir, err := tools.EnsureWorkspaceDir(convID)
+	// The sandbox can rename its workspace, or any child of it, and leave a
+	// symlink in its place. The conversation directory is opened without
+	// following a link and every host write goes through that open root, so
+	// no swap — of the directory itself or of anything inside it, including
+	// during the copy — can redirect staging into another conversation or
+	// host files.
+	ws, err := tools.EnsureConversationDir(ctx, convID)
 	if err != nil {
-		logging.From(ctx).Warn("attachment staging: workspace dir failed (attachments keep uploads paths)", "conv_id", safe.LogSafe(convID), "err", err)
+		if !errors.Is(err, tools.ErrWorkspaceDirLink) { // a link refusal is logged by the opener
+			logging.From(ctx).Warn("attachment staging: workspace dir failed (attachments keep uploads paths)", "conv_id", safe.LogSafe(convID), "err", err)
+		}
 		return atts
 	}
-	// The sandbox can replace any child of its workspace with a symlink.
-	// Anchor host writes to an open root so directory swaps cannot redirect
-	// staging into another conversation or host files (including during copy).
-	workspace, err := os.OpenRoot(convDir)
-	if err != nil {
-		logging.From(ctx).Warn("attachment staging: open workspace failed (attachments keep uploads paths)", "err", err)
-		return atts
-	}
-	defer workspace.Close()
+	defer ws.Close()
+	workspace := ws.Root
+	convDir := tools.WorkspaceDirForConversation(convID)
 	dir := "attachments"
 	// 0o755 like every workspace dir: the sandbox uid (1000) must read it.
 	if err := workspace.MkdirAll(dir, 0o755); err != nil {
@@ -644,10 +647,20 @@ func appendWorkspaceInventoryBlock(message, workspaceDir string) string {
 	if workspaceDir == "" {
 		return message
 	}
-	entries, err := os.ReadDir(workspaceDir)
+	// Listed through the directory opened without following a symbolic link
+	// at its own name: the sandbox can replace the conversation directory
+	// with one, and the names of whatever it points at must not reach the
+	// model.
+	dir, err := tools.OpenDirNoFollow(context.Background(), workspaceDir)
 	if err != nil {
 		// First turn of a brand-new conversation: the dir doesn't exist
-		// yet. Stay silent — there's nothing to surface.
+		// yet. Stay silent — there's nothing to surface. (A directory that
+		// is a symbolic link is refused and logged by the opener.)
+		return message
+	}
+	defer dir.Close()
+	entries, err := fs.ReadDir(dir.FS(), ".")
+	if err != nil {
 		return message
 	}
 

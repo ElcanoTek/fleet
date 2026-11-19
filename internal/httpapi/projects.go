@@ -685,14 +685,18 @@ func hiddenWorkspaceName(name string) bool {
 var workspaceWalkHook func()
 
 func walkWorkspaceFiles(ctx context.Context, convID string, limit int) (files []sourcesFile, truncated bool) {
-	root, err := filepath.EvalSymlinks(tools.WorkspaceDirForConversation(convID))
+	// Walked through the conversation directory opened without following a
+	// symbolic link: the sandbox can replace it with one, and the names and
+	// sizes of whatever it points at must not be listed to project members.
+	ws, err := tools.OpenConversationDir(ctx, convID)
 	if err != nil {
 		// Most conversations never touched a file — no workspace dir.
 		return []sourcesFile{}, false
 	}
+	defer ws.Close()
 	h := make(newestFiles, 0, limit)
 	visited := 0
-	_ = filepath.WalkDir(root, func(p string, d fs.DirEntry, walkErr error) error {
+	_ = fs.WalkDir(ws.FS(), ".", func(p string, d fs.DirEntry, walkErr error) error {
 		visited++
 		if workspaceWalkHook != nil {
 			workspaceWalkHook()
@@ -709,11 +713,7 @@ func walkWorkspaceFiles(ctx context.Context, convID string, limit int) (files []
 		if walkErr != nil {
 			return nil //nolint:nilerr // best-effort listing
 		}
-		rel, err := filepath.Rel(root, p)
-		if err != nil {
-			return nil //nolint:nilerr // best-effort listing
-		}
-		rel = filepath.ToSlash(rel)
+		rel := p // fs.WalkDir paths are slash-separated and relative to the workspace
 		if d.IsDir() {
 			// attachments/ and user-skills/ (privateWorkspaceDirs) are the
 			// owner's uploads and private skills fleet put there, not work
