@@ -5997,5 +5997,8 @@
   "High credit usage": "Consumo de créditos alto",
   "Very high credit usage": "Consumo de créditos muito alto",
   "Free — no per-token charge": "Gratuito — sem custo por token",
-  "credits": "créditos"
+  "credits": "créditos",
+  "Your pinned chats are full. Unpin one to pin “{0}”.": "Os seus chats fixados estão cheios. Desafixe um para fixar «{0}».",
+  "Couldn’t pin “{0}”. Try again.": "Não foi possível fixar «{0}». Tente novamente.",
+  "Couldn’t unpin “{0}”. Try again.": "Não foi possível desafixar «{0}». Tente novamente."
 }

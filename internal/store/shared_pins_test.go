@@ -422,3 +422,25 @@ func TestSharedPin_ClearedWhenTheChatIsTransferred(t *testing.T) {
 		t.Errorf("pins left on a transferred chat = %d", n)
 	}
 }
+
+// A pin on a chat that has stopped being shared with the person is in no
+// list they could unpin it from, so it does not count toward the cap.
+func TestSharedPin_CapIgnoresPinsNoLongerShared(t *testing.T) {
+	t.Parallel()
+
+	f := newTeamFixture(t)
+	gone := f.sharedChat(t, "alice@x.com", f.project.ID, "Was shared")
+	still := f.sharedChat(t, "alice@x.com", f.project.ID, "Still shared")
+	if err := f.s.setSharedPin(f.ctx, "bob@x.com", gone.ID, true, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.setSharedPin(f.ctx, "bob@x.com", still.ID, true, 1); !errors.Is(err, ErrTooManySharedPins) {
+		t.Fatalf("pin at the cap = %v, want ErrTooManySharedPins", err)
+	}
+	if _, err := f.s.SetConversationTeamVisible(f.ctx, "alice@x.com", gone.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.setSharedPin(f.ctx, "bob@x.com", still.ID, true, 1); err != nil {
+		t.Errorf("pin once the other chat stopped being shared = %v, want nil", err)
+	}
+}

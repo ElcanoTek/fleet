@@ -177,12 +177,19 @@ test("a teammate's chat is pinned from its menu, joins Pinned, and unpins back i
   await expect(page.getByTestId("unified-chat-list").getByText("Acme renewal", { exact: true })).toHaveCount(1);
 });
 
-test("a pin the server refuses is put back", async ({ page }) => {
+test("a pin the server refuses is put back, and the person is told why", async ({ page }) => {
   const { pins } = await boot(page, { pinFails: true });
   await pinFromMenu(page, "Acme renewal");
   await expect.poll(() => pins.length).toBe(1);
+  await expect(page.getByText("Couldn’t pin “Acme renewal”. Try again.")).toBeVisible();
   await expect(page.getByTestId("pinned-section").getByTestId("team-shared-conv-row")).toHaveCount(0);
   await expect(page.getByTestId("unified-chat-list").getByText("Acme renewal", { exact: true })).toHaveCount(1);
+
+  // The Pinned group is full (409): the message says what to do about it.
+  await page.route("**/api/conversations/t4/pin", (r: Route) => r.fulfill({ status: 409, body: "too many pinned chats" }));
+  await pinFromMenu(page, "Incident room");
+  await expect(page.getByText("Your pinned chats are full. Unpin one to pin “Incident room”.")).toBeVisible();
+  await expect(page.getByTestId("pinned-section").getByTestId("team-shared-conv-row")).toHaveCount(0);
 });
 
 test("a list read that started before a pin was saved does not undo the pin", async ({ page }) => {

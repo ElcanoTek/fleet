@@ -66,9 +66,17 @@ func (s *Store) setSharedPin(ctx context.Context, userEmail, convID string, pinn
 		}
 		return nil
 	}
-	ok, err := s.sharedWith(ctx, userEmail, convID)
+	// The chats shared with the caller: what may be pinned, and (below) which
+	// of their existing pins still count.
+	shared, err := s.ListSharedAndMultiplayerConversations(ctx, userEmail)
 	if err != nil {
 		return err
+	}
+	open := make([]string, 0, len(shared))
+	ok := false
+	for i := range shared {
+		open = append(open, shared[i].ID)
+		ok = ok || shared[i].ID == convID
 	}
 	if !ok {
 		return ErrConversationNotFound
@@ -86,15 +94,19 @@ func (s *Store) setSharedPin(ctx context.Context, userEmail, convID string, pinn
 	); err != nil {
 		return fmt.Errorf("pin shared chat: %w", err)
 	}
+	// Only pins on chats the person can still open count: one on a chat that
+	// has stopped being shared with them is in no list they could unpin it
+	// from, and must not use up room they cannot get back.
 	var already bool
 	var count int
 	if err := tx.QueryRowContext(ctx,
 		`SELECT EXISTS (SELECT 1 FROM chat.shared_conversation_pins
 		                 WHERE user_email = $1 AND conversation_id = $2),
-		        (SELECT count(*) FROM chat.shared_conversation_pins WHERE user_email = $1)
+		        (SELECT count(*) FROM chat.shared_conversation_pins
+		          WHERE user_email = $1 AND conversation_id = ANY($3))
 		      + (SELECT count(*) FROM conversations
 		          WHERE user_email = $1 AND pinned AND deleted_at IS NULL AND archived_at IS NULL)`,
-		userEmail, convID,
+		userEmail, convID, open,
 	).Scan(&already, &count); err != nil {
 		return fmt.Errorf("pin shared chat: %w", err)
 	}

@@ -3720,6 +3720,7 @@ export function ChatExperience({
           .sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) || b.updated_at - a.updated_at),
       );
       let ok = false;
+      let full = false;
       try {
         const response = await fetch(pinUrl, {
           method: "POST",
@@ -3727,12 +3728,25 @@ export function ChatExperience({
           body: JSON.stringify({ pinned: nextPinned }),
         });
         ok = response.ok;
+        // 409: the Pinned group already holds as many chats as one order can.
+        full = response.status === 409;
       } catch {
         ok = false;
       }
       teamSharedGenRef.current++;
-      // The optimistic row is a lie until the list is read again.
-      if (!ok) await loadTeamSharedChatCounts();
+      if (!ok) {
+        // Say so: the row is about to go back where it was, and a click
+        // that seems to do nothing teaches nobody to unpin something first.
+        notify({
+          message: full
+            ? tr("Your pinned chats are full. Unpin one to pin “{0}”.", [conversation.title])
+            : nextPinned
+              ? tr("Couldn’t pin “{0}”. Try again.", [conversation.title])
+              : tr("Couldn’t unpin “{0}”. Try again.", [conversation.title]),
+        });
+        // The optimistic row is a lie until the list is read again.
+        await loadTeamSharedChatCounts();
+      }
       return ok;
     }
     // Optimistic update
