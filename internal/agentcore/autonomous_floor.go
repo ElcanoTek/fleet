@@ -164,13 +164,25 @@ func isFastIOStorageTool(normTool string) bool {
 		(strings.HasPrefix(normTool, "mcp_fast_io_") && strings.HasSuffix(normTool, "_storage"))
 }
 
+// isAllowedFastIOStorageAction reports whether a Fast.io `storage` call names
+// exactly one action from the list that may run in Autonomous mode without a
+// card: the tool's read actions, plus create-folder. Every other action stays
+// gated, and so does one this list does not know: the tool is multiplexed, so
+// an unrecognized action may be a write.
+//
+// The reads are the ones the hosted tool declares. The second row was added
+// after an Autonomous chat kept raising cards for plain reads such as
+// `content` and `version-list`. `preview-url` and `preview-transform` are left
+// out: both produce a link to the content, not the content itself.
 func isAllowedFastIOStorageAction(rawInput string) bool {
 	actions, duplicateOrInvalid := extractTopLevelStringFieldSpellings(rawInput, "action")
 	if duplicateOrInvalid || len(actions) != 1 {
 		return false
 	}
 	switch strings.ToLower(strings.TrimSpace(actions[0])) {
-	case "list", "details", "read-content", "search", "create-folder", "stat", "get":
+	case "list", "details", "read-content", "search", "create-folder", "stat", "get",
+		"describe", "recent", "content", "version-list", "trash-list", "lock-status",
+		"metadata-facts", "metadata-get", "metadata-versions":
 		return true
 	default:
 		return false

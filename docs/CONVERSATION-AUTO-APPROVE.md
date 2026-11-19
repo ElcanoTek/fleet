@@ -83,6 +83,13 @@ high-consequence gates.
        (which keep `auto` mode gating).
      - Multiplexed destructive storage/sharing (`mcp_fast_io_share` and
        `mcp_fast_io_storage` `delete`/`purge`/`trash`/`remove`) and `git push`.
+       `mcp_fast_io_storage` is gated by default and opened by action: only
+       its read actions and `create-folder` run without a card (`list`,
+       `details`, `read-content`, `search`, `stat`, `get`, `describe`,
+       `recent`, `content`, `version-list`, `trash-list`, `lock-status`,
+       `metadata-facts`, `metadata-get`, `metadata-versions`). Any other
+       action, an unknown one included, keeps its card; so do `preview-url`
+       and `preview-transform`, which hand out a link to the content.
    - Explicit session-level deny policies (`SessionApprovalRegistry` `mode:
      "deny"`) are evaluated before `auto_approve` and always take precedence.
 

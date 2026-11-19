@@ -221,7 +221,13 @@ func testAutonomousFloorPrivilegeAndStorage(t *testing.T) {
 	if !IsAutonomousHardBlocked("mcp_fast_io_team_share", `{}`) {
 		t.Error("named-account mcp_fast_io_team_share must be hard-blocked")
 	}
-	for _, act := range []string{"delete", "purge", "trash", "remove", "move", "copy", "upload"} {
+	for _, act := range []string{
+		"delete", "purge", "trash", "remove", "move", "copy", "upload",
+		// Read-sounding but not reads of the content: each hands out a link.
+		"preview-url", "preview-transform",
+		// Not an action the tool has: unknown stays gated.
+		"list-workspaces", "metadata-set", "version-restore", "lock",
+	} {
 		if !IsAutonomousHardBlocked("mcp_fast_io_storage", `{"action":"`+act+`"}`) {
 			t.Errorf("mcp_fast_io_storage action=%s must be hard-blocked", act)
 		}
@@ -232,7 +238,12 @@ func testAutonomousFloorPrivilegeAndStorage(t *testing.T) {
 	if !IsAutonomousHardBlocked("mcp_fast_io_storage", `{"action":"list","action":"delete"}`) {
 		t.Error("mcp_fast_io_storage duplicate action key must be hard-blocked")
 	}
-	for _, act := range []string{"list", "details", "read-content", "search", "create-folder", "stat", "get"} {
+	for _, act := range []string{
+		"list", "details", "read-content", "search", "create-folder", "stat", "get",
+		"describe", "recent", "content", "version-list", "trash-list", "lock-status",
+		"metadata-facts", "metadata-get", "metadata-versions",
+		" Version-List ", // spelling is normalized, as before
+	} {
 		if IsAutonomousHardBlocked("mcp_fast_io_storage", `{"action":"`+act+`"}`) {
 			t.Errorf("mcp_fast_io_storage safe action=%s must NOT be hard-blocked", act)
 		}
