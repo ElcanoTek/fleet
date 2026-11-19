@@ -310,7 +310,8 @@ readable pending card follows the designer's layout. See
 ## No card for a call the server is certain to reject
 
 A gated MCP call is checked against the tool's own input schema before a card
-is staged (`prevalidateStagedMCPArguments`). The check is narrow on purpose: a
+is staged, and before a notify-mode call is recorded
+(`prevalidateStagedMCPArguments`, from `Stage` and `RecordAction`). The check is narrow on purpose: a
 top-level string argument whose value is outside the closed set the schema
 declares for it (`enum`, `const`, or a union of those, including a root
 `oneOf`/`anyOf` discriminated by that argument). That is the `action` of a

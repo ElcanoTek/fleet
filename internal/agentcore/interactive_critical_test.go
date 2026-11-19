@@ -262,6 +262,19 @@ func TestCriticalToolGateReportsAStageRefusalAsARefusal(t *testing.T) {
 	}
 }
 
+// And for an outbound email tool, which the email gate owns.
+func TestEmailGateReportsAStageRefusalAsARefusal(t *testing.T) {
+	o := newOrchestrationState(nil)
+	o.approvalSink = &stagerFake{err: &StageRefusedError{Reason: `"loud" is not a valid priority. Nothing was staged for approval and nothing ran`}}
+	blocked, msg := o.checkEmailSafety("mcp_sendgrid_send_email", "call-1", `{"to":"a@b.com","priority":"loud"}`)
+	if !blocked || !strings.HasPrefix(msg, "ARGUMENTS_REFUSED: ") {
+		t.Fatalf("blocked=%v msg=%q, want an ARGUMENTS_REFUSED refusal", blocked, msg)
+	}
+	if strings.Contains(msg, "APPROVAL_REQUIRED") || strings.Contains(msg, "Ask the user") {
+		t.Fatalf("a refused input was reported as awaiting approval: %q", msg)
+	}
+}
+
 // manage_tasks action="show" only reads, so it runs without a card — the model
 // has to be able to see a stored prompt before it edits one. Every write action
 // still stages, through the full interactive policy, not just the one gate.

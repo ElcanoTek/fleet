@@ -26,6 +26,17 @@ import (
 // maxListedAllowedValues bounds how many allowed values a refusal names.
 const maxListedAllowedValues = 40
 
+// prevalidateMCPArguments is prevalidateStagedMCPArguments against the turn's
+// MCP catalog. Both ways a gated call leaves the gate go through it: Stage (a
+// card, or a pre-approval) and RecordAction (a notify-mode record).
+func (a *approvalStager) prevalidateMCPArguments(toolName, rawInput string) error {
+	_, catalog, _ := a.mcpScope()
+	if len(catalog) == 0 {
+		return nil
+	}
+	return prevalidateStagedMCPArguments(catalog, toolName, rawInput)
+}
+
 // prevalidateStagedMCPArguments refuses a cataloged MCP tool call that gives a
 // top-level string argument a value outside the closed set its input schema
 // declares. A tool that is not in the catalog, arguments that do not parse,

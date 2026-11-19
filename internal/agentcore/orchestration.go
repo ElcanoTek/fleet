@@ -903,6 +903,9 @@ func (o *orchestrationState) checkEmailSafety(toolName, toolCallID, rawInput str
 	}
 	if o.approvalSink != nil {
 		id, err := o.approvalSink.Stage(toolName, toolCallID, rawInput)
+		if refused := stageRefusal(err); refused != "" {
+			return true, refused
+		}
 		if err != nil {
 			o.log().Error("approval stage failed", "err", err)
 			return true, fmt.Sprintf("APPROVAL_REQUIRED: could not stage send for user approval (%v). Ask the user what to do.", err)

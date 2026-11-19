@@ -67,6 +67,20 @@ func TestStageRefusesAnMCPArgumentOutsideItsSchemaEnum(t *testing.T) {
 	}
 }
 
+// A notify-mode tool is recorded, never staged, so the record path refuses
+// the same call: it must not be written down as an action that ran.
+func TestRecordActionRefusesAnMCPArgumentOutsideItsSchemaEnum(t *testing.T) {
+	t.Parallel()
+
+	// No store: reaching the record would panic.
+	a := &approvalStager{mcpCatalog: argCheckCatalog()}
+	err := a.RecordAction("mcp_fast_io_storage", "call-1", `{"action":"list-workspaces"}`, "")
+	var refused *agentcore.StageRefusedError
+	if !errors.As(err, &refused) || !strings.Contains(err.Error(), `"list-workspaces" is not a valid action`) {
+		t.Fatalf("RecordAction did not refuse the call: %v", err)
+	}
+}
+
 func TestPrevalidateStagedMCPArguments(t *testing.T) {
 	t.Parallel()
 

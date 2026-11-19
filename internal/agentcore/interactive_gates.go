@@ -294,7 +294,11 @@ func (o *orchestrationState) checkCriticalToolApproval(toolName, toolCallID, raw
 	// complete (never for hard-blocked or autonomous-blocked tools).
 	if approvalPolicy, undoHint := ApprovalModeForTool(toolName); approvalPolicy == ApprovalModeNotify && !hardBlocked && !AutonomousBlocked(toolName) {
 		if recorder, ok := o.approvalSink.(ActionRecorder); ok {
-			if err := recorder.RecordAction(toolName, toolCallID, rawInput, undoHint); err != nil {
+			err := recorder.RecordAction(toolName, toolCallID, rawInput, undoHint)
+			if refused := stageRefusal(err); refused != "" {
+				return true, refused
+			}
+			if err != nil {
 				o.log().Warn("notify-mode record failed — falling back to a blocking approval", "tool", toolName, "err", err)
 			} else {
 				// A tool in critical_tool_result_cards: its record waits for the
