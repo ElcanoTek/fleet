@@ -2019,8 +2019,9 @@ func runMaintenancePass(ctx context.Context, cfg *config.Config, h *handlers.Han
 	}
 
 	// Orchestrator temp_uploads — the sched plane's own upload staging area,
-	// which the chat plane's sweeps do not cover.
-	h.CleanupTempFiles(ttl)
+	// which the chat plane's sweeps do not cover. Scratch, on its own clock
+	// (FLEET_SCRATCH_RETENTION_DAYS) rather than the conversation window.
+	h.CleanupTempFiles(cfg.ScratchRetention())
 
 	// Abandoned per-user remote-MCP OAuth flow rows. Correctness is already
 	// guaranteed by their single-use + expiry checks; this only reclaims the

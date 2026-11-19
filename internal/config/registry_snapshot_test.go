@@ -15,13 +15,17 @@ package config
 
 var preRegistryAllowedEnvVars = map[string]bool{
 	// ── chat transport / data ──
-	"CONVERSATION_TTL_DAYS":            true,
-	"CONVERSATION_UNPINNED_CAP":        true,
-	"FLEET_AUTO_ARCHIVE_AFTER_DAYS":    true,
-	"FLEET_INPUT_QUEUE_RETENTION_DAYS": true,
-	"FLEET_TURN_EVENT_RETENTION_DAYS":  true,
-	"FLEET_UPLOAD_MAX_BYTES":           true,
-	"FLEET_SHARED_FILES_MAX_TOTAL_MB":  true,
+	"CONVERSATION_TTL_DAYS":     true,
+	"CONVERSATION_UNPINNED_CAP": true,
+	// Deliberate additions (docs/CHAT-RETENTION.md): the expiry warning
+	// window, and the scratch-file clock split off the conversation TTL.
+	"FLEET_CONVERSATION_EXPIRY_WARNING_DAYS": true,
+	"FLEET_SCRATCH_RETENTION_DAYS":           true,
+	"FLEET_AUTO_ARCHIVE_AFTER_DAYS":          true,
+	"FLEET_INPUT_QUEUE_RETENTION_DAYS":       true,
+	"FLEET_TURN_EVENT_RETENTION_DAYS":        true,
+	"FLEET_UPLOAD_MAX_BYTES":                 true,
+	"FLEET_SHARED_FILES_MAX_TOTAL_MB":        true,
 
 	// ── fleet transport / data (canonical) ──
 	"FLEET_SERVER_ADDR": true,
@@ -437,6 +441,8 @@ var preRegistryEnvKnobs = []envKnob{
 	// ── data (interactive) ──
 	{key: "CONVERSATION_TTL_DAYS", kind: kindInt},
 	{key: "CONVERSATION_UNPINNED_CAP", kind: kindInt},
+	{key: "FLEET_CONVERSATION_EXPIRY_WARNING_DAYS", kind: kindInt, min: bound(0)},
+	{key: "FLEET_SCRATCH_RETENTION_DAYS", kind: kindInt, min: bound(1)},
 	{key: "FLEET_INPUT_QUEUE_RETENTION_DAYS", kind: kindInt, min: bound(0)},
 	{key: "FLEET_TURN_EVENT_RETENTION_DAYS", kind: kindInt},
 	{key: "FLEET_UPLOAD_MAX_BYTES", kind: kindInt64},

@@ -707,9 +707,9 @@ test("One list for all chats is the default: teammates' chats are in the Chats l
   await expect(list).toContainText("Incident room");
   // The person's own chat is temporary and says so; a teammate's is not theirs to lose.
   await expect(list.getByTestId("temporary-mark")).toHaveCount(1);
-  await expect(list.getByTestId("temporary-mark")).toHaveAttribute("title", /14 days/);
+  await expect(list.getByTestId("temporary-mark")).toHaveAttribute("title", /90 days/);
   // The mark does not rename the row; a screen reader gets it as the row's description.
-  await expect(list.getByRole("button", { name: "My own notes", exact: true })).toHaveAccessibleDescription(/14 days/);
+  await expect(list.getByRole("button", { name: "My own notes", exact: true })).toHaveAccessibleDescription(/90 days/);
 
   await page.getByTestId("account-menu-button").click();
   await page.getByTestId("customize-sidebar").click();

@@ -55,6 +55,7 @@ import type {
 import type { Project } from "./ProjectsModal";
 import { previewNodes, type SearchResult } from "./SearchBar";
 import { isTemporaryChat } from "./deleteAllUnpinnedScope";
+import { expiresInDays, nearCap, retentionPolicy, useNowSeconds, type RetentionPolicy } from "./chatRetention";
 import { ShareGlyph, TeamGlyph } from "./ShareGlyphs";
 import { teamLinkUrl } from "./teamSharing";
 import { copyText } from "@/app/shared/lib/clipboard";
@@ -187,20 +188,31 @@ function SealedNewChatButton({ onClick }: { onClick: () => void }) {
 // hover and keyboard focus, on the shared .conv-tooltip surface (portaled to
 // <body> like the sealed tooltip above, and for the same reason). On touch —
 // no hover — the focus a tap gives the button is what shows it. The copy
-// states this deployment's retention period (CONVERSATION_TTL_DAYS, read from
-// the server config; the default, 14, when an older server does not say) and
-// the two keep actions — pinning and filing into a project both exempt a chat
-// from the sweep.
-const DEFAULT_TTL_DAYS = 14;
-const recentInfoText = (days: number) =>
-  tr("Chats here are deleted after {0} days of inactivity. Pin a chat or move it into a project to keep it.", [days]);
+// states this deployment's retention period and how long before the end a
+// chat is flagged (both from the server config), and the keep actions:
+// pinning, filing into a project and archiving all exempt a chat from the
+// sweep (docs/CHAT-RETENTION.md).
+const KEEP_A_CHAT = () => tr("Pin a chat, move it into a project or archive it to keep it.");
+const recentInfoText = (policy: RetentionPolicy) =>
+  [
+    policy.warningDays > 0
+      ? tr("Chats here are temporary: each is deleted after {0} days without activity, and shows the days it has left as that approaches.", [policy.ttlDays])
+      : tr("Chats here are temporary: each is deleted after {0} days without activity.", [policy.ttlDays]),
+    KEEP_A_CHAT(),
+  ].join(" ");
 
 // The one-list view (docs/SIDEBAR.md) mixes the person's temporary chats with
 // teammates' chats, so "chats here are deleted" would be wrong for half the
 // rows: there the hourglass on a row is what marks a temporary chat, and the
 // explainer says what the hourglass means.
-const unifiedInfoText = (days: number) =>
-  tr("Chats marked with an hourglass are temporary: they are deleted after {0} days of inactivity. Pin a chat or move it into a project to keep it. A teammate's chat is theirs to keep.", [days]);
+const unifiedInfoText = (policy: RetentionPolicy) =>
+  [
+    policy.warningDays > 0
+      ? tr("Chats marked with an hourglass are temporary: each is deleted after {0} days without activity, and shows the days it has left as that approaches.", [policy.ttlDays])
+      : tr("Chats marked with an hourglass are temporary: each is deleted after {0} days without activity.", [policy.ttlDays]),
+    KEEP_A_CHAT(),
+    tr("A teammate's chat is theirs to keep."),
+  ].join(" ");
 // A patrol chat's mark: the icon a patrol has when it is pinned to the rail
 // (layout.defaultIcon), so a patrol looks the same wherever it is listed.
 const PATROL_ICON = defaultIcon({ id: "", kind: "chat" }, true);
@@ -221,7 +233,65 @@ function PatrolMark() {
   );
 }
 const temporaryRowText = (days: number) =>
-  tr("Temporary — deleted after {0} days of inactivity. Pin it or move it into a project to keep it.", [days]);
+  tr("Temporary — deleted after {0} days without activity. Pin it, move it into a project or archive it to keep it.", [days]);
+// The same row once it is inside the warning window: how long it has left,
+// and that using it is enough to keep it.
+const expiringRowText = (daysLeft: number) =>
+  daysLeft <= 1
+    ? tr("Temporary — will be deleted within a day. Send a message in it, pin it, move it into a project or archive it to keep it.")
+    : tr("Temporary — will be deleted in {0} days. Send a message in it, pin it, move it into a project or archive it to keep it.", [daysLeft]);
+const expiryDescId = (conversationId: string) => `rail-row-desc-expiring-${conversationId}`;
+
+// ── Temporary-chat notices ───────────────────────────────────────────────────
+// Under the Recent / Temporary heading, only when there is something to say:
+// how many of the person's chats are about to be deleted (a button that takes
+// them to the first one), and that they are close to the most temporary chats
+// one person keeps. Silent otherwise — a standing notice is one people stop
+// reading (docs/CHAT-RETENTION.md).
+function RetentionNotices({
+  expiringCount,
+  temporaryCount,
+  cap,
+  onShowFirst,
+}: {
+  expiringCount: number;
+  temporaryCount: number;
+  cap?: number;
+  onShowFirst: () => void;
+}) {
+  const capNear = nearCap(temporaryCount, cap);
+  if (expiringCount === 0 && !capNear) return null;
+  return (
+    <div className="mx-2 mb-1 grid gap-1 text-[0.75rem] leading-snug">
+      {expiringCount > 0 ? (
+        <button
+          type="button"
+          data-testid="expiring-chats-notice"
+          className="flex w-full items-start gap-1.5 rounded-md border border-[var(--color-warning-border)] px-2 py-1.5 text-left text-[var(--color-warning-text)] transition hover:bg-[var(--rail-hover)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+          title={tr("Show the first of them")}
+          onClick={onShowFirst}
+        >
+          <Icon name="hourglass" className="mt-[0.15rem] size-3 shrink-0" />
+          <span className="min-w-0">
+            {expiringCount === 1
+              ? tr("1 chat will be deleted soon.")
+              : tr("{0} chats will be deleted soon.", [expiringCount])}{" "}
+            {tr("Pin, file or archive a chat to keep it.")}
+          </span>
+        </button>
+      ) : null}
+      {capNear && cap ? (
+        <p
+          data-testid="temporary-cap-notice"
+          role="status"
+          className="rounded-md border border-[var(--color-border)] px-2 py-1.5 text-[var(--color-text-secondary)]"
+        >
+          {tr("You have {0} temporary chats. Past {1}, the least recently active are deleted first.", [temporaryCount, cap])}
+        </p>
+      ) : null}
+    </div>
+  );
+}
 
 // The list's sort, as a small button that opens a menu of the three choices.
 // It was a native <select>, which every touch screen forces to 16px text (so
@@ -1160,8 +1230,13 @@ function ConvRow({
   context,
   patrol,
   temporary,
+  expiresIn,
 }: {
   conversation: ConversationSummary;
+  // The chat is temporary AND inside the warning window: whole days until the
+  // sweep deletes it. The hourglass turns to the warning colour and carries
+  // the number, in every list. `temporary` is then the sentence that says so.
+  expiresIn?: number;
   // The one-list view only: this chat is temporary (the retention sweep
   // would delete it), marked with an hourglass whose tooltip is this text:
   // that it is temporary, after how long it goes, and how to keep it.
@@ -1221,6 +1296,13 @@ function ConvRow({
         focused ? "ring-1 ring-inset ring-[var(--color-accent)]" : "",
       ].join(" ")}
     >
+      {/* The expiry sentence differs per row (days left), so each expiring
+          row carries its own hidden copy for aria-describedby. */}
+      {temporary && expiresIn !== undefined ? (
+        <span id={expiryDescId(conversation.id)} hidden>
+          {temporary}
+        </span>
+      ) : null}
       {editing ? (
         <input
           // Uncontrolled: remounts each time editing starts (it only renders
@@ -1248,7 +1330,12 @@ function ConvRow({
           type="button"
           aria-pressed={selecting ? checked : undefined}
           aria-describedby={
-            [temporary ? TEMPORARY_DESC_ID : "", patrol ? PATROL_DESC_ID : ""].filter(Boolean).join(" ") || undefined
+            [
+              temporary ? (expiresIn === undefined ? TEMPORARY_DESC_ID : expiryDescId(conversation.id)) : "",
+              patrol ? PATROL_DESC_ID : "",
+            ]
+              .filter(Boolean)
+              .join(" ") || undefined
           }
           data-rail-row=""
           className={[
@@ -1287,7 +1374,17 @@ function ConvRow({
                 className="inline-block size-1.5 shrink-0 animate-pulse rounded-full bg-[var(--color-accent)]"
               />
             ) : null}
-            {temporary ? (
+            {temporary && expiresIn !== undefined ? (
+              <span
+                data-testid="expiring-mark"
+                aria-hidden="true"
+                title={temporary}
+                className="inline-flex shrink-0 items-center gap-0.5 text-[0.7rem] font-medium tabular-nums text-[var(--color-warning-text)]"
+              >
+                <Icon name="hourglass" className="size-3 shrink-0" />
+                {tr("{0}d", [Math.max(1, expiresIn)])}
+              </span>
+            ) : temporary ? (
               <span data-testid="temporary-mark" aria-hidden="true" title={temporary}>
                 <Icon name="hourglass" className="size-3 shrink-0 text-[var(--color-text-muted)]" />
               </span>
@@ -1948,7 +2045,24 @@ export function ConversationSidebar({
   // since.
   const isTemporary = (c: ConversationSummary) =>
     isTemporaryChat({ ...c, has_schedule: c.has_schedule || patrolIds.has(c.id) }, scheduleKindByConv);
-  const ttlDays = serverConfig.conversationTtlDays ?? DEFAULT_TTL_DAYS;
+  const retention = retentionPolicy(serverConfig);
+  const ttlDays = retention.ttlDays;
+  // Days left for a temporary chat inside the warning window (null before it).
+  const nowSeconds = useNowSeconds();
+  const expiresIn = (c: ConversationSummary) =>
+    isTemporary(c) ? expiresInDays(c.updated_at, retention, nowSeconds) : null;
+  // The person's chats that are about to be deleted, in the order the list
+  // shows them, for the notice under the heading and its jump to the first.
+  const expiringRecent = recent.filter((c) => expiresIn(c) !== null);
+  const showFirstExpiring = () => {
+    const first = (unified ? allRecent : recent).find((c) => expiresIn(c) !== null);
+    if (!first) return;
+    const row = document.querySelector<HTMLElement>(
+      `[data-conversation-id="${CSS.escape(first.id)}"] [data-rail-row]`,
+    );
+    row?.scrollIntoView({ block: "center" });
+    row?.focus();
+  };
   const canCustomize = useCanCustomize();
   const showSection = (id: SectionId) =>
     canCustomize ? () => updateSidebarLayout((l) => updateSection(l, id, { hidden: false })) : undefined;
@@ -2027,7 +2141,14 @@ export function ConversationSidebar({
     <ConvRow
       key={conversation.id}
       conversation={conversation}
-      temporary={markTemporary && isTemporary(conversation) ? temporaryRowText(ttlDays) : undefined}
+      temporary={
+        expiresIn(conversation) !== null
+          ? expiringRowText(expiresIn(conversation) ?? 0)
+          : markTemporary && isTemporary(conversation)
+            ? temporaryRowText(ttlDays)
+            : undefined
+      }
+      expiresIn={expiresIn(conversation) ?? undefined}
       titleNode={inResults ? markMatches(conversation.title, tokens) : undefined}
       context={
         inResults && conversation.project_id
@@ -3184,9 +3305,9 @@ visibleProjectTree.map(({ project, chats }) => {
                   )}
                   {unified ? tr("Recent") : tr("Temporary")}
                   {unified ? (
-                    <RecentInfoButton text={unifiedInfoText(ttlDays)} label={tr("About this list")} />
+                    <RecentInfoButton text={unifiedInfoText(retention)} label={tr("About this list")} />
                   ) : (
-                    <RecentInfoButton text={recentInfoText(ttlDays)} />
+                    <RecentInfoButton text={recentInfoText(retention)} />
                   )}
                   {onRecentSortChange && allRecent.length > 1 ? (
                     <RecentSortMenu
@@ -3196,6 +3317,12 @@ visibleProjectTree.map(({ project, chats }) => {
                     />
                   ) : null}
                 </div>
+                <RetentionNotices
+                  expiringCount={expiringRecent.length}
+                  temporaryCount={conversations.filter(isTemporary).length}
+                  cap={retention.cap}
+                  onShowFirst={showFirstExpiring}
+                />
                 {allRecent.length === 0 ? (
                   <p className="px-2 py-1.5 text-[0.82rem] text-[var(--color-text-muted)]">
                     {tr("No saved chats yet.")}

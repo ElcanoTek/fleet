@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 )
@@ -103,10 +104,10 @@ func TestLoad_DefaultsApply(t *testing.T) {
 	if cfg.Addr != "127.0.0.1:8080" {
 		t.Errorf("Addr default: got %q", cfg.Addr)
 	}
-	if cfg.ConversationTTL != 14 {
+	if cfg.ConversationTTL != 90 {
 		t.Errorf("ConversationTTL default: got %d", cfg.ConversationTTL)
 	}
-	if cfg.UnpinnedCap != 50 {
+	if cfg.UnpinnedCap != 500 {
 		t.Errorf("UnpinnedCap default: got %d", cfg.UnpinnedCap)
 	}
 	if cfg.PersonaDefault != "assistant" {
@@ -1626,5 +1627,33 @@ func TestLoadEnvFileAppliesPreviouslyMissingKeys(t *testing.T) {
 	// the file value must have survived into the environment.
 	if got := os.Getenv("FLEET_SCHED_RATE_LIMIT_PER_MINUTE"); got != "7" {
 		t.Errorf("FLEET_SCHED_RATE_LIMIT_PER_MINUTE = %q in process env, want 7 (env-file value dropped)", got)
+	}
+}
+
+// The warning window is only ever a slice of the inactivity window: a value at
+// or past it would flag every temporary chat from the moment it is created.
+func TestExpiryWarningDaysIsHeldInsideTheWindow(t *testing.T) {
+	for _, tc := range []struct{ ttl, warn, want int }{
+		{90, 14, 14},
+		{90, 0, 0},
+		{14, 14, 13},
+		{7, 30, 6},
+		{1, 14, 0},
+	} {
+		c := &Config{ConversationTTL: tc.ttl, ConversationExpiryWarningDays: tc.warn}
+		if got := c.ExpiryWarningDays(); got != tc.want {
+			t.Errorf("ttl %d, warning %d: got %d, want %d", tc.ttl, tc.warn, got, tc.want)
+		}
+	}
+}
+
+// Scratch sweeps delete everything older than the duration, so a hand-built
+// Config with the field unset must not yield zero.
+func TestScratchRetentionFallsBackToTheDefault(t *testing.T) {
+	if got := (&Config{}).ScratchRetention(); got != 14*24*time.Hour {
+		t.Errorf("unset: got %v", got)
+	}
+	if got := (&Config{ScratchRetentionDays: 3}).ScratchRetention(); got != 3*24*time.Hour {
+		t.Errorf("3 days: got %v", got)
 	}
 }
