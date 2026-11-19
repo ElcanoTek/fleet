@@ -137,9 +137,11 @@ func baseSlug(slug string) string {
 	return slug
 }
 
-// listLatestPerLab: per lab, the newest text-only model that is not a pinned
-// tier slug (variant-insensitively) and not a ":free" variant; ties on
-// created go to the higher completion price.
+// listLatestPerLab: per lab, the newest text-only model that is not an
+// excluded slug (variant-insensitively) and not a ":free" variant; ties on
+// created go to the higher completion price. The caller excludes the pinned
+// tier slugs, which already have a row of their own, and the pins an operator
+// relabelled, whose row no longer names the lab.
 func listLatestPerLab(c *orCatalog, exclude []string) []agentcore.ModelInfo {
 	skip := map[string]bool{}
 	for _, s := range exclude {
@@ -214,7 +216,10 @@ func (g *Gateway) registerModels(mux *http.ServeMux) {
 
 	// GET /api/model-rankings — one model per major lab (the newest), for the
 	// picker before a search query. The pinned tier slugs are excluded so a
-	// lab's newest row does not duplicate a pinned one.
+	// lab's newest row does not duplicate a pinned one. A pin the operator
+	// relabelled (FLEET_PINNED_MODELS with a label) is excluded too: its row
+	// shows the operator's name, so without this a lab whose newest model is
+	// relabelled would have no row under its own name.
 	mux.HandleFunc("GET /api/model-rankings", func(w http.ResponseWriter, r *http.Request) {
 		if g.session(r) == nil {
 			unauthorized(w)
@@ -225,7 +230,8 @@ func (g *Gateway) registerModels(mux *http.ServeMux) {
 			badGateway(w, err)
 			return
 		}
-		entries := listLatestPerLab(c, []string{agentcore.DefaultCoreModel, agentcore.DefaultMaxModel})
+		exclude := append([]string{agentcore.DefaultCoreModel, agentcore.DefaultMaxModel}, g.cfg.RelabelledPinSlugs...)
+		entries := listLatestPerLab(c, exclude)
 		if len(entries) == 0 {
 			badGateway(w, errors.New("no per-lab models were found"))
 			return

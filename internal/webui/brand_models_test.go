@@ -188,6 +188,38 @@ func TestModelCatalogAndRankings(t *testing.T) {
 	}
 }
 
+// A pin the operator relabelled shows under the operator's name, so the lab
+// keeps a row of its own: the per-lab list offers that lab's next-newest model.
+// An unlabelled pin still names the lab, so nothing is skipped for it.
+func TestModelRankingsSkipRelabelledPins(t *testing.T) {
+	catalog := fixedCatalog{entries: []agentcore.ModelInfo{
+		entry("deepseek/older", 0.000001, 100),
+		entry("deepseek/newest", 0.000002, 200),
+		entry("x-ai/older", 0.000001, 100),
+		entry("x-ai/newest", 0.000002, 200),
+	}}
+	ranked := func(e *testEnv) string {
+		t.Helper()
+		e.g.models.openrouter = catalog
+		var rk struct {
+			Models []rankedModel `json:"models"`
+		}
+		_ = json.NewDecoder(e.do(signedIn(t, req("GET", "/api/model-rankings", ""))).Body).Decode(&rk)
+		ids := make([]string, 0, len(rk.Models))
+		for _, m := range rk.Models {
+			ids = append(ids, m.Slug)
+		}
+		return strings.Join(ids, ",")
+	}
+	if got := ranked(newTestEnv(t)); got != "x-ai/newest,deepseek/newest" {
+		t.Fatalf("no pins: %s", got)
+	}
+	relabelled := func(c *Config, _ *Options) { c.RelabelledPinSlugs = []string{"deepseek/newest:nitro"} }
+	if got := ranked(newTestEnv(t, relabelled)); got != "x-ai/newest,deepseek/older" {
+		t.Fatalf("relabelled pin: %s", got)
+	}
+}
+
 func TestModelCheck(t *testing.T) {
 	e := newTestEnv(t)
 	e.g.models.openrouter = fixedCatalog{entries: []agentcore.ModelInfo{{ID: "x/known", CanonicalSlug: "x/known-2026", CompletionPerToken: 0.000002, HasCompletionPrice: true}}}

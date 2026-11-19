@@ -58,6 +58,13 @@ type Config struct {
 	// CatwalkURL is the catwalk model database base (CATWALK_URL).
 	CatwalkURL string
 
+	// RelabelledPinSlugs are the FLEET_PINNED_MODELS slugs that carry a
+	// label, set by the caller (cmd/fleet) from config.Config.PinnedModels.
+	// The picker shows such a row under the operator's name only, so the
+	// per-lab "newest model" list skips it and offers that lab's next-newest
+	// model under the lab's own name. See docs/PINNED-MODELS.md.
+	RelabelledPinSlugs []string
+
 	// TrustedProxies is config.Config.TrustedProxies (FLEET_TRUSTED_PROXIES),
 	// set by the caller: the proxies whose X-Forwarded-For the gateway reads
 	// to name a request's client, with the same resolver the backends use.
