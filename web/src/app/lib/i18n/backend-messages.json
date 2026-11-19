@@ -115,6 +115,7 @@
     "a turn is currently running on this conversation; wait for it to finish before summarizing",
     "a turn is running in this chat; stop it or wait for it to finish, then transfer",
     "agent manager unavailable",
+    "an administrator has turned off writing shared files from chats on this server (Settings → Admin → Features)",
     "an archived or Lockdown chat can't be transferred",
     "answering a task is limited to its creator or an operator credential",
     "approval group id required",
@@ -320,6 +321,7 @@
     "provider id required",
     "push-notification configs are limited to the task's creator or an operator credential",
     "rate limit exceeded",
+    "read-only (Viewer) accounts cannot write shared files",
     "recurrence must be a standard 5-field cron expression",
     "recurrence_remaining must be between 1 and 10000",
     "recurrence_remaining requires a recurrence",
@@ -344,7 +346,9 @@
     "setting key required",
     "share_scope=\"everyone\" requires explicit user confirmation in the show_ui form (share_scope=\"everyone\") or chat conversation; use share_scope=\"personal\" or ask the user to confirm fleet-wide sharing first",
     "shared file bytes are missing on disk",
+    "shared file content is missing",
     "shared file id required",
+    "shared_file_write needs a signed-in user to record as the writer",
     "skill id required",
     "skill not found",
     "skill unreadable",
@@ -456,7 +460,19 @@
       ]
     },
     {
+      "message": "{0} already exists: use mode 'append' to add to it, or read it and use 'replace' with its expected_sha256",
+      "fields": [
+        "%s"
+      ]
+    },
+    {
       "message": "{0} cannot exceed 200 characters",
+      "fields": [
+        "%s"
+      ]
+    },
+    {
+      "message": "{0} collides with a folder of the same name in the shared library: choose another name",
       "fields": [
         "%s"
       ]
@@ -479,6 +495,12 @@
       "fields": [
         "%s",
         "%d"
+      ]
+    },
+    {
+      "message": "{0} has no previous version to restore (only a replace or an undo leaves one)",
+      "fields": [
+        "%s"
       ]
     },
     {
@@ -536,6 +558,12 @@
     },
     {
       "message": "{0} repeats a key",
+      "fields": [
+        "%s"
+      ]
+    },
+    {
+      "message": "{0} was published by an administrator and is read-only: copy it into your workspace, or write your version under another name",
       "fields": [
         "%s"
       ]
@@ -741,6 +769,13 @@
       ]
     },
     {
+      "message": "another conversation wrote {0} at the same moment: try the {1} again",
+      "fields": [
+        "%s",
+        "%s"
+      ]
+    },
+    {
       "message": "approval {0} is named more than once",
       "fields": [
         "%s"
@@ -864,6 +899,12 @@
       ]
     },
     {
+      "message": "chat-written shared file {0} has no content",
+      "fields": [
+        "%s"
+      ]
+    },
+    {
       "message": "clear pending fallback rollout state: {0}",
       "fields": [
         "%w"
@@ -977,6 +1018,12 @@
       "message": "create: {0}",
       "fields": [
         "%w"
+      ]
+    },
+    {
+      "message": "creating {0} needs a description: one short line saying what the file is and when to read it — every conversation on this server is shown it",
+      "fields": [
+        "%s"
       ]
     },
     {
@@ -1443,6 +1490,12 @@
       ]
     },
     {
+      "message": "replacing {0} needs expected_sha256: read the file first (view_file prints its sha256) so you never overwrite a newer version",
+      "fields": [
+        "%s"
+      ]
+    },
+    {
       "message": "resolve conversation for approval workspace: {0}",
       "fields": [
         "%w"
@@ -1573,6 +1626,30 @@
       ]
     },
     {
+      "message": "shared file {0} has no content",
+      "fields": [
+        "%s"
+      ]
+    },
+    {
+      "message": "shared_file_write failed: {0}",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "shared_file_write: {0}",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "shared_file_write: the writer {0} is not a user of this server",
+      "fields": [
+        "%s"
+      ]
+    },
+    {
       "message": "stage connector approval: {0}",
       "fields": [
         "%w"
@@ -1663,6 +1740,12 @@
       "message": "the vaulted secret from the {0} field needs a valid target URL",
       "fields": [
         "%q"
+      ]
+    },
+    {
+      "message": "there is no shared file at {0} yet: create it first (mode 'create', or 'append' with a description)",
+      "fields": [
+        "%s"
       ]
     },
     {

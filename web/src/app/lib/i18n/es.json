@@ -6025,5 +6025,22 @@
   "· last by": "· último cambio de",
   "· folder index": "· índice de la carpeta",
   "Chats can save shared files": "Los chats pueden guardar archivos compartidos",
-  "Let conversations and scheduled tasks save text files that every chat on this server can read, such as a team log of optimizations. Files an admin uploads stay read-only to chats, and admins can rename or delete chat files in Settings → Shared files. Turning this off stops new writes; files already saved stay readable.": "Permite que las conversaciones y las tareas programadas guarden archivos de texto que cualquier chat de este servidor puede leer, como un registro del equipo con las optimizaciones. Los archivos que sube un administrador siguen siendo de solo lectura para los chats, y los administradores pueden renombrar o eliminar los archivos de los chats en Ajustes → Archivos compartidos. Al desactivarlo se bloquean las nuevas escrituras; los archivos ya guardados se pueden seguir leyendo."
+  "Let conversations and scheduled tasks save text files that every chat on this server can read, such as a team log of optimizations. Files an admin uploads stay read-only to chats, and admins can rename or delete chat files in Settings → Shared files. Turning this off stops new writes; files already saved stay readable.": "Permite que las conversaciones y las tareas programadas guarden archivos de texto que cualquier chat de este servidor puede leer, como un registro del equipo con las optimizaciones. Los archivos que sube un administrador siguen siendo de solo lectura para los chats, y los administradores pueden renombrar o eliminar los archivos de los chats en Ajustes → Archivos compartidos. Al desactivarlo se bloquean las nuevas escrituras; los archivos ya guardados se pueden seguir leyendo.",
+  "an administrator has turned off writing shared files from chats on this server (Settings → Admin → Features)": "un administrador ha desactivado la escritura de archivos compartidos desde los chats en este servidor (Configuración → Administración → Funciones)",
+  "read-only (Viewer) accounts cannot write shared files": "las cuentas de solo lectura (Lector) no pueden escribir archivos compartidos",
+  "shared file content is missing": "falta el contenido del archivo compartido",
+  "shared_file_write needs a signed-in user to record as the writer": "shared_file_write necesita un usuario con sesión iniciada para registrarlo como autor",
+  "{0} already exists: use mode 'append' to add to it, or read it and use 'replace' with its expected_sha256": "{0} ya existe: usa el modo 'append' para añadir contenido, o léelo y usa 'replace' con su expected_sha256",
+  "{0} collides with a folder of the same name in the shared library: choose another name": "{0} coincide con una carpeta del mismo nombre en la biblioteca compartida: elige otro nombre",
+  "{0} has no previous version to restore (only a replace or an undo leaves one)": "{0} no tiene una versión anterior que restaurar (solo un replace o un undo la dejan)",
+  "{0} was published by an administrator and is read-only: copy it into your workspace, or write your version under another name": "{0} lo publicó un administrador y es de solo lectura: cópialo a tu espacio de trabajo o guarda tu versión con otro nombre",
+  "another conversation wrote {0} at the same moment: try the {1} again": "otra conversación escribió {0} en el mismo momento: vuelve a intentar el {1}",
+  "chat-written shared file {0} has no content": "el archivo compartido escrito por un chat {0} no tiene contenido",
+  "creating {0} needs a description: one short line saying what the file is and when to read it — every conversation on this server is shown it": "para crear {0} hace falta una descripción: una línea breve que diga qué es el archivo y cuándo leerlo; se muestra a todas las conversaciones de este servidor",
+  "replacing {0} needs expected_sha256: read the file first (view_file prints its sha256) so you never overwrite a newer version": "para reemplazar {0} hace falta expected_sha256: lee primero el archivo (view_file muestra su sha256) para no sobrescribir nunca una versión más reciente",
+  "shared file {0} has no content": "el archivo compartido {0} no tiene contenido",
+  "shared_file_write failed: {0}": "shared_file_write falló: {0}",
+  "shared_file_write: {0}": "shared_file_write: {0}",
+  "shared_file_write: the writer {0} is not a user of this server": "shared_file_write: el autor {0} no es usuario de este servidor",
+  "there is no shared file at {0} yet: create it first (mode 'create', or 'append' with a description)": "todavía no hay ningún archivo compartido en {0}: créalo primero (modo 'create', o 'append' con una descripción)"
 }
