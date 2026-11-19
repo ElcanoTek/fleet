@@ -22,7 +22,8 @@ except **Retry with** use the same card (**Switch & retry**, **Just switch**,
 
 **The card gate** (`approvalStager.stageSuggestionGated`):
 
-- no card on a conversation already on the advanced model;
+- no card on a conversation already on the advanced model (the conversation is
+  read under its owner, so this also holds for a Multiplayer participant's turn);
 - no card in a lockdown chat whose allow-list excludes the advanced model;
 - no second card while one is pending;
 - after a card is dismissed, or accepted and the user later moved off the

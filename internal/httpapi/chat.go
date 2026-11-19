@@ -1674,6 +1674,7 @@ func (s *Server) newTurnStager(ctx context.Context, conv *store.Conversation, us
 		store:           s.store,
 		conversationID:  conv.ID,
 		userEmail:       user,
+		ownerEmail:      ownerEmail,
 		sink:            buf,
 		mcpBroker:       s.agent.MCPBroker(),
 		mcpCatalog:      s.agent.MCPCatalog(),

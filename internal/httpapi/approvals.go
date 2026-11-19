@@ -47,7 +47,13 @@ type approvalStager struct {
 	store          chatStore
 	conversationID string
 	userEmail      string
-	sink           agent.EventSink
+	// ownerEmail is the conversation's owner. In a Multiplayer chat the
+	// turn's sender (userEmail) may be a participant, and store.Get filters
+	// by owner, so a read of the conversation row itself goes by this. The
+	// conversation was already authorized for the sender when the turn
+	// started. Empty means the sender is the owner.
+	ownerEmail string
+	sink       agent.EventSink
 	// mcpBroker / mcpCatalog are the credential seam staging uses to
 	// pre-validate an email and to resolve mcp_<server>_<tool> identities. They
 	// start as the manager's process-wide default-seat pair and are replaced by
@@ -1181,16 +1187,31 @@ func (a *approvalStager) stageSuggestion(reason, source string) (string, string,
 	return id, msg, id != "", err
 }
 
+// convOwnerEmail is the owner the conversation row is read under.
+func (a *approvalStager) convOwnerEmail() string {
+	if a.ownerEmail != "" {
+		return a.ownerEmail
+	}
+	return a.userEmail
+}
+
 func (a *approvalStager) stageSuggestionGated(reason, source string) (string, string, error) {
 	fallbackModel := agentcore.CurrentFallbackModel()
-	conv, err := a.store.Get(a.ctx, a.userEmail, a.conversationID)
+	// By the owner, not the sender: a participant's turn in a Multiplayer chat
+	// read nothing here, skipped the model and lockdown gates below, and was
+	// offered the fallback model in a chat already pinned to it (live
+	// 2026-11-19). A conversation that cannot be read gets no card.
+	conv, err := a.store.Get(a.ctx, a.convOwnerEmail(), a.conversationID)
 	if err != nil {
 		return "", "", fmt.Errorf("lookup conversation: %w", err)
 	}
-	if conv != nil && conv.Model == fallbackModel {
+	if conv == nil {
+		return "", "SUGGESTION_SUPPRESSED: this conversation could not be read. Do not call suggest_advanced_model again — proceed with the user's request.", nil
+	}
+	if conv.Model == fallbackModel {
 		return "", "SUGGESTION_SUPPRESSED: this conversation is already pinned to the fallback model. Do not call suggest_advanced_model again — proceed with the user's request.", nil
 	}
-	if conv != nil && (conv.Lockdown || a.lockdownOnly) && a.modelAllowed != nil && !a.modelAllowed(fallbackModel) {
+	if (conv.Lockdown || a.lockdownOnly) && a.modelAllowed != nil && !a.modelAllowed(fallbackModel) {
 		return "", "SUGGESTION_SUPPRESSED: this is a lockdown conversation and its allowed models do not include the fallback model. Do not call suggest_advanced_model again — keep working with the current model.", nil
 	}
 	if a.inputKind != "" {
@@ -2227,7 +2248,9 @@ func (s *Server) resolvedApprovalDecision(ctx context.Context, user, approvalID 
 	}
 	state := s.resumeReplyFlag(ctx, s.approvalClientState(latest), latest)
 	if latest.ToolName == "suggest_advanced_model" && latest.Status == "approved" {
-		conv, err := s.store.Get(ctx, user, latest.ConversationID)
+		// A participant answers the cards their own turns staged in a
+		// Multiplayer chat they do not own.
+		conv, err := s.getOwnedOrMultiplayerConversation(ctx, user, latest.ConversationID)
 		if err != nil || conv == nil {
 			return approvalError(http.StatusInternalServerError, "could not load conversation model")
 		}
