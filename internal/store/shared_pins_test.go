@@ -424,7 +424,8 @@ func TestSharedPin_ClearedWhenTheChatIsTransferred(t *testing.T) {
 }
 
 // A pin on a chat that has stopped being shared with the person is in no
-// list they could unpin it from, so it does not count toward the cap.
+// list they could unpin it from, so it does not count toward the cap — and
+// once its slot is reused it is gone, so it cannot return past the cap.
 func TestSharedPin_CapIgnoresPinsNoLongerShared(t *testing.T) {
 	t.Parallel()
 
@@ -442,5 +443,14 @@ func TestSharedPin_CapIgnoresPinsNoLongerShared(t *testing.T) {
 	}
 	if err := f.s.setSharedPin(f.ctx, "bob@x.com", still.ID, true, 1); err != nil {
 		t.Errorf("pin once the other chat stopped being shared = %v, want nil", err)
+	}
+	// The slot was reused, so the old pin is retired: shared again, the chat
+	// comes back unpinned rather than as a second pin past the cap.
+	if stored, err := f.s.SetConversationTeamVisible(f.ctx, "alice@x.com", gone.ID, true); err != nil || !stored {
+		t.Fatalf("share again = (%v, %v)", stored, err)
+	}
+	pinned, order := sharedPinnedIDs(t, f)
+	if len(order) != 2 || len(pinned) != 1 || pinned[0] != still.ID {
+		t.Errorf("after sharing again: pinned = %v of %v, want only %s", pinned, order, still.ID)
 	}
 }

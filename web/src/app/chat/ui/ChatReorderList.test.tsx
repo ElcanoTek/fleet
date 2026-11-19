@@ -78,6 +78,20 @@ describe("ChatReorderList", () => {
     expect(onReorder).toHaveBeenCalledWith(["b", "c", "a"]);
   });
 
+  it("drops nothing when the list changes under a drag, rather than moving another chat", () => {
+    const onReorder = vi.fn();
+    const props = { label: "Pinned chats, in order", hint: "Set the order.", onReorder, onDone: () => {} };
+    const { rerender } = render(<ChatReorderList {...props} chats={chats} />);
+    layOut();
+    fireEvent.pointerDown(rowOf("c"), pointer("mouse", 100));
+    fireEvent.pointerMove(rowOf("c"), pointer("mouse", 100 - 75));
+    // A chat arrives at the top while Charlie is in hand.
+    rerender(<ChatReorderList {...props} chats={[{ id: "z", title: "Zulu" }, ...chats]} />);
+    expect(screen.getByTestId("chat-reorder-item-c").style.transform).toBe("");
+    fireEvent.pointerUp(rowOf("c"), pointer("mouse", 100 - 75));
+    expect(onReorder).not.toHaveBeenCalled();
+  });
+
   it("drags with a finger by the handle only, so touching a row still scrolls the list", () => {
     const onReorder = vi.fn();
     render(<ChatReorderList label="Pinned chats, in order" hint="Set the order." chats={chats} onReorder={onReorder} onDone={() => {}} />);

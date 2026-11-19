@@ -86,7 +86,10 @@ sidebar"), which `/help` renders.
   pinning one's own chat is not capped, as before. Pins are taken one at a
   time per person, so two at the cap cannot both land. A pin row is tied to
   its account and its chat by foreign keys, so it goes with whichever is
-  deleted, and transferring a chat clears every such pin on it. Unpinning an
+  deleted, and transferring a chat clears every such pin on it. A pin on a
+  chat that stops being shared with the person stays (shared again, the chat
+  comes back pinned) until they next pin something, when such rows are
+  retired so they neither use up room nor return past the cap. Unpinning an
   ID that is neither pinned by nor shared with the caller is the same 404.
   The team listings (`?scope=team`, a project home's Team list) report the
   caller's own pin too, never the owner's. Not done: a

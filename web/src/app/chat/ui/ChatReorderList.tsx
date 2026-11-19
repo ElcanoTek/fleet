@@ -118,6 +118,15 @@ export function ChatReorderList({
   };
   // A drag never outlives the list.
   useEffect(() => stopLoop, []);
+  // Nor the order it started in: the drag remembers places, not chats, so if
+  // the list changes under it (a pinned chat arriving from a read that was
+  // still on its way, a move saved in another tab) the row goes back and
+  // nothing is moved, rather than a different chat than the one in hand.
+  const idsKey = ids.join("\n");
+  useEffect(() => {
+    if (dragRef.current) cancelDrag();
+    // cancelDrag reads only refs and its own setter.
+  }, [idsKey]);
 
   // Escape leaves the mode, as Done does — and only that: it is taken in the
   // capture phase and stopped, so the rail's own Escape (collapse the

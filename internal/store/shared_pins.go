@@ -67,7 +67,7 @@ func (s *Store) setSharedPin(ctx context.Context, userEmail, convID string, pinn
 		return nil
 	}
 	// The chats shared with the caller: what may be pinned, and (below) which
-	// of their existing pins still count.
+	// of their existing pins are still live.
 	shared, err := s.ListSharedAndMultiplayerConversations(ctx, userEmail)
 	if err != nil {
 		return err
@@ -94,19 +94,28 @@ func (s *Store) setSharedPin(ctx context.Context, userEmail, convID string, pinn
 	); err != nil {
 		return fmt.Errorf("pin shared chat: %w", err)
 	}
-	// Only pins on chats the person can still open count: one on a chat that
-	// has stopped being shared with them is in no list they could unpin it
-	// from, and must not use up room they cannot get back.
+	// Pins on chats that have stopped being shared with the person are
+	// retired here, before the count. Such a row is in no list they could
+	// unpin it from, so it must not use up room; and left in place it would
+	// come back into force if the chat were shared again, past a cap this
+	// pin had since filled. (Until the person pins something else, a chat
+	// that is shared again does come back pinned.)
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM chat.shared_conversation_pins
+		  WHERE user_email = $1 AND NOT (conversation_id = ANY($2))`,
+		userEmail, open,
+	); err != nil {
+		return fmt.Errorf("pin shared chat: %w", err)
+	}
 	var already bool
 	var count int
 	if err := tx.QueryRowContext(ctx,
 		`SELECT EXISTS (SELECT 1 FROM chat.shared_conversation_pins
 		                 WHERE user_email = $1 AND conversation_id = $2),
-		        (SELECT count(*) FROM chat.shared_conversation_pins
-		          WHERE user_email = $1 AND conversation_id = ANY($3))
+		        (SELECT count(*) FROM chat.shared_conversation_pins WHERE user_email = $1)
 		      + (SELECT count(*) FROM conversations
 		          WHERE user_email = $1 AND pinned AND deleted_at IS NULL AND archived_at IS NULL)`,
-		userEmail, convID, open,
+		userEmail, convID,
 	).Scan(&already, &count); err != nil {
 		return fmt.Errorf("pin shared chat: %w", err)
 	}
