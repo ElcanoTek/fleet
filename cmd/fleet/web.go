@@ -139,6 +139,11 @@ func gatewayConfig(cfg *config.Config) webui.Config {
 	// Decided once by config.Load so the gateway and both backends agree.
 	wc.PasswordLoginDisabled = cfg.PasswordLoginDisabled
 	wc.AccountsManagedByAuth = cfg.AccountsManagedByAuth
+	for _, pin := range cfg.PinnedModels {
+		if pin.Label != "" {
+			wc.RelabelledPinSlugs = append(wc.RelabelledPinSlugs, pin.Slug)
+		}
+	}
 	// The same client-address resolver the backends use.
 	wc.TrustedProxies = httpmw.NewTrustedProxies(cfg.TrustedProxies)
 	return wc

@@ -30,7 +30,8 @@ function patrol(over: Partial<ChatSchedule>): ChatSchedule {
 
 function mockBackend(nowSec: number) {
   const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
-  // The slot passed 19s ago, so the re-read is due about a second from now.
+  // The slot passed 19s ago, so the re-read is due one second after the page
+  // works out the wait (the clock is held still below).
   const before = patrol({ next_run_at: nowSec - 19 });
   const after = patrol({
     next_run_at: nowSec + 7200,
@@ -76,7 +77,16 @@ afterEach(() => {
 
 describe("Patrol on hold", () => {
   it("re-reads the schedules after a slot passes and shows the skipped-run note", async () => {
-    const fetchMock = mockBackend(Math.floor(Date.now() / 1000));
+    // The page waits until 20s after the slot, measured from Date.now() when
+    // its effect runs, and falls back to a 60s re-read if that moment has
+    // already passed. With a running clock the test had under a second to boot
+    // the whole chat before that happened, which a busy runner does not always
+    // manage. Holding the clock on a whole second makes the wait exactly one
+    // second however long the boot takes; the timer itself still runs in real
+    // time.
+    const nowSec = Math.floor(Date.now() / 1000);
+    vi.spyOn(Date, "now").mockReturnValue(nowSec * 1000);
+    const fetchMock = mockBackend(nowSec);
     render(<ChatExperience initialUserEmail="user@example.com" />);
 
     await screen.findByTestId("patrol-banner");

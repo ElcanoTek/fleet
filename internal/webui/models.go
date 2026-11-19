@@ -138,28 +138,55 @@ func baseSlug(slug string) string {
 }
 
 // listLatestPerLab: per lab, the newest text-only model that is not a pinned
-// tier slug (variant-insensitively) and not a ":free" variant; ties on
-// created go to the higher completion price.
-func listLatestPerLab(c *orCatalog, exclude []string) []agentcore.ModelInfo {
-	skip := map[string]bool{}
-	for _, s := range exclude {
-		skip[baseSlug(s)] = true
+// tier slug and not a ":free" variant; ties on created go to the higher
+// completion price. The tier slugs are excluded because they already have a
+// row of their own.
+//
+// A lab whose newest model an operator pinned under another name
+// (relabelled) gets a second row: its next-newest model that is not
+// relabelled either. The newest stays in the list rather than being replaced,
+// because only the browser knows whether the workspace's routing offers the
+// pin at all: where it does, the newest row takes the operator's name and
+// the second row keeps the lab's; where it does not, the lab's newest model
+// is still offered. Slugs are compared variant-insensitively, and against an
+// entry's dated canonical slug as well as its id, since a pin may use either.
+func listLatestPerLab(c *orCatalog, tiers, relabelled []string) []agentcore.ModelInfo {
+	slugSet := func(slugs []string) map[string]bool {
+		set := map[string]bool{}
+		for _, s := range slugs {
+			set[baseSlug(s)] = true
+		}
+		return set
 	}
-	var out []agentcore.ModelInfo
-	for _, lab := range majorLabs {
+	in := func(set map[string]bool, e agentcore.ModelInfo) bool {
+		return set[baseSlug(e.ID)] || (e.CanonicalSlug != "" && set[baseSlug(e.CanonicalSlug)])
+	}
+	skip, renamed := slugSet(tiers), slugSet(relabelled)
+	newest := func(lab string, alsoSkip map[string]bool) *agentcore.ModelInfo {
 		prefix := lab + "/"
 		var best *agentcore.ModelInfo
 		for i := range c.entries {
 			e := c.entries[i]
-			if !strings.HasPrefix(e.ID, prefix) || skip[baseSlug(e.ID)] || strings.HasSuffix(e.ID, ":free") || !isTextCompletion(e) {
+			if !strings.HasPrefix(e.ID, prefix) || in(skip, e) || in(alsoSkip, e) || strings.HasSuffix(e.ID, ":free") || !isTextCompletion(e) {
 				continue
 			}
 			if best == nil || e.Created > best.Created || (e.Created == best.Created && e.CompletionPerToken > best.CompletionPerToken) {
 				best = &c.entries[i]
 			}
 		}
-		if best != nil {
-			out = append(out, *best)
+		return best
+	}
+	var out []agentcore.ModelInfo
+	for _, lab := range majorLabs {
+		best := newest(lab, nil)
+		if best == nil {
+			continue
+		}
+		out = append(out, *best)
+		if in(renamed, *best) {
+			if next := newest(lab, renamed); next != nil {
+				out = append(out, *next)
+			}
 		}
 	}
 	return out
@@ -214,7 +241,9 @@ func (g *Gateway) registerModels(mux *http.ServeMux) {
 
 	// GET /api/model-rankings — one model per major lab (the newest), for the
 	// picker before a search query. The pinned tier slugs are excluded so a
-	// lab's newest row does not duplicate a pinned one.
+	// lab's newest row does not duplicate a pinned one. A lab whose newest
+	// model is a relabelled pin (FLEET_PINNED_MODELS with a label) also gets
+	// its next-newest model, so the lab keeps a row under its own name.
 	mux.HandleFunc("GET /api/model-rankings", func(w http.ResponseWriter, r *http.Request) {
 		if g.session(r) == nil {
 			unauthorized(w)
@@ -225,7 +254,7 @@ func (g *Gateway) registerModels(mux *http.ServeMux) {
 			badGateway(w, err)
 			return
 		}
-		entries := listLatestPerLab(c, []string{agentcore.DefaultCoreModel, agentcore.DefaultMaxModel})
+		entries := listLatestPerLab(c, []string{agentcore.DefaultCoreModel, agentcore.DefaultMaxModel}, g.cfg.RelabelledPinSlugs)
 		if len(entries) == 0 {
 			badGateway(w, errors.New("no per-lab models were found"))
 			return

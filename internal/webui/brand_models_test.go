@@ -188,6 +188,56 @@ func TestModelCatalogAndRankings(t *testing.T) {
 	}
 }
 
+// A pin the operator relabelled shows under the operator's name, so the lab
+// keeps a row of its own: the per-lab list adds that lab's next-newest model
+// after the newest. The newest is never dropped, because the browser may not
+// offer the pin at all (routing), and then the lab's newest must still be
+// there. A pin may name a model by a ":variant" or by its dated canonical slug.
+func TestModelRankingsAddNextNewestForRelabelledPins(t *testing.T) {
+	newestMoonshot := entry("moonshotai/kimi", 0.000002, 200)
+	newestMoonshot.CanonicalSlug = "moonshotai/kimi-20260420"
+	catalog := fixedCatalog{entries: []agentcore.ModelInfo{
+		entry("x-ai/older", 0.000001, 100),
+		entry("x-ai/newest", 0.000002, 200),
+		entry("deepseek/oldest", 0.000001, 50),
+		entry("deepseek/older", 0.000001, 100),
+		entry("deepseek/newest", 0.000002, 200),
+		entry("moonshotai/older", 0.000001, 100),
+		newestMoonshot,
+		entry("qwen/only", 0.000001, 100),
+	}}
+	ranked := func(pins ...string) string {
+		t.Helper()
+		e := newTestEnv(t, func(c *Config, _ *Options) { c.RelabelledPinSlugs = pins })
+		e.g.models.openrouter = catalog
+		var rk struct {
+			Models []rankedModel `json:"models"`
+		}
+		_ = json.NewDecoder(e.do(signedIn(t, req("GET", "/api/model-rankings", ""))).Body).Decode(&rk)
+		ids := make([]string, 0, len(rk.Models))
+		for _, m := range rk.Models {
+			ids = append(ids, m.Slug)
+		}
+		return strings.Join(ids, ",")
+	}
+	for _, tc := range []struct {
+		name string
+		pins []string
+		want string
+	}{
+		{"no pins", nil, "x-ai/newest,deepseek/newest,moonshotai/kimi,qwen/only"},
+		{"a variant of the newest", []string{"deepseek/newest:nitro"}, "x-ai/newest,deepseek/newest,deepseek/older,moonshotai/kimi,qwen/only"},
+		{"the dated canonical slug", []string{"moonshotai/kimi-20260420"}, "x-ai/newest,deepseek/newest,moonshotai/kimi,moonshotai/older,qwen/only"},
+		{"the next-newest is relabelled too", []string{"deepseek/newest", "deepseek/older"}, "x-ai/newest,deepseek/newest,deepseek/oldest,moonshotai/kimi,qwen/only"},
+		{"not the lab's newest", []string{"deepseek/older"}, "x-ai/newest,deepseek/newest,moonshotai/kimi,qwen/only"},
+		{"the lab's only model", []string{"qwen/only"}, "x-ai/newest,deepseek/newest,moonshotai/kimi,qwen/only"},
+	} {
+		if got := ranked(tc.pins...); got != tc.want {
+			t.Errorf("%s: got %s, want %s", tc.name, got, tc.want)
+		}
+	}
+}
+
 func TestModelCheck(t *testing.T) {
 	e := newTestEnv(t)
 	e.g.models.openrouter = fixedCatalog{entries: []agentcore.ModelInfo{{ID: "x/known", CanonicalSlug: "x/known-2026", CompletionPerToken: 0.000002, HasCompletionPrice: true}}}

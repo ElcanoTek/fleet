@@ -40,6 +40,16 @@ FLEET_PINNED_MODELS='[{"slug":"qwen/qwen3-235b-a22b","label":"Acme Nova","tag":"
   context size. Its tooltip leaves
   out the slug, and search finds it by label only, so typing the base model's
   name does not bring up the renamed row.
+- **The lab keeps a row of its own.** Before a search, the chat picker lists
+  the newest model from each major lab (`/api/model-rankings`). When a lab's
+  newest model is a pin with a `label`, that list also carries the lab's
+  next-newest model that is not relabelled, so it appears under the lab's own
+  name beside the relabelled row. The pin may name the model by a `:variant`
+  or by its dated canonical slug. A pin without a label still shows the lab's
+  name, so nothing is added for it. If the workspace's routing does not offer
+  the pin, the lab's newest model is still listed under the lab's name, along
+  with the next-newest. If the relabelled model is the lab's only one in the
+  catalog, the lab has no other row to show.
 - **Operations Center task picker.** Same label and tag. The pins come right
   after the recommended rows. As before, any workspace-provider rows still
   lead this picker. A relabelled row hides the grey slug line and does not
