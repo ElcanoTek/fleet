@@ -96,7 +96,7 @@ func runLoop(
 		}
 		if lc.MaxCostUSD > 0 && accumCost >= lc.MaxCostUSD {
 			stopped(i, "cost_ceiling_exceeded")
-			return lastSession, fmt.Errorf("loop cost ceiling ($%.4f) reached after %d iteration(s) ($%.4f accrued)", lc.MaxCostUSD, i-1, accumCost)
+			return lastSession, fmt.Errorf("loop cost ceiling (%.4f credits) reached after %d iteration(s) (%.4f credits accrued)", lc.MaxCostUSD, i-1, accumCost)
 		}
 
 		it := &models.TaskIteration{

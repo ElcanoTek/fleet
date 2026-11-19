@@ -61,7 +61,7 @@ from this page, and do not read both when one will do.
 
 The guides describe fleet as it ships. A deployment can differ: features can be
 switched off, connectors and personas come from a deployment's own bundle, model
-names and cost bands are per-deployment, and an operator can change windows like
+names and credit-usage levels are per-deployment, and an operator can change windows like
 the conversation-retention period. So:
 
 - If the guides do not cover something, **say so** and point the user at their

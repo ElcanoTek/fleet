@@ -78,7 +78,7 @@ export function validateMaxCostUSD(value: unknown): ValidationResult {
   const trimmed = String(value).trim();
   if (trimmed === "") return { valid: true, message: "" };
   if (!/^\d+(\.\d{1,2})?$/.test(trimmed)) {
-    return { valid: false, message: tr("Max cost must be a dollar amount (up to cents)") };
+    return { valid: false, message: tr("Max cost must be a number of credits with at most two decimals") };
   }
   const parsed = Number.parseFloat(trimmed);
   if (!(parsed > 0) || parsed > 100000) {

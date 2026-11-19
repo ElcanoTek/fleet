@@ -1,3 +1,5 @@
+import { CreditsValue } from "@/app/shared/ui/CreditsValue";
+import { formatCreditAmount, formatCredits } from "@/app/shared/lib/credits";
 import { budgetScopeLabel, budgetWindowLabel, usageSourceLabel } from "@/app/lib/i18n/ownedLabels";
 import { formatFixed } from "@/app/lib/i18n";
 import { rich } from "@/app/lib/i18n/rich";
@@ -61,26 +63,8 @@ const GROUP_OPTIONS: { value: UsageGroupBy; label: string }[] = [
 // being readable and the table below still lists every bucket.
 const MAX_BARS = 11;
 
-const usd = new Intl.NumberFormat(getLanguage(), {
-  style: "currency",
-  currency: "USD",
-  minimumFractionDigits: 2,
-  maximumFractionDigits: 2,
-});
-const usdFine = new Intl.NumberFormat(getLanguage(), {
-  style: "currency",
-  currency: "USD",
-  minimumFractionDigits: 2,
-  maximumFractionDigits: 4,
-});
 const compact = new Intl.NumberFormat(getLanguage(), { notation: "compact", maximumFractionDigits: 1 });
 const plain = new Intl.NumberFormat(getLanguage());
-
-function fmtUSD(v: number): string {
-  // Sub-cent spend is real at per-iteration granularity — keep enough
-  // precision that a $0.004 run doesn't render as the misleading "$0.00".
-  return v > 0 && v < 0.01 ? usdFine.format(v) : usd.format(v);
-}
 
 // bucketDisplayName renders the empty bucket key honestly per dimension: rows
 // without a project/key/creator are real spend, not an error.
@@ -168,7 +152,7 @@ export function UsagePanel() {
             value={measure}
             onChange={(e) => setMeasure(e.target.value as "cost" | "tokens" | "cache")}
           >
-            <NativeSelectOption value="cost">{tr("Cost (USD)")}</NativeSelectOption>
+            <NativeSelectOption value="cost">{tr("Cost (credits)")}</NativeSelectOption>
             <NativeSelectOption value="tokens">{tr("Tokens")}</NativeSelectOption>
             <NativeSelectOption value="cache">{tr("Cache hit %")}</NativeSelectOption>
           </NativeSelect>
@@ -281,7 +265,7 @@ function BudgetsSection() {
       body.soft_tokens === undefined &&
       body.hard_tokens === undefined
     ) {
-      setFormError(tr("Set at least one bound (USD or tokens, soft or hard)."));
+      setFormError(tr("Set at least one bound (credits or tokens, soft or hard)."));
       return;
     }
     setSaving(true);
@@ -335,7 +319,7 @@ function BudgetsSection() {
               <TableHead>{tr("Principal")}</TableHead>
               <TableHead>{tr("Window")}</TableHead>
               <TableHead>{tr("Spend")}</TableHead>
-              <TableHead>{tr("Soft / hard (USD)")}</TableHead>
+              <TableHead>{tr("Soft / hard (credits)")}</TableHead>
               <TableHead>{tr("Soft / hard (tokens)")}</TableHead>
               <TableHead>{tr("Status")}</TableHead>
               <TableHead>{tr("Actions")}</TableHead>
@@ -350,9 +334,9 @@ function BudgetsSection() {
                 </TableCell>
                 <TableCell>{budgetWindowLabel(b.window)}</TableCell>
                 <TableCell>
-                  {fmtUSD(b.spend_usd)} · {compact.format(b.spend_tokens)} {tr("tok")}
+                  {formatCredits(b.spend_usd)} · {compact.format(b.spend_tokens)} {tr("tok")}
                 </TableCell>
-                <TableCell>{budgetBound(b.soft_usd, b.hard_usd, b.effective_hard_usd, fmtUSD)}</TableCell>
+                <TableCell>{budgetBound(b.soft_usd, b.hard_usd, b.effective_hard_usd, (v) => formatCreditAmount(v))}</TableCell>
                 <TableCell>
                   {budgetBound(b.soft_tokens, b.hard_tokens, b.effective_hard_tokens, (v) =>
                     compact.format(v),
@@ -418,26 +402,26 @@ function BudgetsSection() {
             <NativeSelectOption value="week">{tr("Week")}</NativeSelectOption>
             <NativeSelectOption value="month">{tr("Month")}</NativeSelectOption>
           </NativeSelect>
-          <label htmlFor="budgetSoftUsd">{tr("Soft USD")}</label>
+          <label htmlFor="budgetSoftUsd">{tr("Soft credits")}</label>
           <Input
             id="budgetSoftUsd"
             type="number"
             min={0}
             step="0.01"
             inputMode="decimal"
-            aria-label={tr("Soft USD bound")}
+            aria-label={tr("Soft credit bound")}
             placeholder={tr("optional")}
             value={softUsd}
             onChange={(e) => setSoftUsd(e.target.value)}
           />
-          <label htmlFor="budgetHardUsd">{tr("Hard USD")}</label>
+          <label htmlFor="budgetHardUsd">{tr("Hard credits")}</label>
           <Input
             id="budgetHardUsd"
             type="number"
             min={0}
             step="0.01"
             inputMode="decimal"
-            aria-label={tr("Hard USD bound")}
+            aria-label={tr("Hard credit bound")}
             placeholder={tr("optional")}
             value={hardUsd}
             onChange={(e) => setHardUsd(e.target.value)}
@@ -477,7 +461,7 @@ function BudgetsSection() {
         </Button>
       </form>
       <p className="usage-note">
-        {tr("A soft bound fires one alert per window; a hard bound refuses new task creation until the window rolls over. Hard bounds never exceed the live global ceilings. Dollar bounds cover only priced runs (see the note above) — zero-rated / included models (free: true or $0 pricing override) accrue $0.00 toward USD bounds while counting 100% of tokens toward token bounds.")}
+        {tr("A soft bound fires one alert per window; a hard bound refuses new task creation until the window rolls over. Hard bounds never exceed the live global ceilings. Credit bounds cover only priced runs (see the note above) — zero-rated / included models (free: true or a zero pricing override) accrue 0 credits toward credit bounds while counting 100% of tokens toward token bounds.")}
       </p>
     </div>
   );
@@ -551,9 +535,9 @@ function UsageTotals({ report }: { report: UsageReport }) {
     <div className="usage-tiles" data-testid="usage-totals">
       <Card className="usage-tile">
         <span className="usage-tile-label">{tr("Total cost")}</span>
-        <span className="usage-tile-value">{fmtUSD(t.cost_usd)}</span>
+        <span className="usage-tile-value"><CreditsValue value={t.cost_usd} /></span>
         <span className="usage-tile-sub">
-        {rich("tasks {0} · chat {1}", fmtUSD(t.task_cost_usd), fmtUSD(t.chat_cost_usd))}
+        {rich("tasks {0} · chat {1}", formatCredits(t.task_cost_usd), formatCredits(t.chat_cost_usd))}
       </span>
       </Card>
       <Card className="usage-tile">
@@ -592,7 +576,7 @@ function measureOf(b: UsageBucket, measure: UsageMeasure): number {
 }
 
 function fmtMeasure(v: number, measure: UsageMeasure): string {
-  if (measure === "cost") return fmtUSD(v);
+  if (measure === "cost") return formatCredits(v);
   if (measure === "cache") return `${formatFixed(v, 1)}%`;
   return compact.format(v);
 }
@@ -759,9 +743,9 @@ function UsageTable({ report }: { report: UsageReport }) {
             <TableCell className="prompt-cell whitespace-normal" title={bucketDisplayName(b, report.group_by)}>
               {bucketDisplayName(b, report.group_by)}
             </TableCell>
-            <TableCell>{fmtUSD(b.cost_usd)}</TableCell>
-            <TableCell>{fmtUSD(b.task_cost_usd)}</TableCell>
-            <TableCell>{fmtUSD(b.chat_cost_usd)}</TableCell>
+            <TableCell>{formatCredits(b.cost_usd)}</TableCell>
+            <TableCell>{formatCredits(b.task_cost_usd)}</TableCell>
+            <TableCell>{formatCredits(b.chat_cost_usd)}</TableCell>
             <TableCell className="usage-num">{plain.format(b.prompt_tokens)}</TableCell>
             <TableCell className="usage-num">{plain.format(b.completion_tokens)}</TableCell>
             <TableCell className="usage-num">{plain.format(b.cached_tokens)}</TableCell>

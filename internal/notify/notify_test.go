@@ -484,7 +484,7 @@ func TestRenderEmail(t *testing.T) {
 		"text/plain",
 		"text/html",
 		"nightly report",
-		"$0.1234",
+		"0.1234 credits",
 		"42s",
 	} {
 		if !strings.Contains(msg, want) {

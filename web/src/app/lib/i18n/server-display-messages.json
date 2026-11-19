@@ -268,7 +268,7 @@
       ]
     },
     {
-      "message": "pricing for model {0} is unknown; cost fields are null. Add the slug to agentcore.KnownModelPricing to get a dollar estimate.",
+      "message": "pricing for model {0} is unknown; cost fields are null. Add the slug to agentcore.KnownModelPricing to get a cost estimate.",
       "fields": [
         "%v"
       ]

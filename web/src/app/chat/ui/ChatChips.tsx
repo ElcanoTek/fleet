@@ -1,4 +1,3 @@
-import { formatFixed } from "@/app/lib/i18n";
 import { rich } from "@/app/lib/i18n/rich";
 import { getLanguage } from "@/app/lib/i18n";
 import { t as tr } from "@/app/lib/i18n";
@@ -30,7 +29,8 @@ import {
   type TurnSummary,
 } from "./history";
 import { Icon } from "./Icon";
-import { formatBytes, formatDuration, formatTokens, formatUsd } from "./formatters";
+import { formatBytes, formatDuration, formatTokens } from "./formatters";
+import { formatCredits } from "@/app/shared/lib/credits";
 import { StatusChip } from "@/app/shared/ui/StatusChip";
 import { copyText } from "@/app/shared/lib/clipboard";
 import { plural } from "@/app/shared/lib/format";
@@ -143,7 +143,7 @@ export function TurnSummaryChip({
 }) {
   const parts: ReactNode[] = [];
   const executionCount = toolCalls.length + pythonStreams.length;
-  parts.push(<span key="cost">{formatUsd(summary.costUsd)}</span>);
+  parts.push(<span key="cost">{formatCredits(summary.costUsd)}</span>);
   if (summary.durationMs > 0) parts.push(<span key="duration">{formatDuration(summary.durationMs)}</span>);
   if (executionCount > 0) {
     parts.push(
@@ -275,7 +275,7 @@ export function SummaryBanner({
       {meta?.model || (meta?.costUsd ?? 0) > 0 ? (
         <p className="mt-2 text-[0.65rem] text-[var(--color-text-muted)] tabular-nums">
           {meta?.model ? <>{tr("Summarized by")}{" "}<span className="font-medium">{shortModelName(meta.model)}</span></> : null}
-          {meta?.costUsd && meta.costUsd > 0 ? <> · {meta.costUsd < 0.01 ? `$${formatFixed(meta.costUsd, 4)}` : `$${formatFixed(meta.costUsd, 2)}`}</> : null}
+          {meta?.costUsd && meta.costUsd > 0 ? <> · {formatCredits(meta.costUsd)}</> : null}
           {meta?.promptTokens ? <> · {meta.promptTokens.toLocaleString(getLanguage())} {tr("prompt tokens condensed")}</> : null}
         </p>
       ) : null}
@@ -322,7 +322,7 @@ export function ConversationTotalsChip({
   if (totals.turns === 0) return null;
 
   const parts: string[] = [];
-  parts.push(`Σ ${formatUsd(totals.costUsd)}`);
+  parts.push(`Σ ${formatCredits(totals.costUsd)}`);
   if (totals.cachedPercent !== null) parts.push(tr("{0}% cached", [totals.cachedPercent]));
   parts.push(plural(totals.turns, "turn"));
   if (usage) parts.push(formatContextUsage(usage));

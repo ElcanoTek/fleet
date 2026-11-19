@@ -112,7 +112,7 @@ func buildTextBody(ev Event) string {
 	fmt.Fprintf(&b, "Task: %s\r\n", ev.Name)
 	fmt.Fprintf(&b, "ID: %s\r\n", ev.TaskID)
 	fmt.Fprintf(&b, "Status: %s\r\n", ev.Status)
-	fmt.Fprintf(&b, "Cost: $%s\r\n", ev.CostUSD)
+	fmt.Fprintf(&b, "Cost: %s credits\r\n", ev.CostUSD)
 	fmt.Fprintf(&b, "Duration: %ds\r\n", ev.DurationSeconds)
 	if ev.Message != "" {
 		// The ask-pause (#510) / progress message — for a paused task this IS
@@ -152,7 +152,7 @@ func buildHTMLBody(ev Event) string {
 			"<tr><td><b>Task</b></td><td>%s</td></tr>"+
 			"<tr><td><b>ID</b></td><td>%s</td></tr>"+
 			"<tr><td><b>Status</b></td><td>%s</td></tr>"+
-			"<tr><td><b>Cost</b></td><td>$%s</td></tr>"+
+			"<tr><td><b>Cost</b></td><td>%s credits</td></tr>"+
 			"<tr><td><b>Duration</b></td><td>%ds</td></tr>"+
 			"</table>%s%s</body></html>",
 		heading,

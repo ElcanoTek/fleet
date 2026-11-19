@@ -1,4 +1,4 @@
-import { formatFixed } from "@/app/lib/i18n";
+import { formatCredits } from "@/app/shared/lib/credits";
 import { rich } from "@/app/lib/i18n/rich";
 import { t as tr } from "@/app/lib/i18n";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -2169,7 +2169,7 @@ export function TaskCreateModal({
                         </div>
                       ) : null}
                       <label className="task-limit-label" htmlFor="taskMaxCostUSD">
-                        {tr("Max cost (USD)")}
+                        {tr("Max cost (credits)")}
                       </label>
                       <Input
                         id="taskMaxCostUSD"
@@ -2439,11 +2439,11 @@ export function TaskCreateModal({
                   aria-describedby="task-estimate-detail"
                 >
                   {forecast.pricing_known && forecast.estimated_total_cost_usd != null
-                    ? tr("≈ ${0} per run", [formatFixed(forecast.estimated_total_cost_usd, 2)])
+                    ? tr("≈ {0} per run", [formatCredits(forecast.estimated_total_cost_usd, 2)])
                     : tr("Cost unknown for this model")}
                   {forecast.would_hit_ceiling ? (
                     <span className="task-estimate-ceiling">
-        {rich("· may hit the ${0} ceiling", formatFixed(forecast.max_cost_ceiling_usd, 2))}
+        {rich("· may hit the {0} ceiling", formatCredits(forecast.max_cost_ceiling_usd, 2))}
       </span>
                   ) : null}
                 </button>

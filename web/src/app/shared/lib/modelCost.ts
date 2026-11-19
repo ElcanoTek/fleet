@@ -1,12 +1,14 @@
 import { formatFixed } from "@/app/lib/i18n";
 import { t as tr } from "@/app/lib/i18n";
-// Restaurant-style price indicators for the model pickers ($ … $$$$).
+// Credit-usage levels for the model pickers (a four-step, colour-coded meter).
 //
-// OpenRouter prices every model as two per-token numbers (prompt and
+// Money is shown to people as "credits" everywhere in the UI (one credit is one
+// US dollar of metered provider spend — see shared/lib/credits.ts); no "$"
+// appears. OpenRouter prices every model as two per-token numbers (prompt and
 // completion). Those are unreadable at a glance — 0.0000006 vs 0.000002 tells
 // a user nothing while they are choosing a model mid-conversation. This module
 // collapses the pair into one *blended* price per million tokens and buckets it
-// into four tiers, the way a restaurant listing does.
+// into four levels, drawn as a meter that fills and warms as usage rises.
 //
 // The blend is weighted 3 prompt : 1 completion — the industry-conventional
 // ratio for a single headline price, and the right shape for fleet's agent
@@ -30,11 +32,9 @@ export type ModelPrices = {
 
 export type ModelCost = {
   tier: ModelCostTier;
-  // "$" … "$$$$" — the filled glyphs for this tier.
-  symbol: string;
-  // Blended USD per 1M tokens (3 prompt : 1 completion).
+  // Blended credits per 1M tokens (3 prompt : 1 completion).
   blendedPerMillion: number;
-  // Short tier word for the accessible label ("budget", "premium", …).
+  // Level name for the accessible label ("Low credit usage", …).
   label: string;
   // Full human sentence used as the title/aria text on the indicator.
   description: string;
@@ -47,15 +47,15 @@ const COMPLETION_WEIGHT = 1;
 
 // Upper bounds (inclusive) in blended USD per 1M tokens. The top tier has no
 // bound. Chosen so the tiers separate the families users actually compare:
-// small/fast models land in $, mid-tier workhorses in $$, frontier models in
-// $$$, and the reasoning flagships in $$$$.
+// small/fast models land in level 1, mid-tier workhorses in 2, frontier
+// models in 3, and the reasoning flagships in 4.
 const TIER_MAX_PER_MILLION: ReadonlyArray<number> = [1, 5, 15];
 
 const TIER_LABELS: Readonly<Record<ModelCostTier, string>> = {
-  1: "budget",
-  2: "moderate",
-  3: "premium",
-  4: tr("top tier"),
+  1: tr("Low credit usage"),
+  2: tr("Moderate credit usage"),
+  3: tr("High credit usage"),
+  4: tr("Very high credit usage"),
 };
 
 // finite accepts only a genuine non-negative number (or a numeric string, the
@@ -91,13 +91,13 @@ export function tierForBlendedPrice(perMillion: number): ModelCostTier {
   return 4;
 }
 
-// formatBlendedPrice renders the blended price for the tooltip. Sub-dollar
-// prices get three decimals so a $0.05 model doesn't read as "$0.05" ≈ "$0.10";
+// formatBlendedPrice renders the blended price for the tooltip, in credits.
+// Prices under one credit get three decimals so 0.075 doesn't round to 0.08;
 // everything else gets two.
 export function formatBlendedPrice(perMillion: number): string {
   if (perMillion === 0) return "free";
   const decimals = perMillion < 1 ? 3 : 2;
-  return tr("${0}/M tokens", [formatFixed(perMillion, decimals)]);
+  return tr("{0} credits/M tokens", [formatFixed(perMillion, decimals)]);
 }
 
 // modelCostFor is the one entry point the UI calls. Returns null when the model
@@ -112,14 +112,11 @@ export function modelCostFor(prices: ModelPrices | null | undefined): ModelCost 
   const priceText = formatBlendedPrice(perMillion);
   return {
     tier,
-    symbol: "$".repeat(tier),
     blendedPerMillion: perMillion,
     label,
     description:
       perMillion === 0
-        ? tr("Free — no per-token charge ({0} of {1})", ["$".repeat(tier), "$".repeat(MAX_COST_TIER)])
-        : tr("{0} cost — about {1} blended ({2} of {3})", [label, priceText, "$".repeat(tier), "$".repeat(
-            MAX_COST_TIER,
-          )]),
+        ? tr("Free — no per-token charge")
+        : tr("{0} — about {1} blended (level {2} of {3})", [label, priceText, tier, MAX_COST_TIER]),
   };
 }

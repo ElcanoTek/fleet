@@ -1,4 +1,4 @@
-import { formatFixed } from "@/app/lib/i18n";
+import { formatCredits } from "@/app/shared/lib/credits";
 import { localizeServerMessage } from "@/app/lib/i18n/errors";
 import { rich } from "@/app/lib/i18n/rich";
 import { getLanguage } from "@/app/lib/i18n";
@@ -7,16 +7,16 @@ import type { CostForecast } from "@/app/shared/lib/orchestratorApi";
 
 // CostForecastPanel renders the pre-submission cost forecast inline below the
 // Create Task form (#233). It always shows the token breakdown; it shows the
-// dollar estimate + range only when the model's pricing is known, and a warning
+// credit estimate + range only when the model's pricing is known, and a warning
 // banner when the median would exceed the configured cost ceiling. Advisory
 // only — it never gates Submit.
 export function CostForecastPanel({ forecast }: { forecast: CostForecast }) {
-  const usd = (v: number) => `$${formatFixed(v, 4)}`;
+  const credits = (v: number) => formatCredits(v, 4);
   return (
     <div className="cost-forecast" role="status" aria-live="polite">
       {forecast.would_hit_ceiling ? (
         <div className="cost-forecast-warning" role="alert">
-        {rich("Estimated cost (~{0}) exceeds the cost ceiling of ${1} — the run may stop early.", usd(forecast.estimated_total_cost_usd ?? 0), formatFixed(forecast.max_cost_ceiling_usd, 2))}
+        {rich("Estimated cost (~{0}) exceeds the cost ceiling of {1} — the run may stop early.", credits(forecast.estimated_total_cost_usd ?? 0), formatCredits(forecast.max_cost_ceiling_usd, 2))}
       </div>
       ) : null}
       <dl className="cost-forecast-grid">
@@ -34,7 +34,7 @@ export function CostForecastPanel({ forecast }: { forecast: CostForecast }) {
           <>
             <dt>{tr("Estimated cost")}</dt>
             <dd>
-              {tr("{0} (range {1} – {2})", [usd(forecast.estimated_total_cost_usd), usd(forecast.estimated_total_cost_range.min), usd(forecast.estimated_total_cost_range.max)])}
+              {tr("{0} (range {1} – {2})", [credits(forecast.estimated_total_cost_usd), credits(forecast.estimated_total_cost_range.min), credits(forecast.estimated_total_cost_range.max)])}
             </dd>
           </>
         ) : null}

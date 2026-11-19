@@ -126,8 +126,8 @@ describe("AdminOverviewPage system health", () => {
     expect(panel).toHaveTextContent("9.9.9-test"); // version
     expect(panel).toHaveTextContent("up 1h 1m"); // uptime sub
     expect(panel).toHaveTextContent("1/5"); // DB pool in_use/pool_size
-    expect(panel).toHaveTextContent("$4.50"); // LLM spend today
-    expect(panel).toHaveTextContent("120 calls · $0.037/call");
+    expect(panel).toHaveTextContent("4.50 credits"); // LLM spend today
+    expect(panel).toHaveTextContent("120 calls · 0.037 credits/call");
     expect(panel).toHaveTextContent("2 running"); // tasks
     expect(panel).toHaveTextContent("41 ✓"); // tasks today
     expect(panel).toHaveTextContent("1/3"); // sandbox pool available/size
@@ -233,7 +233,7 @@ describe("AdminOverviewPage usage", () => {
     expect(screen.getByText("Users")).toBeInTheDocument();
     expect(await screen.findByText("2h ago")).toBeInTheDocument(); // most recent (first row)
     expect(screen.getByText("5")).toBeInTheDocument(); // turns total 3 + 2
-    expect(screen.getByText("$5.07")).toBeInTheDocument(); // spend total 4.96 + 0.11
+    expect(screen.getByText("5.07 credits")).toBeInTheDocument(); // spend total 4.96 + 0.11
   });
 
   it("refetches BOTH health and stats on manual refresh", async () => {

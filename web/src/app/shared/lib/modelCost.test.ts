@@ -6,13 +6,13 @@ import {
   tierForBlendedPrice,
 } from "./modelCost";
 
-// Unit tests for the restaurant-style cost tiers shown in both model pickers.
-// The numbers below are per-TOKEN prices in OpenRouter's format (USD/token),
-// so 0.000003 is "$3 per 1M tokens".
+// Unit tests for the credit-usage levels shown in both model pickers.
+// The numbers below are per-TOKEN prices in OpenRouter's format, so 0.000003
+// is 3 credits per 1M tokens.
 
 describe("blendedPricePerMillion", () => {
   it("weights prompt 3:1 against completion", () => {
-    // $3/M prompt, $15/M completion → (3*3 + 15) / 4 = $6/M.
+    // 3/M prompt, 15/M completion → (3*3 + 15) / 4 = 6/M.
     expect(
       blendedPricePerMillion({ pricePrompt: 0.000003, priceCompletion: 0.000015 }),
     ).toBeCloseTo(6, 6);
@@ -34,7 +34,7 @@ describe("blendedPricePerMillion", () => {
     ).toBeNull();
   });
 
-  it("treats a free model as a real $0 price, not unknown", () => {
+  it("treats a free model as a real zero price, not unknown", () => {
     expect(blendedPricePerMillion({ pricePrompt: 0, priceCompletion: 0 })).toBe(0);
   });
 });
@@ -53,38 +53,45 @@ describe("tierForBlendedPrice", () => {
 });
 
 describe("formatBlendedPrice", () => {
-  it("renders sub-dollar prices with three decimals", () => {
-    expect(formatBlendedPrice(0.075)).toBe("$0.075/M tokens");
+  it("renders prices under one credit with three decimals", () => {
+    expect(formatBlendedPrice(0.075)).toBe("0.075 credits/M tokens");
   });
-  it("renders dollar-plus prices with two decimals", () => {
-    expect(formatBlendedPrice(6)).toBe("$6.00/M tokens");
+  it("renders prices of one credit or more with two decimals", () => {
+    expect(formatBlendedPrice(6)).toBe("6.00 credits/M tokens");
   });
-  it("names free models rather than printing $0.000", () => {
+  it("names free models rather than printing 0.000", () => {
     expect(formatBlendedPrice(0)).toBe("free");
   });
 });
 
 describe("modelCostFor", () => {
-  it("maps a cheap model to one dollar sign", () => {
+  it("maps a cheap model to level 1", () => {
     const cost = modelCostFor({ pricePrompt: 0.0000003, priceCompletion: 0.0000012 });
     expect(cost?.tier).toBe(1);
-    expect(cost?.symbol).toBe("$");
-    expect(cost?.label).toBe("budget");
-    expect(cost?.description).toContain("$ of $$$$");
+    expect(cost?.label).toBe("Low credit usage");
+    expect(cost?.description).toContain("level 1 of 4");
   });
 
-  it("maps a frontier model to three dollar signs", () => {
+  it("maps a frontier model to level 3", () => {
     const cost = modelCostFor({ pricePrompt: 0.000003, priceCompletion: 0.000015 });
     expect(cost?.tier).toBe(3);
-    expect(cost?.symbol).toBe("$$$");
-    expect(cost?.description).toContain("$6.00/M tokens");
+    expect(cost?.description).toBe("High credit usage — about 6.00 credits/M tokens blended (level 3 of 4)");
   });
 
-  it("maps a flagship model to four dollar signs", () => {
+  it("maps a flagship model to level 4", () => {
     const cost = modelCostFor({ pricePrompt: 0.000015, priceCompletion: 0.000075 });
     expect(cost?.tier).toBe(4);
-    expect(cost?.symbol).toBe("$$$$");
-    expect(cost?.label).toBe("top tier");
+    expect(cost?.label).toBe("Very high credit usage");
+  });
+
+  it("never shows a currency symbol", () => {
+    for (const prices of [
+      { pricePrompt: 0, priceCompletion: 0 },
+      { pricePrompt: 0.0000003, priceCompletion: 0.0000012 },
+      { pricePrompt: 0.000015, priceCompletion: 0.000075 },
+    ]) {
+      expect(modelCostFor(prices)?.description).not.toMatch(/\$|USD/);
+    }
   });
 
   it("describes a free model as free", () => {
@@ -93,7 +100,7 @@ describe("modelCostFor", () => {
 
   it("returns null for models with no known pricing", () => {
     // Workspace-provider models and half-typed custom slugs land here — the
-    // UI must render nothing rather than implying a tier.
+    // UI must render nothing rather than implying a level.
     expect(modelCostFor({})).toBeNull();
     expect(modelCostFor(null)).toBeNull();
     expect(modelCostFor(undefined)).toBeNull();

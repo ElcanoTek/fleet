@@ -22,11 +22,11 @@ const baseForecast: CostForecast = {
 describe("CostForecastPanel", () => {
   afterEach(() => cleanup());
 
-  it("shows the token breakdown and dollar estimate for a known model", () => {
+  it("shows the token breakdown and credit estimate for a known model", () => {
     render(<CostForecastPanel forecast={baseForecast} />);
     expect(screen.getByText("anthropic/claude-sonnet-4-5")).toBeInTheDocument();
     expect(screen.getByText(/12,500 tokens/)).toBeInTheDocument();
-    expect(screen.getByText(/\$0\.3600/)).toBeInTheDocument();
+    expect(screen.getByText(/0\.3600 credits/)).toBeInTheDocument();
     // No ceiling warning when within budget.
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
@@ -41,7 +41,7 @@ describe("CostForecastPanel", () => {
     expect(alert).toHaveTextContent(/exceeds the cost ceiling/);
   });
 
-  it("omits the dollar estimate when the model's pricing is unknown", () => {
+  it("omits the credit estimate when the model's pricing is unknown", () => {
     render(
       <CostForecastPanel
         forecast={{

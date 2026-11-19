@@ -20,7 +20,7 @@ export type PickerModel = {
   created?: number | null;
   priceCompletion?: number | null;
   // Prompt price per token. Together with priceCompletion it drives the
-  // restaurant-style cost indicator (shared/lib/modelCost.ts).
+  // credit-usage meter (shared/lib/modelCost.ts).
   pricePrompt?: number | null;
   contextLength?: number | null;
   // True for models served by an admin-configured workspace provider

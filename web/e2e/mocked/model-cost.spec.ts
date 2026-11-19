@@ -3,15 +3,16 @@ import type { Route } from "@playwright/test";
 import { loginViaCookie } from "./_session";
 import { mockChatBoot } from "./_mocks";
 
-// Mocked e2e for the restaurant-style model cost indicators ($ … $$$$) in both
-// model pickers. The catalog/rankings proxies are stubbed with a priced fixture
-// so the tier arithmetic (blended 3 prompt : 1 completion, see
-// shared/lib/modelCost.ts) is exercised end-to-end through the real UI:
+// Mocked e2e for the credit-usage meter in both model pickers (four pips,
+// filled and coloured by level; no currency glyph anywhere). The
+// catalog/rankings proxies are stubbed with a priced fixture so the level
+// arithmetic (blended 3 prompt : 1 completion, see shared/lib/modelCost.ts) is
+// exercised end-to-end through the real UI, in credits per 1M tokens:
 //
-//   v4-flash     $0.40/$1.60 → $0.70/M  → $
-//   grok-4.6     $1.25/$10   → $3.44/M  → $$
-//   sonnet       $3/$15      → $6.00/M  → $$$
-//   opus         $15/$75     → $30.00/M → $$$$
+//   v4-flash     0.40/1.60 → 0.70/M  → level 1
+//   grok-4.6     1.25/10   → 3.44/M  → level 2
+//   sonnet       3/15      → 6.00/M  → level 3
+//   opus         15/75     → 30.00/M → level 4
 //
 // The default mocks return EMPTY model lists (see _mocks.ts), so every other
 // spec keeps exercising the no-pricing path where no indicator renders.
@@ -73,8 +74,13 @@ test("the chat composer shows a cost tier per model and on the chip", async ({ p
   await expect(tierOf("Claude Opus 4.8")).toHaveAttribute("data-cost-tier", "4");
   await expect(tierOf("Claude Sonnet 4.5")).toHaveAttribute(
     "aria-label",
-    /premium cost — about \$6\.00\/M tokens blended/,
+    /High credit usage — about 6\.00 credits\/M tokens blended \(level 3 of 4\)/,
   );
+  // The level is drawn, not spelled in currency glyphs: three of four pips
+  // filled, and no text at all inside the meter.
+  await expect(tierOf("Claude Sonnet 4.5").locator(".model-cost-pip-filled")).toHaveCount(3);
+  await expect(tierOf("Claude Sonnet 4.5").locator(".model-cost-pip")).toHaveCount(4);
+  await expect(listbox).not.toContainText("$");
 
   // Picking a model moves its tier onto the collapsed chip, so the price band
   // of the model about to run is visible without reopening the picker.

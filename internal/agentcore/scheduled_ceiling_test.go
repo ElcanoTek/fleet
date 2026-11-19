@@ -150,7 +150,7 @@ func TestCeiling_BudgetStopReasonNamesCostCeiling(t *testing.T) {
 	if !res.StoppedByBudget {
 		t.Fatal("StoppedByBudget should be set on the ceiling path")
 	}
-	for _, want := range []string{"COST_CEILING_REACHED", "$0.0600", "$0.05"} {
+	for _, want := range []string{"COST_CEILING_REACHED", "0.0600 credits", "0.05 credits"} {
 		if !strings.Contains(res.BudgetStopReason, want) {
 			t.Errorf("BudgetStopReason %q should contain %q", res.BudgetStopReason, want)
 		}

@@ -5709,10 +5709,23 @@ select.mcp-server-picker__account-select {
   font-size: 0.7rem;
   color: var(--color-text-muted);
 }
-/* Restaurant-style cost glyphs ($ … $$$$) shared by both model pickers. The
-   filled glyphs warm from success-green (cheap) to danger-red (top tier); the
-   unfilled remainder stays a dim track so the tier reads as N-of-4. */
-/* In the task form's header row the name + badge lead and the cost trails,
+/* A credit amount on a headline stat tile (shared/ui/CreditsValue.tsx): the
+   number keeps the tile's size, the unit rides beside it as a small suffix. */
+.credits-value {
+  white-space: nowrap;
+}
+.credits-unit {
+  font-family: var(--font-body);
+  font-size: 0.5em;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  color: var(--color-text-secondary);
+}
+/* Credit-usage meter shared by both model pickers: four pips, the first N
+   filled for level N. The filled pips warm from success-green (low) through
+   amber to danger-red (very high); the unfilled remainder stays a dim track
+   so the level reads as N-of-4 without relying on colour alone. */
+/* In the task form's header row the name + badge lead and the meter trails,
    matching the chat listbox's trailing-edge meta cluster. */
 .model-picker-header .model-cost {
   margin-left: auto;
@@ -5720,37 +5733,42 @@ select.mcp-server-picker__account-select {
 .model-cost {
   display: inline-flex;
   flex-shrink: 0;
-  align-items: baseline;
-  gap: 0.03em;
-  font-size: 0.68rem;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-  letter-spacing: 0.02em;
+  align-items: center;
+  gap: 2px;
   line-height: 1;
   cursor: help;
 }
-.model-cost-filled {
-  color: var(--model-cost-color, var(--color-text-secondary));
+.model-cost-pip {
+  display: block;
+  width: 4px;
+  height: 10px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--color-text-muted) 32%, transparent);
 }
-.model-cost-rest {
-  color: var(--color-text-muted);
-  opacity: 0.45;
+.model-cost-pip-filled {
+  background: var(--model-cost-color, var(--color-text-secondary));
 }
 .model-cost-free {
-  color: var(--color-success);
+  font-size: 0.68rem;
   font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--color-success-text, var(--color-success));
 }
 .model-cost-tier-1 {
-  --model-cost-color: var(--color-success);
+  --model-cost-color: var(--color-success-strong, var(--color-success));
 }
 .model-cost-tier-2 {
-  --model-cost-color: var(--color-text-secondary);
+  --model-cost-color: color-mix(
+    in srgb,
+    var(--color-success-strong, var(--color-success)) 45%,
+    var(--color-warning-strong, var(--color-warning))
+  );
 }
 .model-cost-tier-3 {
-  --model-cost-color: var(--color-warning);
+  --model-cost-color: var(--color-warning-strong, var(--color-warning));
 }
 .model-cost-tier-4 {
-  --model-cost-color: var(--color-danger);
+  --model-cost-color: var(--color-danger-strong, var(--color-danger));
 }
 .model-picker-loading,
 .model-picker-empty {

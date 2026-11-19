@@ -122,7 +122,7 @@ const META: Record<string, SettingMeta> = {
     label: tr("Per-run cost ceiling"),
     description:
       tr("The most one chat reply or one task run can spend before Fleet stops it. Applies to everyone on this workspace from the next run."),
-    unitHint: tr("USD — 1 to 100000, cents allowed; 0 = no ceiling"),
+    unitHint: tr("Credits — 1 to 100000, two decimals allowed; 0 = no ceiling"),
   },
   max_total_tokens: {
     label: tr("Per-run token ceiling"),
@@ -209,8 +209,8 @@ const META: Record<string, SettingMeta> = {
   monthly_soft_spend_limit_usd: {
     label: tr("Monthly soft spend limit"),
     description:
-      tr("Soft monthly billed spend allowance in USD displayed on the Analytics overview banner (included / $0-cost models count $0 toward this limit). Set 0 for unlimited."),
-    unitHint: tr("USD — 1 to 1000000; 0 = unlimited"),
+      tr("Soft monthly billed spend allowance in credits displayed on the Analytics overview banner (included / zero-cost models count 0 credits toward this limit). Set 0 for unlimited."),
+    unitHint: tr("Credits — 1 to 1000000; 0 = unlimited"),
   },
 };
 
@@ -898,7 +898,7 @@ function DecisionModelControl({
         <option value="~typesafe/jev-latest">{tr("Jev, newest release (recommended)")}</option>
         {options.map((m) => (
           <option key={m.id} value={m.id}>
-            {tr("{0} · ${1}/M in", [m.name, formatFixed(m.input_per_million, 3)])}
+            {tr("{0} · {1} credits/M in", [m.name, formatFixed(m.input_per_million, 3)])}
           </option>
         ))}
       </datalist>

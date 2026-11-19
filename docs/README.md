@@ -342,7 +342,8 @@ above fails otherwise.
 - [`MCP-TESTING.md`](MCP-TESTING.md) — Testing MCP servers
 - [`MEMORY.md`](MEMORY.md) — User memory: typed, provenanced, reviewable
 - [`MIGRATIONS.md`](MIGRATIONS.md) — Database migrations
-- [`MODEL-COST-INDICATORS.md`](MODEL-COST-INDICATORS.md) — Model cost indicators ($ … $$$$)
+- [`MODEL-COST-INDICATORS.md`](MODEL-COST-INDICATORS.md) — Model credit-usage meter (four colour-coded pips) in both model pickers
+- [`CREDITS.md`](CREDITS.md) — Credits: how the UI, emails and run messages label money (no `$`, no USD), and what stays in USD
 - [`MODEL-DEFAULTS.md`](MODEL-DEFAULTS.md) — Gemini 4 Hydrogen as primary default (2026-11-13) with Claude Opus 5.5 as fallback frontier tier, operator model rollout across chats & recurring tasks, and the history of default swaps; plus the self-correcting refusal a lockdown conversation returns for a model its allow-list forbids
 - [`MS365-MCP.md`](MS365-MCP.md) — Built-in Microsoft 365 OAuth and Graph MCP Surface (`internal/ms365mcp`)
 - [`MULTIPLAYER-CHAT.md`](MULTIPLAYER-CHAT.md) — Multiplayer chat mode: collaborative team conversations with per-turn sender identity and optional default-on sharing

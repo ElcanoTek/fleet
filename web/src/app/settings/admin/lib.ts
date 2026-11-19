@@ -1,3 +1,4 @@
+import { formatCredits } from "@/app/shared/lib/credits";
 import { formatFixed } from "@/app/lib/i18n";
 import { t as tr } from "@/app/lib/i18n";
 import { getLanguage } from "@/app/lib/i18n";
@@ -63,9 +64,9 @@ export function formatAgo(unixSeconds: number): string {
   return tr("{0}d ago", [Math.floor(seconds / 86400)]);
 }
 
-export function formatUSD(v: number): string {
-  if (v == null) return "$0.00";
-  return `$${formatFixed(v, 2)}`;
+// Spend is shown in credits, never with a currency symbol (shared/lib/credits.ts).
+export function formatSpend(v: number): string {
+  return formatCredits(v, 2);
 }
 
 // formatBytes — the admin pages' byte formatter (Server health, Storage):

@@ -1,3 +1,5 @@
+import { CreditsValue } from "@/app/shared/ui/CreditsValue";
+import { formatCredits } from "@/app/shared/lib/credits";
 import { rich } from "@/app/lib/i18n/rich";
 import { getLanguage } from "@/app/lib/i18n";
 import { t as tr } from "@/app/lib/i18n";
@@ -38,24 +40,8 @@ import {
 
 const RANGE_OPTIONS = [7, 30, 90] as const;
 
-const usd = new Intl.NumberFormat(getLanguage(), {
-  style: "currency",
-  currency: "USD",
-  minimumFractionDigits: 2,
-  maximumFractionDigits: 2,
-});
-const usdFine = new Intl.NumberFormat(getLanguage(), {
-  style: "currency",
-  currency: "USD",
-  minimumFractionDigits: 2,
-  maximumFractionDigits: 4,
-});
 const compact = new Intl.NumberFormat(getLanguage(), { notation: "compact", maximumFractionDigits: 1 });
 const plain = new Intl.NumberFormat(getLanguage());
-
-function fmtUSD(v: number): string {
-  return v > 0 && v < 0.01 ? usdFine.format(v) : usd.format(v);
-}
 
 function tokensOf(u: AdoptionUser): number {
   return u.prompt_tokens + u.completion_tokens;
@@ -240,7 +226,7 @@ function AdoptionTotalsTiles({ report }: { report: AdoptionReport }) {
       <Card className="usage-tile">
         <span className="usage-tile-label">{tr("Spend")}</span>
         <span className="usage-tile-value">
-          {fmtUSD(t.cost_usd)} <DeltaChip cur={t.cost_usd} prev={t.prev_cost_usd} what="spend" />
+          <CreditsValue value={t.cost_usd} /> <DeltaChip cur={t.cost_usd} prev={t.prev_cost_usd} what="spend" />
         </span>
         <span className="usage-tile-sub">
         {rich("{0} task iterations · {1} chat turns", compact.format(t.task_iterations), compact.format(t.chat_turns))}
@@ -425,7 +411,7 @@ function AdoptionLeaderboard({ report }: { report: AdoptionReport }) {
                 <TableCell>
                   <span className={`adoption-tier adoption-tier-${tier}`}>{tier}</span>
                 </TableCell>
-                <TableCell>{fmtUSD(u.cost_usd)}</TableCell>
+                <TableCell>{formatCredits(u.cost_usd)}</TableCell>
                 <TableCell className="usage-num">{plain.format(u.chat_turns)}</TableCell>
                 <TableCell className="usage-num">{plain.format(u.task_iterations)}</TableCell>
                 <TableCell>{u.last_active ?? "—"}</TableCell>

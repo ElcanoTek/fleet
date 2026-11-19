@@ -116,9 +116,9 @@ describe("ModelPicker", () => {
     expect(input.value).toBe(DEFAULT_MODEL);
   });
 
-  it("renders the restaurant-style cost tier for priced catalog models", async () => {
+  it("renders the credit-usage meter for priced catalog models", async () => {
     // Seed-only fallback carries no prices, so this case serves a catalog with
-    // pricing: $3/M prompt + $15/M completion blends (3:1) to $6/M → "$$$".
+    // pricing: 3/M prompt + 15/M completion blends (3:1) to 6 credits/M → level 3.
     vi.stubGlobal(
       "fetch",
       vi.fn().mockImplementation(async (url: string) => {
@@ -143,14 +143,17 @@ describe("ModelPicker", () => {
     render(<Harness />);
     fireEvent.focus(screen.getByRole("combobox"));
     const indicator = await waitFor(() =>
-      screen.getByLabelText(/premium cost — about \$6\.00\/M tokens blended/),
+      screen.getByLabelText(/High credit usage — about 6\.00 credits\/M tokens blended/),
     );
     expect(indicator).toHaveAttribute("data-cost-tier", "3");
-    expect(indicator).toHaveTextContent("$$$$");
+    // Level 3 of 4: three filled pips, one empty — and no currency glyph.
+    expect(indicator.querySelectorAll(".model-cost-pip")).toHaveLength(4);
+    expect(indicator.querySelectorAll(".model-cost-pip-filled")).toHaveLength(3);
+    expect(indicator.textContent).toBe("");
   });
 
   it("omits the cost tier for models with no known pricing", async () => {
-    // Seed fallback (fetch rejects) — no prices anywhere, so no glyphs.
+    // Seed fallback (fetch rejects) — no prices anywhere, so no meter.
     render(<Harness />);
     fireEvent.focus(screen.getByRole("combobox"));
     await waitFor(() => screen.getByText(DEFAULT_MODEL_LABEL));

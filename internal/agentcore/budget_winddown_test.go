@@ -36,7 +36,7 @@ func TestCheckBudgetWindDown(t *testing.T) {
 		t.Fatalf("second check must be active but not first, got %+v", st2)
 	}
 	if notice := st.windDownNotice(); !strings.Contains(notice, "BUDGET WIND-DOWN") ||
-		!strings.Contains(notice, "$8.00 of the $10.00 cost ceiling") {
+		!strings.Contains(notice, "8.00 credits of the 10.00-credit cost ceiling") {
 		t.Fatalf("notice missing spend detail: %q", notice)
 	}
 	// The carve-out: outstanding critical actions are named as NOT new work,
