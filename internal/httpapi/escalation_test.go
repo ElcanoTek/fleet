@@ -580,3 +580,101 @@ func TestEscalateAfterTurn_SuppressesCardOnBackgroundTurn(t *testing.T) {
 		t.Fatalf("events = %+v, want one recorded long_turn signal with Suggested=false", ev)
 	}
 }
+
+// In a Multiplayer chat the turn's sender may not own the conversation. The
+// card gate reads the conversation under its owner, so a participant's
+// struggling turn in a chat already pinned to the fallback model gets no card
+// (live 2026-11-19: it was offered the model the chat was on), while a chat
+// that is not pinned still gets one for whoever ran the turn.
+func TestEscalateAfterTurn_MultiplayerParticipantSeesOwnersModel(t *testing.T) {
+	t.Parallel()
+
+	s := serverFixture(t)
+	s.agent = &fakeTurnEngine{}
+	s.cfg.EscalationSignalsEnabled = true
+	st := s.concreteStore(t)
+	ctx := context.Background()
+	const owner, participant = "jeanne@x.com", "matt@x.com"
+	seedUser(t, st, owner)
+	seedUser(t, st, participant)
+	sharedConv := func(pinned bool) *store.Conversation {
+		t.Helper()
+		conv := seedConv(t, s, owner)
+		if _, err := st.SetConversationMultiplayer(ctx, owner, conv.ID, true, []string{participant}, nil); err != nil {
+			t.Fatalf("SetConversationMultiplayer: %v", err)
+		}
+		if pinned {
+			if err := st.SetModel(ctx, owner, conv.ID, agentcore.CurrentFallbackModel()); err != nil {
+				t.Fatalf("SetModel: %v", err)
+			}
+		}
+		// What the chat handler hands the turn for this sender.
+		loaded, err := s.getOwnedOrMultiplayerConversation(ctx, participant, conv.ID)
+		if err != nil || loaded == nil {
+			t.Fatalf("participant cannot load the shared chat: %v %v", loaded, err)
+		}
+		return loaded
+	}
+	fail := toolResult(t, "boom", true)
+	struggling := func() *TurnResult {
+		return &TurnResult{Model: "openrouter/auto", NewHistory: []agent.HistoryEntry{fail, fail, fail}}
+	}
+	cases := []struct {
+		name     string
+		pinned   bool
+		sender   string
+		wantCard bool
+	}{
+		{"participant in a chat pinned to the fallback model", true, participant, false},
+		{"owner in a chat pinned to the fallback model", true, owner, false},
+		{"participant in a chat on the everyday model", false, participant, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			conv := sharedConv(c.pinned)
+			s.escalateAfterTurn(ctx, newTurnBuffer(conv.ID, "t1"), conv, c.sender, nil, struggling(), nil)
+			if got := pendingSuggestion(t, s, c.sender, conv.ID) != nil; got != c.wantCard {
+				t.Fatalf("card staged = %v, want %v", got, c.wantCard)
+			}
+			ev := escalationEvents(t, s, conv.ID)
+			if len(ev) != 1 || ev[0].Signal != escalationSignalToolErrors || ev[0].Suggested != c.wantCard {
+				t.Fatalf("events = %+v, want one tool_errors row with Suggested=%v", ev, c.wantCard)
+			}
+		})
+	}
+}
+
+// A participant who accepted a suggestion card in a Multiplayer chat and
+// clicks again is answered with the chat's model, not a 500: the resolved
+// answer reads the conversation through the participant's own access.
+func TestResolvedSuggestionAnswersAParticipant(t *testing.T) {
+	t.Parallel()
+
+	s := serverFixture(t)
+	st := s.concreteStore(t)
+	ctx := context.Background()
+	const owner, participant = "owner@x.com", "guest@x.com"
+	seedUser(t, st, owner)
+	seedUser(t, st, participant)
+	conv := seedConv(t, s, owner)
+	if _, err := st.SetConversationMultiplayer(ctx, owner, conv.ID, true, []string{participant}, nil); err != nil {
+		t.Fatalf("SetConversationMultiplayer: %v", err)
+	}
+	fallback := agentcore.CurrentFallbackModel()
+	ap, err := st.CreateApproval(ctx, conv.ID, participant, "suggest_advanced_model", "call-1",
+		`{"reason":"r","recommend_model":"`+fallback+`","source":"signal"}`, time.Now().Unix()+3600, store.ApprovalSeat{})
+	if err != nil {
+		t.Fatalf("CreateApproval: %v", err)
+	}
+	if ok, err := st.ClaimApprovalAndSetModel(ctx, participant, ap.ID, "accepted", conv.ID, fallback); err != nil || !ok {
+		t.Fatalf("ClaimApprovalAndSetModel = %v, %v", ok, err)
+	}
+	d := s.resolvedApprovalDecision(ctx, participant, ap.ID)
+	if d.status != 0 || d.body["model"] != fallback {
+		t.Fatalf("resolved answer = status %d %q body %v, want the chat's model %q", d.status, d.errText, d.body, fallback)
+	}
+	// Someone with no access to the chat still learns nothing about it.
+	if d := s.resolvedApprovalDecision(ctx, "stranger@x.com", ap.ID); d.status == 0 {
+		t.Fatalf("a stranger was answered: %v", d.body)
+	}
+}

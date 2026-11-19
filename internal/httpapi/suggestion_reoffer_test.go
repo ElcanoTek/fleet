@@ -141,3 +141,56 @@ func TestSuggestionRespectsLockdownAllowList(t *testing.T) {
 		t.Errorf("lockdown-only deployment: staged = %v, err = %v; want suppressed", staged, err)
 	}
 }
+
+// ownerOnlyStore reads a conversation only under its owner's email, as
+// store.Get does.
+type ownerOnlyStore struct {
+	reofferStore
+	owner string
+}
+
+func (s *ownerOnlyStore) Get(_ context.Context, userEmail, _ string) (*store.Conversation, error) {
+	if userEmail != s.owner {
+		return nil, nil
+	}
+	return &store.Conversation{ID: "c", UserEmail: s.owner, Model: s.convModel}, nil
+}
+
+// A Multiplayer participant's turn is gated on the conversation its owner
+// holds: no card in a chat already pinned to the fallback model, a card in one
+// that is not. A conversation that cannot be read gets no card.
+func TestSuggestionGateReadsTheOwnersConversation(t *testing.T) {
+	t.Parallel()
+
+	fallback := agentcore.CurrentFallbackModel()
+	cases := []struct {
+		name      string
+		convModel string
+		owner     string
+		want      bool
+	}{
+		{"participant, chat pinned to the fallback model", fallback, "owner@x", false},
+		{"participant, chat on the everyday model", "fast/model", "owner@x", true},
+		{"conversation not readable", "fast/model", "someone-else@x", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			st := &ownerOnlyStore{reofferStore: reofferStore{convModel: c.convModel}, owner: c.owner}
+			a := &approvalStager{ctx: context.Background(), store: st, conversationID: "c", userEmail: "participant@x", ownerEmail: "owner@x", sink: &recordingSink{}}
+			staged, err := a.StageHostSuggestion(suggestionSourceSignal, "3 tool calls in a row failed")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if staged != c.want || (st.staged == 1) != c.want {
+				t.Fatalf("staged = %v (%d cards), want %v", staged, st.staged, c.want)
+			}
+		})
+	}
+
+	// With no owner set the sender is the owner, as before.
+	st := &ownerOnlyStore{reofferStore: reofferStore{convModel: fallback}, owner: "u"}
+	a := &approvalStager{ctx: context.Background(), store: st, conversationID: "c", userEmail: "u", sink: &recordingSink{}}
+	if staged, err := a.StageHostSuggestion(suggestionSourceSignal, "r"); err != nil || staged {
+		t.Fatalf("owner's own pinned chat: staged = %v, err = %v; want suppressed", staged, err)
+	}
+}
