@@ -382,6 +382,10 @@ func TestSharedPin_ShownInTeamListings(t *testing.T) {
 	}
 	list, err := f.s.ListTeamConversations(f.ctx, "bob@x.com")
 	check("ListTeamConversations", list, err)
+	// And the order is bob's too: his pinned chat first, not the owner's.
+	if len(list) < 2 || list[0].ID != viewerPinned.ID {
+		t.Errorf("ListTeamConversations for bob starts with %q, want his own pinned chat", list[0].Title)
+	}
 	list, err = f.s.ListProjectTeamConversations(f.ctx, "bob@x.com", f.project.ID)
 	check("ListProjectTeamConversations", list, err)
 
@@ -397,6 +401,29 @@ func TestSharedPin_ShownInTeamListings(t *testing.T) {
 		if c.ID == viewerPinned.ID && c.Pinned {
 			t.Error("a teammate's pin shows on the owner's own chat")
 		}
+	}
+}
+
+// A pin is refused for a chat that became the caller's own, or stopped being
+// shared, after the list that offered it was read: the check is made again
+// on the locked row.
+func TestSharedPin_RevalidatedOnTheRow(t *testing.T) {
+	t.Parallel()
+
+	f := newTeamFixture(t)
+	c := f.sharedChat(t, "alice@x.com", f.project.ID, "Handover")
+	// As a transfer that committed between the list read and the insert
+	// would leave the row: bob's, and shared with nobody... except that the
+	// listing is forced to still offer it, by keeping it team-visible.
+	if _, err := f.s.db.ExecContext(f.ctx,
+		`UPDATE conversations SET multiplayer = FALSE, team_visible = FALSE WHERE id = $1`, c.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.SetSharedPin(f.ctx, "bob@x.com", c.ID, true); !errors.Is(err, ErrConversationNotFound) {
+		t.Errorf("pin on a chat shared with nobody = %v, want ErrConversationNotFound", err)
+	}
+	if ok, _ := f.s.SharedPinned(f.ctx, "bob@x.com", c.ID); ok {
+		t.Error("a pin was stored on a chat shared with nobody")
 	}
 }
 

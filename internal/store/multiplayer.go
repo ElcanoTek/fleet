@@ -675,7 +675,6 @@ func (s *Store) ListSharedAndMultiplayerConversations(ctx context.Context, calle
 	if err := s.overlayViewerPins(ctx, callerEmail, out); err != nil {
 		return nil, err
 	}
-	sort.SliceStable(out, func(i, j int) bool { return out[i].Pinned && !out[j].Pinned })
 	return out, nil
 }
 

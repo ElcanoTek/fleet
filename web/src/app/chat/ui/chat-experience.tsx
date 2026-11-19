@@ -4086,15 +4086,18 @@ export function ChatExperience({
           () => null,
         ),
       ]);
+      let sharedList: ConversationSummary[] = [];
+      // The body is read before the generation is checked: a pin made while
+      // it was still arriving makes this answer stale too.
+      const sharedData =
+        sharedRes && sharedRes.ok
+          ? ((await sharedRes.json()) as { conversations?: ConversationSummary[] })
+          : null;
       if (gen !== teamSharedGenRef.current) {
         await loadTeamSharedChatCounts();
         return;
       }
-      let sharedList: ConversationSummary[] = [];
-      if (sharedRes && sharedRes.ok) {
-        const sharedData = (await sharedRes.json()) as {
-          conversations?: ConversationSummary[];
-        };
+      if (sharedData) {
         sharedList = sharedData.conversations ?? [];
         const mine = userEmail.trim().toLowerCase();
         setTeamSharedConversations(

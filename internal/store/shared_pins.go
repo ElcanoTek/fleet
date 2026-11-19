@@ -2,8 +2,10 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -107,6 +109,23 @@ func (s *Store) setSharedPin(ctx context.Context, userEmail, convID string, pinn
 	); err != nil {
 		return fmt.Errorf("pin shared chat: %w", err)
 	}
+	// The access check above was made before the lock. Looked at again here,
+	// with the row held, so that a transfer of the chat either finishes first
+	// (and this sees its new owner, or that it is shared with nobody) or
+	// waits for this pin and then clears it with the rest.
+	var owner string
+	var stillShared bool
+	err = tx.QueryRowContext(ctx,
+		`SELECT user_email, (team_visible OR multiplayer) FROM conversations
+		  WHERE id = $1 AND deleted_at IS NULL AND archived_at IS NULL
+		    FOR SHARE`, convID,
+	).Scan(&owner, &stillShared)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && (normalizeEmail(owner) == userEmail || !stillShared)) {
+		return ErrConversationNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("pin shared chat: %w", err)
+	}
 	var already bool
 	var count int
 	if err := tx.QueryRowContext(ctx,
@@ -208,9 +227,11 @@ func (s *Store) sharedPinSet(ctx context.Context, userEmail string) (map[string]
 }
 
 // overlayViewerPins sets, on every conversation in list that callerEmail does
-// not own, the pinned flag to the caller's own pin on it. The owner's pin is
-// the owner's arrangement and is not shown to anyone else; the caller's own
-// chats keep theirs.
+// not own, the pinned flag to the caller's own pin on it, and then puts what
+// is pinned for the caller first (each group in the order it arrived, which
+// callers make most recent first). The owner's pin is the owner's
+// arrangement: it is not shown to anyone else, and it must not order their
+// list either. The caller's own chats keep theirs.
 func (s *Store) overlayViewerPins(ctx context.Context, callerEmail string, list []Conversation) error {
 	if len(list) == 0 {
 		return nil
@@ -225,5 +246,6 @@ func (s *Store) overlayViewerPins(ctx context.Context, callerEmail string, list 
 			list[i].Pinned = pins[list[i].ID]
 		}
 	}
+	sort.SliceStable(list, func(i, j int) bool { return list[i].Pinned && !list[j].Pinned })
 	return nil
 }

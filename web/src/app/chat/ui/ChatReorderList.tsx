@@ -99,6 +99,8 @@ export function ChatReorderList({
     scroller: HTMLElement | null;
     startScroll: number;
     frame: number | null;
+    // The list's IDs, in order, when the drag began.
+    order: string;
   } | null>(null);
   const dragRef = useRef<Drag | null>(null);
   const setDragBoth = (next: Drag | null) => {
@@ -231,6 +233,7 @@ export function ChatReorderList({
       scroller,
       startScroll: scroller?.scrollTop ?? 0,
       frame: null,
+      order: ids.join("\n"),
     };
     // The row keeps receiving the pointer wherever it goes, including off
     // the list and off the sidebar.
@@ -255,7 +258,10 @@ export function ChatReorderList({
     const d = dragRef.current;
     if (!l || e.pointerId !== l.pointerId) return;
     cancelDrag();
-    if (d) move(d.from, d.to);
+    // The places are only good for the order the drag began in. The effect
+    // below cancels a drag when the list changes, but it runs after the
+    // commit: a release in between is caught here.
+    if (d && l.order === ids.join("\n")) move(d.from, d.to);
   };
   const onPointerCancel = (e: React.PointerEvent<HTMLElement>) => {
     if (live.current && e.pointerId === live.current.pointerId) cancelDrag();
