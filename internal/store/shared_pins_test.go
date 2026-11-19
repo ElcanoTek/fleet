@@ -7,13 +7,13 @@ import (
 	"testing"
 )
 
-// sharedPinnedIDs returns the IDs the shared listing marks pinned for email,
-// in listing order, and the position of every ID in that listing.
-func sharedPinnedIDs(t *testing.T, f teamFixture, email string) (pinned []string, order []string) {
+// sharedPinnedIDs returns the IDs the shared listing marks pinned for bob (the
+// teammate in these tests), in listing order, and every ID in that listing.
+func sharedPinnedIDs(t *testing.T, f teamFixture) (pinned []string, order []string) {
 	t.Helper()
-	list, err := f.s.ListSharedAndMultiplayerConversations(f.ctx, email)
+	list, err := f.s.ListSharedAndMultiplayerConversations(f.ctx, "bob@x.com")
 	if err != nil {
-		t.Fatalf("ListSharedAndMultiplayerConversations(%s): %v", email, err)
+		t.Fatalf("ListSharedAndMultiplayerConversations: %v", err)
 	}
 	for _, c := range list {
 		order = append(order, c.ID)
@@ -37,7 +37,7 @@ func TestSharedPin_IsPerViewer(t *testing.T) {
 	if err := f.s.SetPinned(f.ctx, "alice@x.com", newer.ID, true); err != nil {
 		t.Fatal(err)
 	}
-	if pinned, _ := sharedPinnedIDs(t, f, "bob@x.com"); len(pinned) != 0 {
+	if pinned, _ := sharedPinnedIDs(t, f); len(pinned) != 0 {
 		t.Fatalf("the owner's pin leaked into a teammate's listing: %v", pinned)
 	}
 
@@ -48,7 +48,7 @@ func TestSharedPin_IsPerViewer(t *testing.T) {
 	if err := f.s.SetSharedPin(f.ctx, "bob@x.com", older.ID, true); err != nil {
 		t.Fatalf("SetSharedPin again: %v", err)
 	}
-	pinned, order := sharedPinnedIDs(t, f, "bob@x.com")
+	pinned, order := sharedPinnedIDs(t, f)
 	if !reflect.DeepEqual(pinned, []string{older.ID}) {
 		t.Errorf("bob's pinned = %v, want [%s]", pinned, older.ID)
 	}
@@ -74,7 +74,7 @@ func TestSharedPin_IsPerViewer(t *testing.T) {
 	if err := f.s.SetSharedPin(f.ctx, "bob@x.com", older.ID, false); err != nil {
 		t.Fatalf("unpin: %v", err)
 	}
-	if pinned, _ := sharedPinnedIDs(t, f, "bob@x.com"); len(pinned) != 0 {
+	if pinned, _ := sharedPinnedIDs(t, f); len(pinned) != 0 {
 		t.Errorf("after unpinning, pinned = %v", pinned)
 	}
 	// Unpinning what was never pinned is quiet.
@@ -120,7 +120,7 @@ func TestSharedPin_OnlyWhatIsSharedWithYou(t *testing.T) {
 	if _, err := f.s.SetConversationTeamVisible(f.ctx, "alice@x.com", shared.ID, false); err != nil {
 		t.Fatal(err)
 	}
-	if _, order := sharedPinnedIDs(t, f, "bob@x.com"); len(order) != 0 {
+	if _, order := sharedPinnedIDs(t, f); len(order) != 0 {
 		t.Errorf("an unshared chat is still listed for a teammate who pinned it: %v", order)
 	}
 }

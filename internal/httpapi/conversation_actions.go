@@ -85,6 +85,19 @@ func applyCallNoSessionFlag(card map[string]any, toolName, rawInput string, isAu
 	}
 }
 
+// withViewerPin returns a copy of a conversation somebody else owns whose
+// pinned flag is the viewer's own pin on it (as in the shared listing), not
+// the owner's. A failed read is "not pinned": the flag only places a row in
+// the rail.
+func (s *Server) withViewerPin(ctx context.Context, viewer string, conv *store.Conversation) *store.Conversation {
+	shown := *conv
+	shown.Pinned = false
+	if pinned, err := s.store.SharedPinned(ctx, viewer, conv.ID); err == nil {
+		shown.Pinned = pinned
+	}
+	return &shown
+}
+
 func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, user, id string, conv *store.Conversation) {
 	isAutonomousConv := s.isAcceptedAutonomousConversation(r.Context(), conv)
 	if approvalID := r.URL.Query().Get("approval_id"); approvalID != "" {
@@ -250,15 +263,7 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, u
 	// labels. Display data: a failed read degrades to no banner.
 	isOwner := strings.EqualFold(conv.UserEmail, user) || conv.UserEmail == ""
 	if !isOwner {
-		// To anyone but the owner, pinned is their own pin on this chat (as
-		// in the shared listing), not the owner's. A failed read is "not
-		// pinned": the flag only places a row in the rail.
-		shown := *conv
-		shown.Pinned = false
-		if pinned, err := s.store.SharedPinned(r.Context(), user, id); err == nil {
-			shown.Pinned = pinned
-		}
-		conv = &shown
+		conv = s.withViewerPin(r.Context(), user, conv)
 	}
 	var origin *store.BranchOrigin
 	if isOwner {
