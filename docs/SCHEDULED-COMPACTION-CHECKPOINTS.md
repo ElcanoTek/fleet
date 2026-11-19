@@ -224,8 +224,14 @@ the same stop-condition mechanism, at a different threshold:
   `[context_checkpoint] prompt N tokens reached the window-compaction
   threshold …` breadcrumb.
 - **When it goes inert**: if a window compaction finds nothing to summarize
-  (one enormous message), the checkpoint stops pausing until a later
-  compaction — proactive or the reactive overflow recovery — removes history.
+  (one enormous message), or next to nothing, the checkpoint stops pausing
+  until a later compaction — proactive or the reactive overflow recovery —
+  removes history. "Next to nothing" is under 5% of the history after the head
+  (`windowCompactionFutile`): inside a turn of few, large tool steps the cut
+  cannot split a tool exchange, so the oldest "half" is one short message,
+  usually the summary an earlier compaction left. A production patrol turn
+  whose own tool results passed the threshold bought sixteen summaries of that
+  summary in twelve minutes before a later cut reached the turn's own work.
 - **A chat patrol turn with the resend budget off pauses there too**
   (`engine.chatWindowCaps`): a patrol turn is opted into the resend budget
   (`EnableResendBudget`), which bounds its history at 80K by default. With

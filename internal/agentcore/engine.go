@@ -112,7 +112,8 @@ type engine struct {
 	// when a round ends on its own (finish or enforcement).
 	checkpointSteps int
 	// windowCompactionStalled is set when a window-pressure compaction found
-	// nothing to summarize, and cleared by the next one that succeeds. While it
+	// nothing to summarize, or next to nothing (windowCompactionFutile), and
+	// cleared by the next one that succeeds. While it
 	// is set the interactive window checkpoint stays inert, so the tool loop is
 	// not paused again and again for a compaction that cannot happen.
 	windowCompactionStalled bool
@@ -692,26 +693,11 @@ func (e *engine) proactiveCompactKeeping(ctx context.Context, source, kept []fan
 		source = kept
 	}
 	messages := kept
-	head := compactionHeadLen(source)
-	active := source[head:]
-	// The raw midpoint follows the same #1106 boundary rule as
-	// forceCompactMessageHistory: never split a tool exchange, or the kept half
-	// starts with tool results whose call was summarized away and the provider
-	// rejects the compacted prompt. Snap backward first (widening the kept
-	// half, mirroring the force path's preference for the verbatim side); if
-	// that leaves nothing droppable, snap forward instead — either direction
-	// keeps the invariant, and the guards below refuse the degenerate cases
-	// where no safe split makes progress.
-	midpoint := snapCutBackward(active, len(active)/2)
-	if midpoint < 1 {
-		midpoint = snapCutForward(active, len(active)/2)
-	}
-	// Nothing worth doing if there is fewer than one droppable message or the
-	// kept half would be empty.
-	if midpoint < 1 || len(active)-midpoint < 1 {
+	head, midpoint, ok := proactiveSplit(source)
+	if !ok {
 		return proactiveCompactResult{messages: messages}
 	}
-	droppable := active[:midpoint]
+	droppable := source[head : head+midpoint]
 	keep := messages[head+midpoint:]
 
 	summary := e.compactionSummary(ctx, droppable,
@@ -735,6 +721,53 @@ func (e *engine) proactiveCompactKeeping(ctx context.Context, source, kept []fan
 		compacted:     true,
 		dropped:       droppable,
 	}
+}
+
+// proactiveSplit is where proactiveCompactKeeping cuts a history: the pinned
+// head's length and the count of messages after it that are summarized away.
+// ok is false when no safe cut drops a message and keeps one.
+//
+// The raw midpoint follows the same #1106 boundary rule as
+// forceCompactMessageHistory: never split a tool exchange, or the kept half
+// starts with tool results whose call was summarized away and the provider
+// rejects the compacted prompt. Snap backward first (widening the kept half,
+// mirroring the force path's preference for the verbatim side); if that leaves
+// nothing droppable, snap forward instead — either direction keeps the
+// invariant.
+func proactiveSplit(source []fantasy.Message) (head, midpoint int, ok bool) {
+	head = compactionHeadLen(source)
+	active := source[head:]
+	midpoint = snapCutBackward(active, len(active)/2)
+	if midpoint < 1 {
+		midpoint = snapCutForward(active, len(active)/2)
+	}
+	return head, midpoint, midpoint >= 1 && len(active)-midpoint >= 1
+}
+
+// windowCompactionMinGainFraction is the least share of the history after the
+// head that a window compaction must be able to summarize away to be bought.
+const windowCompactionMinGainFraction = 0.05
+
+// windowCompactionFutile reports whether a window compaction of messages would
+// free next to nothing: what it would summarize away is under
+// windowCompactionMinGainFraction of the history after the head. It happens
+// inside a turn of few, large tool steps: the cut may not split a tool
+// exchange, so the "oldest half" is one short message — typically the summary
+// an earlier compaction left. A production patrol turn bought sixteen
+// summaries of that summary in twelve minutes, each pause dropping one message
+// and none relieving the pressure, before a later cut reached the turn's own
+// work. Such a compaction is not bought; the caller treats it as stalled.
+func windowCompactionFutile(messages []fantasy.Message) bool {
+	head, midpoint, ok := proactiveSplit(messages)
+	if !ok {
+		return false
+	}
+	total := estimateModelMessagesTokens(messages[head:])
+	if total <= 0 {
+		return false
+	}
+	gain := estimateModelMessagesTokens(messages[head : head+midpoint])
+	return float64(gain) < windowCompactionMinGainFraction*float64(total)
 }
 
 // compactionSummaryMessageType tags the session-log copy of a compaction
@@ -939,7 +972,11 @@ func (e *engine) checkContextPressure(ctx context.Context, messages []fantasy.Me
 				return out
 			}
 		}
-		if res := e.proactiveCompactKeeping(ctx, summarize, messages); res.compacted {
+		res := proactiveCompactResult{messages: messages}
+		if !windowCompactionFutile(messages) {
+			res = e.proactiveCompactKeeping(ctx, summarize, messages)
+		}
+		if res.compacted {
 			out.messages = res.messages
 			out.warned = false
 			e.windowCompactionStalled = false
@@ -951,8 +988,9 @@ func (e *engine) checkContextPressure(ctx context.Context, messages []fantasy.Me
 			})
 		} else {
 			// Nothing compactible (e.g. one enormous message: head + a single
-			// active turn — proactiveCompactKeeping's documented no-op). Stop pausing
-			// the tool loop for a compaction that cannot happen, and still
+			// active turn — proactiveCompactKeeping's documented no-op), or
+			// nothing worth a summary (windowCompactionFutile). Stop pausing
+			// the tool loop for a compaction that cannot relieve it, and still
 			// surface the pressure so the worst case isn't silent; the reactive
 			// overflow path is the only backstop left.
 			e.windowCompactionStalled = true
