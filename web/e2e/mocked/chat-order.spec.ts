@@ -6,7 +6,7 @@ import { mockChatBoot } from "./_mocks";
 // The rail's hand-set chat orders and the Temporary sort
 // (docs/CHAT-ORDER.md): the Pinned section and each project follow the
 // order saved on the server, "Reorder" turns them into a list that can be
-// dragged or moved with arrows, each move is saved with PUT
+// dragged (pointer events, so a finger works too) or moved with arrows, each move is saved with PUT
 // /api/conversations/order for its scope, Temporary chats follow the chosen
 // sort (remembered on the device), and the list passes axe in both themes.
 
@@ -143,12 +143,17 @@ test("pinned chats follow the saved order and can be reordered with arrows and d
     "Omnicom Pacing moved to position 2 of 3.",
   );
 
-  // Drag: Acme Renewal to the top.
+  // Drag: Acme Renewal to the top. One save for the whole drag, on the drop.
+  const before = puts.length;
   await page
     .getByTestId("chat-reorder-item-c1")
-    .locator("div[draggable]")
-    .dragTo(page.getByTestId("chat-reorder-item-c3").locator("div[draggable]"));
+    .locator("[data-reorder-row]")
+    .dragTo(page.getByTestId("chat-reorder-item-c3").locator("[data-reorder-row]"), {
+      sourcePosition: { x: 80, y: 10 },
+      targetPosition: { x: 80, y: 10 },
+    });
   await expect.poll(() => puts.at(-1)?.ids).toEqual(["c1", "c3", "c2"]);
+  expect(puts.length).toBe(before + 1);
 
   await page.getByTestId("chat-reorder-done").click();
   await expect(list).toBeHidden();
@@ -258,13 +263,19 @@ test("the Recent list follows the chosen sort, remembered on this device", async
   const loose = "c4"; // "Loose Recent": more recent activity, started earlier
   const budget = "c7"; // "Budget Notes"
   await expect.poll(async () => (await y(loose)) < (await y(budget))).toBe(true); // Recent activity (default)
-  const sort = page.getByRole("combobox", { name: "Sort chats" });
-  await sort.selectOption("title");
+  const sort = page.getByTestId("recent-sort");
+  await expect(sort).toHaveAccessibleName("Sort chats: Recent activity");
+  await sort.click();
+  await page.getByRole("menuitemradio", { name: "Title A–Z" }).click();
   await expect.poll(async () => (await y(budget)) < (await y(loose))).toBe(true); // Title A–Z
-  await sort.selectOption("created");
+  await expect(sort).toBeFocused();
+  // From the keyboard: open, arrow to the next choice, Enter.
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("menuitemradio", { name: "Title A–Z" })).toHaveAttribute("aria-checked", "true");
+  await page.getByRole("menuitemradio", { name: "Newest first" }).click();
   await expect.poll(async () => (await y(budget)) < (await y(loose))).toBe(true); // Newest first
   await page.reload();
-  await expect(page.getByRole("combobox", { name: "Sort chats" })).toHaveValue("created");
+  await expect(page.getByTestId("recent-sort")).toHaveAccessibleName("Sort chats: Newest first");
 });
 
 for (const scheme of ["light", "dark"] as const) {

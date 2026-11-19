@@ -7,11 +7,14 @@ left out on purpose.
 ## What shipped
 
 - **Your own order for pinned chats.** With two or more pinned chats, the
-  **Pinned** heading shows **Reorder**.
+  **Pinned** heading shows **Reorder**. In the one list the group also holds
+  the teammates' chats the person pinned for themselves
+  ([SIDEBAR.md](SIDEBAR.md)), in the same order: one group, one order.
 - **Your own order for a project's chats.** A project's options menu offers
   **Reorder chats** when the project holds two or more of your chats. It
   expands the project and puts its chats in reorder mode.
-- **A sort for Temporary chats.** The **Temporary** heading has a sort control:
+- **A sort for Temporary chats.** The **Temporary** heading (**Recent** in the
+  one list) has a sort control, a small menu button:
   **Recent activity** (the default and the old behaviour), **Newest first** (by
   when the chat was started) or **Title A–Z**. The choice is remembered on this
   device (browser storage, `fleet.rail.recentSort`), not saved to the account.
@@ -23,11 +26,21 @@ left out on purpose.
 ### Reorder mode (`ChatReorderList.tsx`)
 
 - The section swaps its ordinary rows for a list. Each item can be dragged, or
-  moved one place with its up/down buttons. The buttons are how the list works
-  from the keyboard and on touch screens, where HTML drag and drop does not
-  fire.
+  moved one place with its up/down buttons.
+- **The drag is pointer events, not HTML drag and drop**, which does not fire
+  for touch: that is why the list could not be dragged on a phone. A mouse or
+  pen drags a row by any part of it; a finger drags by the handle at the
+  row's left only (`touch-action: none` there), so touching anywhere else
+  still scrolls the list. The carried row follows the pointer, the rows it
+  passes step aside to show where it would land, and holding it at the top or
+  bottom edge scrolls the list. The whole drag is one move and one save, on
+  the drop. `Esc`, or the browser cancelling the pointer, puts the row back.
+- The buttons are how the list works from the keyboard and for a screen
+  reader, and they remain on touch screens (44px there).
 - Each move is announced through a polite live region.
-- **Done** or `Esc` leaves the mode. `Esc` is taken in the capture phase and
+- **Done** or `Esc` leaves the mode. **Done** sits above the list (in the
+  Pinned heading, where **Reorder** was; beside the hint in a project), so it
+  is in reach however long the list is. `Esc` is taken in the capture phase and
   stopped there, so on a narrow screen it does not also collapse the rail
   overlay or close the sidebar.
 - Focus behaviour:
@@ -36,8 +49,9 @@ left out on purpose.
     other arrow when the first one is now disabled at an end.
   - Leaving the mode returns the focus to what opened it: **Reorder**, or the
     project's options button.
-- The drag uses its own MIME type, so a reorder drag is never taken for the
-  existing drag of a chat into a project.
+- A reorder drag cannot be taken for the existing drag of a chat into a
+  project: that one is HTML drag and drop on the ordinary rows, which the mode
+  replaces.
 - Only one scope is in reorder mode at a time. The mode ends by itself if its
   scope stops being orderable (another tab leaves fewer than two chats in it),
   rather than lingering with no Done and reappearing later unasked. A project's mode returns the
@@ -59,9 +73,12 @@ left out on purpose.
   (migration 095): a JSON array of conversation IDs, first to last. This avoids
   changing the conversations table and its shared column list, and a reorder
   costs one write.
-- **The server keeps only what is the caller's.** `store.SetChatOrder` keeps
-  only IDs of the caller's own, live conversations that are in the scope
-  (pinned, or filed in that project). They are kept in the order given and
+- **The server keeps only what the caller put in the scope.**
+  `store.SetChatOrder` keeps only live conversations in the scope: for
+  `pinned`, the caller's own pinned chats and the chats other people own that
+  the caller pinned for themselves (`chat.shared_conversation_pins`, which
+  only ever names a chat shared with them); for a project, the caller's own
+  chats filed in it. They are kept in the order given and
   without duplicates. An ID outside that set is dropped rather than refused,
   because a chat can be unpinned or moved in another tab between a drag and its
   save.
@@ -123,12 +140,13 @@ left out on purpose.
 - `internal/httpapi/chat_order_test.go`: the GET/PUT route through the
   `/conversations/` dispatcher, a bad scope, bad JSON and a wrong method.
 - `conversationOrganization.test.ts`:
-  - `applyChatOrder` and `movePinned`;
+  - `applyChatOrder`, `movePinned`, `pinnedGroup` and `dragTargetIndex`;
   - per-project ordering in `projectGroups`;
   - `sortRecent` (each sort, stable ties, a missing `created_at`);
   - that the rail and keyboard orders agree.
 - `ChatReorderList.test.tsx`:
-  - arrows, ends, drag and drop, ignoring a foreign drag;
+  - arrows, ends, a mouse drag on the row and a finger drag on the handle
+    (and none from a finger on the row), a cancelled drag;
   - Done and `Esc`, and that `Esc` is not seen by the rail;
   - focus on entry and after a move.
 - `ConversationSidebar.chatOrder.test.tsx`:

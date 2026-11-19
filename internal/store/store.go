@@ -1968,7 +1968,7 @@ func (s *Store) ListTeamConversations(ctx context.Context, callerEmail string) (
 		  AND c.archived_at IS NULL
 		  AND c.team_visible = TRUE
 		  AND c.team_shared_with = $1 AND c.team_shared_with_id = (SELECT t.id FROM teams t WHERE t.name = $1)
-		ORDER BY c.pinned DESC, c.updated_at DESC, c.id DESC`,
+		ORDER BY c.updated_at DESC, c.id DESC`,
 		caller.TeamID,
 	)
 	if err != nil {
@@ -1989,6 +1989,11 @@ func (s *Store) ListTeamConversations(ctx context.Context, callerEmail string) (
 			list[i].Multiplayer = false
 		}
 		list[i].MultiplayerExcluded = nil
+	}
+	// Pinned on a teammate's chat is the caller's own pin, as in the shared
+	// listing (migration 0204).
+	if err := s.overlayViewerPins(ctx, callerEmail, list); err != nil {
+		return nil, err
 	}
 	return list, nil
 }

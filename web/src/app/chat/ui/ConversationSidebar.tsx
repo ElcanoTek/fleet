@@ -29,7 +29,7 @@ import {
   MAX_LABEL_LEN,
   PINNED_ORDER_SCOPE,
   RECENT_SORTS,
-  isRecentSort,
+  pinnedGroup,
   projectOrderScope,
   sortRecent,
   type RecentSort,
@@ -59,7 +59,7 @@ import { expiresInDays, nearCap, retentionPolicy, useNowSeconds, type RetentionP
 import { ShareGlyph, TeamGlyph } from "./ShareGlyphs";
 import { teamLinkUrl } from "./teamSharing";
 import { copyText } from "@/app/shared/lib/clipboard";
-import { ChatReorderList } from "./ChatReorderList";
+import { ChatReorderList, ReorderDoneButton } from "./ChatReorderList";
 import { AddToSidebarItem } from "@/app/shared/sidebar/AddToSidebarItem";
 import { defaultIcon, sectionOf, updateSection, type SectionId } from "@/app/shared/sidebar/layout";
 import { updateSidebarLayout, useSidebar } from "@/app/shared/sidebar/store";
@@ -90,6 +90,19 @@ const ROW_ACTIONS_REVEAL =
 function usePortalTip(tip: string) {
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
   const show = (e: React.SyntheticEvent<HTMLElement>) => {
+    // Focus shows the tip for a keyboard user only. A tap or click also
+    // focuses the button — and so does a menu handing the focus back when it
+    // closes — and on a touch screen, with no pointer to move away, the tip
+    // then sat over the list for good.
+    if (e.type === "focus") {
+      let keyboard = true;
+      try {
+        keyboard = e.currentTarget.matches(":focus-visible");
+      } catch {
+        // An engine without :focus-visible: show, as before.
+      }
+      if (!keyboard) return;
+    }
     const r = e.currentTarget.getBoundingClientRect();
     // Below the button, arrow pointing back up at it (the design's conv-info
     // tooltip placement: bottom + 7, offset so the arrow lands on the anchor).
@@ -99,6 +112,15 @@ function usePortalTip(tip: string) {
     });
   };
   const hide = () => setPos(null);
+  // The tip is placed once, where its button was: when anything scrolls, the
+  // button moves and the tip would be left pointing at another row.
+  const shown = pos !== null;
+  useEffect(() => {
+    if (!shown) return;
+    const onScroll = () => setPos(null);
+    window.addEventListener("scroll", onScroll, true);
+    return () => window.removeEventListener("scroll", onScroll, true);
+  }, [shown]);
   const tipNode =
     pos && typeof document !== "undefined"
       ? createPortal(
@@ -268,6 +290,76 @@ function RetentionNotices({
         </p>
       ) : null}
     </div>
+  );
+}
+
+// The list's sort, as a small button that opens a menu of the three choices.
+// It was a native <select>, which every touch screen forces to 16px text (so
+// iOS does not zoom on focus): on a phone the control was twice the size of
+// the heading it sits in. A button keeps the heading's own size everywhere,
+// and the menu's rows are full-size tap targets.
+function RecentSortMenu({
+  value,
+  label,
+  onChange,
+}: {
+  value: RecentSort;
+  // The control's accessible name ("Sort chats").
+  label: string;
+  onChange: (next: RecentSort) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const anchorRef = useRef<HTMLButtonElement | null>(null);
+  const current = RECENT_SORTS.find((o) => o.value === value) ?? RECENT_SORTS[0];
+  return (
+    <>
+      <button
+        ref={anchorRef}
+        type="button"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        // Named for what it is and what it is set to.
+        aria-label={`${label}: ${current.label}`}
+        data-testid="recent-sort"
+        data-value={value}
+        onClick={() => setOpen((o) => !o)}
+        className="hit-area-touch ml-auto inline-flex h-6 min-w-0 shrink items-center gap-0.5 rounded-md pl-1.5 pr-1 text-[0.68rem] font-semibold normal-case tracking-normal text-[var(--color-text-secondary)] hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+      >
+        <span className="min-w-0 truncate">{current.label}</span>
+        <Icon name="chevron-down" className="size-3 shrink-0" />
+      </button>
+      <Menu
+        open={open}
+        onClose={() => setOpen(false)}
+        anchorRef={anchorRef}
+        placement="bottom-end"
+        label={label}
+        className="min-w-[11rem]"
+      >
+        {RECENT_SORTS.map((o) => (
+          <button
+            key={o.value}
+            type="button"
+            role="menuitemradio"
+            aria-checked={o.value === value}
+            data-testid={`recent-sort-${o.value}`}
+            onClick={() => {
+              setOpen(false);
+              anchorRef.current?.focus();
+              if (o.value !== value) onChange(o.value);
+            }}
+            className={[
+              "flex w-full items-center gap-2 rounded-[0.4rem] px-2 py-1.5 text-left text-[0.82rem] transition any-pointer-coarse:min-h-11",
+              "hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:bg-[var(--color-overlay-soft)] focus-visible:outline-none",
+              o.value === value ? "font-semibold text-[var(--color-text-primary)]" : "text-[var(--color-text-secondary)]",
+            ].join(" ")}
+          >
+            <span className="min-w-0 flex-1 truncate">{o.label}</span>
+            {o.value === value ? <Icon name="check" className="size-3.5 shrink-0 text-[var(--color-accent)]" /> : null}
+          </button>
+        ))}
+      </Menu>
+    </>
   );
 }
 
@@ -928,8 +1020,10 @@ function ConversationKebab({
 
 // ── Team chats row options ──────────────────────────────────────────────────
 // A teammate's chat is not the viewer's to rename, file, archive or delete, so
-// its menu holds what any member can do with it: pin it to their own sidebar,
-// and copy a link that opens it. The link is the one that works for this row:
+// its menu holds what any member can do with it: pin it to the top of their
+// own list, add it to their sidebar, copy a link that opens it (how a
+// teammate passes it on), and — in a Multiplayer chat they take part in —
+// download it. The link is the one that works for this row:
 // the team link (/chat?team=<id>, the link Share hands out) for a chat shared
 // with the team, the chat link (/chat?c=<id>) for one reached only through
 // Multiplayer (a team link refuses it), and none otherwise.
@@ -943,9 +1037,19 @@ function teamChatLink(c: ConversationSummary): string | null {
 
 function TeamChatKebab({
   conversation,
+  onPin,
+  onDownload,
   onTransfer,
 }: {
   conversation: ConversationSummary;
+  // Pin or unpin the chat for the viewer alone (their own list; nothing
+  // changes for its owner). Absent for an account that cannot save (a
+  // Viewer), or while the role is unknown.
+  onPin?: () => void;
+  // Download the chat. Set only for a Multiplayer chat the viewer takes part
+  // in: the export route serves a participant (with other people's private
+  // context left out) and refuses a read-only team reader.
+  onDownload?: () => void;
   // Set for an admin only: an admin may hand any chat to another person.
   onTransfer?: () => void;
 }) {
@@ -1017,6 +1121,18 @@ function TeamChatKebab({
         label={tr("Options for {0}", [conversation.title])}
         className="min-w-[12rem]"
       >
+        {onPin ? (
+          <MenuItem
+            icon={<Icon name="pin" className="size-4" />}
+            testId="team-chat-pin"
+            onClick={() => {
+              onPin();
+              close();
+            }}
+          >
+            {conversation.pinned ? tr("Unpin") : tr("Pin")}
+          </MenuItem>
+        ) : null}
         <AddToSidebarItem
           target={{ kind: "chat", ref: conversation.id, title: conversation.title }}
           onDone={close}
@@ -1066,6 +1182,18 @@ function TeamChatKebab({
               className="mt-1 w-full rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-transparent px-1.5 py-1 text-[0.72rem] text-[var(--color-text-primary)] focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none any-pointer-coarse:min-h-11"
             />
           </div>
+        ) : null}
+        {onDownload ? (
+          <MenuItem
+            icon={<Icon name="download" className="size-4" />}
+            testId="team-chat-download"
+            onClick={() => {
+              close();
+              onDownload();
+            }}
+          >
+            {tr("Download chat…")}
+          </MenuItem>
         ) : null}
         {onTransfer && !conversation.lockdown && !conversation.archived_at ? (
           <MenuItem
@@ -1490,6 +1618,7 @@ export function ConversationSidebar({
   openShareDialog,
   openTransferDialog,
   canTransferTeamChats,
+  canPinTeamChats = false,
   archivedConversations,
   showArchived,
   setShowArchived,
@@ -1590,6 +1719,10 @@ export function ConversationSidebar({
   // row menu always offers it; a Team chats row offers it to an admin.
   openTransferDialog: (conversation: ConversationSummary) => void;
   canTransferTeamChats: boolean;
+  // Whether the person may pin a teammate's chat to the top of their own
+  // list: true once the account is known not to be a Viewer (whose writes
+  // the API refuses), the rule reordering uses.
+  canPinTeamChats?: boolean;
   archivedConversations: ConversationSummary[];
   showArchived: boolean;
   setShowArchived: Dispatch<SetStateAction<boolean>>;
@@ -1678,11 +1811,6 @@ export function ConversationSidebar({
   const sectionIndex = (id: SectionId) => railLayout.sections.findIndex((x) => x.id === id);
   const projectsFirst = sectionIndex("projects") < sectionIndex("chats");
   const teamFirst = sectionIndex("team") < sectionIndex("chats");
-  // One list for all chats, the default (docs/SIDEBAR.md): teammates' chats
-  // are listed in the Chats section with the person's own, and Team chats
-  // has no section of its own. A person who hid Team chats still sees none
-  // of them here; search finds them all the same.
-  const unified = !railLayout.separate_lists;
   // Projects section (#509 follow-up): the section itself starts open (its
   // presence is the affordance) unless the layout folds it; each project
   // starts collapsed and remembers its expansion for the session only, like
@@ -1804,7 +1932,25 @@ export function ConversationSidebar({
   // Temporary for a frame, so the set is withheld until there is one.
   const knownProjectIds =
     projects.length > 0 ? new Set(projects.map((p) => p.id)) : undefined;
-  const pinned = pinnedUnfiled(conversations, knownProjectIds, chatOrders?.[PINNED_ORDER_SCOPE]);
+  // One list for all chats, the default (docs/SIDEBAR.md): teammates' chats
+  // are listed in the Chats section with the person's own, and Team chats
+  // has no section of its own. A person who hid Team chats still sees none
+  // of them here; search finds them all the same.
+  const unified = !railLayout.separate_lists;
+  const listedTeamChats = teamSec.hidden ? [] : teamSharedConversations;
+  const teamRowIds = new Set(listedTeamChats.map((c) => c.id));
+  // The Pinned group. In the one list it also holds the teammates' chats the
+  // person pinned for themselves (their own pin; nothing changes for the
+  // owner), in one hand-set order with their own. With separate lists a
+  // pinned teammate's chat stays in Team chats, first and marked with a pin.
+  // A chat is listed once: a teammate's row wins over a copy in the own list.
+  const pinnedTeam = unified ? listedTeamChats.filter((c) => c.pinned) : [];
+  const pinnedTeamIds = new Set(pinnedTeam.map((c) => c.id));
+  const pinned = pinnedGroup(
+    pinnedUnfiled(conversations, knownProjectIds).filter((c) => !pinnedTeamIds.has(c.id)),
+    pinnedTeam,
+    chatOrders?.[PINNED_ORDER_SCOPE],
+  );
   // Reorder mode: the scope being ordered ("pinned" or "project:<id>"), whose
   // rows become a drag-and-arrow list until Done (or Escape). One at a time.
   const [reorderScope, setReorderScope] = useState<string | null>(null);
@@ -1848,13 +1994,12 @@ export function ConversationSidebar({
   // order they have on their own (sortRecent breaks ties by input order, and
   // theirs come first), so j/k — which walks only their own — still matches.
   // A chat is listed once: a teammate's row wins over a copy in the own list.
-  const listedTeamChats = teamSec.hidden ? [] : teamSharedConversations;
-  const teamRowIds = new Set(listedTeamChats.map((c) => c.id));
+  // A teammate's chat the person pinned is in the Pinned group, not here.
   const allRecent = unified
     ? sortRecent(
         [
           ...recentUnfiled(conversations, knownProjectIds).filter((c) => !teamRowIds.has(c.id)),
-          ...listedTeamChats,
+          ...listedTeamChats.filter((c) => !pinnedTeamIds.has(c.id)),
         ],
         recentSort,
       )
@@ -2276,7 +2421,7 @@ visibleProjectTree.map(({ project, chats }) => {
                         <ChatReorderList
                           chats={chats.map((c) => ({ id: c.id, title: c.title }))}
                           label={tr("Chats in {0}, in order", [project.name])}
-                          hint={tr("Drag a chat, or use its arrows, to set the order. A chat added for the first time appears at the top.")}
+                          hint={tr("Drag a chat to move it, or use its arrows.")}
                           onReorder={(ids) => onReorderChats(projectOrderScope(project.id), ids)}
                           onDone={() =>
                             // By project ID: two projects may share a name.
@@ -2445,7 +2590,9 @@ visibleProjectTree.map(({ project, chats }) => {
           section scrolls on its own, like the Chats list below. */}
       <div
         className={[
-          "max-h-[30vh] overflow-y-auto overflow-x-hidden",
+          // From sm up only: on a phone the drawer's body is the one scroller
+          // (NavRail), and a capped box inside it would catch the swipe.
+          "overflow-x-hidden sm:max-h-[30vh] sm:overflow-y-auto",
           railCollapsed ? "sm:hidden" : "",
         ].join(" ")}
       >
@@ -2476,7 +2623,9 @@ visibleProjectTree.map(({ project, chats }) => {
           section scrolls on its own, like the Chats list below. */}
       <div
         className={[
-          "max-h-[30vh] overflow-y-auto overflow-x-hidden",
+          // From sm up only: on a phone the drawer's body is the one scroller
+          // (NavRail), and a capped box inside it would catch the swipe.
+          "overflow-x-hidden sm:max-h-[30vh] sm:overflow-y-auto",
           railCollapsed ? "sm:hidden" : "",
         ].join(" ")}
       >
@@ -2539,7 +2688,9 @@ visibleProjectTree.map(({ project, chats }) => {
 
   // One Team chats row: in the section, and in the search results (where the
   // title's matched words are marked).
-  const renderTeamRow = (c: ConversationSummary, inResults: boolean, merged = false) => {
+  // `inPinned`: the row is in the Pinned group, whose heading already says so;
+  // anywhere else a chat the person pinned carries a pin.
+  const renderTeamRow = (c: ConversationSummary, inResults: boolean, merged = false, inPinned = false) => {
                         const active = activeConversationId === c.id;
                         const ownerShort = c.user_email
                           ? c.user_email.split("@")[0]
@@ -2579,6 +2730,12 @@ visibleProjectTree.map(({ project, chats }) => {
                             <span className="min-w-0 flex-1 truncate">
                               {inResults ? markMatches(c.title, tokens) : c.title}
                             </span>
+                            {c.pinned && !inPinned ? (
+                              <span data-testid="team-chat-pinned-mark" className="flex shrink-0" title={tr("Pinned")}>
+                                <Icon name="pin" className="size-3 text-[var(--color-text-muted)]" />
+                                <span className="sr-only">{tr("Pinned")}</span>
+                              </span>
+                            ) : null}
                             {c.multiplayer ? (
                               <span className="shrink-0 rounded-full bg-[color-mix(in_srgb,var(--color-accent)_16%,transparent)] px-1.5 py-px text-[0.62rem] font-medium text-[var(--color-accent)]">
                                 {tr("Live")}
@@ -2595,6 +2752,8 @@ visibleProjectTree.map(({ project, chats }) => {
                           <div className="absolute inset-y-0 right-1 flex items-center">
                             <TeamChatKebab
                               conversation={c}
+                              onPin={canPinTeamChats ? () => void togglePin(c) : undefined}
+                              onDownload={c.multiplayer ? () => void downloadConversation(c) : undefined}
                               onTransfer={canTransferTeamChats ? () => openTransferDialog(c) : undefined}
                             />
                           </div>
@@ -2639,7 +2798,7 @@ visibleProjectTree.map(({ project, chats }) => {
   const teamTop = teamBlock && !searching ? (
     <div
       className={[
-        "max-h-[30vh] shrink-0 overflow-y-auto overflow-x-hidden",
+        "shrink-0 overflow-x-hidden sm:max-h-[30vh] sm:overflow-y-auto",
         railCollapsed ? "sm:hidden" : "",
       ].join(" ")}
     >
@@ -3118,27 +3277,27 @@ visibleProjectTree.map(({ project, chats }) => {
                         {tr("Reorder")}
                       </button>
                     ) : null}
+                    {reorderScope === PINNED_ORDER_SCOPE && canReorderPinned && onReorderChats ? (
+                      <ReorderDoneButton onDone={() => endReorder(() => reorderToggleRef.current?.focus())} />
+                    ) : null}
                   </div>
                   {reorderScope === PINNED_ORDER_SCOPE && canReorderPinned && onReorderChats ? (
                     <ChatReorderList
                       chats={pinned.map((c) => ({ id: c.id, title: c.title }))}
                       label={tr("Pinned chats, in order")}
-                      hint={tr("Drag a chat, or use its arrows, to set the order. A chat pinned for the first time appears at the top.")}
+                      hint={tr("Drag a chat to move it, or use its arrows.")}
                       onReorder={(ids) => onReorderChats(PINNED_ORDER_SCOPE, ids)}
                       onDone={() => endReorder(() => reorderToggleRef.current?.focus())}
+                      doneInHeading
                     />
                   ) : (
-                    pinned.map(renderRow)
+                    pinned.map((c) => (pinnedTeamIds.has(c.id) ? renderTeamRow(c, false, true, true) : renderRow(c)))
                   )}
                 </div>
               ) : null}
               {labelsSection}
               <div className="mb-1">
-                {/* any-pointer-coarse:flex-wrap: at the 16px a touch screen
-                    forces on the sort control, "TEMPORALES" and "Actividad
-                    reciente" do not fit one row; the control then takes the
-                    next row whole instead of being cut off. */}
-                <div className="flex items-center gap-1.5 px-2 pb-1 pt-2 text-[0.68rem] font-semibold uppercase tracking-[0.08em] text-[var(--color-text-muted)] any-pointer-coarse:flex-wrap">
+                <div className="flex items-center gap-1.5 px-2 pb-1 pt-2 text-[0.68rem] font-semibold uppercase tracking-[0.08em] text-[var(--color-text-muted)]">
                   {unified ? (
                     <Icon name="message" className="size-3 shrink-0 text-[var(--color-accent)]" />
                   ) : (
@@ -3151,29 +3310,11 @@ visibleProjectTree.map(({ project, chats }) => {
                     <RecentInfoButton text={recentInfoText(retention)} />
                   )}
                   {onRecentSortChange && allRecent.length > 1 ? (
-                    // On a touch screen every select is forced to 16px text
-                    // (so iOS does not zoom on focus); the width cap below is
-                    // sized for the 11px desktop label and cut the value off
-                    // ("Recent activit"), so it is lifted there. Without a
-                    // cap the control must still give way to the row: it is
-                    // sized to the chosen value where the engine can
-                    // (field-sizing) and may shrink (min-w-0), so a longer
-                    // translation no longer pushes it past the sidebar.
-                    <select
-                      aria-label={unified ? tr("Sort chats") : tr("Sort temporary chats")}
-                      data-testid="recent-sort"
+                    <RecentSortMenu
                       value={recentSort}
-                      onChange={(e) => {
-                        if (isRecentSort(e.target.value)) onRecentSortChange(e.target.value);
-                      }}
-                      className="ml-auto h-6 max-w-[8.5rem] cursor-pointer rounded-md border border-transparent bg-transparent px-1 text-[0.68rem] font-semibold normal-case tracking-normal min-w-0 shrink any-pointer-coarse:max-w-full any-pointer-coarse:font-medium any-pointer-coarse:[field-sizing:content] text-[var(--color-text-secondary)] hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] any-pointer-coarse:h-9"
-                    >
-                      {RECENT_SORTS.map((o) => (
-                        <option key={o.value} value={o.value}>
-                          {o.label}
-                        </option>
-                      ))}
-                    </select>
+                      label={unified ? tr("Sort chats") : tr("Sort temporary chats")}
+                      onChange={onRecentSortChange}
+                    />
                   ) : null}
                 </div>
                 <RetentionNotices

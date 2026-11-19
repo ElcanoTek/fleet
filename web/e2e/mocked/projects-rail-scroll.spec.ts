@@ -41,9 +41,10 @@ test("the rail lists every project and the Projects section scrolls", async ({ p
   await expect(newest).toBeVisible();
   await expect(oldest).toHaveCount(1);
 
-  // The section is its own scroller: it overflows, and scrolling it brings the
+  // From sm up (this viewport) the section is its own scroller; on a phone
+  // the drawer's body is the one scroller instead. Here: it overflows, and scrolling it brings the
   // oldest project into view while the Chats list keeps its place below.
-  const scroller = page.locator("div.overflow-y-auto", { has: newest });
+  const scroller = page.locator("div.sm\\:overflow-y-auto", { has: newest });
   const { clientHeight, scrollHeight } = await scroller.evaluate((el) => ({
     clientHeight: el.clientHeight,
     scrollHeight: el.scrollHeight,

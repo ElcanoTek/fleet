@@ -195,6 +195,37 @@ export function pinnedUnfiled<T extends OrganizableConversation>(
   return pinOrder && pinOrder.length > 0 ? applyChatOrder(pinned, pinOrder) : pinned;
 }
 
+// pinnedGroup is the rail's one Pinned group in the one-list view: the
+// person's own pinned chats and the teammates' chats they have pinned for
+// themselves (docs/SIDEBAR.md), in the person's saved order.
+//
+// `own` is the own pinned chats most recent first (pinnedUnfiled with no
+// order) and `shared` the pinned teammates' chats. Before any order
+// is saved the two interleave by recent activity; the merge never reorders
+// `own` within itself, so the own rows of the result are exactly what
+// pinnedUnfiled gives with the same order — which is what j/k walks
+// (visibleConversationOrder), so the rendered rows and the walk cannot drift.
+export function pinnedGroup<T extends { id?: string; updated_at?: number }>(
+  own: readonly T[],
+  shared: readonly T[],
+  pinOrder?: readonly string[],
+): T[] {
+  // The shared list is not always in activity order (a chat opened by link
+  // is put at its head), so it is sorted here; `own` is taken as it comes.
+  const team = shared
+    .map((c, at) => ({ c, at }))
+    .sort((a, b) => (b.c.updated_at ?? 0) - (a.c.updated_at ?? 0) || a.at - b.at)
+    .map((x) => x.c);
+  const merged: T[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < own.length || j < team.length) {
+    const takeTeam = i >= own.length || (j < team.length && (team[j].updated_at ?? 0) > (own[i].updated_at ?? 0));
+    merged.push(takeTeam ? team[j++] : own[i++]);
+  }
+  return pinOrder && pinOrder.length > 0 ? applyChatOrder(merged, pinOrder) : merged;
+}
+
 // ── Hand-set chat order (docs/CHAT-ORDER.md) ─────────────────────────────
 
 // The scopes a person can put in their own order: their pinned chats, and
@@ -270,6 +301,16 @@ export function sortRecent<T extends Sortable>(chats: readonly T[], sort: Recent
             byActivity(a, b)
         : byActivity;
   return indexed.sort(cmp).map((x) => x.c);
+}
+
+// dragTargetIndex is where a row dragged `dy` pixels from position `from`
+// lands in a list of `count` rows spaced `step` pixels apart: the nearest
+// slot, never outside the list. The reorder list's pointer drag uses it for
+// both the preview and the drop, so what is shown is what is saved.
+export function dragTargetIndex(from: number, dy: number, step: number, count: number): number {
+  if (count <= 0) return 0;
+  if (!(step > 0) || !Number.isFinite(dy)) return Math.max(0, Math.min(count - 1, from));
+  return Math.max(0, Math.min(count - 1, from + Math.round(dy / step)));
 }
 
 // movePinned returns the IDs with the one at `from` moved to `to`

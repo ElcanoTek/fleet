@@ -13,6 +13,8 @@ import {
   applyChatOrder,
   movePinned,
   normalizeLabel,
+  pinnedGroup,
+  dragTargetIndex,
   pinnedUnfiled,
   projectOrderScope,
   sortRecent,
@@ -381,6 +383,61 @@ describe("chat order (docs/CHAT-ORDER.md)", () => {
     const groups = projectGroups(chats, projects, Number.POSITIVE_INFINITY, { [projectOrderScope("p1")]: ["y", "x"] });
     expect(groups.map((g) => g.chats.map((c) => c.id))).toEqual([["y", "x"], ["z"]]);
     expect(projectGroups(chats, projects)[0].chats.map((c) => c.id)).toEqual(["x", "y"]);
+  });
+});
+
+describe("pinnedGroup (own and teammates' pinned chats in one group)", () => {
+  const own = [
+    { id: "a", updated_at: 30 },
+    { id: "b", updated_at: 10 },
+  ];
+  const shared = [
+    { id: "t-old", updated_at: 5 },
+    { id: "t-new", updated_at: 20 },
+  ];
+
+  it("interleaves by recent activity before any order is saved", () => {
+    expect(pinnedGroup(own, shared).map((c) => c.id)).toEqual(["a", "t-new", "b", "t-old"]);
+    expect(pinnedGroup(own, []).map((c) => c.id)).toEqual(["a", "b"]);
+    expect(pinnedGroup([], shared).map((c) => c.id)).toEqual(["t-new", "t-old"]);
+  });
+
+  it("follows the saved order, with chats it does not name on top", () => {
+    expect(pinnedGroup(own, shared, ["t-old", "b", "a"]).map((c) => c.id)).toEqual(["t-new", "t-old", "b", "a"]);
+  });
+
+  it("never reorders the person's own chats among themselves, so j/k matches the rows", () => {
+    // Own chats arrive pinned-first from the server, not strictly by time.
+    const unsorted = [
+      { id: "x", updated_at: 1 },
+      { id: "y", updated_at: 99 },
+    ];
+    for (const order of [undefined, ["y"], ["t-new", "x"]]) {
+      const group = pinnedGroup(unsorted, shared, order).filter((c) => !c.id.startsWith("t-"));
+      const walk = pinnedUnfiled(
+        unsorted.map((c) => ({ ...c, title: c.id, pinned: true })),
+        undefined,
+        order,
+      );
+      expect(group.map((c) => c.id)).toEqual(walk.map((c) => c.id));
+    }
+  });
+});
+
+describe("dragTargetIndex (the reorder list's pointer drag)", () => {
+  it("lands on the nearest slot and never leaves the list", () => {
+    expect(dragTargetIndex(2, 0, 40, 5)).toBe(2);
+    expect(dragTargetIndex(2, 19, 40, 5)).toBe(2);
+    expect(dragTargetIndex(2, 21, 40, 5)).toBe(3);
+    expect(dragTargetIndex(2, -61, 40, 5)).toBe(0);
+    expect(dragTargetIndex(2, -4000, 40, 5)).toBe(0);
+    expect(dragTargetIndex(2, 4000, 40, 5)).toBe(4);
+  });
+
+  it("stays put when the rows have no height to measure", () => {
+    expect(dragTargetIndex(1, 500, 0, 3)).toBe(1);
+    expect(dragTargetIndex(1, Number.NaN, 40, 3)).toBe(1);
+    expect(dragTargetIndex(0, 10, 40, 0)).toBe(0);
   });
 });
 

@@ -3740,6 +3740,52 @@ export function ChatExperience({
     const pinUrl = conversationApiUrl(conversation.id, "/pin");
     if (!pinUrl) return false;
     const nextPinned = !conversation.pinned;
+    // A teammate's chat (a Team chats row): the pin is the person's own —
+    // the server keeps it per viewer and nothing changes for the owner — and
+    // the row lives in the shared list, not in the person's own.
+    const mine = userEmail.trim().toLowerCase();
+    const owner = (conversation.user_email ?? "").trim().toLowerCase();
+    if (owner && mine && owner !== mine) {
+      // A read of the shared list that started before this pin was saved
+      // carries the old flag: bumped now and again when the save answers,
+      // the counter makes any such read discard its answer and read again.
+      teamSharedGenRef.current++;
+      setTeamSharedConversations((current) =>
+        current
+          .map((c) => (c.id === conversation.id ? { ...c, pinned: nextPinned } : c))
+          // As the server lists them: pinned first, each group most recent first.
+          .sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) || b.updated_at - a.updated_at),
+      );
+      let ok = false;
+      let full = false;
+      try {
+        const response = await fetch(pinUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ pinned: nextPinned }),
+        });
+        ok = response.ok;
+        // 409: the Pinned group already holds as many chats as one order can.
+        full = response.status === 409;
+      } catch {
+        ok = false;
+      }
+      teamSharedGenRef.current++;
+      if (!ok) {
+        // Say so: the row is about to go back where it was, and a click
+        // that seems to do nothing teaches nobody to unpin something first.
+        notify({
+          message: full
+            ? tr("Your pinned chats are full. Unpin one to pin “{0}”.", [conversation.title])
+            : nextPinned
+              ? tr("Couldn’t pin “{0}”. Try again.", [conversation.title])
+              : tr("Couldn’t unpin “{0}”. Try again.", [conversation.title]),
+        });
+        // The optimistic row is a lie until the list is read again.
+        await loadTeamSharedChatCounts();
+      }
+      return ok;
+    }
     // Optimistic update. The server counts a pin or an unpin as activity
     // (it bumps updated_at), so the row's timestamp moves with it: a chat
     // unpinned back into Temporary starts a full window, and its countdown
@@ -4023,7 +4069,11 @@ export function ChatExperience({
       (c) => (c.user_email ?? "").trim().toLowerCase() !== mine,
     );
   }, [teamSharedConversations, userEmail]);
-  const loadTeamSharedChatCounts = useCallback(async () => {
+  // Bumped around every pin of a teammate's chat (togglePin): a shared-list
+  // read that overlapped one is stale and is read again instead of applied.
+  const teamSharedGenRef = useRef(0);
+  const loadTeamSharedChatCounts = useCallback(async (): Promise<void> => {
+    const gen = teamSharedGenRef.current;
     try {
       // Each read settles on its own: a failed team-count read must not
       // throw away the shared list that did arrive (the sidebar's shortcuts
@@ -4037,10 +4087,17 @@ export function ChatExperience({
         ),
       ]);
       let sharedList: ConversationSummary[] = [];
-      if (sharedRes && sharedRes.ok) {
-        const sharedData = (await sharedRes.json()) as {
-          conversations?: ConversationSummary[];
-        };
+      // The body is read before the generation is checked: a pin made while
+      // it was still arriving makes this answer stale too.
+      const sharedData =
+        sharedRes && sharedRes.ok
+          ? ((await sharedRes.json()) as { conversations?: ConversationSummary[] })
+          : null;
+      if (gen !== teamSharedGenRef.current) {
+        await loadTeamSharedChatCounts();
+        return;
+      }
+      if (sharedData) {
         sharedList = sharedData.conversations ?? [];
         const mine = userEmail.trim().toLowerCase();
         setTeamSharedConversations(
@@ -7588,6 +7645,7 @@ export function ChatExperience({
           togglePin={togglePin}
           chatOrders={chatOrders}
           onReorderChats={accountRole !== undefined && accountRole !== "viewer" ? reorderChats : undefined}
+          canPinTeamChats={accountRole !== undefined && accountRole !== "viewer"}
           recentSort={recentSort}
           onRecentSortChange={setRecentSort}
           toggleArchive={requestArchive}

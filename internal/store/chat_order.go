@@ -67,9 +67,12 @@ func (s *Store) ChatOrders(ctx context.Context, userEmail string) (map[string][]
 }
 
 // SetChatOrder saves the user's order for one scope and returns what it kept.
-// Only conversations the user owns and has not deleted, and that are in the
-// scope (pinned, or filed in that project), are kept — in the order given and
-// without duplicates — so a saved list never names someone else's chat. An ID
+// Only live conversations that are in the scope are kept — in the order given
+// and without duplicates. The pinned scope is the user's own pinned chats plus
+// the chats other people own that the user has pinned for themselves
+// (SetSharedPin, which accepts only a chat shared with them); a project scope
+// is the user's own chats filed in that project. So a saved list never names a
+// chat the user did not put in the scope themselves. An ID
 // outside that set is dropped rather than refused, since a chat can be
 // unpinned or moved in another tab between a drag and its save. A list that
 // keeps nothing removes the scope's row.
@@ -83,13 +86,20 @@ func (s *Store) SetChatOrder(ctx context.Context, userEmail, scope string, ids [
 	}
 	inScope := map[string]bool{}
 	if len(ids) > 0 {
+		// Pinned: the person's own pinned chats, and the chats other people
+		// own that they have pinned for themselves (migration 0204) — one
+		// Pinned group in the rail, so one order.
 		q := `SELECT id FROM conversations
-		       WHERE user_email = $1 AND deleted_at IS NULL AND id = ANY($2) AND pinned`
-		args := []any{userEmail, ids}
+		       WHERE user_email = $1 AND deleted_at IS NULL AND id = ANY($2) AND pinned
+		      UNION
+		      SELECT p.conversation_id FROM chat.shared_conversation_pins p
+		        JOIN conversations c ON c.id = p.conversation_id AND c.deleted_at IS NULL
+		       WHERE p.user_email = $3 AND p.conversation_id = ANY($2)`
+		args := []any{userEmail, ids, normalizeEmail(userEmail)}
 		if projectID != "" {
 			q = `SELECT id FROM conversations
 			      WHERE user_email = $1 AND deleted_at IS NULL AND id = ANY($2) AND project_id = $3`
-			args = append(args, projectID)
+			args = []any{userEmail, ids, projectID}
 		}
 		rows, err := s.db.QueryContext(ctx, q, args...)
 		if err != nil {

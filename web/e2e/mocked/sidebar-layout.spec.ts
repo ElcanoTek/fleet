@@ -368,7 +368,8 @@ test("a Team chats row has a menu: pin it, or copy the link that opens it", asyn
   await row.getByTestId("team-chat-options").click();
   const menu = page.getByRole("menu", { name: "Options for Incident room" });
   // Only what a teammate can do with someone else's chat.
-  await expect(menu.getByRole("menuitem")).toHaveText(["Add to sidebar", "Copy link"]);
+  // (Download is for a Multiplayer chat the person takes part in, as this is.)
+  await expect(menu.getByRole("menuitem")).toHaveText(["Pin", "Add to sidebar", "Copy link", "Download chat…"]);
   await menu.getByTestId("add-to-sidebar").click();
   await expect(page.getByTestId("rail-shortcut")).toContainText("Incident room");
   await expect.poll(() => puts.length).toBeGreaterThan(0);
@@ -386,6 +387,12 @@ test("a Team chats row has a menu: pin it, or copy the link that opens it", asyn
   const shared = page.getByTestId("team-shared-conv-row").filter({ hasText: "Q4 planning" }).locator("..");
   await shared.hover();
   await shared.getByTestId("team-chat-options").click();
+  // Read-only for this person: no download.
+  await expect(page.getByRole("menu", { name: "Options for Q4 planning" }).getByRole("menuitem")).toHaveText([
+    "Pin",
+    "Add to sidebar",
+    "Copy link",
+  ]);
   await page.getByRole("menu", { name: "Options for Q4 planning" }).getByRole("menuitem", { name: "Copy link" }).click();
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(`${origin}/chat?team=t1`);
 });
@@ -568,7 +575,7 @@ test.describe("on a touch screen", () => {
     // ...and so are the items of the menu it opens.
     await team.getByTestId("team-chat-options").tap();
     const items = page.getByRole("menu", { name: "Options for Incident room" }).getByRole("menuitem");
-    await expect(items).toHaveCount(2);
+    await expect(items).toHaveCount(4); // Pin, Add to sidebar, Copy link, Download chat…
     for (const item of await items.all()) {
       expect((await item.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(44);
     }
