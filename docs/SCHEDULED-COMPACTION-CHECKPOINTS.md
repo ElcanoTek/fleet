@@ -236,6 +236,15 @@ the same stop-condition mechanism, at a different threshold:
   waited minutes for a first chunk, and failed as "too long" when one step's
   tool results crossed the window. With the budget off a patrol turn now warns
   and compacts at the interactive caps.
+- **An empty response is retried inside the loop**: when a chat round ends with
+  no text and no tool call (or only a tool call written as text) and the run
+  has executed no tool, the round is run once more with a nudge. That retry
+  used to be streamed by the interactive finalize hook, outside the loop, so it
+  had no checkpoint, no compaction and no stream-error recovery: on a long
+  chat its tool results could push the next call over the window and end the
+  turn as "too long" with the tool work done. The hook now asks the loop for
+  the round (`FinalizeInput.Redrive`), which pauses, compacts and recovers
+  like any other.
 - **Scheduled runs can opt into it** (#1764): a scheduled engine uses the
   window checkpoint instead of the resend budget when the operator turns the
   budget off (`FLEET_CONTEXT_RESEND_BUDGET_TOKENS=0`) **and** opts into
