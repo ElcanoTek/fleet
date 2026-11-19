@@ -3709,6 +3709,10 @@ export function ChatExperience({
     const mine = userEmail.trim().toLowerCase();
     const owner = (conversation.user_email ?? "").trim().toLowerCase();
     if (owner && mine && owner !== mine) {
+      // A read of the shared list that started before this pin was saved
+      // carries the old flag: bumped now and again when the save answers,
+      // the counter makes any such read discard its answer and read again.
+      teamSharedGenRef.current++;
       setTeamSharedConversations((current) =>
         current
           .map((c) => (c.id === conversation.id ? { ...c, pinned: nextPinned } : c))
@@ -3726,6 +3730,7 @@ export function ChatExperience({
       } catch {
         ok = false;
       }
+      teamSharedGenRef.current++;
       // The optimistic row is a lie until the list is read again.
       if (!ok) await loadTeamSharedChatCounts();
       return ok;
@@ -4007,7 +4012,11 @@ export function ChatExperience({
       (c) => (c.user_email ?? "").trim().toLowerCase() !== mine,
     );
   }, [teamSharedConversations, userEmail]);
-  const loadTeamSharedChatCounts = useCallback(async () => {
+  // Bumped around every pin of a teammate's chat (togglePin): a shared-list
+  // read that overlapped one is stale and is read again instead of applied.
+  const teamSharedGenRef = useRef(0);
+  const loadTeamSharedChatCounts = useCallback(async (): Promise<void> => {
+    const gen = teamSharedGenRef.current;
     try {
       // Each read settles on its own: a failed team-count read must not
       // throw away the shared list that did arrive (the sidebar's shortcuts
@@ -4020,6 +4029,10 @@ export function ChatExperience({
           () => null,
         ),
       ]);
+      if (gen !== teamSharedGenRef.current) {
+        await loadTeamSharedChatCounts();
+        return;
+      }
       let sharedList: ConversationSummary[] = [];
       if (sharedRes && sharedRes.ok) {
         const sharedData = (await sharedRes.json()) as {

@@ -80,12 +80,16 @@ sidebar"), which `/help` renders.
   pinned chats ([CHAT-ORDER.md](CHAT-ORDER.md)). With separate lists it
   stays in **Team chats**, listed first and marked with a pin. A person who
   hid Team chats sees none of them, pinned or not. A Viewer account, whose
-  writes the API refuses, is not offered the item. At most 500 such pins per
-  person (the cap on one saved order); a pin past it is a 409, and pins are
-  taken one at a time per person so two at the cap cannot both land. A pin
-  row is tied to its account and its chat by foreign keys, so it goes with
-  whichever is deleted. Unpinning an ID that is neither pinned by nor shared
-  with the caller is the same 404. Not done: a
+  writes the API refuses, is not offered the item. A pin on a teammate's
+  chat is refused (409) once the person's Pinned group — their own pinned
+  chats and these pins together — holds 500, the most one saved order names;
+  pinning one's own chat is not capped, as before. Pins are taken one at a
+  time per person, so two at the cap cannot both land. A pin row is tied to
+  its account and its chat by foreign keys, so it goes with whichever is
+  deleted, and transferring a chat clears every such pin on it. Unpinning an
+  ID that is neither pinned by nor shared with the caller is the same 404.
+  The team listings (`?scope=team`, a project home's Team list) report the
+  caller's own pin too, never the owner's. Not done: a
   pinned teammate's chat is not walked by `j`/`k` and cannot be selected,
   like every teammate's row.
 - **Temporary has one definition.** `store.temporaryConversationClause` is
@@ -137,7 +141,8 @@ sidebar"), which `/help` renders.
   or five rows on a tall phone, none in landscape. Now everything between the
   brand row and the footer scrolls together (`rail-body` in `NavRail.tsx`);
   from 640px up that wrapper is `display: contents`, so the wider rail is laid
-  out exactly as before. The brand row (with the close button), **Delete
+  out exactly as before. On a phone nothing inside it is a scroll box of
+  its own: Projects and Team chats are capped (30vh) from 640px up only. The brand row (with the close button), **Delete
   temporary chats** and the account menu stay put. Not done: the search field
   does not stick to the top while scrolling.
 - **Compact** hides the one-line subtitles.

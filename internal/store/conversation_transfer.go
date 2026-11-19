@@ -115,6 +115,15 @@ func (s *Store) TransferConversation(ctx context.Context, ownerEmail, convID, to
 		return nil, err
 	}
 
+	// Other people's pins on the chat (migration 0204) go with the transfer:
+	// it is shared with nobody now, and the new owner's own row would
+	// otherwise sit unseen behind the chat's own pin, counted against their
+	// cap and beyond the reach of Unpin.
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM chat.shared_conversation_pins WHERE conversation_id = $1`, convID); err != nil {
+		return nil, err
+	}
+
 	out := &ConversationTransfer{Conversation: &conv, FromEmail: from, ToEmail: to}
 	// Counted over both people: the new owner may already have patrols of
 	// their own in the chat from taking part in it, and those are paused too.

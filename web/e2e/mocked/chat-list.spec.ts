@@ -137,6 +137,14 @@ async function pinFromMenu(page: Page, title: string, item: "Pin" | "Unpin" = "P
   await page.getByRole("menuitem", { name: item, exact: true }).click();
 }
 
+// Two animation frames: long enough for a response the page just received to
+// be read, applied and committed, so "still there" is not checked too early.
+async function settledFrames(page: Page) {
+  await page.evaluate(
+    () => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))),
+  );
+}
+
 test.beforeEach(async ({ context }) => {
   await loginViaCookie(context);
 });
@@ -175,6 +183,47 @@ test("a pin the server refuses is put back", async ({ page }) => {
   await expect.poll(() => pins.length).toBe(1);
   await expect(page.getByTestId("pinned-section").getByTestId("team-shared-conv-row")).toHaveCount(0);
   await expect(page.getByTestId("unified-chat-list").getByText("Acme renewal", { exact: true })).toHaveCount(1);
+});
+
+test("a list read that started before a pin was saved does not undo the pin", async ({ page }) => {
+  const { pins, team } = await boot(page);
+  // The next read of the shared list is answered late, with what the server
+  // held when the read arrived (before the pin).
+  let release: () => void = () => {};
+  const held = new Promise<void>((r) => (release = r));
+  let hold = true;
+  let reads = 0;
+  let arrived: () => void = () => {};
+  const readArrived = new Promise<void>((r) => (arrived = r));
+  await page.route("**/api/conversations?scope=shared", async (r: Route) => {
+    reads++;
+    const sorted = () => [...team].sort((a, b) => Number(b.pinned) - Number(a.pinned));
+    if (!hold) return r.fulfill({ json: { conversations: sorted() } });
+    hold = false;
+    const stale = JSON.stringify({ conversations: sorted() });
+    arrived();
+    await held;
+    return r.fulfill({ contentType: "application/json", body: stale });
+  });
+  // A refused pin on one of the person's own chats makes the page re-read
+  // its lists, the shared one among them.
+  await page.route("**/api/conversations/c6/pin", (r: Route) => r.fulfill({ status: 500, body: "down" }));
+  const own = page.locator('[data-conversation-id="c6"]').first();
+  await own.hover();
+  await own.getByRole("button", { name: /Conversation options/ }).click();
+  await page.getByRole("menuitem", { name: "Pin", exact: true }).click();
+  await readArrived;
+
+  await pinFromMenu(page, "Acme renewal");
+  await expect.poll(() => pins.some((p) => p.id === "t1" && p.pinned)).toBe(true);
+  const pinnedRow = page.getByTestId("pinned-section").getByTestId("team-shared-conv-row").filter({ hasText: "Acme renewal" });
+  await expect(pinnedRow).toHaveCount(1);
+  const before = reads;
+  release();
+  // The stale answer is dropped and the list read again; the pin stays.
+  await expect.poll(() => reads).toBeGreaterThan(before);
+  await settledFrames(page);
+  await expect(pinnedRow).toHaveCount(1);
 });
 
 test("a Viewer account is offered no pin on a teammate's chat", async ({ page }) => {
@@ -429,6 +478,15 @@ test.describe("on a phone", () => {
     await boot(page);
     await openDrawer(page);
     const body = page.getByTestId("rail-body");
+    // The one scroller: nothing inside it is a scroll box of its own (the
+    // Projects and Team chats sections are capped only on wider screens).
+    const nested = await body.evaluate((el) =>
+      [...el.querySelectorAll<HTMLElement>("*")].filter((n) => {
+        const o = getComputedStyle(n).overflowY;
+        return (o === "auto" || o === "scroll") && n.scrollHeight > n.clientHeight + 1;
+      }).length,
+    );
+    expect(nested).toBe(0);
     const { scrollHeight, clientHeight } = await body.evaluate((el) => ({
       scrollHeight: el.scrollHeight,
       clientHeight: el.clientHeight,

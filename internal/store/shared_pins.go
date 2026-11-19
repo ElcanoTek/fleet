@@ -9,9 +9,11 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// MaxSharedPins bounds how many chats owned by other people one person may
-// pin. It matches MaxChatOrder: the pinned group is hand-ordered, and an
-// order names at most that many chats.
+// MaxSharedPins bounds the Pinned group a pin on somebody else's chat may
+// grow: the person's own pinned chats and their pins on other people's,
+// together. It matches MaxChatOrder: the group is hand-ordered, and an order
+// names at most that many chats. Pinning one's own chat is not capped (it
+// never was); once the group is full, only that can still add to it.
 const MaxSharedPins = MaxChatOrder
 
 // ErrTooManySharedPins refuses a pin past MaxSharedPins.
@@ -89,7 +91,9 @@ func (s *Store) setSharedPin(ctx context.Context, userEmail, convID string, pinn
 	if err := tx.QueryRowContext(ctx,
 		`SELECT EXISTS (SELECT 1 FROM chat.shared_conversation_pins
 		                 WHERE user_email = $1 AND conversation_id = $2),
-		        (SELECT count(*) FROM chat.shared_conversation_pins WHERE user_email = $1)`,
+		        (SELECT count(*) FROM chat.shared_conversation_pins WHERE user_email = $1)
+		      + (SELECT count(*) FROM conversations
+		          WHERE user_email = $1 AND pinned AND deleted_at IS NULL AND archived_at IS NULL)`,
 		userEmail, convID,
 	).Scan(&already, &count); err != nil {
 		return fmt.Errorf("pin shared chat: %w", err)
@@ -180,4 +184,25 @@ func (s *Store) sharedPinSet(ctx context.Context, userEmail string) (map[string]
 		out[id] = true
 	}
 	return out, rows.Err()
+}
+
+// overlayViewerPins sets, on every conversation in list that callerEmail does
+// not own, the pinned flag to the caller's own pin on it. The owner's pin is
+// the owner's arrangement and is not shown to anyone else; the caller's own
+// chats keep theirs.
+func (s *Store) overlayViewerPins(ctx context.Context, callerEmail string, list []Conversation) error {
+	if len(list) == 0 {
+		return nil
+	}
+	callerEmail = normalizeEmail(callerEmail)
+	pins, err := s.sharedPinSet(ctx, callerEmail)
+	if err != nil {
+		return err
+	}
+	for i := range list {
+		if normalizeEmail(list[i].UserEmail) != callerEmail {
+			list[i].Pinned = pins[list[i].ID]
+		}
+	}
+	return nil
 }

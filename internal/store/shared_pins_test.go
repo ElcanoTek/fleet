@@ -318,3 +318,107 @@ func TestSharedPin_TiedToTheAccount(t *testing.T) {
 		t.Errorf("pins left after the account was deleted = %d", n)
 	}
 }
+
+// The cap is on the whole Pinned group: the person's own pinned chats count
+// toward it, so a pin on a teammate's chat cannot push the group past what
+// one saved order holds.
+func TestSharedPin_CapCountsOwnPinnedChats(t *testing.T) {
+	t.Parallel()
+
+	f := newTeamFixture(t)
+	theirs := f.sharedChat(t, "alice@x.com", f.project.ID, "Theirs")
+	mine, err := f.s.CreateConversation(f.ctx, "bob@x.com", "Mine", "victoria", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.SetPinned(f.ctx, "bob@x.com", mine.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.setSharedPin(f.ctx, "bob@x.com", theirs.ID, true, 1); !errors.Is(err, ErrTooManySharedPins) {
+		t.Fatalf("pin with the group already full of own chats = %v, want ErrTooManySharedPins", err)
+	}
+	if err := f.s.SetPinned(f.ctx, "bob@x.com", mine.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.setSharedPin(f.ctx, "bob@x.com", theirs.ID, true, 1); err != nil {
+		t.Errorf("pin after unpinning an own chat = %v, want nil", err)
+	}
+}
+
+// The team listings report the caller's own pin on a teammate's chat, like
+// the shared listing: never the owner's, and the caller's own chats keep
+// their own.
+func TestSharedPin_ShownInTeamListings(t *testing.T) {
+	t.Parallel()
+
+	f := newTeamFixture(t)
+	ownerPinned := f.sharedChat(t, "alice@x.com", f.project.ID, "Owner pinned")
+	viewerPinned := f.sharedChat(t, "alice@x.com", f.project.ID, "Viewer pinned")
+	// Shared first, pinned after: filing a chat in the project clears its pin.
+	if err := f.s.SetPinned(f.ctx, "alice@x.com", ownerPinned.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.SetSharedPin(f.ctx, "bob@x.com", viewerPinned.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]bool{ownerPinned.ID: false, viewerPinned.ID: true}
+	check := func(name string, list []Conversation, err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		seen := 0
+		for _, c := range list {
+			if w, ok := want[c.ID]; ok {
+				seen++
+				if c.Pinned != w {
+					t.Errorf("%s: %q pinned = %v for bob, want %v", name, c.Title, c.Pinned, w)
+				}
+			}
+		}
+		if seen != len(want) {
+			t.Fatalf("%s listed %d of the %d shared chats", name, seen, len(want))
+		}
+	}
+	list, err := f.s.ListTeamConversations(f.ctx, "bob@x.com")
+	check("ListTeamConversations", list, err)
+	list, err = f.s.ListProjectTeamConversations(f.ctx, "bob@x.com", f.project.ID)
+	check("ListProjectTeamConversations", list, err)
+
+	// The owner reading the same list sees her own pin, not bob's.
+	list, err = f.s.ListTeamConversations(f.ctx, "alice@x.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range list {
+		if c.ID == ownerPinned.ID && !c.Pinned {
+			t.Error("the owner's own pin is missing from her team listing")
+		}
+		if c.ID == viewerPinned.ID && c.Pinned {
+			t.Error("a teammate's pin shows on the owner's own chat")
+		}
+	}
+}
+
+// Transferring a chat removes every pin other people had on it, the new
+// owner's included, so none is left behind the chat's own pin.
+func TestSharedPin_ClearedWhenTheChatIsTransferred(t *testing.T) {
+	t.Parallel()
+
+	f := newTeamFixture(t)
+	c := f.sharedChat(t, "alice@x.com", f.project.ID, "Handover")
+	if err := f.s.SetSharedPin(f.ctx, "bob@x.com", c.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.s.TransferConversation(f.ctx, "alice@x.com", c.ID, "bob@x.com"); err != nil {
+		t.Fatalf("TransferConversation: %v", err)
+	}
+	var n int
+	if err := f.s.db.QueryRowContext(f.ctx,
+		`SELECT count(*) FROM chat.shared_conversation_pins WHERE conversation_id = $1`, c.ID).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Errorf("pins left on a transferred chat = %d", n)
+	}
+}

@@ -672,12 +672,8 @@ func (s *Store) ListSharedAndMultiplayerConversations(ctx context.Context, calle
 	// the owner's: the owner's pin is their own arrangement and no business
 	// of a teammate's list. The caller's pinned chats come first, each group
 	// most recent first as the query left it.
-	pins, err := s.sharedPinSet(ctx, callerEmail)
-	if err != nil {
+	if err := s.overlayViewerPins(ctx, callerEmail, out); err != nil {
 		return nil, err
-	}
-	for i := range out {
-		out[i].Pinned = pins[out[i].ID]
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Pinned && !out[j].Pinned })
 	return out, nil

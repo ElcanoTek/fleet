@@ -2469,7 +2469,9 @@ visibleProjectTree.map(({ project, chats }) => {
           section scrolls on its own, like the Chats list below. */}
       <div
         className={[
-          "max-h-[30vh] overflow-y-auto overflow-x-hidden",
+          // From sm up only: on a phone the drawer's body is the one scroller
+          // (NavRail), and a capped box inside it would catch the swipe.
+          "overflow-x-hidden sm:max-h-[30vh] sm:overflow-y-auto",
           railCollapsed ? "sm:hidden" : "",
         ].join(" ")}
       >
@@ -2500,7 +2502,9 @@ visibleProjectTree.map(({ project, chats }) => {
           section scrolls on its own, like the Chats list below. */}
       <div
         className={[
-          "max-h-[30vh] overflow-y-auto overflow-x-hidden",
+          // From sm up only: on a phone the drawer's body is the one scroller
+          // (NavRail), and a capped box inside it would catch the swipe.
+          "overflow-x-hidden sm:max-h-[30vh] sm:overflow-y-auto",
           railCollapsed ? "sm:hidden" : "",
         ].join(" ")}
       >
@@ -2673,7 +2677,7 @@ visibleProjectTree.map(({ project, chats }) => {
   const teamTop = teamBlock && !searching ? (
     <div
       className={[
-        "max-h-[30vh] shrink-0 overflow-y-auto overflow-x-hidden",
+        "shrink-0 overflow-x-hidden sm:max-h-[30vh] sm:overflow-y-auto",
         railCollapsed ? "sm:hidden" : "",
       ].join(" ")}
     >

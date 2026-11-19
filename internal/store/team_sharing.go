@@ -376,6 +376,11 @@ func (s *Store) ListProjectTeamConversations(ctx context.Context, callerEmail, p
 		}
 		list[i].MultiplayerExcluded = nil
 	}
+	// Pinned on a teammate's chat is the caller's own pin, as in the shared
+	// listing (migration 0204).
+	if err := s.overlayViewerPins(ctx, callerEmail, list); err != nil {
+		return nil, err
+	}
 	return list, nil
 }
 
