@@ -49,7 +49,40 @@ Identical to the webhook trigger (#177): the provider signs the raw body with th
 per-trigger HMAC-SHA256 secret and sends it as `X-Hub-Signature-256` (or
 `X-Fleet-Signature-256`). An unknown slug, a webhook-kind slug hit on the email
 endpoint, or a bad signature all return an **identical, timing-equalized 401** —
-no slug or kind enumeration. The admin API key is never involved.
+no slug or kind enumeration. The admin API key is never involved, and neither is
+any other API key: the email endpoint ignores a `fleet_webhook_` key, so a key
+sent without a valid signature gets the same 401.
+
+### Each endpoint fires only its own kind
+
+The kind check runs in both directions:
+
+| Request | Answer |
+| --- | --- |
+| A webhook trigger's slug on `POST /triggers/email/{slug}` | The unknown-slug answer: **401** `{"detail":"unauthorized"}`, no run |
+| An email trigger's slug on `POST /triggers/{slug}`, with a valid signature **or** a `fleet_webhook_` key that lists the slug | The unknown-slug answer: **401** `{"detail":"unauthorized"}`, no run |
+
+Both take the handler's unknown-slug path: the lookup by slug and kind returns
+no row, and the handler still computes one HMAC, against a per-process dummy
+secret, before answering with the unknown-slug status and body. The answer
+therefore does not show that the slug exists as a trigger of the other kind. An
+email trigger runs only through the email endpoint, under every control below
+and the connector opt-in. The generic endpoint applies none of them, so it never
+fires an email trigger.
+
+A `fleet_webhook_` key may list any well-formed slug: keys live in the key file,
+not the trigger table, and a slug can be listed before its trigger exists or
+reused after it is deleted, so key creation does not check kinds. The check is
+made on every request instead: a key listing an email trigger's slug fires
+nothing.
+
+The rule holds by construction. The trigger lookup by slug always names the one
+kind the endpoint fires (`storage.GetTriggerBySlug(ctx, kind, slug)`, with no
+slug-only form), and each spawn function refuses a trigger of another kind
+(`SpawnWebhookRun` fires webhook triggers only, `SpawnEmailRun` email triggers
+only), so a future endpoint has to state which kind it fires.
+`TestOpenAPITriggerRoutesFireOnlyTheirKind` (in `cmd/fleet`) sends a trigger of
+every other kind in `models.TriggerKinds` to every trigger endpoint in the spec.
 
 ## Security controls (the email-kind policy)
 
@@ -77,7 +110,9 @@ allowlist — so an untrusted inbound email can never auto-escalate through a
 connector. This is the hard rule from the issue. (The pre-existing #177 webhook
 path is unchanged: it still inherits the template's MCP selection. Webhook
 ingress is HMAC-authenticated against a per-trigger secret, so its trust model is
-the operator holding that secret, not an arbitrary inbound sender.)
+the operator holding that secret, not an arbitrary inbound sender. That rule
+applies to webhook triggers only: the generic endpoint answers an email
+trigger's slug as an unknown slug, so an email trigger never runs under it.)
 
 ### "None" is written down, not left blank (#979)
 

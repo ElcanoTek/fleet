@@ -65,12 +65,24 @@ func (db *Database) CreateTrigger(ctx context.Context, t *models.TaskTrigger) er
 	return err
 }
 
-// GetTriggerBySlug looks up a trigger by its URL slug. Returns sql.ErrNoRows
-// when no trigger matches — the webhook handler maps that to 401 (not 404) to
-// avoid slug enumeration.
-func (db *Database) GetTriggerBySlug(ctx context.Context, slug string) (*models.TaskTrigger, error) {
+// GetTriggerBySlug looks up the trigger with this URL slug AND this kind.
+// Returns sql.ErrNoRows when no trigger matches, including a trigger that has
+// the slug but another kind, so an ingress route sees another kind's slug
+// exactly as an unknown one; the handlers map that to 401 (not 404) to avoid
+// slug enumeration. The kind is filtered in the query, so an other-kind slug
+// comes back as no row and the handler takes its unknown-slug path.
+//
+// kind is required, not an optional filter: each ingress route fires one kind
+// of trigger, so the lookup names it. An invalid kind is an error, never a
+// match-anything.
+func (db *Database) GetTriggerBySlug(ctx context.Context, kind models.TriggerKind, slug string) (*models.TaskTrigger, error) {
+	if !kind.IsValid() {
+		return nil, fmt.Errorf("trigger lookup: %q is not a trigger kind", kind)
+	}
+	// A blank stored kind reads as webhook, the same default scanTrigger applies.
 	row := db.conn.QueryRowContext(ctx,
-		"SELECT "+triggerColumns+" FROM task_triggers WHERE slug = $1", slug)
+		"SELECT "+triggerColumns+" FROM task_triggers WHERE slug = $1 AND COALESCE(NULLIF(kind, ''), $3) = $2",
+		slug, string(kind), string(models.TriggerKindWebhook))
 	return scanTrigger(ctx, row)
 }
 

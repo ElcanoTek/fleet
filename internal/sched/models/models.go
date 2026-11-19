@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -731,14 +732,17 @@ const (
 	TriggerKindEmail TriggerKind = "email"
 )
 
+// TriggerKinds lists every trigger kind. Each kind has exactly one ingress
+// route, and that route fires only triggers of its own kind: a trigger is
+// always looked up by slug AND the kind the route accepts
+// (storage.GetTriggerBySlug), so a slug of another kind is answered as an
+// unknown one. The cross-kind tests walk this list, so a new kind is covered
+// on every route the moment it is added here.
+var TriggerKinds = []TriggerKind{TriggerKindWebhook, TriggerKindEmail}
+
 // IsValid reports whether k is a recognized trigger kind.
 func (k TriggerKind) IsValid() bool {
-	switch k {
-	case TriggerKindWebhook, TriggerKindEmail:
-		return true
-	default:
-		return false
-	}
+	return slices.Contains(TriggerKinds, k)
 }
 
 // EmailTriggerPolicy holds the email-kind security controls (#511), persisted as

@@ -13,9 +13,13 @@ func (s *Storage) CreateTrigger(ctx context.Context, t *models.TaskTrigger) erro
 	return s.db.CreateTrigger(ctx, t)
 }
 
-// GetTriggerBySlug looks up a trigger by slug (used by the webhook/email handlers).
-func (s *Storage) GetTriggerBySlug(ctx context.Context, slug string) (*models.TaskTrigger, error) {
-	return s.db.GetTriggerBySlug(ctx, slug)
+// GetTriggerBySlug resolves the trigger an ingress route fires: the trigger
+// with this slug, only when it is of kind, the one kind the route accepts. A
+// trigger of another kind is answered as no trigger (sql.ErrNoRows), so the
+// route takes its unknown-slug path. There is deliberately no lookup by slug
+// alone: a route has to state which kind it fires (see db.GetTriggerBySlug).
+func (s *Storage) GetTriggerBySlug(ctx context.Context, kind models.TriggerKind, slug string) (*models.TaskTrigger, error) {
+	return s.db.GetTriggerBySlug(ctx, kind, slug)
 }
 
 // GetTrigger looks up a trigger by ID.
@@ -168,8 +172,20 @@ func triggerRunCreate(template *models.Task, prompt string, inherit connectorInh
 // so the scheduler evaluates the gate before dispatch. The `inherit` flags
 // decide whether the run carries the template's write-capable connectors —
 // the one place the event-trigger security default is enforced.
-func (s *Storage) buildTriggerRun(ctx context.Context, taskID uuid.UUID, prompt string, inherit connectorInheritance) (uuid.UUID, error) {
-	template, err := s.db.GetTask(ctx, taskID)
+//
+// kind is the trigger kind whose connector rule `inherit` implements. A
+// trigger of any other kind is refused before anything is written, so a
+// caller that resolved the trigger some other way (by ID, or by a lookup that
+// forgot the kind) still cannot run an email trigger under the webhook rule,
+// or the reverse.
+func (s *Storage) buildTriggerRun(ctx context.Context, trigger *models.TaskTrigger, kind models.TriggerKind, prompt string, inherit connectorInheritance) (uuid.UUID, error) {
+	if trigger == nil {
+		return uuid.Nil, fmt.Errorf("spawn %s trigger run: no trigger", kind)
+	}
+	if got := trigger.KindOrWebhook(); got != kind {
+		return uuid.Nil, fmt.Errorf("spawn %s trigger run: trigger %s is of kind %q", kind, trigger.ID, got)
+	}
+	template, err := s.db.GetTask(ctx, trigger.TaskID)
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("load template task: %w", err)
 	}
@@ -188,12 +204,12 @@ func (s *Storage) buildTriggerRun(ctx context.Context, taskID uuid.UUID, prompt 
 	return run.ID, nil
 }
 
-// SpawnWebhookRun creates one fresh run cloned from the trigger's template
-// task, with the rendered prompt substituted (#177). Behavior is unchanged:
-// the spawned run inherits the template's MCP selection (its historical
-// connector subset).
+// SpawnWebhookRun creates one fresh run cloned from a webhook trigger's
+// template task, with the rendered prompt substituted (#177). Behavior is
+// unchanged: the spawned run inherits the template's MCP selection (its
+// historical connector subset). A trigger of another kind is refused.
 func (s *Storage) SpawnWebhookRun(ctx context.Context, trigger *models.TaskTrigger, prompt string) (uuid.UUID, error) {
-	return s.buildTriggerRun(ctx, trigger.TaskID, prompt, connectorsMCPOnly)
+	return s.buildTriggerRun(ctx, trigger, models.TriggerKindWebhook, prompt, connectorsMCPOnly)
 }
 
 // SpawnEmailRun creates one fresh run from an email trigger's template (#511).
@@ -201,11 +217,12 @@ func (s *Storage) SpawnWebhookRun(ctx context.Context, trigger *models.TaskTrigg
 // (the secure default) spawns a native-tools-only run whose credential allowlist
 // is an explicit deny-all, so an untrusted inbound email can never auto-escalate
 // through a connector; true inherits both the MCP selection and its credential
-// allowlist (a connector needs both to write).
+// allowlist (a connector needs both to write). A trigger of another kind is
+// refused.
 func (s *Storage) SpawnEmailRun(ctx context.Context, trigger *models.TaskTrigger, prompt string, inheritConnectors bool) (uuid.UUID, error) {
 	inherit := connectorsDenied
 	if inheritConnectors {
 		inherit = connectorsInherited
 	}
-	return s.buildTriggerRun(ctx, trigger.TaskID, prompt, inherit)
+	return s.buildTriggerRun(ctx, trigger, models.TriggerKindEmail, prompt, inherit)
 }

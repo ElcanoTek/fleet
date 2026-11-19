@@ -329,7 +329,7 @@ func TestHandleEmailTrigger_OptOutRunReachesZeroConnectorSeats(t *testing.T) {
 	secret := seedEmailTrigger(t, store, "zeroseats", validPolicy(), false, mcp)
 	// Scope the TEMPLATE to a real seat, so "inherited nothing" and "may call
 	// nothing" are distinguishable outcomes rather than the same empty list.
-	trig, err := store.GetTriggerBySlug(context.Background(), "zeroseats")
+	trig, err := store.GetTriggerBySlug(context.Background(), models.TriggerKindEmail, "zeroseats")
 	if err != nil {
 		t.Fatalf("GetTriggerBySlug: %v", err)
 	}

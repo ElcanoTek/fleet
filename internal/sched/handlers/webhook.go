@@ -60,9 +60,12 @@ type triggerHeaders struct {
 // SOLELY via the per-trigger HMAC-SHA256 secret — never the admin API key — so
 // external services (GitHub, Slack, CI) can call it without admin credentials.
 //
-// Unknown slug and bad signature both return an identical 401 AND perform the
-// same HMAC work (a dummy compare on the miss path), so neither the response nor
-// its timing lets an attacker enumerate valid slugs.
+// It fires webhook-kind triggers only. An unknown slug, the slug of a trigger
+// of another kind (an email trigger, which only POST /triggers/email/{slug}
+// fires, under the email rules), and a bad signature all return an identical
+// 401 AND perform the same HMAC work (a dummy compare on the miss path), so
+// neither the response nor its timing reveals which slugs exist, or of what
+// kind.
 func (h *Handlers) HandleWebhookTrigger(w http.ResponseWriter, r *http.Request) {
 	slug := chi.URLParam(r, "slug")
 
@@ -103,10 +106,12 @@ func (h *Handlers) HandleWebhookTrigger(w http.ResponseWriter, r *http.Request) 
 
 	// Look up the trigger only for well-formed slugs; a malformed slug can't match
 	// a stored row, so skip the DB probe (DoS guard) and fall through to the
-	// equalized dummy-HMAC miss path below.
+	// equalized dummy-HMAC miss path below. The lookup names the one kind this
+	// route fires: a trigger of another kind comes back as no row, so it takes
+	// the same miss path as an unknown slug — whichever credential was sent.
 	var trig *models.TaskTrigger
 	if triggerSlugShape.MatchString(slug) {
-		t, lookupErr := h.storage.GetTriggerBySlug(r.Context(), slug)
+		t, lookupErr := h.storage.GetTriggerBySlug(r.Context(), models.TriggerKindWebhook, slug)
 		if lookupErr != nil && !errors.Is(lookupErr, sql.ErrNoRows) {
 			logging.From(r.Context()).Error("webhook trigger lookup error", "slug", safe.LogSafe(slug), "err", lookupErr)
 			writeError(w, http.StatusInternalServerError, "internal error")
