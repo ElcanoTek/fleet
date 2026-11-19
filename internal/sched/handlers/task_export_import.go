@@ -164,41 +164,6 @@ func (h *Handlers) HandleTaskImport(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// A run_if gate executes on the host as the fleet user, so IMPORTING one is
-	// gated exactly like authoring one (requireAdminForRunIf on the create and
-	// edit paths): without this, any create_task principal could mint a
-	// host-side command by wrapping it in an export envelope. Checked up front,
-	// before any write, mirroring the conflict=replace admin gate above.
-	if !p.hasPermission(models.PermissionAdmin) {
-		for i, rec := range envelope.Tasks {
-			if rec.RunIf != nil {
-				writeError(w, http.StatusForbidden, fmt.Sprintf(
-					"task[%d] (name=%s): run_if: a host-side pre-run gate can only be imported by an admin", i, rec.Name))
-				return
-			}
-		}
-	}
-
-	// Per-principal rolling budget (#601 part 2): import is a bulk create, so it
-	// runs the SAME budgetCapError gate POST /tasks and /tasks/batch run, once
-	// up front for the whole envelope — the budget bounds the principal, not
-	// any one record, so an exhausted window refuses the import before any row
-	// is written. Without it (and the per-record priority ceiling in
-	// createTaskFromRecord) an export envelope was an unmetered route around
-	// every create gate.
-	creator := creatorFromPrincipal(p)
-	// ...but NOT for a dry run. dry_run=true writes no row (every create and
-	// replace below is behind `if !dryRun`) and therefore spends nothing, so
-	// refusing it on an exhausted window would deny the validation-only plan
-	// precisely when an operator most needs to see what an import would do.
-	// The gate belongs on the writes, not on the preview of them.
-	if !dryRun {
-		if err := h.budgetCapError(r.Context(), creator); err != nil {
-			writeBudgetRefusal(w, err)
-			return
-		}
-	}
-
 	// Detect duplicate names WITHIN the import payload itself — two records
 	// sharing a name can't both be created (the second would collide with the
 	// first), and conflict=error/skip/replace all treat intra-batch dupes as an
@@ -242,47 +207,55 @@ func (h *Handlers) HandleTaskImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Every record this import writes (created or replaced) runs the SAME
+	// gates as POST /tasks: admitCreate per created record, admitEdit per
+	// replaced one. A record conflict=skip leaves alone writes nothing, so it
+	// is neither checked nor charged.
+	plan := planImport(envelope.Tasks, existing, conflict)
+	gates := taskGatesFor(creatorFromPrincipal(p))
+	if err := h.importContentRefusal(gates.creator.hasAdminPermission, envelope.Tasks, plan); err != nil {
+		writeError(w, http.StatusForbidden, err.Error())
+		return
+	}
+
+	// The per-principal gates, once for the import. The rolling budget
+	// (#601 part 2) bounds the principal's new tasks, not any one record, so it
+	// runs when the import creates at least one: an exhausted window refuses
+	// the import before any row is written. A replace edits an existing task,
+	// and PUT /tasks/{id} has no budget gate either; a replace that finds its
+	// row gone and creates instead meets the budget in admitCreate. The
+	// importing key's hourly counter is charged one request per record the
+	// import creates or replaces, as on /tasks/batch.
+	//
+	// A dry run runs neither: it writes no row (every create and replace below
+	// is behind `if !dryRun`), so refusing it on an exhausted window would deny
+	// the plan precisely when an operator most needs to see what an import
+	// would do.
+	if !dryRun {
+		if plan.creates > 0 {
+			if err := h.checkBudget(r.Context(), gates); err != nil {
+				writeBudgetRefusal(w, err)
+				return
+			}
+		}
+		if plan.creates+plan.replaces > 0 && !h.chargeRecords(gates, plan.creates+plan.replaces) {
+			writeError(w, http.StatusTooManyRequests, "Rate limit exceeded")
+			return
+		}
+	}
+
 	resp := models.TaskImportResponse{DryRun: dryRun, Total: len(envelope.Tasks), Results: []models.TaskImportResult{}}
-
-	for _, rec := range envelope.Tasks {
-		result := models.TaskImportResult{Name: rec.Name}
-		name := strings.TrimSpace(rec.Name)
-		_, collision := existing[name]
-
-		switch {
-		case collision && conflict == models.TaskImportConflictSkip:
-			result.Status = models.TaskImportSkipped
-			result.Reason = "conflict=skip"
+	for i, rec := range envelope.Tasks {
+		result := h.importRecord(r, rec, plan.actions[i], conflict, gates, dryRun)
+		switch result.Status {
+		case models.TaskImportSkipped:
 			resp.Skipped++
-		case collision && conflict == models.TaskImportConflictReplace:
-			if !dryRun {
-				id, rerr := h.replaceTaskByName(r, rec, creator)
-				if rerr != nil {
-					result.Status = models.TaskImportErrored
-					result.Error = rerr.Error()
-					resp.Errors++
-					resp.Results = append(resp.Results, result)
-					continue
-				}
-				result.ID = &id
-			}
-			result.Status = models.TaskImportReplaced
+		case models.TaskImportReplaced:
 			resp.Replaced++
-		default:
-			// No collision (or unnamed record — never collides by name).
-			if !dryRun {
-				id, cerr := h.createTaskFromRecord(r, rec, creator)
-				if cerr != nil {
-					result.Status = models.TaskImportErrored
-					result.Error = cerr.Error()
-					resp.Errors++
-					resp.Results = append(resp.Results, result)
-					continue
-				}
-				result.ID = &id
-			}
-			result.Status = models.TaskImportCreated
+		case models.TaskImportCreated:
 			resp.Created++
+		case models.TaskImportErrored:
+			resp.Errors++
 		}
 		resp.Results = append(resp.Results, result)
 	}
@@ -296,44 +269,154 @@ func (h *Handlers) HandleTaskImport(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, r, status, resp)
 }
 
+// importAction is what an import does with one record.
+type importAction int
+
+const (
+	importCreate importAction = iota
+	importReplace
+	importSkip
+)
+
+// importPlan is each record's action, and how many records the import
+// creates and replaces.
+type importPlan struct {
+	actions           []importAction
+	creates, replaces int
+}
+
+// planImport decides each record's action from the names that already exist.
+// A colliding record is replaced under conflict=replace and left alone under
+// conflict=skip (conflict=error refused the whole import before this); every
+// other record, unnamed ones included, is created.
+func planImport(records []models.TaskExportRecord, existing map[string]uuid.UUID, conflict models.TaskImportConflict) importPlan {
+	plan := importPlan{actions: make([]importAction, len(records))}
+	for i, rec := range records {
+		_, collision := existing[strings.TrimSpace(rec.Name)]
+		switch {
+		case collision && conflict == models.TaskImportConflictSkip:
+			plan.actions[i] = importSkip
+		case collision && conflict == models.TaskImportConflictReplace:
+			plan.actions[i] = importReplace
+			plan.replaces++
+		default:
+			plan.actions[i] = importCreate
+			plan.creates++
+		}
+	}
+	return plan
+}
+
+// importRecord carries out one record's planned action (nothing on a dry
+// run) and reports it. A planned create whose name another request took after
+// the plan was made answers like the plan would have: skipped under
+// conflict=skip, otherwise an error naming the conflict.
+func (h *Handlers) importRecord(r *http.Request, rec models.TaskExportRecord, action importAction, conflict models.TaskImportConflict, gates *taskGates, dryRun bool) models.TaskImportResult {
+	result := models.TaskImportResult{Name: rec.Name}
+	skipped := func() models.TaskImportResult {
+		result.Status = models.TaskImportSkipped
+		result.Reason = "conflict=skip"
+		return result
+	}
+	switch action {
+	case importSkip:
+		return skipped()
+	case importReplace:
+		result.Status = models.TaskImportReplaced
+		if dryRun {
+			return result
+		}
+		id, err := h.replaceTaskByName(r, rec, gates)
+		if err != nil {
+			result.Status, result.Error = models.TaskImportErrored, err.Error()
+			return result
+		}
+		result.ID = &id
+		return result
+	default:
+		result.Status = models.TaskImportCreated
+		if dryRun {
+			return result
+		}
+		id, err := h.createTaskFromRecord(r, rec, gates)
+		if err != nil {
+			var refusal *createRefusalError
+			if conflict == models.TaskImportConflictSkip && errors.As(err, &refusal) && refusal.status == http.StatusConflict {
+				return skipped()
+			}
+			result.Status, result.Error = models.TaskImportErrored, err.Error()
+			return result
+		}
+		result.ID = &id
+		return result
+	}
+}
+
+// importContentRefusal checks the two admin-only rules on a record's content
+// for every record the import writes, before any write, so a dry run reports
+// the same refusal the import would. admitCreate applies both again per
+// record. It returns the refusal naming the first offending record, or nil.
+//
+// run_if runs on the host as the fleet user, so importing one needs admin, as
+// authoring one does. A per-task max_cost_usd / max_total_tokens above the
+// deployment ceiling needs admin, as on POST /tasks (#1533), with POST /tasks's
+// text.
+func (h *Handlers) importContentRefusal(isAdmin bool, records []models.TaskExportRecord, plan importPlan) error {
+	if isAdmin {
+		return nil
+	}
+	for i, rec := range records {
+		if plan.actions[i] == importSkip {
+			continue
+		}
+		if rec.RunIf != nil {
+			return fmt.Errorf("task[%d] (name=%s): run_if: a host-side pre-run gate can only be imported by an admin", i, rec.Name)
+		}
+		tc := models.ExportRecordToTaskCreate(rec)
+		if msg := h.requireAdminForCeilingsAboveDeployment(isAdmin, &tc); msg != "" {
+			return fmt.Errorf("task[%d] (name=%s): %v", i, rec.Name, msg)
+		}
+	}
+	return nil
+}
+
 // createTaskFromRecord mints a fresh task from a portable record (the import
-// "create" path) and persists it. It reuses the handler's validateTaskCreate so
-// the imported definition is subject to the SAME routing/cron/timezone/model
-// validation as POST /tasks — import cannot mint a task the create path would
-// reject, nor one more urgent than the importing key's priority ceiling. The
-// creator is the importing principal (re-attributed on import — user AND key,
-// via taskCreator.attribute, so a key-imported task is visible to that key).
-func (h *Handlers) createTaskFromRecord(r *http.Request, rec models.TaskExportRecord, creator taskCreator) (uuid.UUID, error) {
+// "create" path) and persists it. The record goes through the SAME gates as
+// POST /tasks (Handlers.admitCreate) — import cannot mint a task the create
+// path would reject: not one that fails its validation, not one with a ceiling
+// above the deployment's unless the importer is an admin, not one more urgent
+// than the importing key's priority ceiling, not one whose connectors do not
+// resolve for the importer. The creator is the importing principal
+// (re-attributed on import — user AND key, via taskCreator.attribute, so a
+// key-imported task is visible to that key).
+func (h *Handlers) createTaskFromRecord(r *http.Request, rec models.TaskExportRecord, gates *taskGates) (uuid.UUID, error) {
 	tc := models.ExportRecordToTaskCreate(rec)
-	if err := h.validateTaskCreate(&tc); err != nil {
-		return uuid.Nil, err
-	}
-	task := models.NewTask(tc)
-	creator.attribute(task)
-	// Per-key priority ceiling (#230): the same per-record cap the batch path
-	// applies, on the post-default priority.
-	if err := priorityCapError(creator.creatorKeyMaxPriority, task.Priority); err != nil {
-		return uuid.Nil, err
-	}
-	// The create path's mcp_selection check, against the importing owner.
-	if err := h.checkTaskMCPSelection(r.Context(), task); err != nil {
+	task, err := h.admitCreate(r.Context(), gates, &tc, nil)
+	if err != nil {
 		return uuid.Nil, err
 	}
 	if _, err := h.storage.AddTaskWithContext(r.Context(), task); err != nil {
+		// Another request took the name after the import's name lookup: the
+		// same 409 refusal POST /tasks gives, and the only 409 this returns.
+		if isTaskNameConflict(err) {
+			return uuid.Nil, taskNameTaken(task.Name)
+		}
 		return uuid.Nil, err
 	}
 	return task.ID, nil
 }
 
 // replaceTaskByName updates an existing task's DEFINITION in place (the import
-// "replace" path). The record is validated exactly like a create, then handed
-// to storage.ReplaceTaskDefinition, which re-locks the row, re-checks it is
+// "replace" path). The record goes through the same edit gates as
+// PUT /tasks/{id} (Handlers.admitEdit; a replace keeps the row's owner, so
+// the selection must resolve for it), then is handed to
+// storage.ReplaceTaskDefinition, which re-locks the row, re-checks it is
 // still pending/scheduled, overlays ONLY definition fields (the shared
 // models.OverlayTaskDefinition — execution state is never copied from the
 // record), and recomputes the dispatch state (#1104). A task that was claimed
 // or finished since the pre-flight is therefore refused per-record instead of
 // having its status/lease silently rewound into a second execution.
-func (h *Handlers) replaceTaskByName(r *http.Request, rec models.TaskExportRecord, creator taskCreator) (uuid.UUID, error) {
+func (h *Handlers) replaceTaskByName(r *http.Request, rec models.TaskExportRecord, gates *taskGates) (uuid.UUID, error) {
 	existing, err := h.storage.GetTaskByName(r.Context(), rec.Name)
 	if err != nil {
 		return uuid.Nil, err
@@ -341,14 +424,10 @@ func (h *Handlers) replaceTaskByName(r *http.Request, rec models.TaskExportRecor
 	if existing == nil {
 		// Raced: the task was deleted between the pre-flight and now. Treat as a
 		// create so the import still lands the record.
-		return h.createTaskFromRecord(r, rec, creator)
+		return h.createTaskFromRecord(r, rec, gates)
 	}
 	tc := models.ExportRecordToTaskCreate(rec)
-	if err := h.validateTaskCreate(&tc); err != nil {
-		return uuid.Nil, err
-	}
-	// A replace keeps the row's owner, so the selection must resolve for it.
-	if err := h.checkMCPSelectionForOwner(r.Context(), existing.CreatedBy, tc.MCPSelection, tc.CredentialAllowlist); err != nil {
+	if err := h.admitEdit(r.Context(), gates, existing, &tc, taskEditScope{replace: true}); err != nil {
 		return uuid.Nil, err
 	}
 	updated, err := h.storage.ReplaceTaskDefinition(r.Context(), existing.ID, tc)
@@ -356,7 +435,7 @@ func (h *Handlers) replaceTaskByName(r *http.Request, rec models.TaskExportRecor
 		// Deleted between the name lookup and the row lock: the same race as the
 		// nil branch above, with the same answer — land the record as a create.
 		if errors.Is(err, sql.ErrNoRows) {
-			return h.createTaskFromRecord(r, rec, creator)
+			return h.createTaskFromRecord(r, rec, gates)
 		}
 		return uuid.Nil, err
 	}
