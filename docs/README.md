@@ -394,7 +394,7 @@ above fails otherwise.
 - [`SELF-WAKE.md`](SELF-WAKE.md) — Self-wake: sleep / wake_on_event
 - [`SERVER-STATS.md`](SERVER-STATS.md) — Admin server statistics
 - [`SESSION-EPOCH.md`](SESSION-EPOCH.md) — Per-user session epoch (password reset ends outstanding sessions)
-- [`SHARED-FILES.md`](SHARED-FILES.md) — Shared files: the cross-chat file library
+- [`SHARED-FILES.md`](SHARED-FILES.md) — Shared files: the cross-chat file library (admin uploads, and text files chats write with `shared_file_write`)
 - [`SKILLS.md`](SKILLS.md) — Skills (#513, phase 1)
 - [`STALE-CLIENTS.md`](STALE-CLIENTS.md) — Stale clients after a deploy: the update notice and the error pages
 - [`STRUCTURED-OUTPUT.md`](STRUCTURED-OUTPUT.md) — Structured output contracts

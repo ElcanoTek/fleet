@@ -6018,5 +6018,12 @@
   "This temporary chat will be deleted within a day.": "Este chat temporal se eliminará en menos de un día.",
   "This temporary chat will be deleted in {0} days.": "Este chat temporal se eliminará en {0} días.",
   "Sending a message keeps it for another {0} days; pinning keeps it for good.": "Si envías un mensaje, se conserva otros {0} días; si lo fijas, se conserva de forma permanente.",
-  "Pin to keep": "Fijar para conservar"
+  "Pin to keep": "Fijar para conservar",
+  " Admins upload and manage files here. Conversations can also save text files they share with every chat (a team log, for example), marked “written by chats”; admins can rename or delete those too.": " Los administradores suben y gestionan archivos aquí. Las conversaciones también pueden guardar archivos de texto que comparten con todos los chats (un registro del equipo, por ejemplo), marcados como «escrito por chats»; los administradores también pueden renombrarlos o eliminarlos.",
+  " Admins manage uploads. Conversations can also save text files they share with every chat (a team log, for example), marked “written by chats”.": " Los administradores gestionan los archivos subidos. Las conversaciones también pueden guardar archivos de texto que comparten con todos los chats (un registro del equipo, por ejemplo), marcados como «escrito por chats».",
+  "· written by chats": "· escrito por chats",
+  "· last by": "· último cambio de",
+  "· folder index": "· índice de la carpeta",
+  "Chats can save shared files": "Los chats pueden guardar archivos compartidos",
+  "Let conversations and scheduled tasks save text files that every chat on this server can read, such as a team log of optimizations. Files an admin uploads stay read-only to chats, and admins can rename or delete chat files in Settings → Shared files. Turning this off stops new writes; files already saved stay readable.": "Permite que las conversaciones y las tareas programadas guarden archivos de texto que cualquier chat de este servidor puede leer, como un registro del equipo con las optimizaciones. Los archivos que sube un administrador siguen siendo de solo lectura para los chats, y los administradores pueden renombrar o eliminar los archivos de los chats en Ajustes → Archivos compartidos. Al desactivarlo se bloquean las nuevas escrituras; los archivos ya guardados se pueden seguir leyendo."
 }

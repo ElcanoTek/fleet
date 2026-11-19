@@ -28,7 +28,32 @@ type SharedFile struct {
 	UploadedBy  string `json:"uploaded_by,omitempty"`
 	CreatedAt   int64  `json:"created_at"`
 	UpdatedAt   int64  `json:"updated_at"`
+
+	// Origin is SharedFileOriginAdmin (an upload: bytes in the data dir) or
+	// SharedFileOriginChat (written by shared_file_write: text in the row).
+	// Chats may write only chat rows (migration 0205, ADR-0114).
+	Origin string `json:"origin"`
+	// UpdatedBy / UpdatedConversationID name the last writer of a chat row:
+	// an email, and the conversation id (or "task:<id>" for a scheduled
+	// run). Both are "" on an admin upload.
+	UpdatedBy             string `json:"updated_by,omitempty"`
+	UpdatedConversationID string `json:"updated_conversation_id,omitempty"`
+	// FolderIndex marks the file its folder's entry point: a folder with many
+	// files is announced to the model as one line naming this file.
+	FolderIndex bool `json:"folder_index,omitempty"`
+	// HasPrevious reports a displaced version one undo can restore.
+	HasPrevious bool `json:"has_previous,omitempty"`
 }
+
+// Shared-file origins (chat.shared_files.origin).
+const (
+	SharedFileOriginAdmin = "admin"
+	SharedFileOriginChat  = "chat"
+)
+
+// IsChatWritten reports whether a row was written by a chat (its text lives in
+// the database, and chats may change it).
+func (f SharedFile) IsChatWritten() bool { return f.Origin == SharedFileOriginChat }
 
 // ErrSharedFileNotFound reports an id no row carries.
 var ErrSharedFileNotFound = errors.New("shared file not found")
@@ -73,12 +98,19 @@ const sharedPathNamespaceConflict = `
 		OR ($3 <> '' AND folder = '' AND name = $3)
 	)`
 
-const sharedFileColumns = `id, name, folder, description, size_bytes, content_type, sha256, uploaded_by, created_at, updated_at`
+const sharedFileColumns = `id, name, folder, description, size_bytes, content_type, sha256, uploaded_by, created_at, updated_at, origin, updated_by, updated_conversation_id, folder_index`
+
+// sharedFileSelect is the read projection: the stored columns plus whether a
+// previous version exists. It never selects content itself — listing the
+// library (every turn's prompt block) must not drag every chat file's text
+// out of the database.
+const sharedFileSelect = sharedFileColumns + `, previous_content IS NOT NULL`
 
 func scanSharedFile(row interface{ Scan(...any) error }) (SharedFile, error) {
 	var f SharedFile
 	err := row.Scan(&f.ID, &f.Name, &f.Folder, &f.Description, &f.SizeBytes,
-		&f.ContentType, &f.SHA256, &f.UploadedBy, &f.CreatedAt, &f.UpdatedAt)
+		&f.ContentType, &f.SHA256, &f.UploadedBy, &f.CreatedAt, &f.UpdatedAt,
+		&f.Origin, &f.UpdatedBy, &f.UpdatedConversationID, &f.FolderIndex, &f.HasPrevious)
 	return f, err
 }
 
@@ -86,11 +118,13 @@ func scanSharedFile(row interface{ Scan(...any) error }) (SharedFile, error) {
 // token minted at the API layer) and the already-validated name/folder.
 func (s *Store) CreateSharedFile(ctx context.Context, f SharedFile) (SharedFile, error) {
 	now := time.Now().Unix()
+	// An upload is always an admin row; chat rows are created only by
+	// WriteChatSharedFile, which also stores their text.
 	row := s.db.QueryRowContext(ctx, `
 		INSERT INTO shared_files (`+sharedFileColumns+`)
-		SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+		SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'admin', '', '', FALSE
 		WHERE NOT EXISTS (`+sharedPathNamespaceConflict+`)
-		RETURNING `+sharedFileColumns,
+		RETURNING `+sharedFileSelect,
 		f.ID, f.Name, f.Folder, f.Description, f.SizeBytes,
 		f.ContentType, f.SHA256, f.UploadedBy, now, now)
 	out, err := scanSharedFile(row)
@@ -137,7 +171,7 @@ func (s *Store) SharedFilePathAvailable(ctx context.Context, folder, name string
 // listing is stable for both the admin UI and the per-turn prompt block.
 func (s *Store) ListSharedFiles(ctx context.Context) ([]SharedFile, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT `+sharedFileColumns+` FROM shared_files ORDER BY folder, name`)
+		`SELECT `+sharedFileSelect+` FROM shared_files ORDER BY folder, name`)
 	if err != nil {
 		return nil, err
 	}
@@ -156,7 +190,7 @@ func (s *Store) ListSharedFiles(ctx context.Context) ([]SharedFile, error) {
 // GetSharedFile returns one row by id.
 func (s *Store) GetSharedFile(ctx context.Context, id string) (SharedFile, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT `+sharedFileColumns+` FROM shared_files WHERE id = $1`, id)
+		`SELECT `+sharedFileSelect+` FROM shared_files WHERE id = $1`, id)
 	f, err := scanSharedFile(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return SharedFile{}, ErrSharedFileNotFound
@@ -185,7 +219,7 @@ func (s *Store) UpdateSharedFileMeta(ctx context.Context, id, name, folder, desc
 		UPDATE shared_files
 		SET name = $2, folder = $3, description = $4, updated_at = $5
 		WHERE id = $1
-		RETURNING `+sharedFileColumns,
+		RETURNING `+sharedFileSelect,
 		id, name, folder, description, time.Now().Unix())
 	f, err := scanSharedFile(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -201,7 +235,7 @@ func (s *Store) UpdateSharedFileMeta(ctx context.Context, id, name, folder, desc
 // the file it described without a prior read.
 func (s *Store) DeleteSharedFile(ctx context.Context, id string) (SharedFile, error) {
 	row := s.db.QueryRowContext(ctx,
-		`DELETE FROM shared_files WHERE id = $1 RETURNING `+sharedFileColumns, id)
+		`DELETE FROM shared_files WHERE id = $1 RETURNING `+sharedFileSelect, id)
 	f, err := scanSharedFile(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return SharedFile{}, ErrSharedFileNotFound

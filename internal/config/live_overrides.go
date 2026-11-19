@@ -156,6 +156,19 @@ func (c *Config) SetContextHandlesEnabled(v bool) {
 	c.setLive(func() { c.ContextHandlesEnabled = v })
 }
 
+// LiveSharedFilesChatWritesEnabled reports whether conversations and
+// scheduled runs may write shared files (shared_file_write), admin-override
+// aware. Read on every write, so an admin edit governs the next call.
+func (c *Config) LiveSharedFilesChatWritesEnabled() bool {
+	return c.liveBool(func() bool { return c.SharedFilesChatWritesEnabled })
+}
+
+// SetSharedFilesChatWritesEnabled applies the admin override for chat writes
+// to the shared file library.
+func (c *Config) SetSharedFilesChatWritesEnabled(v bool) {
+	c.setLive(func() { c.SharedFilesChatWritesEnabled = v })
+}
+
 // LiveTeamChatsSharedByDefault reports whether non-lockdown conversations
 // created by team members start shared with their team by default,
 // admin-override-aware.

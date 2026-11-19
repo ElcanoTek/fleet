@@ -87,6 +87,7 @@ func baseTools(sb *sandbox.Sandbox) []fantasy.AgentTool {
 		NewEnableMCPConnectorsTool(),
 		NewConnectorStudioTool(),
 		NewPlaywrightBrowserTool(),
+		NewSharedFileWriteTool(sb),
 	}
 }
 

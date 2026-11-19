@@ -6018,5 +6018,12 @@
   "This temporary chat will be deleted within a day.": "Este chat temporário será eliminado em menos de um dia.",
   "This temporary chat will be deleted in {0} days.": "Este chat temporário será eliminado dentro de {0} dias.",
   "Sending a message keeps it for another {0} days; pinning keeps it for good.": "Enviar uma mensagem mantém-no por mais {0} dias; fixá-lo mantém-no de forma permanente.",
-  "Pin to keep": "Fixar para manter"
+  "Pin to keep": "Fixar para manter",
+  " Admins upload and manage files here. Conversations can also save text files they share with every chat (a team log, for example), marked “written by chats”; admins can rename or delete those too.": " Os administradores carregam e gerem ficheiros aqui. As conversas também podem guardar ficheiros de texto que partilham com todos os chats (um registo da equipa, por exemplo), marcados como «escrito por chats»; os administradores também os podem mudar de nome ou eliminar.",
+  " Admins manage uploads. Conversations can also save text files they share with every chat (a team log, for example), marked “written by chats”.": " Os administradores gerem os ficheiros carregados. As conversas também podem guardar ficheiros de texto que partilham com todos os chats (um registo da equipa, por exemplo), marcados como «escrito por chats».",
+  "· written by chats": "· escrito por chats",
+  "· last by": "· última alteração de",
+  "· folder index": "· índice da pasta",
+  "Chats can save shared files": "Os chats podem guardar ficheiros partilhados",
+  "Let conversations and scheduled tasks save text files that every chat on this server can read, such as a team log of optimizations. Files an admin uploads stay read-only to chats, and admins can rename or delete chat files in Settings → Shared files. Turning this off stops new writes; files already saved stay readable.": "Permite que as conversas e as tarefas agendadas guardem ficheiros de texto que qualquer chat deste servidor pode ler, como um registo da equipa com as otimizações. Os ficheiros que um administrador carrega continuam só de leitura para os chats, e os administradores podem mudar o nome ou eliminar os ficheiros dos chats em Definições → Ficheiros partilhados. Desativar impede novas escritas; os ficheiros já guardados continuam legíveis."
 }
