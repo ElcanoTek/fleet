@@ -296,11 +296,12 @@ type Config struct {
 	// FLEET_CONVERSATION_EXPIRY_WARNING_DAYS, default 14; 0 turns the
 	// warning off.
 	ConversationExpiryWarningDays int
-	// ScratchRetentionDays bounds the scheduler's scratch files: orchestrator
-	// upload staging (temp_uploads) and finished task / mcp-run workspaces.
-	// These used to share the conversation TTL; they have a knob of their own
-	// so keeping chats for longer does not also keep run scratch for longer.
-	// FLEET_SCRATCH_RETENTION_DAYS, default 14.
+	// ScratchRetentionDays bounds the orchestrator's upload staging files
+	// (temp_uploads). They used to share the conversation TTL; they have a
+	// knob of their own so keeping chats for longer does not also keep
+	// staging files for longer. FLEET_SCRATCH_RETENTION_DAYS, default 14.
+	// (Finished task workspaces are not governed by it: their sweep has its
+	// own fixed seven-day ceiling, storage.SweepTaskWorkspaces.)
 	ScratchRetentionDays int
 	// InputQueueRetentionDays bounds how long completed/cancelled input-queue
 	// rows retain their idempotency keys after terminal transition.

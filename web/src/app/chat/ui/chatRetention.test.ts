@@ -67,6 +67,11 @@ describe("nearCap", () => {
     expect(nearCap(4, 5)).toBe(true);
   });
 
+  it("never warns an account with no temporary chats, whatever the cap", () => {
+    expect(nearCap(0, 1)).toBe(false);
+    expect(nearCap(1, 1)).toBe(true);
+  });
+
   it("is false with no cap", () => {
     expect(nearCap(10_000, undefined)).toBe(false);
     expect(nearCap(10_000, 0)).toBe(false);

@@ -3740,11 +3740,17 @@ export function ChatExperience({
     const pinUrl = conversationApiUrl(conversation.id, "/pin");
     if (!pinUrl) return false;
     const nextPinned = !conversation.pinned;
-    // Optimistic update
+    // Optimistic update. The server counts a pin or an unpin as activity
+    // (it bumps updated_at), so the row's timestamp moves with it: a chat
+    // unpinned back into Temporary starts a full window, and its countdown
+    // must not be worked out from the time before it was pinned.
+    const touchedAt = Math.floor(Date.now() / 1000);
     setConversations((current) =>
       current
         .map((c) =>
-          c.id === conversation.id ? { ...c, pinned: nextPinned } : c,
+          c.id === conversation.id
+            ? { ...c, pinned: nextPinned, updated_at: Math.max(c.updated_at, touchedAt) }
+            : c,
         )
         .sort((a, b) => {
           if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
@@ -5426,6 +5432,15 @@ export function ChatExperience({
         setTitle(before.title);
         return false;
       }
+      // A rename is activity on the server (updated_at is bumped), which
+      // restarts a temporary chat's window; keep the row's timestamp, and so
+      // its countdown, in step without waiting for the next list read.
+      const renamedAt = Math.floor(Date.now() / 1000);
+      setConversations((current) =>
+        current.map((c) =>
+          c.id === conversationId ? { ...c, updated_at: Math.max(c.updated_at, renamedAt) } : c,
+        ),
+      );
       return true;
     } catch (err) {
       // A thrown fetch used to escape here as an unhandled rejection, and the

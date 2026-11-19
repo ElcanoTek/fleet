@@ -143,7 +143,7 @@ client bundle's manifest names them, and fleet admits them at startup ([MCP-BUND
 | `CONVERSATION_TTL_DAYS` | int | `90` | server | Days without activity before a temporary chat (unpinned, in no project, not archived, not shared, no patrol or timer) is deleted. See docs/CHAT-RETENTION.md. *Validated at boot*. |
 | `CONVERSATION_UNPINNED_CAP` | int | `500` | server | Maximum temporary chats kept per user; past it the least recently active are deleted first. *Validated at boot*. |
 | `FLEET_CONVERSATION_EXPIRY_WARNING_DAYS` | int | `14` | server | Days before its deletion that a temporary chat is flagged in the interface; 0 turns the warning off. Held below CONVERSATION_TTL_DAYS. *Validated at boot* (≥ 0). |
-| `FLEET_SCRATCH_RETENTION_DAYS` | int | `14` | server | Days orchestrator upload staging files and finished task workspaces are kept. *Validated at boot* (≥ 1). |
+| `FLEET_SCRATCH_RETENTION_DAYS` | int | `14` | server | Days orchestrator upload staging files (temp_uploads) are kept. *Validated at boot* (≥ 1). |
 | `FLEET_INPUT_QUEUE_RETENTION_DAYS` | int | `30` | server | Days finished input-queue rows keep their idempotency keys; 0 disables the purge. *Validated at boot* (≥ 0). |
 | `FLEET_TURN_EVENT_RETENTION_DAYS` | int | `14` | server | Days a finished turn keeps its durable SSE ledger; 0 disables the sweep. *Validated at boot*. |
 | `FLEET_UPLOAD_MAX_BYTES` | int64 | `1073741824` | server | Per-file cap on chat attachment uploads, in bytes. *Validated at boot*. |

@@ -45,7 +45,6 @@ iteration.
 | `SweepAttachments` | Attachment files past the conversation TTL | conversation TTL |
 | `SweepOrphanWorkspaces` | `<workspace>/<convID>/` dirs with no live conversation row | liveness, not age |
 | `CleanupTempFiles` | Orchestrator `temp_uploads` staging files | `FLEET_SCRATCH_RETENTION_DAYS` (14) |
-| task workspace sweep | Finished task and mcp-run workspaces | `FLEET_SCRATCH_RETENTION_DAYS` (14) |
 | `SweepExpiredOAuthFlows` | Abandoned per-user remote-MCP OAuth flow rows | flow expiry |
 | `worktree.PruneStale` | Orphaned per-run git worktrees | `FLEET_WORKTREE_PRUNE_AGE` (24h) |
 
@@ -259,7 +258,7 @@ rarely reach their cap — it just makes the number visible at boot rather than 
 | `CONVERSATION_TTL_DAYS` | `90` | Days without activity before a temporary chat is deleted. |
 | `CONVERSATION_UNPINNED_CAP` | `500` | Most temporary chats one person keeps; the least recently active go first. |
 | `FLEET_CONVERSATION_EXPIRY_WARNING_DAYS` | `14` | How long before deletion a chat is flagged in the interface. `0` turns the warning off. |
-| `FLEET_SCRATCH_RETENTION_DAYS` | `14` | Age before upload staging files and finished task workspaces are removed. |
+| `FLEET_SCRATCH_RETENTION_DAYS` | `14` | Age before orchestrator upload staging files (`temp_uploads`) are removed. |
 | `FLEET_INPUT_QUEUE_RETENTION_DAYS` | `30` | Age before terminal input-queue rows are purged. `0` disables. |
 | `FLEET_TURN_EVENT_RETENTION_DAYS` | `14` | Age before finished turns' SSE ledgers are swept. `0` disables. |
 | `FLEET_PAUSED_TASK_EXPIRY_MINUTES` | `0` (off) | Fail a task awaiting input longer than this. |

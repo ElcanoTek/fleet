@@ -64,9 +64,11 @@ export function expiresInDays(updatedAt: number, policy: RetentionPolicy, nowSec
   return days <= policy.warningDays ? days : null;
 }
 
-// How close to the cap a person is told about it: within a tenth of it.
+// How close to the cap a person is told about it: within a tenth of it. Never
+// with no temporary chats at all — a cap of 1 would otherwise put the
+// threshold at zero and warn an empty account for good.
 export function nearCap(temporaryCount: number, cap: number | undefined): boolean {
-  if (!cap || cap <= 0) return false;
+  if (!cap || cap <= 0 || temporaryCount <= 0) return false;
   return temporaryCount >= cap - Math.max(1, Math.floor(cap / 10));
 }
 

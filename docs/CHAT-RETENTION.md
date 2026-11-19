@@ -80,12 +80,16 @@ will do.
 
 ## Scratch files have their own clock
 
-Two file sweeps borrowed the conversation window as their age limit:
-orchestrator upload staging (`temp_uploads`) and finished task and mcp-run
-workspaces. Left alone, raising the chat window to 90 days would have kept six
-times as much scheduler scratch on disk, which is the opposite of the goal.
-They now read `FLEET_SCRATCH_RETENTION_DAYS` (default 14, their old effective
-value).
+The orchestrator's upload staging sweep (`temp_uploads`) borrowed the
+conversation window as its age limit. Left alone, raising the chat window to
+90 days would have kept six times as many staging files on disk, which is the
+opposite of the goal. It now reads `FLEET_SCRATCH_RETENTION_DAYS` (default 14,
+its old effective value).
+
+Finished task and mcp-run workspaces are unaffected either way: their sweep is
+handed the conversation window but has a fixed seven-day ceiling of its own
+(`storage.SweepTaskWorkspaces`), so they are removed after seven days as
+before.
 
 Chat attachment uploads (`EMAIL_ATTACHMENT_DIR`) still follow the conversation
 window, deliberately: an upload has to outlive the chat that refers to it.

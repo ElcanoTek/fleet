@@ -75,6 +75,15 @@ test("a temporary chat near the end of its window says so in the rail and in the
   await expect(page.getByTestId("expiring-mark")).toHaveCount(0);
   await expect(notice).toHaveCount(0);
   expect(pins).toEqual([{ pinned: true }]);
+
+  // Unpinning is activity too: the chat is temporary again with a full
+  // window, so the old countdown must not come back.
+  await page.locator("aside").getByRole("button", { name: "Conversation options for Idle for months" }).click();
+  await page.getByRole("menuitem", { name: "Unpin", exact: true }).click();
+  await expect.poll(() => pins.length).toBe(2);
+  await expect(page.getByTestId("temporary-mark")).toHaveCount(2);
+  await expect(page.getByTestId("expiring-mark")).toHaveCount(0);
+  await expect(banner).toHaveCount(0);
 });
 
 test("a chat with time left carries no warning", async ({ page }) => {
