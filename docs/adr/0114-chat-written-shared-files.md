@@ -49,6 +49,14 @@ scheduled run write a TEXT file into the shared library:
   compares a chat file's hash, not just its size). The staged tree stays
   read-only to every sandbox: the tool is the only way in, and it runs
   host-side through the same handler for chat turns and scheduled runs.
+- **One namespace, serialized:** a file named like a folder (`shared/q3` beside
+  `shared/q3/a.txt`) has no unique index to stop it, so every write that can
+  claim a path — chat create, admin upload, admin rename — holds one
+  transaction-scoped advisory lock across its file-versus-folder check and its
+  write. That closes the race for chats, admins and replicas alike (it also
+  closes the cross-replica window SHARED-FILES.md used to list for uploads).
+  The chat handler additionally holds the process's library mutex across the
+  write and the restage, like every other library mutation.
 - **Who:** any non-Viewer user, recorded as `updated_by` with the chat (or
   `task:<id>`) it came from. Admin uploads (`origin = 'admin'`) stay
   read-only to chats. The library is server-wide, exactly as admin uploads

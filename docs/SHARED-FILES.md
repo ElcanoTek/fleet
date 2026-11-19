@@ -98,10 +98,13 @@ the sandbox could see depended on map iteration order. Both write paths refuse
 the second claimant with `ErrSharedFileNameIsFolder` → `409`, because the
 request is the last moment a human is present to be told. Note what this does
 **not** do: a deployment that already carries such a pair is not migrated, and
-its `Sync` keeps erroring until an operator renames one side. Nor is the guard
-race-free — "name must not equal any folder" is not expressible as a unique
-index, so it is check-then-write under the handler mutex. That closes the
-window within one process; two replicas racing the same pair can still land it.
+its `Sync` keeps erroring until an operator renames one side. "Name must not
+equal any folder" is not expressible as a unique index, so the guard is
+check-then-write — made race-free by a transaction-scoped Postgres advisory
+lock (`pg_advisory_xact_lock`) that every path-claiming write holds across its
+check and its insert or rename: admin uploads, admin renames, and chat creates
+([Files chats write](#files-chats-write)). Two writers — in one process, on two
+replicas, or a chat racing an admin — can never both pass the check.
 
 ## Files chats write
 

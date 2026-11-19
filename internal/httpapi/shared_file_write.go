@@ -89,6 +89,14 @@ func (s *Server) writeChatSharedFile(ctx context.Context, email, origin string, 
 	}
 	path := sharedfiles.ChatPromptPath(folder, name)
 
+	// The write and the restage run under sharedFilesMu, like every other
+	// library mutation (upload, rename, delete, the reconciler), so this
+	// process never interleaves them. Across processes and replicas the store
+	// serializes path claims with a transaction-scoped advisory lock and each
+	// file's writes with its row lock.
+	s.sharedFilesMu.Lock()
+	defer s.sharedFilesMu.Unlock()
+
 	var res store.ChatSharedFileWriteResult
 	for attempt := 0; ; attempt++ {
 		if write.NewID, err = randomToken(); err != nil {
@@ -105,7 +113,7 @@ func (s *Server) writeChatSharedFile(ctx context.Context, email, origin string, 
 	}
 
 	staged := true
-	if serr := s.stageChatSharedFile(ctx, res.File.ID); serr != nil {
+	if serr := s.restageChatSharedFileLocked(ctx, res.File.ID); serr != nil {
 		// The write is durable; only the sandbox-visible copy lags, and the
 		// hourly reconciler (SyncSharedFiles) restages it from the database.
 		staged = false
@@ -119,13 +127,11 @@ func (s *Server) writeChatSharedFile(ctx context.Context, email, origin string, 
 	return sharedFileWriteResult(res, path, req.Mode, staged), nil
 }
 
-// stageChatSharedFile restages one chat-written file from the database. It
-// re-reads the row and its text under sharedFilesMu, so two writers that commit
-// in one order but reach this point in the other still leave the NEWER
-// version staged — the stage always copies what the database holds now.
-func (s *Server) stageChatSharedFile(ctx context.Context, id string) error {
-	s.sharedFilesMu.Lock()
-	defer s.sharedFilesMu.Unlock()
+// restageChatSharedFileLocked restages one chat-written file from the
+// database. It re-reads the row and its text, so the stage always copies what
+// the database holds NOW — the newer version even if another replica wrote
+// after this call's commit. Caller holds sharedFilesMu.
+func (s *Server) restageChatSharedFileLocked(ctx context.Context, id string) error {
 	f, err := s.store.GetSharedFile(ctx, id)
 	if err != nil {
 		return err

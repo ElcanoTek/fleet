@@ -299,3 +299,81 @@ func TestChatSharedFileConcurrentAppends(t *testing.T) {
 		t.Fatalf("lines = %d, want %d", got, writers)
 	}
 }
+
+// A file named like a folder ("q3" beside "q3/a.txt") has no unique index to
+// stop it; the namespace advisory lock must, whichever writers race — two
+// chats, or a chat and an admin upload or rename. Exactly one side may win
+// each round, and the library must never hold both.
+func TestSharedFileNamespaceRaceNeverLandsBoth(t *testing.T) {
+	t.Parallel()
+	st := newTestStore(t)
+	ctx := context.Background()
+	for round := 0; round < 8; round++ {
+		folder := fmt.Sprintf("r%d", round)
+		var wg sync.WaitGroup
+		results := make(chan error, 3)
+		wg.Add(3)
+		go func() { // a chat creates the root FILE named like the folder
+			defer wg.Done()
+			w := chatWrite(SharedFileWriteCreate, "", folder, "x")
+			w.NewID, w.Description = "f"+folder, strp("file")
+			_, err := st.WriteChatSharedFile(ctx, w)
+			results <- err
+		}()
+		go func() { // another chat creates a file INSIDE the folder
+			defer wg.Done()
+			w := chatWrite(SharedFileWriteCreate, folder, "a.txt", "y")
+			w.NewID, w.Description = "d"+folder, strp("in folder")
+			_, err := st.WriteChatSharedFile(ctx, w)
+			results <- err
+		}()
+		go func() { // an admin uploads into the folder too
+			defer wg.Done()
+			_, err := st.CreateSharedFile(ctx, SharedFile{ID: "u" + folder, Name: "b.csv", Folder: folder})
+			results <- err
+		}()
+		wg.Wait()
+		close(results)
+		for err := range results {
+			if err != nil && !errors.Is(err, ErrSharedFileNameIsFolder) {
+				t.Fatalf("round %d: unexpected error %v", round, err)
+			}
+		}
+		files, err := st.ListSharedFiles(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var rootFile, inFolder bool
+		for _, f := range files {
+			if f.Folder == "" && f.Name == folder {
+				rootFile = true
+			}
+			if f.Folder == folder {
+				inFolder = true
+			}
+		}
+		if rootFile && inFolder {
+			t.Fatalf("round %d: both a file and a folder named %q landed", round, folder)
+		}
+		if !rootFile && !inFolder {
+			t.Fatalf("round %d: nothing landed", round)
+		}
+	}
+	// A rename into a name that a folder holds is refused under the same lock.
+	if _, err := st.CreateSharedFile(ctx, SharedFile{ID: "z1", Name: "z.csv"}); err != nil {
+		t.Fatal(err)
+	}
+	files, _ := st.ListSharedFiles(ctx)
+	var takenFolder string
+	for _, f := range files {
+		if f.Folder != "" {
+			takenFolder = f.Folder
+			break
+		}
+	}
+	if takenFolder != "" {
+		if _, err := st.UpdateSharedFileMeta(ctx, "z1", takenFolder, "", ""); !errors.Is(err, ErrSharedFileNameIsFolder) {
+			t.Fatalf("rename onto a folder name err = %v", err)
+		}
+	}
+}

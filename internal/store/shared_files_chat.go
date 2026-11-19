@@ -203,6 +203,12 @@ func (s *Store) createChatSharedFile(ctx context.Context, tx *sql.Tx, w ChatShar
 	if err := checkLibraryTotal(ctx, tx, size, w.MaxTotalBytes); err != nil {
 		return ChatSharedFileWriteResult{}, err
 	}
+	// A new path is claimed: hold the namespace lock across the file-versus-
+	// folder check and the insert, as uploads and renames do, so a concurrent
+	// "q3" and "q3/a.txt" can never both commit.
+	if err := lockSharedFilesNamespace(ctx, tx); err != nil {
+		return ChatSharedFileWriteResult{}, err
+	}
 	var conflict int
 	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (`+sharedPathNamespaceConflict+`)::int`,
 		w.NewID, w.Name, w.Folder).Scan(&conflict); err != nil {
