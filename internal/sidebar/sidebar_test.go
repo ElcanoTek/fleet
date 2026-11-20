@@ -128,6 +128,84 @@ func TestNormalizePinnedSection(t *testing.T) {
 	}
 }
 
+// A layout saved before the sidebar redesign (no "pinned" section, no row
+// options, "chat" wherever the person left it) must read back with every
+// choice in it intact: nobody's customized sidebar is undone by the upgrade.
+func TestNormalizeCarriesOverALayoutSavedBeforeTheRedesign(t *testing.T) {
+	t.Parallel()
+	saved := Layout{
+		Version: 1,
+		Items: []Item{
+			{ID: "tasks", Kind: KindBuiltin, Label: "Jobs", Icon: "bar-chart"},
+			{ID: "s-board", Kind: KindChat, Ref: "c-1", Title: "Campaign Watch", View: "dashboard", Icon: "🚀"},
+			{ID: "chat", Kind: KindBuiltin, Label: "Ask"},
+			{ID: "s-proj", Kind: KindProject, Ref: "p-1", Title: "Playbook", Hidden: true},
+			{ID: "patrols", Kind: KindBuiltin, Hidden: true},
+			{ID: "s-help", Kind: KindPage, Ref: "help"},
+		},
+		Sections: []Section{
+			{ID: "team", Label: "Colleagues"},
+			{ID: "chats", Label: "Conversations", Collapsed: true},
+			{ID: "projects", Hidden: true},
+		},
+		Home:          "s-board",
+		Compact:       true,
+		SeparateLists: true,
+	}
+	got, err := Normalize(saved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Every item, in the person's order, with its name, icon, view and
+	// whether it is shown.
+	if !reflect.DeepEqual(got.Items, saved.Items) {
+		t.Errorf("items = %+v\nwant  %+v", got.Items, saved.Items)
+	}
+	// Their sections, in their order, with their names, folds and hides;
+	// Pinned is new, goes first, and starts folded because their Chats does.
+	wantSections := append([]Section{{ID: "pinned", Collapsed: true}}, saved.Sections...)
+	if !reflect.DeepEqual(got.Sections, wantSections) {
+		t.Errorf("sections = %+v\nwant     %+v", got.Sections, wantSections)
+	}
+	if got.Home != "s-board" || !got.Compact || !got.SeparateLists {
+		t.Errorf("home=%q compact=%v separate_lists=%v: want them kept", got.Home, got.Compact, got.SeparateLists)
+	}
+	// The new row options are off (rows show a status, chats group by date)
+	// until the person turns them off.
+	if got.StatusOff || got.DatesOff {
+		t.Errorf("status_off=%v dates_off=%v: want both unset", got.StatusOff, got.DatesOff)
+	}
+	// And it is stable: reading it again changes nothing.
+	again, err := Normalize(got)
+	if err != nil || !reflect.DeepEqual(again, got) {
+		t.Errorf("not idempotent: %+v (err %v)", again, err)
+	}
+}
+
+// Pinned chats used to be drawn inside the Chats section, so hiding Chats hid
+// them too. A person who had hidden Chats does not get a Pinned list back.
+func TestNormalizePinnedInheritsHiddenChats(t *testing.T) {
+	t.Parallel()
+	l, err := Normalize(Layout{Version: 1, Sections: []Section{{ID: "projects"}, {ID: "chats", Hidden: true}, {ID: "team"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Section{{ID: "pinned", Hidden: true}, {ID: "projects"}, {ID: "chats", Hidden: true}, {ID: "team"}}
+	if !reflect.DeepEqual(l.Sections, want) {
+		t.Errorf("sections = %+v, want %+v", l.Sections, want)
+	}
+	// Once Pinned is in the layout it is the person's own setting: showing it
+	// while Chats stays hidden is kept.
+	l.Sections[0].Hidden = false
+	l, err = Normalize(l)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if l.Sections[0].ID != "pinned" || l.Sections[0].Hidden {
+		t.Errorf("an explicit Pinned was overridden: %+v", l.Sections[0])
+	}
+}
+
 func TestNormalizeFillsDefaults(t *testing.T) {
 	t.Parallel()
 	l, err := Normalize(Layout{Version: 1})

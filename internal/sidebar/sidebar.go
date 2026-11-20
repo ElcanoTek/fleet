@@ -141,8 +141,9 @@ func Parse(raw []byte) (Layout, error) {
 
 // Normalize validates l and returns its normalized form: free text cleaned,
 // every built-in item and section present (missing ones appended in their
-// default order; a missing Pinned section goes first, where it has always
-// been drawn), and a home that names an item fleet can open to (else "").
+// default order; a missing Pinned section goes first, hidden or folded as
+// the layout's Chats section is), and a home that names an item fleet can
+// open to (else "").
 // Normalize is idempotent: a normalized layout normalizes to itself.
 //
 // Home may name a hidden shortcut: a chat, project, task or page a person
@@ -201,8 +202,18 @@ func Normalize(l Layout) (Layout, error) {
 		out.Sections = append(out.Sections, Section{ID: in.ID, Label: label, Hidden: in.Hidden, Collapsed: in.Collapsed})
 	}
 	// A layout saved before Pinned was a section of its own gets it first.
+	// Pinned chats were then drawn at the top of the Chats section, so a
+	// person who hid Chats, or set it to start folded, made that choice for
+	// their pinned chats as well: the new section starts the same way, and
+	// nothing they had put out of sight comes back on its own.
 	if !seenSec["pinned"] {
-		out.Sections = append([]Section{{ID: "pinned"}}, out.Sections...)
+		pinned := Section{ID: "pinned"}
+		for _, sec := range out.Sections {
+			if sec.ID == "chats" {
+				pinned.Hidden, pinned.Collapsed = sec.Hidden, sec.Collapsed
+			}
+		}
+		out.Sections = append([]Section{pinned}, out.Sections...)
 		seenSec["pinned"] = true
 	}
 	for _, id := range SectionIDs {

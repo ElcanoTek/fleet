@@ -224,9 +224,19 @@ export function normalizeLayout(raw: unknown): SidebarLayout {
     if (s.collapsed === true) section.collapsed = true;
     sections.push(section);
   }
-  // A layout saved before Pinned was a section of its own gets it where it
-  // has always been drawn: first.
-  if (!seenSections.has("pinned")) sections.unshift({ id: "pinned" });
+  // A layout saved before Pinned was a section of its own gets it first.
+  // Pinned chats were then drawn at the top of the Chats section, so a person
+  // who hid Chats, or set it to start folded, made that choice for their
+  // pinned chats as well: the new section starts the same way, and nothing
+  // they had put out of sight comes back on its own. (The server does the
+  // same: internal/sidebar.)
+  if (!seenSections.has("pinned")) {
+    const chats = sections.find((x) => x.id === "chats");
+    const pinned: SidebarSection = { id: "pinned" };
+    if (chats?.hidden) pinned.hidden = true;
+    if (chats?.collapsed) pinned.collapsed = true;
+    sections.unshift(pinned);
+  }
   for (const id of SECTION_IDS) {
     if (id !== "pinned" && !seenSections.has(id)) sections.push({ id });
   }

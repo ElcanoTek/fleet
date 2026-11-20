@@ -293,6 +293,44 @@ the redesign needed.
   admin save over a default they have not seen. The editor is also locked
   while a save is in flight, so no edit is lost to the save's answer.
 
+## What carries over from before the redesign
+
+Nothing a person had set up is undone by the upgrade. No table changed and
+no stored row is rewritten: a saved layout is read as it was saved, and is
+only written again when its owner next changes something.
+
+- **A saved sidebar** keeps every choice in it: the items at the top in the
+  person's order, with their names, icons, dashboard-or-chat view and whether
+  each is shown; the lists in their order, with their names, folds and hides;
+  where fleet opens (what was "Home" is the start page); density; and
+  teammates' chats in a list of their own. The same holds for the workspace
+  default an administrator saved.
+- **Pinned is new as a section**, so an older layout does not name it. It is
+  added first. Pinned chats used to be drawn at the top of the Chats section,
+  so a person who had hidden Chats, or set it to start folded, had made that
+  choice for their pinned chats too: the new section starts hidden or folded
+  the same way (`Normalize` in `internal/sidebar`, `normalizeLayout` in
+  `layout.ts`), and nothing they had put out of sight comes back on its own.
+  From then on Pinned is its own setting.
+- **Pins** are untouched: a person's pinned chats, the teammates' chats they
+  pinned, and pinned projects are the same rows in the same tables. A saved
+  hand-set order of pinned chats is kept as it is; pinned projects, which that
+  order could not name before, are listed above it until the person reorders.
+- **The "Chat" destination** is no longer a row (starting a chat is the pen),
+  so a name or icon someone gave it is no longer shown; it stays in the saved
+  layout. A Home that was the Chat page opens the last chat, as it did.
+- **What moves on screen without being lost:** a chat or project kept at the
+  top is listed there and not again in Pinned or Chats; a pinned project is in
+  Pinned and not again under Projects; a pinned teammate's chat is in Pinned
+  whichever way teammates' chats are listed; labels are off the rows.
+- **This browser's choices** (collapsed or expanded, the Chats sort) use the
+  same stored keys as before.
+
+`TestNormalizeCarriesOverALayoutSavedBeforeTheRedesign` and
+`TestNormalizePinnedInheritsHiddenChats` (`internal/sidebar`) and the
+"carries over a sidebar customized before the redesign" tests in
+`layout.test.ts` pin this on both sides.
+
 ## Where it differs from the design
 
 The mockups were a direction, not a specification. These are the places the
@@ -363,8 +401,9 @@ migration.
   that is neither the caller's nor shared with them is the 404 an unknown id
   gets.
 - **The sidebar layout** (`internal/sidebar`) gains a `pinned` section, put
-  first in a layout saved before it existed, and two optional flags,
-  `status_off` and `dates_off`. `home` may now name a hidden shortcut (a
+  first in a layout saved before it existed (hidden or folded as that
+  layout's Chats section is), and two optional flags, `status_off` and
+  `dates_off`. `home` may now name a hidden shortcut (a
   start page that is not a top item); a hidden destination is still refused.
 - **The pinned order may name pinned projects** (`store.SetChatOrder`): an
   entry `project:<id>` is kept when it names a pinned project the caller owns

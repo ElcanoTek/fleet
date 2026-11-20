@@ -61,6 +61,66 @@ describe("normalizeLayout", () => {
     expect(moved.sections[1].hidden).toBe(true);
   });
 
+  it("carries over a sidebar customized before the redesign, with every choice intact", () => {
+    // As the old client saved it: no "pinned" section, no row options, and
+    // "chat" wherever the person left it.
+    const saved = {
+      version: 1,
+      items: [
+        { id: "tasks", kind: "builtin", label: "Jobs", icon: "bar-chart" },
+        { id: "s-board", kind: "chat", ref: "c-1", title: "Campaign Watch", view: "dashboard", icon: "🚀" },
+        { id: "chat", kind: "builtin", label: "Ask" },
+        { id: "s-proj", kind: "project", ref: "p-1", title: "Playbook", hidden: true },
+        { id: "patrols", kind: "builtin", hidden: true },
+        { id: "s-help", kind: "page", ref: "help" },
+      ],
+      sections: [
+        { id: "team", label: "Colleagues" },
+        { id: "chats", label: "Conversations", collapsed: true },
+        { id: "projects", hidden: true },
+      ],
+      home: "s-board",
+      compact: true,
+      separate_lists: true,
+    };
+    const l = normalizeLayout(saved);
+    // The top of the sidebar: their items, in their order, with their names,
+    // icons, views, and what they had hidden still hidden.
+    expect(topItems(l)).toEqual([saved.items[0], saved.items[1], saved.items[5]]);
+    expect(l.items.find((i) => i.id === "patrols")?.hidden).toBe(true);
+    expect(l.items.find((i) => i.id === "s-proj")).toEqual(saved.items[3]);
+    // Their lists, in their order, with their names, folds and hides. Pinned
+    // is new: it goes first, and starts folded because their Chats does.
+    expect(l.sections).toEqual([{ id: "pinned", collapsed: true }, ...saved.sections]);
+    // Where fleet opens, density, and teammates' chats in a list of their own.
+    expect(l.home).toBe("s-board");
+    expect(isStartPage(l, "chat", "c-1")).toBe(true);
+    expect(l.compact).toBe(true);
+    expect(teamChatsMode(l)).toBe("own");
+    // The new row options start as they were drawn before: statuses and dates on.
+    expect(l.status_off).toBeUndefined();
+    expect(l.dates_off).toBeUndefined();
+    // Reading it again changes nothing, so it is never saved back altered.
+    expect(normalizeLayout(l)).toEqual(l);
+  });
+
+  it("does not bring pinned chats back for someone who had hidden Chats", () => {
+    // Pinned chats used to be drawn inside the Chats section: hiding Chats hid them.
+    const l = normalizeLayout({ sections: [{ id: "projects" }, { id: "chats", hidden: true }, { id: "team" }] });
+    expect(l.sections).toEqual([{ id: "pinned", hidden: true }, { id: "projects" }, { id: "chats", hidden: true }, { id: "team" }]);
+    // Once Pinned is in the layout it is the person's own setting.
+    const shown = normalizeLayout(updateSection(l, "pinned", { hidden: false }));
+    expect(shown.sections[0]).toEqual({ id: "pinned" });
+    expect(shown.sections.find((x) => x.id === "chats")?.hidden).toBe(true);
+  });
+
+  it("a Home that was the Chat page still opens the last chat", () => {
+    const l = normalizeLayout({ home: "chat" });
+    // No start page of its own: fleet opens the last chat, as "Chat" did.
+    expect(topItems(l).some((i) => i.id === "chat")).toBe(false);
+    expect(["", "chat"]).toContain(l.home);
+  });
+
   it("keeps the two row options only when they are set", () => {
     const plain = normalizeLayout({ version: 1 });
     expect("status_off" in plain).toBe(false);
