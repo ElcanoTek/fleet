@@ -131,7 +131,7 @@ function QuickCustomize({ onMore }: { onMore: () => void }) {
             })}
           </RadioGroup>
           <p className="text-[0.75rem] leading-snug text-[var(--color-text-muted)]">
-            {tr("Any chat, dashboard or project can be the start page: ⋯ › Set as start page.")}
+            {tr("Any chat, dashboard or project can be the start page: ⋮ › Set as start page.")}
           </p>
         </section>
 

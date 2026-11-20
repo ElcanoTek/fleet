@@ -116,17 +116,16 @@ sent before pressing the card's run button.
 
 ### Patrol Launchpad: your first patrol in five steps
 
-The quickest way to put the assistant on patrol is **Patrols** (sparkles) in
-the left rail, between **Chat** and **Background tasks**, on every surface (in the
-collapsed rail it is the sparkles icon; on a phone, open the sidebar). Until
-you have opened it once it carries a small pulsing dot. Patrols themselves live
-in Chat — each one is a chat that wakes on its schedule — so **Patrols** is
-their index and their front door: with no patrols yet it opens the **Patrol
-Launchpad**; once you have some, it lists them (name, its chat, cadence, and
-**Paused** when paused) — click one to open its chat — with **New patrol** at
-the bottom to open the Launchpad. The Launchpad is a guided wizard that takes
-you from nothing set up to a running patrol.
-It starts with **Why patrol?**, a four-step Expanding Brain ladder from
+The quickest way to put the assistant on patrol is the **Patrol Launchpad**, a
+guided wizard that takes you from nothing set up to a running patrol. Open it
+with **New patrol** in the **+** menu at the top of the sidebar, on any page
+(the **+** stays in the collapsed sidebar; on a phone, open the sidebar
+first). The [Patrols page](#the-patrols-page) opens it too: **Set up your
+first patrol** when you have no patrols yet, and **Use guided setup** in its
+**New patrol** form once you do. Patrols themselves live in Chat — each one is
+a chat that wakes on its schedule — and the Patrols page is where you see
+them all together.
+The Launchpad starts with **Why patrol?**, a four-step Expanding Brain ladder from
 chatting, to scheduled reports, to patrols that analyze and decide, to letting
 the assistant act on your behalf, plus the trust path:
 start at **Suggest & ask** and turn on **⚡ Auto-approve** in the Patrol bar once
@@ -173,8 +172,8 @@ patrol, and runs the first check straight away; **Watch it work** opens that
 chat; unless you chose **Act for me** or **Autonomous**, the success screen also suggests
 turning on **⚡ Auto-approve** once its calls keep being right. From then on it
 is an ordinary in-chat patrol (below): pause it from the Patrol bar, change
-or stop it in **Patrols & timers** (the clock on the composer toolbar), or ask
-in the chat to change it. Nothing is created until
+or stop it in **Patrols & timers** (the clock on the composer toolbar) or on
+the Patrols page, or ask in the chat to change it. Nothing is created until
 you press **Launch patrol** — except the non-negotiables you saved, which are
 memories as soon as you press **Save**. Close the Launchpad with **Maybe later**
 or `Esc` at any point, except while **Draft it with AI** is writing (up to
@@ -182,6 +181,50 @@ about 45 seconds) or during the few seconds of launching; your
 answers are kept for the rest of the browser session. A read-only account sees
 the **Why patrol?** page with a note that it cannot save memories or start a
 patrol, and a **Got it** button instead of the rest of the wizard.
+
+### The Patrols page
+
+**Patrols**, by default the first item in the sidebar on every page, opens a
+page that lists every recurring patrol you have set up, across all your chats, and under
+**Shared with you** the patrols your teammates run in chats they have shared
+with you. Search finds a patrol by its name, its chat or its owner. One-shot
+timers are not listed here; they stay in their chat's **Patrols & timers**.
+
+Each row shows the patrol's name, its schedule, how many times it has run, its
+chat's approval mode and the chat it lives in, with the time until its next
+run at the right (or **paused**). On a patrol of your own the row also has
+**Run now** and a pause or resume button. A patrol whose runs are being
+skipped because an approval card is waiting says so on its row, with the
+number of runs skipped.
+
+Click a row to open it:
+
+- **Approval mode** changes how much the patrol may do without asking. It is
+  the chat's setting, so it applies to every patrol in that chat, and choosing
+  **Autonomous** asks you to confirm first.
+- **Recent runs** lists the patrol's latest runs: when each fired, whether it
+  ran on schedule or because you pressed **Run now**, and when a run was
+  skipped, why. It records what happened, not what the assistant found; open
+  the chat for that.
+- **Each run** shows what the patrol is asked to do every time it wakes;
+  **Show full task** expands a long one.
+- **Edit schedule & task** changes the schedule, the task and the label,
+  **Open chat** goes to the patrol's chat, and **Remove patrol** stops it for
+  good and takes a second click to confirm.
+
+A teammate's patrol is there to read. Its row carries its owner's initial and
+offers **Open chat**; opening the row says whose it is and shows its recent
+runs. Only the person who set a patrol up can run, pause, change or remove it,
+and what it is asked to do each run is shown only to them.
+
+**New patrol**, at the top of the page, opens a form: say what to check and
+do each run, pick a schedule and an approval mode, optionally give it a
+label, and press **Start patrol**. Under **Runs in**, **A new chat** makes a
+chat for the patrol, named after its label, and **An existing chat** adds the
+patrol to one of your chats, beside any patrols it already has (sealed chats
+are not offered). **Use guided setup** opens the Launchpad instead. With no
+patrols yet, the page offers **Set up your first patrol** (the Launchpad) and
+**Or write one yourself** (the form).
 
 ### In-chat patrols and timers
 
@@ -344,24 +387,36 @@ the middle holds the work, and the composer at the bottom is where you ask.
 
 ### The rail
 
-At the top of the rail are the three ways of working, each with a one-line
-subtitle: **Chat** (*Talk it through*), **Patrols** (*Chats that check in on a
-schedule* — your patrol chats, and the
-[Patrol Launchpad](#patrol-launchpad-your-first-patrol-in-five-steps)) and
-**Background tasks** (*Runs without a chat*; formerly the
-Operations Center). **New chat** starts a fresh
-conversation. The search field, also reachable with
-`⌘K` or `Ctrl K`, searches everything in the rail at once (see **Searching
-the rail**, below the table). Below that, conversations are grouped:
+The rail is one sidebar, and it is the same on every page: Chat, Patrols,
+Background tasks, Settings, Guides and Analytics. Wherever you are, one click
+on a chat in it takes you back to that chat. Everything between the search
+field and your account menu scrolls together, as one list.
 
-| Group | What it holds |
+At the top are your deployment's logo and name, a gear that opens a short
+[Customize](#customizing-your-sidebar) panel, and a button that collapses the
+rail to a strip of icons. Under them:
+
+- **Search**, also reachable with `⌘K` or `Ctrl K`, searches everything in
+  the rail at once (see **Searching the rail**, below the table).
+- The **pen** starts a new chat.
+- The **+** opens a menu: **New chat**, **New patrol** (the
+  [Patrol Launchpad](#patrol-launchpad-your-first-patrol-in-five-steps)),
+  **New background task**, **New project** and, where your deployment offers
+  it, **New sealed chat** (a chat in Lockdown mode).
+
+Next come the top items, which stay in view above your lists: **Patrols**
+(the [Patrols page](#the-patrols-page)), **Background tasks** (formerly the
+Operations Center) and anything you choose to keep there, such as a
+dashboard (see [Customizing your sidebar](#customizing-your-sidebar)). Below
+them are your lists:
+
+| List | What it holds |
 | --- | --- |
-| **Projects** | Workspaces with standing instructions, shared learnings, and their own conversations. A project shared with your team carries a team glyph. See [Memory and projects](#7-memory-and-projects). |
-| **Team chats** | Conversations shared with you or open in **Multiplayer mode** from teammates. By default they are listed in **Recent**, among your own chats, each with a team mark, the owner's short name and a **Live** badge when multiplayer is on; with **One list for all chats** switched off they have a **Team chats** list of their own. Each row's `⋮` menu holds **Pin** and **Add to sidebar** (neither on a read-only **Viewer** account) and **Copy link**. **Pin** moves the chat into your **Pinned** group, for you alone: nothing changes for its owner or for anyone else, and it does not stop the owner's chat from expiring. With a **Team chats** list of its own, a chat you pinned stays in that list, first and marked with a pin. **Copy link** copies: for a chat shared with your team, the team link, which opens it for anyone on your team; for a chat you were added to in Multiplayer, its chat link, which opens it for the people in it. A Multiplayer chat you take part in also has **Download chat…**. Renaming, filing, archiving and deleting stay with the chat's owner. |
-| **Pinned** | Conversations you have chosen to keep at the top: your own, and any teammate's chat you pinned from its menu. Your own pinned conversations never expire. With two or more, **Reorder** in the heading lets you put them in your own order (see [Ordering your chats](#ordering-your-chats)). |
-| **Labels** | Your labels, each a filter. Click one to show only conversations carrying it; click several to narrow further. |
-| **Recent** | Your other chats and your teammates' shared chats, in one list, most recently active first; the menu beside the heading can sort it by **Newest first** or **Title A–Z** instead. Each chat of yours that is temporary carries an hourglass: it is deleted after a period without activity (90 days by default), and the ⓘ beside the heading says so. For the last part of that period (14 days by default) the hourglass turns amber and shows the days the chat has left, and a line under the heading counts the chats about to be deleted; click it to go to the first. Sending a message in a chat starts its period again. Pin a chat, move it into a project or archive it to keep it; a chat with a patrol, and a chat you have shared, is kept too. **Delete temporary chats**, in red at the bottom of the sidebar, deletes them all at once after you confirm. With **One list for all chats** switched off, this group is headed **Temporary** and holds only your own chats. |
-| **Archived** | Collapsed by default. Conversations you have put away but not deleted; open the group to bring one back. |
+| **Pinned** | What you have chosen to keep at hand: your pinned projects and pinned chats, and any teammate's chat you pinned from its menu, in one list. Your own pinned conversations never expire. With two or more entries, **Reorder** in the heading lets you put them in your own order (see [Ordering your chats](#ordering-your-chats)). |
+| **Projects** | Workspaces with standing instructions, shared learnings, and their own conversations. A project shared with your team carries a team glyph. The first eight are listed; **All N projects** shows the rest and **Show fewer** folds them again. A pinned project is listed in **Pinned** instead. See [Memory and projects](#7-memory-and-projects). |
+| **Chats** | Your other chats and, by default, your teammates' shared chats, in one list, most recently active first, under the date headings **Today**, **Yesterday**, **This week** and **Older**. When the list holds teammates' chats or patrol chats, chips above it narrow it to **All**, **Mine**, **Shared** or **Patrols**; a chip appears only when it would change the list. The menu beside the heading holds **Sort** (**Recent activity**, **Newest first** or **Title A–Z**; an A–Z list has no date headings), **Filter by label**, **Select chats…** and **Delete temporary chats…**, which deletes all your temporary chats at once after you confirm. A chat of yours that is not pinned, in a project, shared or on patrol is temporary: it is deleted after a period without activity (90 days by default). For the last part of that period (14 days by default) its row shows the days it has left, and a line under the heading counts the chats about to be deleted; click it to go to the first. Sending a message in a chat starts its period again. Pin a chat, move it into a project or archive it to keep it. |
+| **Team chats** | Conversations shared with you or open in **Multiplayer mode** from teammates. By default they are in **Chats**, among your own, each with its owner's initial; [Customize](#customizing-your-sidebar) can give them a **Team chats** list of their own, or hide them. Each row's `⋮` menu holds **Pin**, **Move to the top** and **Set as start page** (none of them on a read-only **Viewer** account) and **Copy link**. **Pin** moves the chat into your **Pinned** list, for you alone: nothing changes for its owner or for anyone else, and it does not stop the owner's chat from expiring. **Copy link** copies: for a chat shared with your team, the team link, which opens it for anyone on your team; for a chat you were added to in Multiplayer, its chat link, which opens it for the people in it. A Multiplayer chat you take part in also has **Download chat…**. Renaming, filing, archiving and deleting stay with the chat's owner. |
+| **Archived** | At the foot of **Chats**, once you have archived a chat, and collapsed by default. Conversations you have put away but not deleted; open it to bring one back. |
 
 **Searching the rail.** Type in the search field and the groups above step aside for one list of
 results. Search looks through all of your chats (pinned, temporary, and filed
@@ -380,7 +435,7 @@ Clear the field and the rail returns exactly as you left it.
 - **In messages** lists chats where the words appear in the conversation
   itself, with the matching line beneath. This covers your own chats,
   archived ones included (tagged **Archived**), and the chats shared with
-  you: the ones in **Team chats**, shown with their owner's name. In a shared
+  you: your teammates' chats, marked with their owner's initial. In a shared
   chat it searches what was asked and answered. A deployment can switch
   message search off, in which case this group does not appear.
 - If a result comes from a list you have hidden, the group says **Hidden in
@@ -391,16 +446,32 @@ Clear the field and the rail returns exactly as you left it.
 - When nothing matches, the rail says so and **Clear search** empties the
   field.
 
-A chat row can carry small marks, each labeled when you hover. Two say who
-can see it: one means it is shared by link, the other that it is shared with
-your team. A pulse line marks a **patrol** chat, one with a patrol that is
-running or paused, wherever the chat is listed; a chat with a patrol is kept,
-not deleted for inactivity. The hourglass means the opposite: the chat is
-temporary (it is on each temporary chat in **Recent**, and beside the
-**Temporary** heading when you use separate lists). Click a project's name to open its home (and expand it); the chevron only
-folds it. Hovering a project shows its menu: **Open project**, **New chat**,
-**Reorder chats** (when it holds two or more of your chats), and, for the
-owner, **Share…** and **Project settings…**. See [Keeping, shaping, and sharing conversations](#8-keeping-shaping-and-sharing-conversations).
+A row is its title, with at most one status at its right edge, shown only
+when it matters and explained when you hover. The first of these that applies
+is the one shown: a pulsing dot while a reply is being written; the days left
+on a temporary chat that is about to be deleted; a pulse line on a **patrol**
+chat, with the time until its next check (or **Paused**); a green dot on a
+**Multiplayer** chat; a team glyph on a chat
+shared with your team; a link on a chat shared by link; a lock on a sealed
+chat. A teammate's chat also carries its owner's initial. A chat with a patrol
+is kept, not deleted for inactivity. A temporary chat shows nothing until it
+is close to being deleted, and labels are not drawn on rows: a chat's labels
+are in its tooltip and under **Labels** in its menu, and **Filter by label**
+in the Chats menu shows only the chats that carry them. Click a project's
+name to open its home (and expand it); the chevron only folds it. Hovering a
+project shows its menu: **Open project**, **New chat**, **Reorder chats**
+(when it holds two or more of your chats), **Move to the top** and **Set as
+start page**, and, for the owner, **Pin**, **Rename**, **Share…**, **Project
+settings…** and **Delete project**. See [Keeping, shaping, and sharing conversations](#8-keeping-shaping-and-sharing-conversations).
+
+Drag the rail's right edge to make it wider or narrower, and double-click the
+edge to go back to the default width. From the keyboard, move the focus to the
+edge and press the left and right arrow keys, `Home` and `End` for the
+narrowest and widest, or `Enter` for the default. The width is remembered in
+this browser. Collapsed, the rail is a strip that keeps the logo, a button to
+expand it again, the **+** menu, the top items and your account menu. On a
+phone the rail is a drawer, opened with the menu button at the top left of
+each page.
 
 Your account menu at the foot of the rail switches between **Light**, **Dark**,
 and **System** appearance and opens **Settings**, **Guides** (these user
@@ -477,71 +548,83 @@ nothing shared.
 
 ### Customizing your sidebar
 
-The rail is yours to arrange. Open **Customize sidebar** from your account
-menu (or hover the line under Chat, Patrols and Background tasks and press
-**Customize**). A panel slides in from the right and leaves the rail in view,
-so every change shows in it as you make it. Changes are saved to your account
-a moment later, so your sidebar is the same in every browser you sign in to.
-A read-only **Viewer** account can open the panel but not change anything.
+The rail is yours to arrange. The **gear** at the top of the rail opens a
+short panel with the choices people change most:
 
-- **Start from** offers five arrangements for the ways people use fleet:
-  **Classic** (the rail as it comes), **Just chat**, **Dashboards first**,
-  **Automation** (Background tasks and Patrols on top, opening on Background
-  tasks) and **Team room** (team chats first). Each card draws your own rail
-  in miniature, and choosing one keeps every shortcut you have pinned.
-- **In the sidebar** lists Chat, Patrols, Background tasks and your
-  shortcuts. **Add** pins a chat, a patrol, a teammate's shared or multiplayer
-  chat, a project, a recent background task, or a page (Guides, Settings, and
-  Analytics for administrators). Drag a row, or use its arrows, to move it;
-  type over its name to rename it; press its icon to pick another icon or any
-  emoji; switch it off to hide it; press **×** to unpin it. A chat can open
-  as a **Chat** or as a **Dashboard**, straight into
-  [Dashboard view](#dashboard-view).
-- **Home** (the map pin on a row) is where fleet opens. When you open fleet
-  without a link to something else, it takes you to your Home instead of your
-  most recent chat: a dashboard, a patrol, a project, Background tasks or a
-  page. Moving around inside fleet never sends you back there, and a link to
-  a chat still opens that chat. With no Home set, fleet opens your most
-  recent chat, as before.
-- **On the Chat page** orders, renames, hides or folds the **Projects**,
-  **Chats** and **Team chats** lists. Search still finds what is in a hidden
-  or folded list. A hidden Chats list still leaves the
-  **+** for a new chat.
-- **One list for all chats**, in the same part of the panel, lists your
-  teammates' shared chats together with your own instead of in a **Team
-  chats** list of their own. Your pinned chats stay in **Pinned** at the top;
-  below them, one **Recent** list holds the rest of your chats and your
-  teammates', sorted together (most recently active first, or by the sort
-  you pick beside the heading). A teammate's row keeps its team mark and the
-  owner's name. Each chat of yours that is temporary carries a small hourglass:
-  it is deleted after a period without activity (90 days by default)
-  unless you pin it, move it into a project or archive it, and the
-  hourglass shows the days it has left as that approaches. Chats in a
-  project stay under their project. On by default; switch it off to give
-  your teammates' chats a **Team chats** list of their own, with **Temporary**
-  holding only your own chats. Hiding **Team chats** in this panel keeps
-  teammates' chats out of the list either way.
-- **Compact** shows one line per item, without the descriptions.
+- **Fleet opens to** picks your start page: **The last chat you had open**
+  (the default), **Background tasks**, anything you keep at the top of the
+  rail, or anything you have pinned.
+- **Density** switches the rows between **Comfortable** and **Compact**.
+- **Show** turns **Patrols**, **Background tasks**, **Projects** and
+  **Teammates' shared chats** on or off.
 
-**Add to sidebar** in a chat's menu, or in a project's menu, pins it without
-opening the panel (a chat you last read as a dashboard is added as a
-dashboard); the same item reads **Remove from sidebar** once it is there.
-**Reset to default** in the panel returns you to your workspace's sidebar.
-A pinned chat you can no longer open is shown faded, so you can unpin it.
+**More options** in that panel, or **Customize sidebar** in your account
+menu, opens the full panel. It slides in from the right and leaves the rail in
+view, so every change shows in it as you make it. Changes are saved to your
+account a moment later, so your sidebar is the same in every browser you sign
+in to. A read-only **Viewer** account can open both panels but not change
+anything.
+
+- **Fleet opens to** is the same choice as in the short panel. Your start
+  page is where fleet takes you when you open it without a link to something
+  else: a dashboard, a chat, a project, Background tasks or a page. Moving
+  around inside fleet never sends you back there, and a link to a chat still
+  opens that chat. With no start page set, fleet opens the last chat you had
+  open.
+- **Start from** offers five arrangements: **Classic** (Patrols and
+  Background tasks, then Pinned, Projects and Chats), **Just chat** (your
+  chats and pins, nothing else), **Dashboards first** (what you keep at the
+  top comes before Patrols and Background tasks), **Automation** (Background
+  tasks and Patrols lead) and **Team room** (your teammates' chats in a list
+  of their own, first). Choosing one rearranges the rail; your pins and your
+  density stay as they are, and so does your start page unless the
+  arrangement hides it.
+- **Top of the sidebar** lists Patrols, Background tasks and whatever you
+  keep there. **Add** adds a chat, a patrol, a teammate's shared or
+  multiplayer chat, a project, a recent background task, or a page (Guides,
+  Settings, and Analytics for administrators). Drag a row, or use its arrows,
+  to move it; type over its name to rename it; press its icon to pick another
+  icon or any emoji; switch it off to hide it; press **×** to remove it;
+  press its map pin to make it your start page. A chat can open as a **Chat**
+  or as a **Dashboard**, straight into [Dashboard view](#dashboard-view).
+- **Pinned** lists your pinned chats and projects in their order: use the
+  arrows to reorder them, the bin to unpin one, and **Pin** to pin another
+  chat or project.
+- **Lists** orders, renames, hides or folds **Pinned**, **Projects** and
+  **Chats**. Search still finds what is in a hidden or folded list.
+- **Teammates' shared chats** puts your teammates' chats **In Chats** (mixed
+  with your own; the default), in an **Own list** (a **Team chats** list you
+  can place above or below your chats), or **Hidden** (not listed; search
+  still finds them).
+- **Group chats by date** turns the **Today**, **Yesterday**, **This week**
+  and **Older** headings in Chats on or off, and **Status on rows** does the
+  same for the status at the right of each row.
+- **Density** is **Comfortable** or **Compact**, as in the short panel.
+
+**Move to the top**, in the menu of a chat, a project or a teammate's chat,
+keeps it among the top items without opening the panel (a chat you last read
+as a dashboard is kept as a dashboard). It then leaves the list it was in,
+and the same item reads **Remove from the top**. **Set as start page**, in
+the same menus, makes that chat, dashboard or project the page fleet opens
+to; it does not have to be a top item, and the item then reads **Remove as
+start page**. **Reset to default** in the panel returns you to your
+workspace's sidebar. A chat kept at the top that you can no longer open is
+shown faded, so you can remove it.
 
 Administrators set the sidebar everyone starts with under **Settings → Admin
-→ Sidebar**: the same editor, saved with **Save for everyone**. Its **Add**
-list offers only chats and projects shared with your team (your own sidebar
-can pin private ones too), and a pin that is not shared is marked **Not
-shared with the team**. People who
+→ Sidebar** (the **Workspace default** tab at the top of the full panel goes
+there): the same editor, without the Pinned list, saved with **Save for
+everyone**. Its **Add** list offers only chats and projects shared with your
+team (your own sidebar can keep private ones too), and one that is not shared
+is marked **Not shared with the team**. People who
 have not customized their own sidebar get it the next time they load a page,
-and **Reset to default** brings anyone back to it. A chat pinned there shows
+and **Reset to default** brings anyone back to it. A chat kept there shows
 only to people who can open it, which makes a shared or multiplayer chat (a
-team-wide patrol, say) a good Home for everyone; a Home someone cannot open is
-skipped for them. Background tasks cannot be pinned there, because only their
-owner and administrators can open one. **Start from my sidebar**
-copies your own arrangement as a starting point, and **Reset to fleet's
-default** removes the workspace sidebar.
+team-wide patrol, say) a good start page for everyone; a start page someone
+cannot open is skipped for them. Background tasks cannot be added there,
+because only their owner and administrators can open one. **Start from my
+sidebar** copies your own arrangement as a starting point, and **Reset to
+fleet's default** removes the workspace sidebar.
 
 ### The header
 
@@ -610,11 +693,14 @@ beside them. Use it for anything you want to keep an eye on while you keep
 talking: a pipeline, a campaign, a launch checklist, a comparison you are
 refining. Turn it on with **Dashboard** at the top of the chat (on desktop screens), **Dashboard
 view** in **More options**, or `D`; leave with **Exit**, or `Esc` when you are
-not typing in the message box. The sidebar button at the left of the board's
-header slides the sidebar in over the board, so you can move to another
-dashboard or chat without leaving the view. A chat
-[pinned to your sidebar](#customizing-your-sidebar) as a dashboard opens
-straight into this view.
+not typing in the message box. The rail stays beside the board as its strip
+of icons, so the top items and the **+** menu are one click away. The expand
+button at the top of the strip slides the whole sidebar in over the board, so
+you can move to another dashboard or chat without leaving the view; `Esc`, or
+a click outside it, closes it again and leaves you on the board. On a phone,
+the sidebar button at the left of the board's header opens the sidebar. A chat
+[kept at the top of your sidebar](#customizing-your-sidebar) as a dashboard
+opens straight into this view.
 
 - **Ask for what you want to watch.** "Turn this into a dashboard", "add a
   panel for open deals", "refresh the revenue panel". The assistant builds
@@ -1047,7 +1133,7 @@ about the first kind.
 | Email preview | The assistant wants to show you a draft without sending it (with the same **Light** / **Dark** inbox toggle, **Mobile** / **Desktop** size toggle on wide screens, **Show source**, and **Expand full email** / **Collapse email preview** controls). | **Dismiss** — display-only by design |
 | Run this shell command? | A command the platform treats as risky. | **Approve & run** · **Cancel** |
 | Run "Connector studio"? · Run "Playwright browser"? | The assistant wants its built-in browser to type, click, press a key or choose an option on a page, usually while building a connection. The card lists each step in words, names where a password comes from (the form field you filled in) instead of showing it, and when the steps run in a live browser session shows the site the session started on and the site its page is on now, with a note when they differ. The call's own arguments, with the same values hidden, are under **Details**. | **Approve & run** · **Cancel** |
-| Schedule a task | The assistant proposes a scheduled task, usually because you chose **Make recurring task…**. See [From chat to a task](#10-from-chat-to-a-task). | **Approve & schedule** · **Edit** · **Cancel** |
+| Schedule a task | The assistant proposes a scheduled task, usually because you chose **Make a background task…**. See [From chat to a task](#10-from-chat-to-a-task). | **Approve & schedule** · **Edit** · **Cancel** |
 | Change a task | The assistant wants to stop or update an existing scheduled task. A prompt change shows each edit as the text it replaces and the text it becomes, or text added at the end; the rest of the prompt is kept. A full rewrite shows the new prompt (a very long one is shortened on the card, and says so) under a warning that it replaces everything. (The assistant can read a task's current prompt without a card.) | **Approve & stop** or **Approve & update** · **Cancel** |
 | Enable MCP connector? | The assistant needs one or more connected bundled optional MCP connectors that are not yet turned on in this conversation. Approving turns them on for this conversation and continues the reply with their tools mounted (unless the conversation's hourly auto-resume cap or input queue limit has been reached, in which case a notice is posted and the newly enabled tools take effect on your next message); when **Auto-approve** is active in the conversation, the assistant enables connected bundled optional connectors without stopping on a card and continues automatically when within those limits. | **Approve & continue** · **Decline** |
 | Run an action | Any other connector action that changes something, such as updating a record in an external system. The card names the action, the system it runs against, and the arguments it was called with. A deployment can make it read in plain words instead: **APPROVAL NEEDED** with the countdown, a title, the record with its id and a link (**Open in …**), each change as before → after, and warnings such as "Deal is Active" as badges, with the raw arguments under **Details**. Long lists show the first 10 with **Show N more**, and a search box when there are more than 25. | **Approve & run** (**Approve** on a plain-words card) · **Cancel** |
@@ -1323,7 +1409,7 @@ member.
 
 ### Setting one up
 
-**New project** (the **+** beside **Projects** in the rail) asks for a name, an
+**New project** (in the **+** menu at the top of the rail) asks for a name, an
 optional set of instructions, and **Who can see it**: **Only you** (a private
 project) or your team. Shared with your team, everyone on it sees the project's
 instructions, its team learnings, and any chat shared with them — but each chat
@@ -1347,11 +1433,11 @@ deletes a conversation; chats always stay with their owner.
 
 ### The project home
 
-The rail lists every project you can see: pinned ones first, then the rest by
-when each project was last created or edited (renamed, or its settings or
-sharing changed) — chatting in a project does not move it up. Once the list is
-longer than the space it has, the **Projects** section scrolls on its own, the
-same way **Chats** does below it.
+The rail lists every project you can see: pinned ones in **Pinned**, the rest
+under **Projects** by when each project was last created or edited (renamed,
+or its settings or sharing changed) — chatting in a project does not move it
+up. **Projects** shows the first eight, with **All N projects** for the rest;
+the rail scrolls as one list, so no section scrolls on its own.
 
 Open a project from the rail to reach its home. Its title carries a pill saying
 who can see it — **Only you** or **Shared with** your team; in a shared project
@@ -1384,27 +1470,43 @@ Any existing conversation can be filed into a project with **Move to project**,
 and taken out again with **Remove from project**, which confirms that the chat
 becomes temporary again and offers **Pin it and remove** so nothing expires by
 accident. If a project is more structure than you need, **labels** are the
-lighter option: tag conversations from their menu, then filter the rail by label.
+lighter option: tag conversations from their menu, then choose **Filter by
+label** in the menu beside the **Chats** heading.
 Labels organize; they carry no instructions or learnings.
 
 ## 8. Keeping, shaping, and sharing conversations
 
 Every conversation in the rail has a menu behind the `⋮` button that appears when
-you hover over it (on a touch screen it is always shown). Here is everything in it.
+you hover over it (on a touch screen it is always shown). The menu is the same
+on every page. From a page other than Chat, an item that needs one of Chat's
+dialogs (sharing, downloading, a patrol, archiving, deleting and so on) takes
+you to Chat and carries on there; **Pin**, **Rename** and **Labels** happen
+in place. Here is everything in it, in order.
 
 | Item | What it does |
 | --- | --- |
-| **Pin** | Keep it indefinitely and show it under **Pinned**. Pin anything you would mind losing. |
+| **Pin** | Keep it indefinitely and show it under **Pinned**. Pin anything you would mind losing. A chat in a project has no **Pin**: it is kept with its project. |
+| **Move to the top** | Keep it among the top items of the rail, above your lists; it reads **Remove from the top** once it is there. See [Customizing your sidebar](#customizing-your-sidebar). |
 | **Rename** | Conversations take a title from their first exchange. Rename the ones you keep so the rail reads as a list of work, not a list of first sentences. |
 | **Move to project** | File it under a project. The conversation picks up that project's context from its next turn. |
-| **Labels** | Add or remove labels. Labels double as filters in the rail. |
-| **Download chat** | Export the conversation in one of three formats: **Web page**, which opens in any browser, looks like the chat, and prints to PDF; **Text document**, for pasting into email, Word, or Docs; or **Raw data**, the complete record for developers. **Include the agent's work** adds the tool calls, results, and reasoning; it is off by default so a long chat downloads as the conversation, not its machinery. |
-| **Make recurring task…** | Ask the assistant to turn this conversation into a scheduled task. See [From chat to a task](#10-from-chat-to-a-task). |
-| **Save as workflow** | Turn the whole conversation into a reusable workflow template in the prompt library or a personal **Agent Skill (`/skill-name`)**. See [From chat to a task](#10-from-chat-to-a-task). |
+| **Labels** | Add or remove labels. **Filter by label**, in the menu beside the **Chats** heading, then shows only the chats that carry the labels you tick. |
+| **Set as start page** | Make this chat the page fleet opens to; it reads **Remove as start page** when it is. See [Customizing your sidebar](#customizing-your-sidebar). |
+| **Add a patrol…** | Opens the chat's **Patrols & timers**, to put it on a schedule; it reads **Patrols…** once the chat has one. Not offered on a sealed chat. See [In-chat patrols and timers](#in-chat-patrols-and-timers). |
+| **Make a background task…** | Ask the assistant to turn this conversation into a scheduled task. See [From chat to a task](#10-from-chat-to-a-task). |
+| **Save as workflow…** | Turn the whole conversation into a reusable workflow template in the prompt library or a personal **Agent Skill (`/skill-name`)**. See [From chat to a task](#10-from-chat-to-a-task). |
 | **Share…** | Opens the share dialog: sharing with your team first, then **Share outside your team** (a public link). See [Sharing with your team](#sharing-with-your-team). |
-| **Select** | Enter selection mode to pin, label, or delete several conversations at once. If the selection includes chats shared with your team, the delete confirmation says how many, and that the team loses them and their shared files; teammates who branched them keep their copies. |
-| **Archive** | Put it away without deleting it. Archived conversations never expire and can be unarchived from the **Archived** group. Archiving a chat shared with your team stops sharing it (it asks first, with the number of shared files); unarchived, it comes back as **Only you**. An archived chat can't be shared with your team; unarchive it first. |
-| **Delete** | Remove the conversation and everything it produced. There is a confirmation, and no undo. For a chat shared with your team, the confirmation says what the team loses; teammates who branched it keep their copies. |
+| **Download chat…** | Export the conversation in one of three formats: **Web page**, which opens in any browser, looks like the chat, and prints to PDF; **Text document**, for pasting into email, Word, or Docs; or **Raw data**, the complete record for developers. **Include the agent's work** adds the tool calls, results, and reasoning; it is off by default so a long chat downloads as the conversation, not its machinery. |
+| **Transfer ownership…** | Hand the chat to someone else; see **Transferring a chat** under [Sharing with your team](#sharing-with-your-team). Not offered on a sealed chat. |
+| **Archive** | Put it away without deleting it. Archived conversations never expire and can be unarchived from **Archived**, at the foot of the **Chats** list. Archiving a chat shared with your team stops sharing it (it asks first, with the number of shared files); unarchived, it comes back as **Only you**. An archived chat can't be shared with your team; unarchive it first. |
+| **Delete…** | Remove the conversation and everything it produced. There is a confirmation, and no undo. For a chat shared with your team, the confirmation says what the team loses; teammates who branched it keep their copies. |
+
+To pin, label or delete several conversations at once, choose **Select
+chats…** in the menu beside the **Chats** heading. Tick the chats you mean,
+then use the bar at the foot of the rail: **Pin selected**, **Add label**,
+**Delete selected**, and **Exit selection** to finish. If the selection
+includes chats shared with your team, the delete confirmation says how many,
+and that the team loses them and their shared files; teammates who branched
+them keep their copies.
 
 > **What expires, and when.** An unpinned conversation that is not in a project,
 > not archived, not shared, and has no patrol or timer is temporary: it is
@@ -1421,10 +1523,10 @@ you hover over it (on a touch screen it is always shown). Here is everything in 
 
 ### Ordering your chats
 
-Pinned chats and the chats in a project start out newest first. To put them in
+What you pin and the chats in a project start out newest first. To put them in
 your own order:
 
-- **Pinned chats:** press **Reorder** in the **Pinned** heading.
+- **Pinned:** press **Reorder** in the **Pinned** heading.
 - **A project's chats:** open the project's `⋮` menu and choose **Reorder
   chats**.
 
@@ -1435,8 +1537,9 @@ keyboard. Every move is saved as you make it, to your account, so the order is
 the same on every device you sign in from. Press **Done**, above the list (or
 `Esc`), to go back to the ordinary rows.
 
-The **Pinned** group is one order for everything in it: a teammate's chat you
-pinned is moved like your own.
+The **Pinned** list is one order for everything in it: a pinned project and a
+teammate's chat you pinned are moved like your own chats, so a project can sit
+between two chats. The full Customize panel has the same list, with arrows.
 
 A chat you pin, or file in the project, for the first time appears at the top
 of the list, above the ones you have ordered, until you move it; one you unpin
@@ -1445,8 +1548,7 @@ up to 500 chats at a time, and not to a read-only (viewer) account, which
 cannot save an order. In a project you order your own chats; each teammate
 orders theirs.
 
-The **Recent** list (headed **Temporary** with separate lists) has a sort
-instead, in the menu beside the heading:
+The **Chats** list has a sort instead, in the menu beside its heading:
 **Recent activity** (the default), **Newest first** (by when the chat was
 started) or **Title A–Z**. The choice is remembered on this device. Temporary
 chats expire when left alone, so they are sorted rather than hand-placed; to
@@ -1533,9 +1635,10 @@ members start in **Multiplayer mode** automatically (chats created inside a
 personal project stay private until Multiplayer mode is turned on in the Share
 dialog). When Multiplayer mode is on:
 
-- Teammates (and anyone else added to the chat) see it under **Team chats** in
-  the rail with a **Live** badge, can open it directly in the chat view, and can
-  send messages into the shared thread.
+- Teammates (and anyone else added to the chat) see it in the rail, among
+  their **Chats** by default, with the green dot of a Multiplayer chat, can
+  open it directly in the chat view, and can send messages into the shared
+  thread.
 - Every message shows the sender's email above their bubble, and each turn runs
   under **the sender's own account** — using the sender's email, personal
   memories, skills, per-user connector accounts, and approval cards. Because a turn's tool calls, reasoning, and token/cost summary belong to the person whose credentials ran it, turning on **Show details** shows **Turn details hidden for other users' turns** on turns started by someone else. That keeps your screen clear; it is not a privacy wall. The assistant works from the whole chat, including what it fetched on a teammate's turn, and can repeat it, so turn Multiplayer mode on only with people who may see what the chat's turns bring in.
@@ -1555,8 +1658,8 @@ becomes private to the new owner (team sharing, Multiplayer mode and any
 public link are turned off, and approval mode goes back to **Manual**), and
 you lose access to it unless they share it with you. An archived or Lockdown
 chat can't be transferred, and a chat with a turn running has to finish or be
-stopped first. An admin can also transfer a chat listed under
-**Team chats** from its `⋮` menu.
+stopped first. An admin can also transfer a teammate's shared chat from
+its `⋮` menu.
 
 ### While a turn is running
 
@@ -1760,12 +1863,13 @@ and update the saved prompt.
 ### Getting the prompt into a task
 
 **From the library, on the Background tasks page.** The recommended route. On
-the Background tasks page, **New task** opens the task form; insert the prompt from the
+the Background tasks page, **New task** (or **New background task** in the rail's **+**
+menu, from any page) opens the task form; insert the prompt from the
 library, then set the schedule, the model, and the recipients. The prompt has one
 home and the task points at it. The Background tasks guide covers the form field
 by field.
 
-**Make recurring task… from the chat.** The direct route. From the conversation's
+**Make a background task… from the chat.** The direct route. From the conversation's
 menu, the assistant proposes a task from the conversation and stages a schedule
 card. **Edit** opens the name, the schedule, and the full prompt; **Approve &
 schedule** (or **Approve with changes**, if you edited) creates it; **Cancel**

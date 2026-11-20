@@ -89,7 +89,7 @@ describe("the gear's Customize panel", () => {
     expect(option(panel, "Background tasks")).not.toBeChecked();
     // Patrols is a list of chats, not somewhere to land.
     expect(within(panel).queryByRole("radio", { name: "Patrols" })).toBeNull();
-    expect(panel).toHaveTextContent("Any chat, dashboard or project can be the start page: ⋯ › Set as start page.");
+    expect(panel).toHaveTextContent("Any chat, dashboard or project can be the start page: ⋮ › Set as start page.");
   });
 
   it("lists the top items and what is pinned, by their live names, and sets one as the start page", async () => {

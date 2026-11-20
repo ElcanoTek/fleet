@@ -285,7 +285,7 @@ function StartPageSection({
       <p className="text-[0.75rem] leading-snug text-[var(--color-text-muted)]" data-testid="sidebar-home-summary">
         {current.key === ""
           ? tr("No start page set: fleet opens the last chat you had open.")
-          : tr("Opening fleet takes you to {0}. Any chat, dashboard or project can be the start page: ⋯ › Set as start page.", [current.label])}
+          : tr("Opening fleet takes you to {0}. Any chat, dashboard or project can be the start page: ⋮ › Set as start page.", [current.label])}
       </p>
     </section>
   );

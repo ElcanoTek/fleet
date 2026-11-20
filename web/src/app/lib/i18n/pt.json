@@ -6088,7 +6088,7 @@
   "Chats that check in on a schedule, with full history, workspace files and enabled connectors.": "Chats que se ativam de acordo com um horário, com todo o histórico, os ficheiros do espaço de trabalho e os conectores ativados.",
   "Teammates' shared chats": "Chats partilhados por colegas",
   "Fleet opens to": "O Fleet abre em",
-  "Any chat, dashboard or project can be the start page: ⋯ › Set as start page.": "Qualquer chat, painel ou projeto pode ser a página inicial: ⋯ › Definir como página inicial.",
+  "Any chat, dashboard or project can be the start page: ⋮ › Set as start page.": "Qualquer chat, painel ou projeto pode ser a página inicial: ⋮ › Definir como página inicial.",
   "Density": "Densidade",
   "Saved to your account, on every device.": "Guardada na sua conta, em todos os dispositivos.",
   "Start page — fleet opens here": "Página inicial: o fleet abre aqui",
@@ -6105,7 +6105,7 @@
   "Comfortable": "Confortável",
   "The last chat you had open": "O último chat que teve aberto",
   "No start page set: fleet opens the last chat you had open.": "Sem página inicial: o fleet abre o último chat que teve aberto.",
-  "Opening fleet takes you to {0}. Any chat, dashboard or project can be the start page: ⋯ › Set as start page.": "Ao abrir o fleet, vai para {0}. Qualquer chat, painel ou projeto pode ser a página inicial: ⋯ › Definir como página inicial.",
+  "Opening fleet takes you to {0}. Any chat, dashboard or project can be the start page: ⋮ › Set as start page.": "Ao abrir o fleet, vai para {0}. Qualquer chat, painel ou projeto pode ser a página inicial: ⋮ › Definir como página inicial.",
   "Pin a chat or a project": "Fixar um chat ou um projeto",
   "Find a chat or a project…": "Procure um chat ou um projeto…",
   "Chats and projects, in the order you set. Use the arrows to reorder; the bin unpins. A pinned chat is kept: it is never deleted for inactivity.": "Chats e projetos, pela ordem que definir. Use as setas para reordenar; o ícone do lixo desafixa. Um chat fixado é mantido: nunca é eliminado por inatividade.",
@@ -6141,5 +6141,6 @@
   "Couldn't pin the project.": "Não foi possível fixar o projeto.",
   "Couldn't rename the project.": "Não foi possível mudar o nome do projeto.",
   "Resize sidebar": "Redimensionar barra lateral",
-  "Drag to resize the sidebar": "Arraste para redimensionar a barra lateral"
+  "Drag to resize the sidebar": "Arraste para redimensionar a barra lateral",
+  "patrol not found": "A patrulha não foi encontrada"
 }

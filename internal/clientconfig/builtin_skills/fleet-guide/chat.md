@@ -125,7 +125,7 @@ first patrol** when you have no patrols yet, and **Use guided setup** in its
 **New patrol** form once you do. Patrols themselves live in Chat — each one is
 a chat that wakes on its schedule — and the Patrols page is where you see
 them all together.
-It starts with **Why patrol?**, a four-step Expanding Brain ladder from
+The Launchpad starts with **Why patrol?**, a four-step Expanding Brain ladder from
 chatting, to scheduled reports, to patrols that analyze and decide, to letting
 the assistant act on your behalf, plus the trust path:
 start at **Suggest & ask** and turn on **⚡ Auto-approve** in the Patrol bar once
@@ -184,8 +184,8 @@ patrol, and a **Got it** button instead of the rest of the wizard.
 
 ### The Patrols page
 
-**Patrols**, the first item in the sidebar on every page, opens a page that
-lists every recurring patrol you have set up, across all your chats, and under
+**Patrols**, by default the first item in the sidebar on every page, opens a
+page that lists every recurring patrol you have set up, across all your chats, and under
 **Shared with you** the patrols your teammates run in chats they have shared
 with you. Search finds a patrol by its name, its chat or its owner. One-shot
 timers are not listed here; they stay in their chat's **Patrols & timers**.
@@ -221,8 +221,8 @@ and what it is asked to do each run is shown only to them.
 do each run, pick a schedule and an approval mode, optionally give it a
 label, and press **Start patrol**. Under **Runs in**, **A new chat** makes a
 chat for the patrol, named after its label, and **An existing chat** adds the
-patrol to one of your chats, beside any patrols it already has (a sealed chat
-is not offered). **Use guided setup** opens the Launchpad instead. With no
+patrol to one of your chats, beside any patrols it already has (sealed chats
+are not offered). **Use guided setup** opens the Launchpad instead. With no
 patrols yet, the page offers **Set up your first patrol** (the Launchpad) and
 **Or write one yourself** (the form).
 
@@ -402,7 +402,7 @@ rail to a strip of icons. Under them:
 - The **+** opens a menu: **New chat**, **New patrol** (the
   [Patrol Launchpad](#patrol-launchpad-your-first-patrol-in-five-steps)),
   **New background task**, **New project** and, where your deployment offers
-  sealed chats, **New sealed chat**.
+  it, **New sealed chat** (a chat in Lockdown mode).
 
 Next come the top items, which stay in view above your lists: **Patrols**
 (the [Patrols page](#the-patrols-page)), **Background tasks** (formerly the
