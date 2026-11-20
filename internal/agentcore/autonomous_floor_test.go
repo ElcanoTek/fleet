@@ -471,6 +471,7 @@ func TestGitPushFloorBareAssignment(t *testing.T) {
 		`j=$(jq -r '.id' x.json); n=$(grep -c foo x)`,
 		`ls | head -1; f=$(date)`,
 		`n=$(wc -l < x)`,
+		`f=$(ls) > "$(date +%F).txt"`,
 		`for x in a b; do n=$(wc -l < "$x"); done`,
 		`export f=$(ls)`, // a command word, already allowed before
 		`OUT=$(ls); LATEST=$(ls -t | head -1)`,
@@ -546,6 +547,13 @@ func TestGitPushFloorBareAssignment(t *testing.T) {
 		`f=$(ls ${a[x]})`,
 		`f=$(ls > ${x@P})`,
 		`f=$(cat < ${x@P})`,
+		// Redirects on the assignment itself.
+		`x='$(git push)out'; f=$(ls) > "${x@P}"`,
+		`f=$(ls) > $((x))`,
+		`f=$(ls) > "$(sh /tmp/push-script)"`,
+		`f=$(ls > "$(sh /tmp/push-script)")`,
+		`LD_BIND_NOW=$(cat f)`,
+		`GCONV_PATH=$(pwd)`,
 		// Here-doc bodies expand substitutions before the command reads them.
 		"f=$(cat <<EOF\n$($(printf '\\x67it') $(printf '\\x70ush'))\nEOF\n)",
 		"f=$(cat <<EOF\n`sh x`\nEOF\n)",

@@ -454,8 +454,11 @@ type shellSegment struct {
 	// opaqueRedir: a redirect target had a `${...}` or `$((...))`
 	// expansion (`> ${x@P}`); the target word itself is not kept in tokens.
 	opaqueRedir bool
-	stdinBodies []string
-	stdinDyn    bool
+	// redirSubcmds are the substitution bodies inside redirect targets
+	// (`> "$(cmd)"`), which run even though the target is not a token.
+	redirSubcmds []string
+	stdinBodies  []string
+	stdinDyn     bool
 }
 
 type pendingHeredoc struct {
@@ -1067,6 +1070,7 @@ func (l *shellLexer) readRedirectTarget() shellToken {
 		if tok.evaluates {
 			savedSeg.opaqueRedir = true
 		}
+		savedSeg.redirSubcmds = append(savedSeg.redirSubcmds, tok.subcmds...)
 	}
 	l.curSeg = savedSeg
 	return out
@@ -1244,8 +1248,14 @@ var assignmentLeadKeywords = map[string]bool{
 // Literal-value assignments never reach here dynamic, so their verdict is
 // unchanged.
 func segmentOnlyAssignsVariables(seg shellSegment) bool {
-	if seg.pipedStdin || seg.stdinDyn || len(seg.stdinBodies) > 0 {
+	if seg.pipedStdin || seg.stdinDyn || len(seg.stdinBodies) > 0 || seg.opaqueRedir {
+		// An evaluating redirect target (`> "${x@P}"`) runs hidden text.
 		return false
+	}
+	for _, body := range seg.redirSubcmds {
+		if !substBodyIsInert(body, 1) {
+			return false
+		}
 	}
 	sawAssign := false
 	for _, tok := range seg.tokens {
@@ -1305,6 +1315,11 @@ func substBodyIsInert(body string, depth int) bool {
 			// Here-docs and here-strings: their expansions are checked
 			// above, but nothing here needs one, so stay strict.
 			return false
+		}
+		for _, sub := range seg.redirSubcmds {
+			if !substBodyIsInert(sub, depth+1) {
+				return false
+			}
 		}
 		for _, tok := range seg.tokens {
 			// `echo ${x@P}` runs prompt expansion and `echo $((x))`
@@ -1449,9 +1464,7 @@ var gitSensitiveVarNames = map[string]bool{
 	"GLOBSORT":        true,
 	"POSIXLY_CORRECT": true,
 	"TIMEFORMAT":      true,
-	"LD_PRELOAD":      true,
-	"LD_LIBRARY_PATH": true,
-	"LD_AUDIT":        true,
+	"GCONV_PATH":      true,
 	"SSH_ASKPASS":     true,
 	"OPTIND":          true,
 	"OPTERR":          true,
@@ -1486,7 +1499,8 @@ var gitSensitiveVarNames = map[string]bool{
 // plain shell variable.
 func gitSensitiveAssignName(tok string) bool {
 	name, _, _ := strings.Cut(tok, "=")
-	return strings.HasPrefix(name, "GIT_") || strings.HasPrefix(name, "BASH") || gitSensitiveVarNames[name]
+	return strings.HasPrefix(name, "GIT_") || strings.HasPrefix(name, "BASH") ||
+		strings.HasPrefix(name, "LD_") || gitSensitiveVarNames[name]
 }
 
 func nonGitCommandEmbedsGitPush(args []shellToken, depth int) bool {
