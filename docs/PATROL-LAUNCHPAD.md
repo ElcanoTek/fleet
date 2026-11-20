@@ -19,23 +19,32 @@ identifiers and comments, and the operator-only `fleet admin` CLI keep the old
 name. The user guides moved
 from the rail into the account menu, beside Settings.
 
-**Patrols live in Chat; the rail item is their index.** A click reads
-`GET /api/patrols` (the caller's active and paused recurring patrols across
-their own non-deleted chats, each with its chat title; `store.ListUserPatrols`,
-capped at 100, served by the partial index `idx_chat_schedules_user_patrols`
-from migration 096, which `TestListUserPatrols_UsesItsIndex` pins). With none, it opens the wizard; with some, a menu lists them —
-name, chat, cadence, *Paused* — each opening its chat, with **New patrol** at
-the bottom. On a collapsed rail the menu opens beside the icon strip
-(`right-start`, kept on-screen). The menu is capped to the viewport and
-scrolls, so with many patrols the last rows and **New patrol** stay reachable.
-Rows in the caller's own chats need no access check; a teammate's
-multiplayer chat is checked once per request, however many patrols it holds.
-Opening the wizard from that menu leaves the focus on the Patrols
-item, so closing the wizard returns it there. On a phone that item is in
-the drawer the wizard closed, so the focus goes to the visible **Open
-sidebar** button instead. The wizard says where a patrol lives (in Chat, under its name, with
-the Patrol bar on top) on its Plan and Launch steps and on the success screen. The wizard is portalled to `document.body` (the phone drawer is a
-transformed element) and opens on the rail's dialog layer.
+**Patrols live in Chat; the Patrols page is their index.** The sidebar's
+**Patrols** item opens `/patrols` ([SIDEBAR.md](SIDEBAR.md), "Patrols is a
+page"), which reads `GET /api/patrols`: the caller's active and paused
+recurring patrols across their own non-deleted chats, each with its chat
+title (`store.ListUserPatrols`, capped at 100, served by the partial index
+`idx_chat_schedules_user_patrols` from migration 096, which
+`TestListUserPatrols_UsesItsIndex` pins), then the patrols shared with them
+(`store.ListSharedPatrols`). Before the November 2026 sidebar redesign the
+item opened a dropdown of the same list; the page replaced it.
+
+**Where the wizard opens from** (`patrolWizard.tsx`). Any part of the page
+can ask for it (`openPatrolWizard`), and one host per page mounts it (the
+sidebar frame, `NavRail`), so there is one wizard however it was asked for:
+the sidebar's **+** menu (**New patrol**), the Patrols page (**Use guided
+setup** on its form, **Set up your first patrol** when there are none), and
+the one-shot `?launchpad=1` link the guides use, which is taken back out of
+the address bar so a reload does not reopen it. Closing the wizard returns
+the focus to what opened it; on a phone that control is in the drawer the
+wizard closed, so the focus goes to the visible **Open sidebar** button
+instead. Closing it also reads the patrols again, so the Patrols page and
+the sidebar's row marks follow a patrol it just launched. The wizard says
+where a patrol lives (in Chat, under its name, with the Patrol bar on top) on
+its Plan and Launch steps and on the success screen. It is portalled to
+`document.body` (the phone drawer is a transformed element) and opens on the
+sidebar's dialog layer. The pulsing "new" dot the old sidebar item carried
+was dropped with the dropdown.
 
 User-facing description: the Chat guide's "Patrol Launchpad" section
 (`internal/clientconfig/builtin_skills/fleet-guide/chat.md`).
@@ -177,7 +186,8 @@ hides the pulsing dot) and that a patrol was launched
 - `web/src/app/launchpad/PatrolLaunchpad.test.tsx` — the full walk, the launch
   call order and bodies, AI draft success and failure, progress persistence,
   a failed launch.
-- `web/src/app/launchpad/LaunchpadButton.test.tsx` — the new dot and the deep link.
+- `web/src/app/launchpad/patrolWizard.test.tsx` — opening it from anywhere on the page, the focus hand-back, the re-read of the patrols on close, and the deep link.
+- `web/src/app/patrols/PatrolsView.test.tsx` — the Patrols page: the list, a row's detail, the controls, the empty and failed states, and starting a patrol in a new or an existing chat.
 - `web/e2e/mocked/patrol-launchpad.spec.ts` — the walk through the real
   gateway and bundle, the deep link, and axe on every step in both schemes.
 - `internal/httpapi/patrol_draft_test.go`, `internal/agent/patrol_draft_test.go`
