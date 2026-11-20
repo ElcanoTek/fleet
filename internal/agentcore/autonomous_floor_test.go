@@ -451,7 +451,9 @@ func TestRunPythonGitPushFloor(t *testing.T) {
 // that only assigns variables runs no command; everything that can still
 // reach git (the substitution bodies, a later dynamic command word, an env
 // prefix on a real git, assignments that steer git or the shell, opaque
-// expansions, quoted names) must stay blocked.
+// expansions, quoted names, substitutions that run a program the gate
+// cannot read, integer-attribute targets, stdin carried in) must stay
+// blocked.
 func TestGitPushFloorBareAssignment(t *testing.T) {
 	repro := `ls -t .fleet/tool-output/ | head -3; f=$(ls -t .fleet/tool-output/* | head -1); echo $f; grep -o '"chess.com"\|"calculatorsoup.com"\|"comicbook.com"\|"cheezburger.com"' $f | sort | uniq -c`
 	for _, cmd := range []string{
@@ -464,7 +466,8 @@ func TestGitPushFloorBareAssignment(t *testing.T) {
 		`a=$(ls) b=$(date) c=x`,
 		`n=$1`,
 		`d=${HOME}/x`, // already allowed before: dynamic then a slash
-		`out=$(git status --porcelain)`,
+		`out=$(LC_ALL=C sort x | uniq -c)`,
+		`j=$(jq -r '.id' x.json); n=$(grep -c foo x)`,
 		`ls | head -1; f=$(date)`,
 		`n=$(wc -l < x)`,
 		`for x in a b; do n=$(wc -l < "$x"); done`,
@@ -477,8 +480,7 @@ func TestGitPushFloorBareAssignment(t *testing.T) {
 		`{ f=$(ls); }`,
 		"f=$(ls)\necho $f",
 		"f=\\\n$(ls)",
-		`f=$( (ls) )`,
-		`git_ref=$(git rev-parse HEAD)`, // lower-case: bash names are case-sensitive; git reads GIT_*
+		`git_ref=$(date)`, // lower-case: bash names are case-sensitive; git reads GIT_*
 	} {
 		if bashCommandRunsGitPush(cmd) {
 			t.Errorf("bashCommandRunsGitPush(%q) = true, want false", cmd)
@@ -510,6 +512,30 @@ func TestGitPushFloorBareAssignment(t *testing.T) {
 		`printf 'git push' | { f=$(bash); }`,
 		`f=$(sh) <<< 'git push origin main'`,
 		"f=$(sh) <<'EOF'\ngit push origin main\nEOF",
+		// A substitution that runs a program the gate cannot read.
+		`f=$(sh /tmp/push-script)`,
+		`f=$(bash ./x.sh)`,
+		`f=$(source /tmp/push-script)`,
+		`f=$(. /tmp/push-script)`,
+		`f=$(./push.sh)`,
+		`f=$(/tmp/x/ls)`,
+		`f=$(python3 x.py)`,
+		`f=$(find . -exec sh {} \;)`,
+		`f=$(echo x | xargs sh)`,
+		`f=$(ls | sort --compress-program=sh)`,
+		`f=$(printf -v 'a[$(git push)]' x)`,
+		`f=$(ls $(sh x))`,
+		`f=$(git -c core.fsmonitor=x status)`,
+		`f=$("ls")`,
+		`f=$(if true; then sh x; fi)`,
+		`f=$( (sh x) )`,
+		`f=$(PATH=/tmp/x ls)`,
+		// Names an inert command could resolve to something else.
+		`ls() { sh x; }; f=$(ls)`,
+		`function ls { sh x; }; f=$(ls)`,
+		`PATH=/tmp/x; f=$(ls)`,
+		`hash -p /tmp/x ls; f=$(ls)`,
+		`shopt -s expand_aliases; f=$(ls)`,
 		// Stdin that reaches the substitution from a redirect, an enclosing
 		// group or loop, a function call or exec.
 		`f=$(sh </tmp/push-script)`,

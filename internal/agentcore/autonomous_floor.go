@@ -387,7 +387,8 @@ func bashCommandRunsGitPushDepth(cmd string, depth int) bool {
 	}
 	writesPushText := anySegmentWritesPushText(segments)
 	stdinMayReachAssign := anySegmentReceivesStdin(segments) && (grouped || anySegmentIsCompound(segments))
-	assignOnlyOK := depth == 0 && !stdinMayReachAssign && !anySegmentMaySetVarAttributes(segments)
+	// grouped also covers `ls() { ...; }`, which would redefine an inert name.
+	assignOnlyOK := depth == 0 && !grouped && !stdinMayReachAssign && !anySegmentMaySetVarAttributes(segments)
 	for _, seg := range segments {
 		if segmentIsGitPush(seg, writesPushText, assignOnlyOK, depth) {
 			return true
@@ -437,6 +438,9 @@ type shellToken struct {
 	// expansion is a command substitution or a simple `$param` — forms that
 	// only produce a string. See segmentOnlyAssignsVariables.
 	valueOnlyAssign bool
+	// subcmds are the bodies of the command and process substitutions
+	// inside this word (also listed in the script's own subcmds).
+	subcmds []string
 }
 
 type shellSegment struct {
@@ -469,6 +473,7 @@ type shellLexer struct {
 	tokPlainLen  int
 	tokPlainStop bool
 	tokOpaqueDyn bool
+	tokSubFrom   int
 	subcmds      []string
 	heredocs     []pendingHeredoc
 	grouped      bool
@@ -540,7 +545,9 @@ func (l *shellLexer) flushTok() {
 		dynamicAfterSlash: l.tokDynSlash,
 		literal:           !l.tokDyn && l.tokPlainLen == len(val),
 		valueOnlyAssign:   eq > 0 && eq < l.tokPlainLen && !l.tokOpaqueDyn && isEnvAssignmentToken(val),
+		subcmds:           append([]string(nil), l.subcmds[l.tokSubFrom:]...),
 	})
+	l.tokSubFrom = len(l.subcmds)
 	l.tok.Reset()
 	l.hasTok = false
 	l.tokDyn = false
@@ -1143,7 +1150,11 @@ var assignmentLeadKeywords = map[string]bool{
 // bare assignment is not a command word, though, and without this a harmless
 // `f=$(ls ...)` staged a "git push to a remote" card. It stays safe because:
 //   - command substitution bodies are collected in subcmds and checked on
-//     their own by bashCommandRunsGitPushDepth, so `f=$(git push)` is caught;
+//     their own by bashCommandRunsGitPushDepth, so `f=$(git push)` is caught,
+//     and beyond that every body must only run inert commands
+//     (substBodyIsInert): no interpreter, script file, `source`, `find
+//     -exec`, `xargs` or anything else that can run a program the gate cannot
+//     read, so `f=$(sh /tmp/push-script)` keeps failing closed;
 //   - only `$(...)`, backticks and simple `$param` count (valueOnlyAssign):
 //     `$((...))` and `${...}` can evaluate a variable's text as arithmetic,
 //     whose array subscripts run hidden commands, so those stay opaque;
@@ -1189,9 +1200,72 @@ func segmentOnlyAssignsVariables(seg shellSegment) bool {
 		if !tok.valueOnlyAssign || gitSensitiveAssignName(tok.val) {
 			return false
 		}
+		for _, body := range tok.subcmds {
+			if !substBodyIsInert(body, 1) {
+				return false
+			}
+		}
 		sawAssign = true
 	}
 	return sawAssign
+}
+
+// inertCommands only read files or their arguments and print text: none
+// of them runs another program, interprets its input as code, or changes
+// shell state (every body runs in a subshell). The command word must be the
+// bare literal name, so `./ls` or `/tmp/x/cat` is not one of them, and the
+// caller turns the shortcut off when the script can redefine a name
+// (functions, alias, hash, PATH).
+var inertCommands = map[string]bool{
+	"ls": true, "cat": true, "head": true, "tail": true, "wc": true,
+	"grep": true, "egrep": true, "fgrep": true, "sort": true, "uniq": true,
+	"cut": true, "tr": true, "tac": true, "nl": true, "paste": true,
+	"column": true, "date": true, "pwd": true, "basename": true,
+	"dirname": true, "realpath": true, "readlink": true, "stat": true,
+	"du": true, "df": true, "echo": true, "printf": true, "jq": true,
+	"mktemp": true, "whoami": true, "id": true, "file": true, "seq": true,
+	"md5sum": true, "sha1sum": true, "sha256sum": true, "base64": true,
+	"true": true, "false": true,
+}
+
+// substBodyIsInert reports whether a command substitution body only runs
+// inertCommands. `sort --compress-program=PROG` runs PROG and `printf -v`
+// assigns through an evaluated subscript, so those flags are refused.
+func substBodyIsInert(body string, depth int) bool {
+	if depth > 4 {
+		return false
+	}
+	segments, subcmds, grouped := parseShellScript(body)
+	if grouped {
+		return false
+	}
+	for _, sub := range subcmds {
+		if !substBodyIsInert(sub, depth+1) {
+			return false
+		}
+	}
+	for _, seg := range segments {
+		i := 0
+		for i < len(seg.tokens) && seg.tokens[i].literal && isEnvAssignmentToken(seg.tokens[i].val) && !gitSensitiveAssignName(seg.tokens[i].val) {
+			i++
+		}
+		if i >= len(seg.tokens) {
+			continue
+		}
+		cmd := seg.tokens[i]
+		if !cmd.literal || !inertCommands[cmd.val] {
+			return false
+		}
+		for _, arg := range seg.tokens[i+1:] {
+			if cmd.val == "sort" && strings.HasPrefix(arg.val, "--comp") {
+				return false
+			}
+			if cmd.val == "printf" && strings.HasPrefix(arg.val, "-v") {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // attributeSettingWords can give a variable the integer or nameref
@@ -1199,9 +1273,14 @@ func segmentOnlyAssignsVariables(seg shellSegment) bool {
 // later in the current shell where one could hide: `eval`, `source`/`.`,
 // `alias`, a `trap` body (a DEBUG trap runs before the very next command),
 // a `mapfile -C` callback, PS4 under xtrace, `enable -f` loading a builtin.
+//
+// It also lists the words that change what a command name runs, which
+// inertCommands relies on: `function`, `alias`, `hash`, `enable`, `shopt`
+// (a `name() {` definition is caught by its parentheses).
 var attributeSettingWords = []string{
 	"declare", "typeset", "local", "eval", "source", "alias", "trap",
 	"mapfile", "readarray", "enable", "PS4", "PROMPT_COMMAND",
+	"function", "hash", "shopt",
 }
 
 // anySegmentMaySetVarAttributes reports whether any word of the script
@@ -1215,6 +1294,10 @@ func anySegmentMaySetVarAttributes(segments []shellSegment) bool {
 	for _, seg := range segments {
 		for _, tok := range seg.tokens {
 			if tok.val == "." {
+				return true
+			}
+			if isEnvAssignmentToken(tok.val) && gitSensitiveAssignName(tok.val) {
+				// `PATH=/tmp/x; f=$(ls)` would resolve ls elsewhere.
 				return true
 			}
 			for _, w := range attributeSettingWords {
