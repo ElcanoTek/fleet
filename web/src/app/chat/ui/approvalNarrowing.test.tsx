@@ -261,6 +261,36 @@ describe("a narrowed approval without a readable card", () => {
   });
 });
 
+describe("card attestation inside a grouped card", () => {
+  const groupId = "11111111-2222-3333-4444-555555555555";
+  const digest = "b".repeat(64);
+
+  it("echoes the digest of each approved card it rendered, and none for a declined or card-less one", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(okResponse({ results: [] }));
+    vi.stubGlobal("fetch", fetchMock);
+    const members: Approval[] = [
+      pending({ id: "ap-ix", groupId, cardSha256: digest }),
+      {
+        id: "ap-mg",
+        tool: "mcp_magnite_execute_plan",
+        status: "pending",
+        summary: { tool: "mcp_magnite_execute_plan", args: [{ key: "deal_ids", value: '["m1","m2"]' }] },
+        groupId,
+        cardSha256: "c".repeat(64), // no card rendered for it: never echoed
+        expiresAt: Math.floor(Date.now() / 1000) + 600,
+      },
+    ];
+    render(<ApprovalGroupCard groupId={groupId} approvals={members} conversationId="conv_1" onResolved={vi.fn()} onOneAtATime={vi.fn()} />);
+    fireEvent.click(screen.getByTestId("approval-group-approve"));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
+      approve: ["ap-ix", "ap-mg"],
+      decline: [],
+      card_sha256: { "ap-ix": digest },
+    });
+  });
+});
+
 // docs/APPROVAL-CARD-DESCRIBERS.md, "Back to the server": the generic action
 // card renders the describer's card, so on Approve it echoes the digest fleet
 // sent with it; fleet then tells the server which card the person approved.

@@ -400,6 +400,7 @@ func TestApprovalGroup_Narrowing(t *testing.T) {
 		`{"approve":["ap-pm","ap-mg"],"narrow":{"ap-pm":["q"]},"narrow_args":{"ap-pm":"deal_ids"}}`,                                            // not a staged value
 		`{"approve":["ap-pm","ap-mg"],"narrow":{"ap-pm":[]},"narrow_args":{"ap-pm":"deal_ids"}}`,                                               // empty
 		`{"approve":["ap-pm"],"narrow":{"ap-pm":null}}`,                                                                                        // null
+		`{"approve":["ap-pm"],"decline":["ap-mg"],"card_sha256":{"ap-mg":"` + strings.Repeat("a", 64) + `"}}`,                                  // a card digest for a declined card
 		`{"approve":["ap-pm"],"narrow":{"ap-pm":[` + strings.TrimSuffix(strings.Repeat(`"x",`, maxApprovalGroupNarrowedValues+1), ",") + `]}}`, // over the group's value budget
 	} {
 		st := &narrowGroupStore{groupStore: newGroupStore(rows()...), narrowed: map[string]string{}}
@@ -986,7 +987,7 @@ func TestStagedNarrowable_HoldsTheWorstCaseEscapedList(t *testing.T) {
 // rendered it tells the server which card that was
 // (`_meta["fleet/approval_card"]`: its title and the sha256 of the canonical
 // card). The web card attests it by echoing the `card_sha256` fleet sent with
-// the card. No echo (the terminal, an email preview, a grouped approval), an
+// the card. No echo (the terminal, an email preview), an
 // echo of another card, a row with no card, or a stored card the client would
 // not render: no entry.
 func TestHandleApproval_TellsTheServerWhichCardWasApproved(t *testing.T) {
@@ -1064,5 +1065,28 @@ func TestWithApprovalCard_CarriesTheDigestTheClientEchoes(t *testing.T) {
 	row.CardJSON = ""
 	if payload := withApprovalCard(map[string]any{}, &row); len(payload) != 0 {
 		t.Fatalf("no card, payload = %#v", payload)
+	}
+}
+
+// A group decision passes each approved card's echoed digest to that card's
+// own decision, as the single-card POST does; a declined card carries none.
+func TestGroupDecisionRequest_CarriesTheEchoedCardDigest(t *testing.T) {
+	var req approvalGroupRequest
+	body := `{"approve":["ap-pm","ap-mg"],"decline":["ap-ix"],"narrow":{"ap-pm":["x"]},"narrow_args":{"ap-pm":"deal_ids"},"card_sha256":{"ap-pm":"d1","ap-mg":"d2"}}`
+	if err := json.Unmarshal([]byte(body), &req); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkGroupNarrowing(req); err != nil {
+		t.Fatal(err)
+	}
+	pm := groupDecisionRequest(req, "ap-pm", true)
+	if pm.CardSHA256 != "d1" || pm.NarrowedArg != "deal_ids" || !pm.ApprovedValues.present || pm.Scope != "once" {
+		t.Fatalf("ap-pm = %+v", pm)
+	}
+	if mg := groupDecisionRequest(req, "ap-mg", true); mg.CardSHA256 != "d2" || mg.ApprovedValues.present {
+		t.Fatalf("ap-mg = %+v", mg)
+	}
+	if ix := groupDecisionRequest(req, "ap-ix", false); ix.CardSHA256 != "" || ix.Approved {
+		t.Fatalf("ap-ix = %+v", ix)
 	}
 }

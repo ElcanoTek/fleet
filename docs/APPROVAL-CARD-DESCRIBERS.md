@@ -170,16 +170,18 @@ off-schema card on the wire.
   as before for it.
 - **Back to the server:** every payload that carries `card` also carries
   `card_sha256`, the hex sha256 of that canonical card (`withApprovalCard`).
-  The web's generic action card, the one surface that renders `card`, echoes
-  it in the approve POST (`card_sha256`). When the echo equals the digest of
+  The surfaces that render `card` echo it on Approve: the web's generic
+  action card in the approve POST (`card_sha256`), and the grouped card in
+  the group decision (`card_sha256: {<approval id>: <digest>}`, for approved
+  cards only). When the echo equals the digest of
   the card the row holds, `runStagedTool` adds
   `_meta["fleet/approval_card"] = {"title": <card title>, "sha256": <digest>}`
   to the `tools/call` (`approvalCardRequestMeta`), beside `fleet/narrowed`
   when the approval was narrowed. No entry means fleet cannot say the person
   approved the describer's card: the generic arguments card (no describer, it
   failed or timed out, or the stored card no longer renders), or a surface
-  that does not render the card (the terminal, an email tool's preview, a
-  grouped approval). The server can then bind the call to the card the person
+  that does not render the card (the terminal, an email tool's preview).
+  The server can then bind the call to the card the person
   saw rather than to an argument the agent wrote: elcano-config's
   `execute_plan` runs a call whose agent-written `summary` is stale only behind
   its own verified card (whose title is never its "couldn't be checked"

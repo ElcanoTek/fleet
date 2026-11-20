@@ -183,14 +183,23 @@ export function ApprovalGroupCard({
         setSubmitError(tr("This approval group has an invalid id and can't be sent."));
         return;
       }
+      // Each approved card this group rendered from its describer card echoes
+      // that card's digest, so fleet can tell the server which card the person
+      // approved (docs/APPROVAL-CARD-DESCRIBERS.md, "Back to the server").
+      const approving = new Set(approve);
+      const cardDigests: Record<string, string> = {};
+      for (const a of approvals) {
+        if (approving.has(a.id) && a.card && a.cardSha256) cardDigests[a.id] = a.cardSha256;
+      }
       const response = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(
-          Object.keys(narrowed).length > 0
-            ? { approve, decline, narrow: narrowed, narrow_args: narrowedArgs }
-            : { approve, decline },
-        ),
+        body: JSON.stringify({
+          approve,
+          decline,
+          ...(Object.keys(narrowed).length > 0 ? { narrow: narrowed, narrow_args: narrowedArgs } : {}),
+          ...(Object.keys(cardDigests).length > 0 ? { card_sha256: cardDigests } : {}),
+        }),
       });
       if (!response.ok) {
         // Nothing was decided: the server refuses the whole decision before

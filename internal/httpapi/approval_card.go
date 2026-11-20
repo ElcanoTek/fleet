@@ -427,7 +427,7 @@ func approvalCardPayload(a *store.Approval) json.RawMessage {
 // Absent when the person approved anything else: the generic arguments card
 // (no describer, the describer failed or timed out, or the stored card no
 // longer renders), or a surface that does not render the card (the terminal,
-// an email tool's preview card, a grouped approval).
+// an email tool's preview card).
 const approvalCardRequestMetaKey = mcp.RequestMetaPrefix + "approval_card"
 
 // approvalCardDigest is the hex sha256 of the canonical card a client renders
