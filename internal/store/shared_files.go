@@ -109,6 +109,37 @@ func lockSharedFilesNamespace(ctx context.Context, tx *sql.Tx) error {
 	return err
 }
 
+// SharedFilePathOwnerLocked calls fn with the row that owns (folder, name)
+// right now — nil when none does — while a transaction holds the namespace
+// lock, so no other writer can claim the path until fn returns. Callers use it
+// to unstage a path a rename or delete freed WITHOUT deleting a copy another
+// replica just staged for a new owner of that path (ADR-0114).
+func (s *Store) SharedFilePathOwnerLocked(ctx context.Context, folder, name string, fn func(owner *SharedFile) error) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := lockSharedFilesNamespace(ctx, tx); err != nil {
+		return err
+	}
+	row := tx.QueryRowContext(ctx,
+		`SELECT `+sharedFileSelect+` FROM shared_files WHERE folder = $1 AND name = $2`, folder, name)
+	f, err := scanSharedFile(row)
+	var owner *SharedFile
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+	case err != nil:
+		return err
+	default:
+		owner = &f
+	}
+	if err := fn(owner); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 const sharedFileColumns = `id, name, folder, description, size_bytes, content_type, sha256, uploaded_by, created_at, updated_at, origin, updated_by, updated_conversation_id, folder_index`
 
 // sharedFileSelect is the read projection: the stored columns plus whether a

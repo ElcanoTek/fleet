@@ -197,7 +197,11 @@ transaction holding the row `FOR SHARE` and stages while still holding it
 (`store.StageChatSharedFileLocked`). A concurrent write, rename or delete —
 from this process or another replica — waits until that stage finishes, and
 its own restage runs after it; so a replica that read version 1 can never
-publish it over version 2.
+publish it over version 2. Likewise, when a rename or delete frees a path, the
+staged copy there is removed only after checking — under the namespace lock
+every path claim takes — that no other row owns the path by now
+(`store.SharedFilePathOwnerLocked`); if one does (a chat on another replica
+created a new file there in between), it is restaged instead.
 
 **Reconciling.** `Sync` stages a chat file from the database when its staged
 copy is missing, a different size, or a different sha256: chat files are

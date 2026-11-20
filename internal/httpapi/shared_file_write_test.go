@@ -272,3 +272,43 @@ func TestSharedFileWriteWithoutHandler(t *testing.T) {
 		t.Fatalf("no handler: %+v %v", resp, err)
 	}
 }
+
+// A rename or delete on one replica must not remove the staged copy of a NEW
+// file another replica created at the freed path in between: the unstage
+// checks the path's current owner under the namespace lock and restages it.
+func TestUnstageFreedPathKeepsANewOwner(t *testing.T) {
+	t.Parallel()
+	srv, _ := sharedFilesFixture(t)
+	lib := srv.sharedFilesLibrary()
+	staged := filepath.Join(lib.StagedRoot, "opt", "log.csv")
+
+	// The freed row: an earlier file at opt/log.csv, already gone from the DB.
+	freed := store.SharedFile{ID: "old-row", Folder: "opt", Name: "log.csv", Origin: store.SharedFileOriginChat}
+
+	// Another replica's chat has since created a new file at the same path.
+	writeOK(t, srv, map[string]any{"path": "opt/log.csv", "mode": "create", "content": "new owner\n", "description": "log"})
+	assertStaged(t, staged, "new owner\n")
+
+	srv.sharedFilesMu.Lock()
+	err := srv.unstageFreedPathLocked(context.Background(), lib, freed)
+	srv.sharedFilesMu.Unlock()
+	if err != nil {
+		t.Fatalf("unstage freed path: %v", err)
+	}
+	assertStaged(t, staged, "new owner\n")
+
+	// With no owner, the stale copy is removed.
+	stale := filepath.Join(lib.StagedRoot, "opt", "gone.csv")
+	if err := os.WriteFile(stale, []byte("stale"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	srv.sharedFilesMu.Lock()
+	err = srv.unstageFreedPathLocked(context.Background(), lib, store.SharedFile{ID: "x", Folder: "opt", Name: "gone.csv"})
+	srv.sharedFilesMu.Unlock()
+	if err != nil {
+		t.Fatalf("unstage: %v", err)
+	}
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Fatalf("stale copy still present: %v", err)
+	}
+}

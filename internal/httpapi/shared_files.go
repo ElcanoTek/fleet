@@ -402,7 +402,7 @@ func (s *Server) patchSharedFile(w http.ResponseWriter, r *http.Request, id stri
 	if updated.Name != old.Name || updated.Folder != old.Folder {
 		// Re-materialize under the new path. Failures self-heal on Sync.
 		lib := s.sharedFilesLibrary()
-		if err := lib.Unstage(old); err != nil {
+		if err := s.unstageFreedPathLocked(r.Context(), lib, old); err != nil {
 			logging.From(r.Context()).Error("shared files: unstage old path failed", "id", id, "err", err)
 		}
 		if err := s.stageSharedFileLocked(r.Context(), lib, updated); err != nil {
@@ -421,7 +421,7 @@ func (s *Server) deleteSharedFile(w http.ResponseWriter, r *http.Request, id str
 		return
 	}
 	lib := s.sharedFilesLibrary()
-	if err := lib.Unstage(f); err != nil {
+	if err := s.unstageFreedPathLocked(r.Context(), lib, f); err != nil {
 		logging.From(r.Context()).Warn("shared files: unstage failed (will self-heal on the next maintenance pass)", "id", safe.LogSafe(id), "err", err)
 	}
 	if err := lib.RemoveCanonical(f.ID); err != nil {

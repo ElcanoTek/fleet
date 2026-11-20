@@ -153,6 +153,24 @@ func (s *Server) stageSharedFileLocked(ctx context.Context, lib sharedfiles.Libr
 	return s.restageChatSharedFileLocked(ctx, f.ID)
 }
 
+// unstageFreedPathLocked removes the staged copy at a path a rename or delete
+// just freed — unless another row owns that path by now (on another replica, a
+// chat may have created a new file there in between), in which case it
+// restages that row instead. The check and the filesystem change run under the
+// store's namespace lock, which every path claim also takes, so no new owner
+// can appear between them. Caller holds sharedFilesMu.
+func (s *Server) unstageFreedPathLocked(ctx context.Context, lib sharedfiles.Library, freed store.SharedFile) error {
+	return s.store.SharedFilePathOwnerLocked(ctx, freed.Folder, freed.Name, func(owner *store.SharedFile) error {
+		if owner == nil {
+			return lib.Unstage(freed)
+		}
+		if owner.ID == freed.ID {
+			return nil // not actually freed (a no-op rename): nothing to do
+		}
+		return s.stageSharedFileLocked(ctx, lib, *owner)
+	})
+}
+
 func sharedFileWriteResult(res store.ChatSharedFileWriteResult, path, mode string, staged bool) *tools.SharedFileWriteResult {
 	f := res.File
 	out := &tools.SharedFileWriteResult{
