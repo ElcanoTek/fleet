@@ -525,6 +525,14 @@ func TestGitPushFloorBareAssignment(t *testing.T) {
 		`eval 'declare -i f'; f=$x`,
 		`. ./attrs.sh; f=$x`,
 		`source ./attrs.sh; f=$(date)`,
+		// Strings run later in the same shell can set the attribute.
+		`trap 'declare -gi f' DEBUG; x='a[$(git push)]'; f=$x`,
+		`cmd=declare; trap '$cmd -gi f' DEBUG; f=$x`,
+		`trap "$t" DEBUG; f=$x`,
+		`PS4='$(typeset -gi f)'; set -x; f=$x`,
+		`mapfile -C 'declare -gi f' -c 1 a < x; f=$x`,
+		`enable -f ./x.so x; f=$x`,
+		`readarray -C cb a < x; f=$(date)`,
 		// Below the top level the parent's attributes are unknown.
 		`declare -i f; eval 'f=$x'`,
 		`bash -c 'f=$(ls)'`,

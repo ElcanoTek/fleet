@@ -1146,8 +1146,9 @@ var assignmentLeadKeywords = map[string]bool{
 //     integer and behaviour variables are refused by name
 //     (gitSensitiveAssignName), and a user attribute (`declare -i`/`-n`,
 //     `typeset`, `local`) can only come from the same `bash -c` script, so
-//     the caller only allows this at depth 0 when no word in the script can
-//     set one (anySegmentMaySetVarAttributes). Deeper scripts (eval strings,
+//     the caller only allows this at depth 0 when no word in the script,
+//     including strings run later such as a trap body, can set one
+//     (anySegmentMaySetVarAttributes). Deeper scripts (eval strings,
 //     substitution bodies, `sh -c`) cannot see their parent's attributes and
 //     keep failing closed.
 //
@@ -1170,29 +1171,40 @@ func segmentOnlyAssignsVariables(seg shellSegment) bool {
 	return sawAssign
 }
 
-// attributeSettingCommands are the words that can give a variable the
-// integer or nameref attribute in the current shell (`declare -i f`,
-// `local -n r`), or run text the gate cannot see that might (`eval`,
-// `source`, `.`, an `alias` for one of them).
-var attributeSettingCommands = map[string]bool{
-	"declare": true,
-	"typeset": true,
-	"local":   true,
-	"eval":    true,
-	"source":  true,
-	".":       true,
-	"alias":   true,
+// attributeSettingWords can give a variable the integer or nameref
+// attribute in the current shell (`declare -i f`, `local -n r`), or run text
+// later in the current shell where one could hide: `eval`, `source`/`.`,
+// `alias`, a `trap` body (a DEBUG trap runs before the very next command),
+// a `mapfile -C` callback, PS4 under xtrace, `enable -f` loading a builtin.
+var attributeSettingWords = []string{
+	"declare", "typeset", "local", "eval", "source", "alias", "trap",
+	"mapfile", "readarray", "enable", "PS4", "PROMPT_COMMAND",
 }
 
-// anySegmentMaySetVarAttributes reports whether any word of the script, in
-// any position, names an attributeSettingCommands entry. Matching every word
-// rather than the command word keeps wrappers (`builtin declare`,
-// `command typeset`) and function bodies covered.
+// anySegmentMaySetVarAttributes reports whether any word of the script
+// could set a variable attribute (attributeSettingWords). It matches each
+// name as a whole word anywhere inside every token, not just as the command
+// word, so wrappers (`builtin declare`), function bodies, and strings run
+// later (`trap 'declare -gi f' DEBUG`, `cmd=declare`) are covered; `.` must
+// be the whole word. Over-matching (`/usr/local/bin`) only keeps the old,
+// fail-closed verdict.
 func anySegmentMaySetVarAttributes(segments []shellSegment) bool {
 	for _, seg := range segments {
 		for _, tok := range seg.tokens {
-			if attributeSettingCommands[executableBaseName(tok.val)] {
+			if tok.val == "." {
 				return true
+			}
+			for _, w := range attributeSettingWords {
+				if containsASCIIWordFold(tok.val, w) {
+					return true
+				}
+			}
+		}
+		for _, body := range seg.stdinBodies {
+			for _, w := range attributeSettingWords {
+				if containsASCIIWordFold(body, w) {
+					return true
+				}
 			}
 		}
 	}
