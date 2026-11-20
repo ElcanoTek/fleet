@@ -171,6 +171,72 @@ describe("useSidebarLibrary", () => {
     expect(result.current.conversations.find((c) => c.id === "own-2")?.pinned).toBe(false);
   });
 
+  it("a first read overtaken by a quick pin is read again, so no list is left unread", async () => {
+    // The last page's chats are on screen while the first read is out.
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let projectReads = 0;
+    const calls = stubApi();
+    const base = globalThis.fetch as unknown as (input: string, init?: RequestInit) => Promise<Response>;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string, init?: RequestInit) => {
+        if (String(input) === "/api/projects" && ++projectReads === 1) await held;
+        return base(input, init);
+      }),
+    );
+    rememberSidebarLibrary({ conversations: [conv({ id: "own-2", title: "Other" })] });
+    const { result } = renderHook(() => useSidebarLibrary("me@example.com", () => {}));
+    await waitFor(() => expect(projectReads).toBe(1));
+    await act(async () => {
+      await result.current.togglePin(result.current.conversations[0]);
+    });
+    // The first read comes back carrying the state from before the pin: it
+    // is dropped, and the lists are read again.
+    await act(async () => {
+      release();
+    });
+    await waitFor(() => expect(result.current.projects.map((p) => p.id)).toEqual(["p-1"]));
+    expect(result.current.chatOrders).toEqual({ pinned: ["own-1"] });
+    expect(projectReads).toBe(2);
+    expect(calls.filter((c) => c.method === "POST")).toHaveLength(1);
+  });
+
+  it("order saves go one at a time, and only the latest order waits behind a save that is out", async () => {
+    const releases: (() => void)[] = [];
+    const calls = stubApi();
+    const base = globalThis.fetch as unknown as (input: string, init?: RequestInit) => Promise<Response>;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string, init?: RequestInit) => {
+        if (init?.method === "PUT") await new Promise<void>((resolve) => releases.push(resolve));
+        return base(input, init);
+      }),
+    );
+    const { result } = renderHook(() => useSidebarLibrary("me@example.com", () => {}));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => {
+      result.current.reorderChats("pinned", ["a", "b", "c"]);
+      result.current.reorderChats("pinned", ["b", "a", "c"]);
+      result.current.reorderChats("pinned", ["b", "c", "a"]);
+    });
+    // The screen has the last move; one save is out.
+    expect(result.current.chatOrders.pinned).toEqual(["b", "c", "a"]);
+    await waitFor(() => expect(releases).toHaveLength(1));
+    await act(async () => {
+      releases[0]();
+    });
+    await waitFor(() => expect(releases).toHaveLength(2));
+    await act(async () => {
+      releases[1]();
+    });
+    const saved = () => calls.filter((c) => c.method === "PUT").map((c) => (c.body as { conversation_ids: string[] }).conversation_ids);
+    await waitFor(() => expect(saved()).toEqual([["a", "b", "c"], ["b", "c", "a"]]));
+    expect(result.current.chatOrders.pinned).toEqual(["b", "c", "a"]);
+  });
+
   it("pinning a teammate's chat changes the teammates' list, not the caller's own", async () => {
     stubApi();
     const { result } = renderHook(() => useSidebarLibrary("me@example.com", () => {}));

@@ -117,6 +117,10 @@ export function useSidebarLibrary(userEmail: string, onError: (message: string) 
   // Bumped by every local change: a list read that started before it carries
   // the old state and is dropped rather than undoing the change on screen.
   const gen = useRef(0);
+  // Changes whose request is still out, and whether a read was dropped while
+  // one was: the lists are read again once the last of them is back.
+  const inFlight = useRef(0);
+  const rereadWanted = useRef(false);
 
   const setLibrary = useCallback((update: (cur: SidebarLibrary) => SidebarLibrary) => {
     setLibraryState((cur) => {
@@ -141,8 +145,18 @@ export function useSidebarLibrary(userEmail: string, onError: (message: string) 
     if (projects) setProjectsLoaded(true);
     if (shared) setTeamSharedLoaded(true);
     if (archived) setArchivedLoaded(true);
-    // A change made while the lists were on their way wins: read again.
-    if (at !== gen.current) return;
+    // A change made while the lists were on their way wins, and what was
+    // read is dropped. The lists are still owed: read again now, or as soon
+    // as the change's own request is back (settle), so a first load that a
+    // quick pin or rename overtook never leaves the sidebar without its
+    // projects, shared chats and orders.
+    if (at !== gen.current) {
+      if (inFlight.current > 0) {
+        rereadWanted.current = true;
+        return;
+      }
+      return loadRef.current();
+    }
     setLibrary((cur) => ({
       // A list that could not be read keeps what was there.
       conversations: own ? (own.conversations ?? []) : cur.conversations,
@@ -155,6 +169,29 @@ export function useSidebarLibrary(userEmail: string, onError: (message: string) 
       serverConfig: config ? sidebarServerConfig(config) : cur.serverConfig,
     }));
   }, [mine, setLibrary]);
+  const loadRef = useRef(load);
+  useEffect(() => {
+    loadRef.current = load;
+  }, [load]);
+
+  // A change's request is back: say so if it failed, and read the lists
+  // again when it failed or when a read was dropped while it was out.
+  const settle = useCallback(
+    async (ok: boolean, failed: string) => {
+      gen.current++;
+      inFlight.current--;
+      if (!ok) onError(failed);
+      if (inFlight.current > 0) {
+        if (!ok) rereadWanted.current = true;
+        return;
+      }
+      if (!ok || rereadWanted.current) {
+        rereadWanted.current = false;
+        await load();
+      }
+    },
+    [load, onError],
+  );
 
   useEffect(() => {
     let live = true;
@@ -179,6 +216,7 @@ export function useSidebarLibrary(userEmail: string, onError: (message: string) 
       failed: string,
     ): Promise<boolean> => {
       gen.current++;
+      inFlight.current++;
       setLibrary(apply);
       let ok = false;
       try {
@@ -186,14 +224,10 @@ export function useSidebarLibrary(userEmail: string, onError: (message: string) 
       } catch {
         ok = false;
       }
-      gen.current++;
-      if (!ok) {
-        onError(failed);
-        await load();
-      }
+      await settle(ok, failed);
       return ok;
     },
-    [load, onError, setLibrary],
+    [setLibrary, settle],
   );
 
   const post = (url: string, body: unknown, method = "POST") =>
@@ -254,15 +288,40 @@ export function useSidebarLibrary(userEmail: string, onError: (message: string) 
     [change],
   );
 
+  // An order is saved whole, so two saves out at once could land in either
+  // order and leave the older one stored. They go one at a time: the screen
+  // takes each move at once, and while a save is out only the latest order
+  // for a scope waits behind it.
+  const pendingOrders = useRef(new Map<string, string[]>());
+  const savingOrders = useRef(false);
   const reorderChats = useCallback(
     (scope: string, ids: string[]) => {
-      void change(
-        (cur) => ({ ...cur, chatOrders: { ...cur.chatOrders, [scope]: ids } }),
-        () => post("/api/conversations/order", { scope, conversation_ids: ids }, "PUT"),
-        tr("Couldn’t save the new order. Try again."),
-      );
+      gen.current++;
+      setLibrary((cur) => ({ ...cur, chatOrders: { ...cur.chatOrders, [scope]: ids } }));
+      pendingOrders.current.set(scope, ids);
+      if (savingOrders.current) return;
+      savingOrders.current = true;
+      inFlight.current++;
+      void (async () => {
+        let ok = true;
+        for (;;) {
+          const next = pendingOrders.current.entries().next();
+          if (next.done) break;
+          const [nextScope, nextIds] = next.value;
+          pendingOrders.current.delete(nextScope);
+          try {
+            const res = await post("/api/conversations/order", { scope: nextScope, conversation_ids: nextIds }, "PUT");
+            if (!res.ok) ok = false;
+          } catch {
+            ok = false;
+          }
+        }
+        savingOrders.current = false;
+        await settle(ok, tr("Couldn’t save the new order. Try again."));
+      })();
     },
-    [change],
+    // post is a plain function of its arguments.
+    [setLibrary, settle],
   );
 
   const patchProject = useCallback(
