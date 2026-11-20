@@ -1586,8 +1586,11 @@ ask a patrol to publish a log it keeps. It appears in the transcript as
 a short note in the chat says what was changed and why. The reply runs with
 your connections, and always asks you before anything that needs approval,
 even if the chat is set to approve automatically. An administrator can also
-archive or delete a chat; a deleted chat stays in a recycle bin for 30 days,
-so ask them to restore it if it was a mistake.
+change one of your patrols' instructions or its schedule (how often and at
+what time it runs), or pause or resume it; each change leaves the same kind
+of note in the chat. An administrator can also archive or delete a chat; a
+deleted chat stays in a recycle bin for 30 days, so ask them to restore it if
+it was a mistake.
 
 ### Long conversations
 

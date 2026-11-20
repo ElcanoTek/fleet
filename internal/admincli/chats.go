@@ -93,7 +93,7 @@ const chatsUsage = `fleet chats — administer any chat on this box (ADR-0115; a
   fleet chats set      <chat_id> [--title T] [--model SLUG] [--approval-mode manual] [--archive|--unarchive] --reason TEXT
   fleet chats actions  [<chat_id>] [--limit 50] [--json]  (the record of admin changes)
   fleet chats request  <request_id> [--json]              (an admin request's progress)
-  fleet chats patrol   list|show|set-prompt|pause|resume  (same as fleet patrol)
+  fleet chats patrol   list|show|set-prompt|set-schedule|pause|resume  (same as fleet patrol)
 
 Every change is recorded as --as (default <unix user>@<host>) and noted
 in the chat. An admin message runs as the chat's owner, with the owner's connectors, labelled

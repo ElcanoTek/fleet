@@ -471,3 +471,205 @@ func (s *Store) AdminSetChatScheduleStatus(ctx context.Context, a AdminActor, id
 	}
 	return s.AdminGetChatSchedule(ctx, cur.ID)
 }
+
+// AdminCronPreviewRuns is how many upcoming runs a schedule edit previews.
+const AdminCronPreviewRuns = 5
+
+// ChatScheduleDefinitionChangedError is returned when a patrol's definition
+// (its prompt, title or schedule) was edited after the administrator read it:
+// the schedule edit was chosen against a patrol that is no longer there.
+type ChatScheduleDefinitionChangedError struct {
+	Expected int64
+	Current  int64
+}
+
+func (e *ChatScheduleDefinitionChangedError) Error() string {
+	return fmt.Sprintf("the patrol changed since it was read (expected def_version %d, now %d): run `fleet patrol show` again and rebuild the edit from the current patrol", e.Expected, e.Current)
+}
+
+// AdminChatScheduleCronEdit is one administrator schedule edit: a new
+// cadence, a new timezone, or both, for a live recurring patrol.
+type AdminChatScheduleCronEdit struct {
+	// ID is the schedule id or a unique prefix of at least
+	// MinChatScheduleIDPrefix characters.
+	ID string
+	// CronExpr is the new 5-field cron expression (or @descriptor); empty
+	// keeps the current one.
+	CronExpr string
+	// Timezone is the new IANA timezone the cron is read in; empty keeps the
+	// current one.
+	Timezone string
+	// ExpectDefVersion is the def_version of the patrol the edit was chosen
+	// against. It is required: any edit of the patrol's definition since —
+	// the owner's or another administrator's — bumps it, and the edit is then
+	// refused rather than applied over a patrol the administrator never saw.
+	ExpectDefVersion *int64
+	// Reason is recorded in chat.admin_actions and shown in the chat's
+	// notice. Required unless DryRun.
+	Reason string
+	// DryRun runs every check and computes the preview, then changes
+	// nothing.
+	DryRun bool
+}
+
+// AdminChatScheduleCronResult is what AdminSetChatScheduleCron did (or, on a
+// dry run, would do).
+type AdminChatScheduleCronResult struct {
+	Before AdminChatSchedule `json:"before"`
+	// After is the patrol as it now is; on a dry run, as it would be.
+	After   AdminChatSchedule `json:"after"`
+	Changed bool              `json:"changed"`
+	DryRun  bool              `json:"dry_run"`
+	// NextRuns are the next AdminCronPreviewRuns firings under the new
+	// schedule (Unix seconds). A paused patrol runs none of them until it is
+	// resumed.
+	NextRuns []int64 `json:"next_runs"`
+	// Notice is the UI-only notice written into the chat ("" on a dry run or
+	// when nothing changed).
+	Notice string `json:"notice,omitempty"`
+}
+
+// adminScheduleText describes a recurring patrol's schedule in a notice or an
+// audit row: the cron and the timezone it is read in.
+func adminScheduleText(cronExpr, tz string) string {
+	return fmt.Sprintf("%q (%s)", cronExpr, tz)
+}
+
+// AdminSetChatScheduleCron changes a live (active or paused) recurring
+// patrol's cadence and/or timezone as an administrator, compare-and-swap on
+// its def_version. The new schedule goes through the owner's own edit path
+// (updateLockedChatScheduleTx: the same cron and timezone validation and
+// minimum interval, the same def_version bump — so a fire claimed under the
+// old schedule is superseded — and the same next-run computation). The owner,
+// prompt, title and status are untouched. A real change is recorded in
+// chat.admin_actions (action "patrol_schedule") and announced in the chat
+// with a UI-only notice, in the same transaction.
+func (s *Store) AdminSetChatScheduleCron(ctx context.Context, a AdminActor, in AdminChatScheduleCronEdit) (AdminChatScheduleCronResult, error) {
+	res := AdminChatScheduleCronResult{DryRun: in.DryRun}
+	if err := a.validate(); err != nil {
+		return res, err
+	}
+	why := ""
+	if !in.DryRun {
+		var err error
+		if why, err = cleanAdminReason(in.Reason); err != nil {
+			return res, err
+		}
+	}
+	spec := strings.TrimSpace(in.CronExpr)
+	zone := strings.TrimSpace(in.Timezone)
+	if spec == "" && zone == "" {
+		return res, fmt.Errorf("%w: give a new cron expression, a new timezone, or both", ErrInvalidChatSchedule)
+	}
+	if in.ExpectDefVersion == nil {
+		return res, fmt.Errorf("%w: the def_version of the patrol the edit was built from is required", ErrInvalidChatSchedule)
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return res, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	id, err := resolveChatScheduleID(ctx, tx, in.ID)
+	if err != nil {
+		return res, err
+	}
+	// Lock the chat, then the schedule: the order a fire's delivery takes
+	// them (DeliverChatScheduleFire) and the prompt edit above takes them, so
+	// an edit racing a firing patrol waits instead of deadlocking. A dry run
+	// (the browser previews on every edit) writes nothing and locks nothing.
+	lock := " FOR UPDATE"
+	if in.DryRun {
+		lock = ""
+	}
+	var convID string
+	if err := tx.QueryRowContext(ctx, `SELECT conversation_id FROM `+chatSchedulesTable+` WHERE id = $1`, id).Scan(&convID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return res, ErrChatScheduleNotFound
+		}
+		return res, err
+	}
+	var liveID string
+	if err := tx.QueryRowContext(ctx,
+		`SELECT id FROM conversations WHERE id = $1 AND deleted_at IS NULL`+lock, convID).Scan(&liveID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return res, ErrChatScheduleNotFound
+		}
+		return res, err
+	}
+	if _, err := tx.ExecContext(ctx, `SELECT 1 FROM `+chatSchedulesTable+` WHERE id = $1`+lock, id); err != nil {
+		return res, err
+	}
+	before, err := scanAdminChatSchedule(tx.QueryRowContext(ctx, adminChatScheduleSelect+` WHERE s.id = $1`, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return res, ErrChatScheduleNotFound
+	}
+	if err != nil {
+		return res, err
+	}
+	res.Before, res.After = before, before
+	if before.Status != ChatScheduleStatusActive && before.Status != ChatScheduleStatusPaused {
+		return res, fmt.Errorf("%w: cannot modify a %s schedule", ErrInvalidChatSchedule, before.Status)
+	}
+	if before.CronExpr == "" {
+		// A one-shot timer has a duration, not a schedule; turning it into
+		// a recurring patrol is the owner's decision.
+		return res, fmt.Errorf("%w: this is a one-shot timer, not a recurring patrol; only a patrol's schedule can be changed", ErrInvalidChatSchedule)
+	}
+	if before.DefVersion != *in.ExpectDefVersion {
+		return res, &ChatScheduleDefinitionChangedError{Expected: *in.ExpectDefVersion, Current: before.DefVersion}
+	}
+
+	var patch ChatSchedulePatch
+	if spec != "" {
+		patch.CronExpr = &spec
+	}
+	if zone != "" {
+		patch.Timezone = &zone
+	}
+	now := time.Now()
+	// The owner's validation, on a copy: the canonical cron and timezone the
+	// edit would store, so an edit that changes nothing is a no-op.
+	next := before.ChatSchedule
+	if err := applyChatSchedulePatch(&next, patch, now); err != nil {
+		return res, err
+	}
+	_, _, runs, err := PreviewChatScheduleCron(next.CronExpr, next.Timezone, now, AdminCronPreviewRuns)
+	if err != nil {
+		return res, err
+	}
+	res.NextRuns = runs
+	res.Changed = next.CronExpr != before.CronExpr || next.Timezone != before.Timezone
+	if !res.Changed {
+		// Nothing to change: no def_version bump, no notice, no record.
+		return res, nil
+	}
+	if in.DryRun {
+		res.After.ChatSchedule = next
+		return res, nil
+	}
+
+	if _, err := updateLockedChatScheduleTx(ctx, tx, before.ChatSchedule, patch, now); err != nil {
+		return res, err
+	}
+	from := adminScheduleText(before.CronExpr, before.Timezone)
+	to := adminScheduleText(next.CronExpr, next.Timezone)
+	res.Notice = adminNoticeText(fmt.Sprintf("changed the schedule of the patrol %q from %s to %s", before.Title, from, to), why)
+	if err := s.appendNoticeTx(ctx, tx, before.ConversationID, NoticePatrolUpdated, res.Notice); err != nil {
+		return res, err
+	}
+	detail := fmt.Sprintf("schedule %s -> %s; def_version %d -> %d", from, to, before.DefVersion, before.DefVersion+1)
+	if err := recordAdminAction(ctx, tx, a, "patrol_schedule", before.ConversationID, id, why, detail); err != nil {
+		return res, err
+	}
+	after, err := scanAdminChatSchedule(tx.QueryRowContext(ctx, adminChatScheduleSelect+` WHERE s.id = $1`, id))
+	if err != nil {
+		return res, err
+	}
+	if err := tx.Commit(); err != nil {
+		return res, err
+	}
+	res.After = after
+	return res, nil
+}

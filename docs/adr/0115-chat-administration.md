@@ -1,6 +1,7 @@
 # ADR-0115: Chat administration
 
-- **Status:** Accepted
+- **Status:** Accepted (amended 2026-11-20: administrators can change a
+  patrol's schedule)
 - **Date:** 2026-11-20
 - **Deciders:** fleet maintainers
 
@@ -37,8 +38,8 @@ Add chat administration, with one store layer and two ways in:
 
 - **`fleet chats`** on the host (`list`, `show`, `history`, `send`, `stop`,
   `transfer`, `notice`, `set`, `actions`, `request`).
-- **`fleet patrol`** on the host (`list`, `show`, `set-prompt`, `pause`,
-  `resume`).
+- **`fleet patrol`** on the host (`list`, `show`, `set-prompt`,
+  `set-schedule`, `pause`, `resume`).
 - **Settings → Admin → Chats** in the browser, backed by the admin-only routes
   `/admin/chats`, `/admin/chats/{id}[/history|/requests|/notice]`,
   `/admin/patrols/{id}`, `/admin/chat-requests/{id}` and `/admin/chat-actions`.
@@ -95,6 +96,12 @@ Add chat administration, with one store layer and two ways in:
     already claimed under the old prompt is superseded.
   - The CLI shows the diff first and backs the old prompt up to
     `/var/backups/fleet/patrol-prompts/`.
+  - Its schedule (cron and/or timezone) can be changed with a compare-and-swap
+    on `def_version`, through the owner's own edit path, so it is validated,
+    bumps `def_version` and recomputes the next run exactly as the owner's
+    edit does. A dry run previews the next runs in the patrol's timezone first.
+    Owner, prompt, title and status are untouched; a one-shot timer has no
+    schedule to change.
   - Patrols can also be paused or resumed. That goes through the owner's own
     path, which revokes a run in flight and cancels the patrol's queued turns.
 
@@ -137,6 +144,11 @@ queued `admin` rows: neither has a client waiting to submit again.
 - An administrator's message spends the owner's connectors and model budget,
   as a patrol does. The audit table and the notice in the chat are how the
   owner sees that it happened.
+- A patrol's cadence is no longer the owner's alone: an administrator can
+  move it (for example from weekdays to every day) without the owner, with the
+  reason recorded and announced in the chat. The owner's edit and the
+  administrator's share one write path, so they cannot drift apart in what
+  they accept.
 - What an administrator can do is the owner's set of actions minus two:
   answering approval cards and turning on Autonomous mode. Deleting a chat was
   a third, until [ADR-0116](0116-admin-chat-delete-recycle-bin.md) added it

@@ -56,12 +56,41 @@ Operator tools for looking after chats that belong to someone else
     editable.
   - **Notice.** It writes a UI-only `patrol_updated` notice into the chat,
     saying the instructions changed and why. The model never sees it.
+- **`fleet patrol set-schedule <id> [--cron C] [--timezone TZ] --expect-def-version N --reason R`**
+  (and **Change schedule** on the Chats page, `PATCH /admin/patrols/{id}` with
+  `cron` / `timezone` / `expect_def_version`):
+  - **Compare-and-swap on `def_version`.** Any edit of the patrol's definition
+    since it was read (its prompt, title or schedule, by the owner or another
+    administrator) bumps `def_version`, and the edit is refused. `fleet patrol
+    show` prints the value.
+  - **The owner's own edit path.** The new schedule goes through the same code
+    as the owner's `PATCH /conversations/{id}/schedules/{sid}`
+    (`updateLockedChatScheduleTx`): the same cron parser, timezone check and
+    5-minute minimum interval, the same `def_version` bump (a fire claimed
+    under the old schedule is superseded) and the same next-run computation.
+  - **Preview first.** A dry run (`--dry-run`, or `dry_run: true`) runs every
+    check and prints the next five runs in the patrol's timezone without
+    changing anything. The browser previews this way as you type, so what it
+    shows is what the scheduler will do. Applying without a terminal needs
+    `--yes`.
+  - **Schedule only.** Owner, prompt, title and status are untouched. A paused
+    patrol stays paused; its new schedule is validated now and its next run is
+    computed when it is resumed.
+  - **Patrols only.** A one-shot timer has no schedule to change, and a
+    cancelled or completed patrol is refused.
+  - **Record and notice.** It is recorded as `patrol_schedule` (old and new
+    cron and timezone, and the `def_version` change) and announced in the chat
+    with a UI-only `patrol_updated` notice: "An administrator changed the
+    schedule of the patrol … from … to …. Reason: …". Applying the schedule a
+    patrol already has changes nothing and writes neither.
+  - A run already delivered into the chat's queue is a run of the old schedule
+    that has happened; it is left as it is, as on the owner's path.
 - **`fleet patrol pause|resume <id> --reason R`** goes through the owner's own
   path (a pause revokes a run in flight and cancels the patrol's queued runs),
   and is recorded and noted like every admin change.
-- **Locking.** The edit locks the chat, then the schedule, the same order a
-  fire's delivery uses, so an edit racing a firing patrol waits rather than
-  deadlocking.
+- **Locking.** The prompt and schedule edits lock the chat, then the schedule,
+  the same order a fire's delivery uses, so an edit racing a firing patrol
+  waits rather than deadlocking.
 
 ## Deviations
 
@@ -72,6 +101,9 @@ Operator tools for looking after chats that belong to someone else
   rewrite runs already in the queue. The operator path does, because an
   operator edits without the owner's view of what is pending. Bringing the
   owner path in line is left for its own change.
+- Sharing the owner's edit path changed it in one respect: a new cron or
+  timezone on a **paused** patrol is now validated when it is set. Before, it
+  was stored unchecked and refused only when someone resumed the patrol.
 
 ### Deleting chats ([ADR-0116](adr/0116-admin-chat-delete-recycle-bin.md))
 
