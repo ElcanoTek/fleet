@@ -9,11 +9,13 @@ import type { Locator, Page } from "@playwright/test";
 // and therefore its own sidebar title; that lets the per-row "Pin <title>" /
 // "Delete <title>" controls be addressed unambiguously.
 //
-// In the unified rail (#169) the per-row actions live in a kebab menu (Pin ·
-// Rename · Download · Add to folder · Labels · Archive · Delete) rather than as
-// inline hover buttons. openRowMenu opens that menu; the action's accessible
-// name ("Pin <title>", "Archive <title>", "Delete <title>") is preserved. Rows
-// in the Archived section keep their inline Unarchive/Delete controls.
+// In the sidebar the per-row actions live in a ⋯ menu (Pin · Rename · Labels ·
+// … · Share… · Download chat… · Archive · Delete…) rather than as inline hover
+// buttons. openRowMenu opens that menu; its items are plain verbs ("Pin",
+// "Archive", "Delete…"). Rows in the Archived fold at the end of Chats keep
+// their inline Unarchive/Delete controls ("Unarchive <title>", "Delete
+// <title>"). "Delete temporary chats…" is an item of the Chats menu (the small
+// button at the Chats heading's right edge).
 //
 // These journeys involve no sandbox tool calls (the echo is a plain text turn),
 // so they are fast and deterministic.
@@ -33,7 +35,8 @@ async function openRowMenu(page: Page, row: Locator, title: string) {
 // whose reply — and thus the conversation title — is exactly `title`.
 async function seedChat(page: Page, title: string, opts: { fresh?: boolean } = {}) {
   if (opts.fresh) {
-    await page.getByRole("button", { name: "New chat" }).click();
+    // The pen beside the sidebar's search field.
+    await page.getByRole("button", { name: "New chat", exact: true }).click();
     await expect(page.getByRole("heading", { name: /what can i help with/i })).toBeVisible({
       timeout: 10_000,
     });
@@ -99,7 +102,7 @@ test.describe("live conversation management (real chat server + Postgres)", () =
     const bar = sidebar(page);
     const row = bar.locator("div.group").filter({ hasText: "Doomed chat" }).first();
     await openRowMenu(page, row, "Doomed chat");
-    await page.getByRole("menuitem", { name: "Delete", exact: true }).click();
+    await page.getByRole("menuitem", { name: "Delete…", exact: true }).click();
     // Confirm in the modal.
     await page.getByRole("button", { name: /^delete$/i }).click();
 
@@ -129,7 +132,10 @@ test.describe("live conversation management (real chat server + Postgres)", () =
     await page.getByRole("menuitem", { name: "Pin", exact: true }).click();
     expect((await pinResponse).status()).toBe(200);
 
-    await page.getByRole("button", { name: /delete temporary chats/i }).click();
+    // The bulk action is in the Chats menu, at the Chats heading's right edge.
+    await page.getByTestId("recent-sort").click();
+    await expect(page.getByRole("menu", { name: "Chat list options" })).toBeVisible();
+    await page.getByTestId("delete-temporary-chats").click();
     await page.getByRole("button", { name: /^delete all$/i }).click();
 
     await expect(bar.getByText("Unpinned victim", { exact: true })).toHaveCount(0, { timeout: 10_000 });

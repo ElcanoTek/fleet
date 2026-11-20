@@ -83,6 +83,7 @@ intercept reaches the gateway and answers 502 (no backend).
 | `protocol-pills.spec.ts` | the neutral fallback pills render; the Summarize form templates its prompt and the mocked chat echoes it; the Draft form gates on its required field then sends the template. |
 | `orchestrator.spec.ts` | the dashboard loads stats + the task list; a task is created via `<McpServerPicker>` with an `mcp_selection` and no `target_node_name`; opening a task renders its log viewer. |
 | `cross-view.spec.ts` | one authenticated session navigates `/chat` ↔ `/orchestrator` via in-app links, never bouncing to `/login`. |
+| `sidebar-redesign.spec.ts` | the sidebar with a lot in it (about 200 chats, a dozen projects, teammates' chats, patrols): it scrolls as one and never sideways, and passes axe, in light and dark, on a desktop and on a phone; the + menu, the Chats menu and a row's ⋯ menu; one status per row; the gear's quick Customize panel and the full one; drag and keyboard resize; the collapsed strip; the `/patrols` page (mine, shared with me, empty, failed); the same sidebar on `/orchestrator` with a way back to a chat; the strip and slide-over in dashboard view. |
 
 ---
 

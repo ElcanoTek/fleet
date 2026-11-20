@@ -15,7 +15,10 @@ import { mockChatBoot } from "./_mocks";
 
 const ME = "e2e@example.com";
 const DAY = 86_400;
-const NOW = Math.floor(Date.now() / 1000);
+// The fixtures are built when a test starts, never when this file is loaded:
+// what a row says about time ("19h", "6d", Today) is read against the
+// browser's clock, and one worker runs the whole file over several minutes.
+const nowSeconds = () => Math.floor(Date.now() / 1000);
 
 type Row = Record<string, unknown> & { id: string; title: string };
 
@@ -39,8 +42,9 @@ const PROJECTS = [
   team_id: team,
   mcp_servers: [],
   pinned: id === "p-twc",
-  created_at: NOW - 200 * DAY + i,
-  updated_at: NOW - i * 3600,
+  // Most recently changed first, in the order above.
+  created_at: 1_700_000_000 + i,
+  updated_at: 1_760_000_000 - i * 3600,
 }));
 
 const TOPICS = [
@@ -58,8 +62,11 @@ const TOPICS = [
   "Margin report",
 ];
 
-function conv(id: string, title: string, ageSeconds: number, extra: Record<string, unknown> = {}): Row {
-  return {
+type Conv = (id: string, title: string, ageSeconds: number, extra?: Record<string, unknown>) => Row;
+
+// A chat last active `ageSeconds` before `NOW`.
+function convAt(NOW: number): Conv {
+  return (id, title, ageSeconds, extra = {}) => ({
     id,
     title,
     persona: "default",
@@ -70,18 +77,20 @@ function conv(id: string, title: string, ageSeconds: number, extra: Record<strin
     updated_at: NOW - ageSeconds,
     created_at: NOW - ageSeconds - 3 * DAY,
     ...extra,
-  };
+  });
 }
 
 // The person's own chats: a few with something to say for themselves, then
 // the ton (180 more, spread over eleven weeks).
-function ownChats(): Row[] {
+function ownChats(NOW: number): Row[] {
+  const conv = convAt(NOW);
   const own: Row[] = [
-    conv("c-release", "Fleet release watch", 600),
-    conv("c-ctv", "CTV SSP path efficiency deep-dive", DAY + 3600),
+    // (has_schedule: the server's listing says which chats a patrol keeps.)
+    conv("c-release", "Fleet release watch", 600, { has_schedule: true }),
+    conv("c-ctv", "CTV SSP path efficiency deep-dive", DAY + 3600, { has_schedule: true }),
     conv("c-npdeal", "NorthPeak deal optimization", DAY + 7200, { team_visible: true }),
-    conv("c-npupd", "North Peak deal updates", 3 * DAY),
-    conv("c-basis", "Basis pacing check", 4 * DAY),
+    conv("c-npupd", "North Peak deal updates", 3 * DAY, { has_schedule: true }),
+    conv("c-basis", "Basis pacing check", 4 * DAY, { has_schedule: true }),
     conv("c-fw26", "North Peak FW26 campaign", 5 * 3600, { pinned: true, team_visible: true }),
     conv("c-wrap", "End-of-campaign wrap - NorthPeak", 2 * DAY, { pinned: true }),
     conv("c-sealed", "Board pack numbers", 6 * DAY, { lockdown: true }),
@@ -103,7 +112,8 @@ function ownChats(): Row[] {
   return own;
 }
 
-function teamChats(): Row[] {
+function teamChats(NOW: number): Row[] {
+  const conv = convAt(NOW);
   const team: Row[] = [
     conv("t-hyvee", "Raptive Hy-Vee deal insights", 1800, { user_email: "jeanne@example.com", team_visible: true }),
     conv("t-twc", "New TWC optimisation emails", 3000, { user_email: "jeanne@example.com", team_visible: true, multiplayer: true }),
@@ -121,7 +131,7 @@ function teamChats(): Row[] {
   return team;
 }
 
-const PATROLS = [
+const patrolsAt = (NOW: number) => [
   {
     id: "pt-1",
     conversation_id: "c-npupd",
@@ -130,7 +140,8 @@ const PATROLS = [
     cron: "0 */2 * * *",
     timezone: "America/Detroit",
     status: "active",
-    next_run_at: NOW + 1800,
+    // Half an hour, and a little: it reads "30m" for the test's first minute.
+    next_run_at: NOW + 1820,
     run_count: 44,
     approval_mode: "auto",
     mine: true,
@@ -193,7 +204,7 @@ const PATROLS = [
 
 const PATROL_PROMPT =
   "Goal: keep the team on top of changes to the public repository and say which ones matter to clients and why. Advise only.";
-const PATROL_RUNS = [
+const patrolRunsAt = (NOW: number) => [
   { at: NOW - 3 * 3600, trigger: "schedule", outcome: "queued", run_number: 12 },
   { at: NOW - 27 * 3600, trigger: "schedule", outcome: "busy", reason: "approval_pending" },
   { at: NOW - 51 * 3600, trigger: "manual", outcome: "queued", run_number: 11 },
@@ -212,9 +223,11 @@ type Layout = Record<string, unknown>;
 type Opts = { patrols?: unknown[]; layout?: Layout | null };
 
 async function mockWorkspace(page: Page, opts: Opts = {}) {
-  const own = ownChats();
-  const team = teamChats();
-  const patrols = opts.patrols ?? PATROLS;
+  const NOW = nowSeconds();
+  const own = ownChats(NOW);
+  const team = teamChats(NOW);
+  const allPatrols = patrolsAt(NOW);
+  const patrols = opts.patrols ?? allPatrols;
   const puts: Layout[] = [];
   const patrolReads: string[] = [];
   await mockChatBoot(page, { conversations: own });
@@ -239,7 +252,9 @@ async function mockWorkspace(page: Page, opts: Opts = {}) {
     const patrol = (patrols as Array<{ id: string; mine?: boolean }>).find((p) => p.id === id);
     if (!patrol) return r.fulfill({ status: 404, json: { error: "not found" } });
     // As the server answers: what each run is asked to do, for its creator only.
-    return r.fulfill({ json: { patrol: { ...patrol, ...(patrol.mine ? { prompt: PATROL_PROMPT } : {}) }, runs: PATROL_RUNS } });
+    return r.fulfill({
+      json: { patrol: { ...patrol, ...(patrol.mine ? { prompt: PATROL_PROMPT } : {}) }, runs: patrolRunsAt(NOW) },
+    });
   });
   let layout = opts.layout ?? null;
   await page.route("**/api/sidebar", (r: Route) => {
@@ -262,6 +277,19 @@ async function mockWorkspace(page: Page, opts: Opts = {}) {
     if (url.searchParams.get("archived") === "true") return r.fulfill({ json: { conversations: [] } });
     return r.fulfill({ json: { conversations: own } });
   });
+  // One chat, as the server answers for it: the chat and its schedules (the
+  // page's own knowledge of the open chat's patrols, which wins over the
+  // patrols list).
+  await page.route("**/api/conversations/*", (r: Route) => {
+    if (r.request().method() !== "GET") return r.fulfill({ json: {} });
+    const id = new URL(r.request().url()).pathname.split("/").pop() ?? "";
+    const found = [...own, ...team].find((c) => c.id === id);
+    if (!found) return r.fulfill({ status: 404, json: { error: "not found" } });
+    const schedules = (patrols as Array<{ conversation_id: string }>)
+      .filter((p) => p.conversation_id === id)
+      .map((p) => ({ ...p, kind: "patrol", prompt: PATROL_PROMPT }));
+    return r.fulfill({ json: { conversation: found, history: [], schedules } });
+  });
   await page.route("**/api/conversations/order", (r: Route) => r.fulfill({ json: { orders: {} } }));
   await page.route("**/api/orchestrator/**", (r: Route) => {
     const path = new URL(r.request().url()).pathname.replace("/api/orchestrator", "");
@@ -273,7 +301,7 @@ async function mockWorkspace(page: Page, opts: Opts = {}) {
     if (path === "/tasks") return r.fulfill({ json: { data: TASKS, total: TASKS.length, limit: 20, offset: 0 } });
     return r.fulfill({ json: {} });
   });
-  return { own, team, puts, patrolReads };
+  return { own, team, puts, patrolReads, allPatrols };
 }
 
 async function openChat(page: Page) {
@@ -331,9 +359,16 @@ for (const scheme of ["light", "dark"] as const) {
       await expect(page.getByTestId("pinned-section").locator("[data-rail-row]")).toHaveCount(3);
       await expect(page.getByTestId("projects-show-all")).toHaveText("All 11 projects");
       const rows = page.getByTestId("unified-chat-list").locator("[data-rail-row]");
-      expect(await rows.count()).toBeGreaterThan(200);
-      // Grouped by date, most recent first.
-      await expect(page.getByTestId("unified-chat-list").locator("[data-date-group]").first()).toHaveAttribute("data-date-group", "today");
+      await expect.poll(() => rows.count()).toBeGreaterThan(200);
+      // Grouped by date, most recent first (which groups there are depends
+      // on the hour the test runs at; their order does not).
+      const groups = await page
+        .getByTestId("unified-chat-list")
+        .locator("[data-date-group]")
+        .evaluateAll((els) => els.map((el) => el.getAttribute("data-date-group")));
+      expect(groups.length).toBeGreaterThanOrEqual(3);
+      expect(groups).toEqual(["today", "yesterday", "week", "older"].filter((g) => groups.includes(g)));
+      expect(groups.at(-1)).toBe("older");
 
       // One sidebar that scrolls as a whole: its body is the only scroll box,
       // and a tall one.
@@ -377,7 +412,7 @@ for (const scheme of ["light", "dark"] as const) {
       await expect(page.getByTestId("customize-sidebar-button")).toBeVisible();
       await expect(page.getByTestId("nav-to-patrols")).toBeVisible();
       const rows = page.getByTestId("unified-chat-list").locator("[data-rail-row]");
-      expect(await rows.count()).toBeGreaterThan(200);
+      await expect.poll(() => rows.count()).toBeGreaterThan(200);
 
       expect(await scrollBoxes(page)).toEqual(["rail-body"]);
       const body = page.getByTestId("rail-body");
@@ -470,7 +505,7 @@ test.describe("on a desktop", () => {
     await chatsMenuButton.click();
     const chatsMenu = page.getByRole("menu", { name: "Chat list options" });
     await expect(chatsMenu.getByRole("menuitemradio")).toHaveText(["Recent activity", "Newest first", "Title A–Z"]);
-    await expect(page.getByTestId("recent-sort-recent")).toHaveAttribute("aria-checked", "true");
+    await expect(page.getByTestId("recent-sort-activity")).toHaveAttribute("aria-checked", "true");
     await expect(chatsMenu.getByRole("menuitem")).toHaveText(["Filter by label", "Select chats…", /^Delete temporary chats…/]);
     await expect(page.getByTestId("delete-temporary-chats")).toContainText(
       "Keeps pinned, filed, shared and patrol chats. Temporary chats go after 90 days without activity anyway.",
@@ -644,6 +679,53 @@ test.describe("on a desktop", () => {
     await expect(gear).toBeFocused();
   });
 
+  test("for an admin the full panel leads to the workspace default, and passes axe", async ({ page }) => {
+    await mockWorkspace(page);
+    // The admin probe (the most recent route wins).
+    await page.route("**/api/admin/settings", (r: Route) => r.fulfill({ json: { settings: [] } }));
+    await page.route("**/api/me", (r: Route) => r.fulfill({ json: { email: ME, role: "admin", team_id: "team-1" } }));
+    await page.route("**/api/admin/sidebar", (r: Route) => r.fulfill({ json: { layout: null, updated_by: "", updated_at: 0 } }));
+    await openChat(page);
+    await page.getByTestId("customize-sidebar-button").click();
+    await page.getByTestId("customize-more").click();
+    const full = page.getByTestId("sidebar-customizer");
+    await expect(full).toBeVisible();
+    // Two sidebars an admin can edit: their own (this panel) and the one
+    // everyone starts from.
+    const scope = full.getByTestId("sidebar-scope");
+    await expect(scope.locator('[aria-current="page"]')).toHaveText("My sidebar");
+    await expect(scope.getByRole("link", { name: "Workspace default" })).toHaveAttribute("href", "/settings/admin/sidebar");
+    // The panel's parts, top to bottom.
+    await expect(full.getByRole("heading", { level: 3 })).toHaveText([
+      "Fleet opens to",
+      "Start from",
+      "Top of the sidebar",
+      "Pinned",
+      "Lists",
+      "Density",
+    ]);
+    await expect(full.getByTestId("sidebar-editor-sections").locator("li")).toHaveCount(3);
+    await expect(full.getByTestId("sidebar-editor-dates")).toBeChecked();
+    await expect(full.getByTestId("sidebar-editor-status")).toBeChecked();
+    await expectNoAxeViolations(page, '[data-testid="sidebar-customizer"]');
+
+    // The two row options change the list at once.
+    await full.getByTestId("sidebar-editor-status").click();
+    await expect(page.getByTestId("unified-chat-list").getByTestId("row-status")).toHaveCount(0);
+    await full.getByTestId("sidebar-editor-status").click();
+    await expect(page.getByTestId("unified-chat-list").getByTestId("row-status").first()).toBeAttached();
+    await full.getByTestId("sidebar-editor-dates").click();
+    await expect(page.getByTestId("unified-chat-list").locator("[data-date-group]")).toHaveCount(0);
+    await full.getByTestId("sidebar-editor-dates").click();
+    await expect(page.getByTestId("unified-chat-list").locator("[data-date-group]").first()).toBeAttached();
+
+    // Workspace default is its own page, in Settings.
+    await scope.getByRole("link", { name: "Workspace default" }).click();
+    await expect(page).toHaveURL(/\/settings\/admin\/sidebar$/);
+    await expect(page.getByRole("heading", { name: "Sidebar", exact: true })).toBeVisible();
+    await expect(page.getByTestId("sidebar-customizer")).toHaveCount(0);
+  });
+
   // ── Resize ────────────────────────────────────────────────────────────────
 
   test("the sidebar's edge resizes it: by dragging, from the keyboard, remembered, and reset", async ({ page }) => {
@@ -695,10 +777,15 @@ test.describe("on a desktop", () => {
     await expect.poll(width).toBe(240);
     await page.keyboard.press("End");
     await expect.poll(width).toBe(480);
-    await page.keyboard.press("ArrowLeft");
-    await page.keyboard.press("ArrowLeft");
-    await page.keyboard.press("ArrowLeft");
-    await expect.poll(width).toBe(432);
+    await page.keyboard.press("ArrowRight");
+    await expect.poll(width).toBe(480);
+    // (Each step is let settle before the next: the sidebar eases to its new
+    // width, and a step is taken from where it is drawn.)
+    for (const expected of [464, 448, 432]) {
+      await page.keyboard.press("ArrowLeft");
+      await expect.poll(width).toBe(expected);
+      await expect(handle).toHaveAttribute("aria-valuenow", String(expected));
+    }
 
     // Remembered on this device.
     await page.reload();
@@ -763,8 +850,9 @@ test.describe("on a desktop", () => {
     const menu = page.getByRole("menu", { name: "New" });
     await expect(menu).toBeVisible();
     const mb = (await menu.boundingBox())!;
-    const ab = (await aside.boundingBox())!;
-    expect(mb.x).toBeGreaterThanOrEqual(ab.x + ab.width - 1);
+    const pb = (await page.getByTestId("new-menu-button").boundingBox())!;
+    expect(mb.x).toBeGreaterThanOrEqual(pb.x + pb.width);
+    expect(Math.abs(mb.y - pb.y)).toBeLessThanOrEqual(8);
     await expect(page.getByTestId("new-menu-chat")).toBeVisible();
     await page.keyboard.press("Escape");
 
@@ -879,10 +967,10 @@ test.describe("on a desktop", () => {
   });
 
   test("a failed read of the patrols says so, and never reads as having none", async ({ page }) => {
-    await mockWorkspace(page);
+    const { allPatrols } = await mockWorkspace(page);
     let fail = true;
     await page.route("**/api/patrols", (r: Route) =>
-      fail ? r.fulfill({ status: 502, body: "down" }) : r.fulfill({ json: { patrols: PATROLS } }),
+      fail ? r.fulfill({ status: 502, body: "down" }) : r.fulfill({ json: { patrols: allPatrols } }),
     );
     await page.goto("/patrols");
     await expect(page.getByTestId("patrols-load-failed")).toBeVisible({ timeout: 15_000 });
@@ -912,7 +1000,7 @@ test.describe("on a desktop", () => {
     await expect(page.getByTestId("pinned-section").locator("[data-rail-row]")).toHaveCount(3);
     await expect(page.getByTestId("projects-section")).toBeVisible();
     const rows = page.getByTestId("unified-chat-list").locator("[data-rail-row]");
-    expect(await rows.count()).toBeGreaterThan(200);
+    await expect.poll(() => rows.count()).toBeGreaterThan(200);
     expect(await scrollBoxes(page)).toEqual(["rail-body"]);
     expect(await pageOverflowX(page)).toBeLessThanOrEqual(1);
     await expectNoAxeViolations(page, "aside");
@@ -939,7 +1027,7 @@ test.describe("on a desktop", () => {
     await expect(page.getByRole("heading", { name: /what can i help with/i })).toBeVisible();
   });
 
-  test("the + on another page starts a background task on its own page, and a patrol in place", async ({ page }) => {
+  test("the + on another page starts a background task on its own page", async ({ page }) => {
     await mockWorkspace(page);
     await page.goto("/help");
     await expect(page.getByTestId("guide-card-chat")).toBeVisible({ timeout: 15_000 });

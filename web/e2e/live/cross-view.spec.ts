@@ -2,9 +2,11 @@ import { test, expect } from "./fixtures";
 
 // LIVE cross-view session: one real login (the elcano_session cookie) gates
 // BOTH the /chat and /orchestrator views off the single request gate (internal/webui). This
-// navigates between them via the in-app links and asserts it never bounces back
-// to /login — proving the shared session against the real backend (the chat
-// shell loads its real boot data; the orchestrator probes its real /me).
+// navigates between them via the in-app controls (the sidebar every page
+// has: its Background tasks row out, its pen back) and asserts it never
+// bounces back to /login — proving the shared session against the real
+// backend (the chat shell loads its real boot data; the orchestrator probes
+// its real /me).
 
 test.describe("live cross-view session", () => {
   test("one session navigates /chat ↔ /orchestrator without re-login", async ({ page, login }) => {
@@ -19,10 +21,14 @@ test.describe("live cross-view session", () => {
     // /me probe) or its own login card — but either way it must NOT have bounced
     // to the app /login page: the shared middleware accepted the session.
     expect(new URL(page.url()).pathname.startsWith("/login")).toBe(false);
-    await expect(page.getByTestId("nav-to-chat")).toBeVisible({ timeout: 15_000 });
+    // The same sidebar is on Background tasks. It has no "Chat" row: its pen
+    // (New chat) is the way back to Chat when there is no chat row to press
+    // (the login fixture wipes this account's conversations).
+    const backToChat = page.getByTestId("new-chat-button");
+    await expect(backToChat).toBeVisible({ timeout: 15_000 });
 
     // Cross back to chat — still no re-login.
-    await page.getByTestId("nav-to-chat").click();
+    await backToChat.click();
     await page.waitForURL((u) => !u.pathname.startsWith("/orchestrator"), { timeout: 15_000 });
     expect(new URL(page.url()).pathname.startsWith("/login")).toBe(false);
     await expect(page.getByRole("heading", { name: /what can i help with/i })).toBeVisible({
