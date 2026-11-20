@@ -128,3 +128,21 @@ func TestNeedsSetupForPrompt_PersonaMatchKeepsCase(t *testing.T) {
 		t.Fatalf("denied connector listed: %+v", got)
 	}
 }
+
+// Connector names are case-sensitive, so two that differ only by case are
+// both listed.
+func TestNeedsSetupForPrompt_CaseDistinctNamesBothListed(t *testing.T) {
+	m := fixtureManager(t)
+	m.SetConnectorMeta([]clientconfig.ConnectorMeta{
+		{Name: "Salesforce", Tools: []string{"read"}},
+		{Name: "salesforce", Tools: []string{"read"}},
+	})
+	got := m.needsSetupForPrompt("victoria", nil)
+	names := make([]string, 0, len(got))
+	for _, c := range got {
+		names = append(names, c.Name)
+	}
+	if strings.Join(names, ",") != "Salesforce,salesforce" {
+		t.Fatalf("got %v, want [Salesforce salesforce]", names)
+	}
+}

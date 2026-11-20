@@ -938,7 +938,7 @@ func (m *Manager) needsSetupForPrompt(persona string, hidden []string) []clientc
 		if c.Configured || name == "" || running[name] {
 			continue
 		}
-		safe := agentcore.PromptSafeName(strings.ToLower(name))
+		safe := agentcore.PromptSafeName(name) // case kept: connector names are case-sensitive
 		if safe == "" || seen[safe] {
 			continue
 		}
