@@ -1,6 +1,7 @@
 package agentcore
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -440,5 +441,292 @@ func TestRunPythonGitPushFloor(t *testing.T) {
 				t.Errorf("BeforeToolCall(run_python, %s) unexpectedly blocked: %q", tc.name, msg)
 			}
 		})
+	}
+}
+
+// TestGitPushFloorBareAssignment pins the 2026-11-20 false positive: a
+// scheduled report ran `f=$(ls -t ... | head -1)` and Fleet staged a
+// "git push to a remote" card, because a bare assignment with a command
+// substitution value was read as an unknown dynamic command word. A segment
+// that only assigns variables runs no command; everything that can still
+// reach git (the substitution bodies, a later dynamic command word, an env
+// prefix on a real git, assignments that steer git or the shell, opaque
+// expansions, quoted names, substitutions that run a program the gate
+// cannot read, integer-attribute targets, stdin carried in) must stay
+// blocked.
+func TestGitPushFloorBareAssignment(t *testing.T) {
+	repro := `ls -t .fleet/tool-output/ | head -3; f=$(ls -t .fleet/tool-output/* | head -1); echo $f; grep -o '"chess.com"\|"calculatorsoup.com"\|"comicbook.com"\|"cheezburger.com"' $f | sort | uniq -c`
+	for _, cmd := range []string{
+		repro,
+		`f=$(ls)`,
+		`f=$(ls); echo $f`,
+		`f=$(ls) ; cat "$f"`,
+		`f="$(ls -t dir/* | head -1)"`,
+		"f=`ls`",
+		`a=$(ls) b=$(date) c=x`,
+		`n=$1`,
+		`d=${HOME}/x`, // already allowed before: dynamic then a slash
+		`out=$(LC_ALL=C sort -k2 x | uniq -c)`,
+		`s=$(printf '%s\n' a b | sort -r)`,
+		`j=$(jq -r '.id' x.json); n=$(grep -c foo x)`,
+		`ls | head -1; f=$(date)`,
+		`n=$(wc -l < x)`,
+		`printf '%s\n' a; f=$(ls)`,
+		`echo "${HOME}"; f=$(ls)`,
+		`echo "${f:-none}" "${f#./}" "${#f}"; f=$(cat "${HOME}/x")`,
+		`test -f x; f=$(ls)`,
+		`f=$(ls -t dir/* 2>/dev/null | head -1)`,
+		`f=$(ls 2>&1); g=$(cat x 2>&- >/dev/null)`,
+		`export TZ=UTC; f=$(date)`,
+		`for x in a b; do f=$(ls "$x"); done`,
+		`f=$(echo "${x:-y}")`,
+		`f=$(ls) > out.txt`,
+		`for x in a b; do n=$(wc -l < "$x"); done`,
+		`export f=$(ls)`, // a command word, already allowed before
+		`OUT=$(ls); LATEST=$(ls -t | head -1)`,
+		`if f=$(ls); then echo "$f"; fi`,
+		`for x in a b; do n=$(wc -l "$x"); echo $n; done`,
+		`while line=$(head -1 f); do break; done`,
+		`! f=$(ls)`,
+		`{ f=$(ls); }`,
+		"f=$(ls)\necho $f",
+		"f=\\\n$(ls)",
+		"cat <<'EOF'\n$(not run)\nEOF\nf=$(ls)",
+		`git_ref=$(date)`, // lower-case: bash names are case-sensitive; git reads GIT_*
+	} {
+		if bashCommandRunsGitPush(cmd) {
+			t.Errorf("bashCommandRunsGitPush(%q) = true, want false", cmd)
+		}
+	}
+	raw, err := json.Marshal(map[string]string{"command": repro})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if IsGitPushBash(string(raw)) {
+		t.Errorf("IsGitPushBash(repro) = true, want false")
+	}
+	if risky, reason := classifyRiskyBash(string(raw)); risky {
+		t.Errorf("classifyRiskyBash(repro) = (true, %q), want false", reason)
+	}
+	if IsAutonomousHardBlocked("bash", string(raw)) {
+		t.Errorf("repro must NOT be hard-blocked")
+	}
+
+	for _, cmd := range []string{
+		// The substitution body is still checked.
+		`f=$(git push origin main)`,
+		"f=`git push`",
+		`f="$(git -C repo push)"`,
+		`f=$(ls) g=$(git push)`,
+		`if f=$(git push); then :; fi`,
+		// Stdin reaches the substitution when there is no command name.
+		`echo 'git push origin main' | f=$(sh)`,
+		`printf 'git push' | { f=$(bash); }`,
+		`f=$(sh) <<< 'git push origin main'`,
+		"f=$(sh) <<'EOF'\ngit push origin main\nEOF",
+		// A substitution that runs a program the gate cannot read.
+		`f=$(sh /tmp/push-script)`,
+		`f=$(bash ./x.sh)`,
+		`f=$(source /tmp/push-script)`,
+		`f=$(. /tmp/push-script)`,
+		`f=$(./push.sh)`,
+		`f=$(/tmp/x/ls)`,
+		`f=$(python3 x.py)`,
+		`f=$(find . -exec sh {} \;)`,
+		`f=$(echo x | xargs sh)`,
+		`f=$(ls | sort --compress-program=sh)`,
+		`f=$(printf -v 'a[$(git push)]' x)`,
+		`f=$(ls | sort --co=sh)`,
+		`f=$(ls | sort --com sh)`,
+		`o=--compress-program=sh; f=$(ls | sort $o)`,
+		`o=-v; f=$(printf $o 'a[$(git push)]' x)`,
+		`x='a[$(git push)]'; v=-v; f=$(printf "$v" "$x" x)`,
+		`f=$(ls $(sh x))`,
+		`f=$(git -c core.fsmonitor=x status)`,
+		`f=$("ls")`,
+		`f=$(if true; then sh x; fi)`,
+		`f=$( (sh x) )`,
+		`f=$(PATH=/tmp/x ls)`,
+		// Opaque expansions in an inert command's words or redirects.
+		`x='$(git push)'; f=$(echo ${x@P})`,
+		`x='a[$(git push)]'; f=$(echo $((x)))`,
+		`x='a[$(git push)]'; f=$(echo $[x])`,
+		`x='a[$(git push)]'; y=$[x]`,
+		`f=$(ls ${a[x]})`,
+		`f=$(ls > ${x@P})`,
+		`f=$(cat < ${x@P})`,
+		// Redirects on the assignment itself.
+		`x='$(git push)out'; f=$(ls) > "${x@P}"`,
+		`f=$(ls) > $((x))`,
+		`f=$(ls) > "$(sh /tmp/push-script)"`,
+		`f=$(ls) > "$(date +%F).txt"`, // dynamic output target: could be /dev/fd/N
+		`f=$(ls > "$(sh /tmp/push-script)")`,
+		`LD_BIND_NOW=$(cat f)`,
+		`GCONV_PATH=$(pwd)`,
+		// Here-doc bodies expand substitutions before the command reads them.
+		"f=$(cat <<EOF\n$($(printf '\\x67it') $(printf '\\x70ush'))\nEOF\n)",
+		"f=$(cat <<EOF\n`sh x`\nEOF\n)",
+		"f=$(cat <<< \"$(sh x)\")",
+		"cat <<EOF\n$($(printf '\\x67it') $(printf '\\x70ush'))\nEOF",
+		"cat <<-EOF\n\t${x:-$(sh -c 'git push')}\nEOF",
+		// Names an inert command could resolve to something else.
+		`ls() { sh x; }; f=$(ls)`,
+		`function ls { sh x; }; f=$(ls)`,
+		`PATH=/tmp/x; f=$(ls)`,
+		`hash -p /tmp/x ls; f=$(ls)`,
+		`printf -v PATH %s /tmp/reviewbin; f=$(ls)`,
+		`builtin printf -v PATH %s /tmp/x; f=$(ls)`,
+		`printf $o PATH %s /tmp/x; f=$(ls)`,
+		`read PATH < x; f=$(ls)`,
+		`getopts o PATH; f=$(ls)`,
+		`let PATH=1; f=$(ls)`,
+		`unset PATH; f=$(ls)`,
+		`export PATH=/tmp/x; f=$(ls)`,
+		`PATH+=:/tmp/x; f=$(ls)`,
+		`BASH_CMDS[ls]=/tmp/x; f=$(ls)`,
+		`BASH_ALIASES[ls]=x; f=$(ls)`,
+		`: ${PATH:=/tmp/x}; f=$(ls)`,
+		`echo $((PATH=1)); f=$(ls)`,
+		`x='PATH=0'; echo $((x)); f=$(ls)`,
+		`x='PATH=0'; echo ${s:x}; f=$(ls)`,
+		`x='PATH=0'; echo ${a[x]}; f=$(ls)`,
+		`x='PATH=0'; echo ${#a[x]}; f=$(ls)`,
+		`y='a[x]'; echo ${!y}; f=$(ls)`,
+		`x='PATH=0'; [[ 1 -eq x ]]; f=$(ls)`,
+		`x='PATH=0'; [ -v 'a[x]' ]; f=$(ls)`,
+		`x='PATH=0'; test -v 'a[x]'; f=$(ls)`,
+		`x='PATH=0'; echo $[x]; f=$(ls)`,
+		`sleep 1 & wait -p 'a[x]'; f=$(ls)`,
+		`f=$(cat "${a[x]}")`,
+		// Writes another command may read through a file descriptor.
+		`exec 3> >(sh); f=$(printf '\x67it\x20\x70ush origin main\n' >&3); exec 3>&-; wait`,
+		`f=$(printf 'git push' >&3)`,
+		`f=$(printf x 1>&$fd)`,
+		`f=$(printf x 3>f)`,
+		`f=$(printf x > /dev/fd/3)`,
+		`f=$(printf x > /proc/self/fd/3)`,
+		`f=$(printf x &> /dev/fd/3)`,
+		`f=$(printf x > "$out")`,
+		`f=$(ls) >&3`,
+		`cat <(ls); f=$(ls)`,
+		`coproc sh; f=$(ls)`,
+		`v='PATH=/tmp/reviewbin'; export "$v"; f=$(ls)`,
+		`v='PATH=/tmp/x'; readonly $v; f=$(ls)`,
+		`for PATH in /tmp/reviewbin; do f=$(ls); done`,
+		`select PATH in /tmp/x; do f=$(ls); break; done`,
+		`export PATH; f=$(ls)`,
+		`coproc PATH { :; }; f=$(ls)`,
+		`shopt -s expand_aliases; f=$(ls)`,
+		// Stdin that reaches the substitution from a redirect, an enclosing
+		// group or loop, a function call or exec.
+		`f=$(sh </tmp/push-script)`,
+		`f=$(bash 0<x)`,
+		`f=$(sh <&3)`,
+		`f=$(sh <>x)`,
+		`sh </tmp/push-script`,
+		`echo 'git push' | (sh)`,
+		`function fn { $(printf git) push; }; fn`,
+		`{ f=$(sh); } < /tmp/push-script`,
+		`{ true; f=$(sh); } <<< 'git push'`,
+		`echo 'git push' | { true; f=$(sh); }`,
+		`echo 'git push' | (f=$(sh))`,
+		`echo 'git push' | (true; f=$(sh))`,
+		`cat x | while read -r l; do f=$(sh); done`,
+		`while :; do f=$(sh); done < x`,
+		`exec < /tmp/push-script; f=$(sh)`,
+		`exec 0<x; f=$(sh /dev/stdin)`,
+		`fn() { f=$(sh); }; echo 'git push' | fn`,
+		`function fn { f=$(sh); }; fn < x`,
+		// Integer-attribute targets evaluate the value as arithmetic, whose
+		// array subscripts run commands hidden in a variable.
+		`x='a[$(git push)]'; OPTIND=$x`,
+		`OPTIND=$(printf 'a[$(git push)]')`,
+		`RANDOM=$x`,
+		`HISTCMD=$x`,
+		`BASH_COMPAT=$x`,
+		`BASH_XTRACEFD=$x`,
+		`declare -i f; x='a[$(git push)]'; f=$x`,
+		`typeset -i f; f=$x`,
+		`fn() { local -i f; f=$x; }; fn`,
+		`declare -n r='a[$(git push)]'; r=$(date)`,
+		`builtin declare -i f; f=$x`,
+		`"decl""are" -i f; f=$x`,
+		`eval 'declare -i f'; f=$x`,
+		`. ./attrs.sh; f=$x`,
+		`source ./attrs.sh; f=$(date)`,
+		// Strings run later in the same shell can set the attribute.
+		`trap 'declare -gi f' DEBUG; x='a[$(git push)]'; f=$x`,
+		`cmd=declare; trap '$cmd -gi f' DEBUG; f=$x`,
+		`trap "$t" DEBUG; f=$x`,
+		`PS4='$(typeset -gi f)'; set -x; f=$x`,
+		`mapfile -C 'declare -gi f' -c 1 a < x; f=$x`,
+		`enable -f ./x.so x; f=$x`,
+		`readarray -C cb a < x; f=$(date)`,
+		// Below the top level the parent's attributes are unknown.
+		`declare -i f; eval 'f=$x'`,
+		`bash -c 'f=$(ls)'`,
+		`echo $(f=$(ls))`,
+		// A later dynamic command word still fails closed.
+		`f=$(ls); $f`,
+		`f=$(printf git); $f push origin main`,
+		`f=$(printf git); "$f" push origin main`,
+		`cmd=$(printf 'git push'); $cmd`,
+		`f=$(printf git) $f push`,
+		`f=$(ls); eval "$f"`,
+		`f=$(printf git); exec $f push`,
+		// An env prefix on a real command still detects.
+		`GIT_DIR=x git push`,
+		`GIT_DIR=$(pwd)/.git git push`,
+		`X=$(ls) git push`,
+		`X=$(ls) $f`,
+		// Assignments that steer git or the shell keep failing closed with
+		// an unknown value.
+		`GIT_SSH_COMMAND=$(cat f)`,
+		`GIT_CONFIG_COUNT=$(printf 0)`,
+		`PATH=$(pwd):$PATH`,
+		`HOME=$(mktemp -d)`,
+		`XDG_CONFIG_HOME=$(pwd)`,
+		`BASH_ENV=$(pwd)`,
+		`BASHOPTS=$(cat f)`,
+		`EXECIGNORE=$(cat f)`,
+		`PS4=$(cat f)`,
+		`IFS=$(printf ' ')`,
+		`LD_PRELOAD=$(cat f)`,
+		`f=$(ls) PATH=$(pwd)`,
+		// Opaque expansions: arithmetic and ${...} can evaluate a variable's
+		// text, and array subscripts there run hidden commands.
+		`y=$((x))`,
+		`y=$((a[$(ls)]))`,
+		`y=${a[x]}`,
+		`y=${x@P}`,
+		`y=${x:i}`,
+		`y=$'\x67'`,
+		`y=$"x"`,
+		`y=<(ls)`,
+		`y=a{b,c}$(ls)`,
+		`y=*$(ls)`,
+		`f+=$(ls)`,
+		// A quoted or escaped name is a command named "f=...", not an
+		// assignment; so is a word after exec/builtin/coproc/time or a
+		// quoted keyword.
+		`"f"=$(ls)`,
+		`'f'=$(ls)`,
+		`\f=$(ls)`,
+		`f"="$(ls)`,
+		`$x=$(ls)`,
+		`$""f=$(ls)`,
+		`''f=$(ls)`,
+		`exec f=$(ls)`,
+		`builtin f=$(ls)`,
+		`coproc f=$(ls)`,
+		`time f=$(ls)`,
+		`"if" f=$(ls)`,
+		`fi f=$(ls)`,
+		`nohup f=$(ls)`,
+		`sudo f=$(ls)`,
+	} {
+		if !bashCommandRunsGitPush(cmd) {
+			t.Errorf("bashCommandRunsGitPush(%q) = false, want true", cmd)
+		}
 	}
 }

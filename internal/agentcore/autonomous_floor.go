@@ -379,15 +379,18 @@ func bashCommandRunsGitPushDepth(cmd string, depth int) bool {
 	if depth > 4 {
 		return true
 	}
-	segments, subcmds := parseShellScript(cmd)
+	segments, subcmds, grouped := parseShellScript(cmd)
 	for _, sub := range subcmds {
 		if bashCommandRunsGitPushDepth(sub, depth+1) {
 			return true
 		}
 	}
 	writesPushText := anySegmentWritesPushText(segments)
+	stdinMayReachAssign := anySegmentReceivesStdin(segments) && (grouped || anySegmentIsCompound(segments))
+	// grouped also covers `ls() { ...; }`, which would redefine an inert name.
+	assignOnlyOK := depth == 0 && !grouped && !stdinMayReachAssign && !anySegmentMaySetVarAttributes(segments)
 	for _, seg := range segments {
-		if segmentIsGitPush(seg, writesPushText, depth) {
+		if segmentIsGitPush(seg, writesPushText, assignOnlyOK, depth) {
 			return true
 		}
 	}
@@ -426,12 +429,39 @@ type shellToken struct {
 	val               string
 	dynamic           bool
 	dynamicAfterSlash bool
+	// literal: the whole word is unquoted, unescaped source text with no
+	// expansion, so a reserved word like `if` really is the keyword.
+	literal bool
+	// valueOnlyAssign: the word is a shell variable assignment `NAME=value`
+	// whose `NAME=` is unquoted literal source text (so bash parses it as
+	// an assignment, not as a command named `NAME=...`) and whose every
+	// expansion is a command substitution or a simple `$param` — forms that
+	// only produce a string. See segmentOnlyAssignsVariables.
+	valueOnlyAssign bool
+	// subcmds are the bodies of the command and process substitutions
+	// inside this word (also listed in the script's own subcmds).
+	subcmds []string
+	// evaluates: the word has an expansion that evaluates a variable's
+	// text: `$((...))`, `$[...]`, or a `${...}` that braceBodyEvaluates
+	// (`${x@P}` prompt expansion; subscripts, offsets and indirection, which
+	// are arithmetic whose array subscripts run commands and whose `=`
+	// assigns, e.g. `x='PATH=0'; echo ${s:x}`).
+	evaluates bool
 }
 
 type shellSegment struct {
 	tokens      []shellToken
 	pipedStdin  bool
 	hasOutRedir bool
+	// opaqueRedir: a redirect target had a `${...}` or `$((...))`
+	// expansion (`> ${x@P}`); the target word itself is not kept in tokens.
+	opaqueRedir bool
+	// redirSubcmds are the substitution bodies inside redirect targets
+	// (`> "$(cmd)"`), which run even though the target is not a token.
+	redirSubcmds []string
+	// fdRedir: a redirect reaches a descriptor other than 0/1/2 or a
+	// dynamic target (see noteRedirTarget).
+	fdRedir     bool
 	stdinBodies []string
 	stdinDyn    bool
 }
@@ -440,6 +470,9 @@ type pendingHeredoc struct {
 	segIdx int
 	delim  string
 	strip  bool
+	// expand: the delimiter is unquoted, so bash expands `$(...)`,
+	// backticks and `${...}` in the body before the command reads it.
+	expand bool
 }
 
 type shellLexer struct {
@@ -451,49 +484,105 @@ type shellLexer struct {
 	hasTok      bool
 	tokDyn      bool
 	tokDynSlash bool
-	subcmds     []string
-	heredocs    []pendingHeredoc
+	// tokPlainLen counts the leading bytes of the current word that came
+	// from unquoted, unescaped source text; tokPlainStop ends that run at
+	// the first quote, escape or expansion. tokOpaqueDyn marks a word with
+	// an expansion other than `$(...)`, backticks or a simple `$param`.
+	tokPlainLen  int
+	tokPlainStop bool
+	tokOpaqueDyn bool
+	tokEvalDyn   bool
+	tokSubFrom   int
+	subcmds      []string
+	heredocs     []pendingHeredoc
+	grouped      bool
 }
 
-func parseShellScript(cmd string) ([]shellSegment, []string) {
+// parseShellScript splits a script into segments and the bodies of its
+// command and process substitutions. grouped reports a `(` or `)` at this
+// level (a subshell, a function definition, a case pattern), which can carry
+// a pipe or redirect into the segments inside it.
+func parseShellScript(cmd string) (segments []shellSegment, subcmds []string, grouped bool) {
 	l := &shellLexer{src: cmd}
 	for l.pos < len(l.src) {
 		l.stepUnquoted()
 	}
 	l.flushSeg(false)
-	return l.segments, l.subcmds
+	return l.segments, l.subcmds, l.grouped
 }
 
 func (l *shellLexer) writeLiteralByte(ch byte) {
 	l.tok.WriteByte(ch)
 	l.hasTok = true
+	l.tokPlainStop = true
 	if ch == '/' {
 		l.tokDynSlash = false
 	}
 }
 
+// writePlainByte writes a byte that appeared unquoted and unescaped in the
+// source, extending the word's plain prefix while nothing else came first.
+func (l *shellLexer) writePlainByte(ch byte) {
+	plain := !l.tokPlainStop
+	l.writeLiteralByte(ch)
+	if plain {
+		l.tokPlainLen++
+		l.tokPlainStop = false
+	}
+}
+
+// markDynamic records an expansion the gate cannot resolve and that may do
+// more than yield a string (globs, `${...}` with its arithmetic subscripts
+// and `@P` prompt expansion, `$((...))`, `$'...'`, process substitution).
 func (l *shellLexer) markDynamic(placeholder string) {
+	l.tokOpaqueDyn = true
+	l.markStringDynamic(placeholder)
+}
+
+// markEvalDynamic records an expansion that is opaque and can evaluate a
+// variable's text as a prompt string or arithmetic (see shellToken.evaluates).
+func (l *shellLexer) markEvalDynamic(placeholder string) {
+	l.tokEvalDyn = true
+	l.markDynamic(placeholder)
+}
+
+// markStringDynamic records a command substitution (`$(...)` or backticks,
+// whose bodies are collected in subcmds and checked on their own) or a
+// simple `$param`: unknown text, but the expansion itself only yields a string.
+func (l *shellLexer) markStringDynamic(placeholder string) {
 	if placeholder != "" {
 		l.tok.WriteString(placeholder)
 	}
 	l.hasTok = true
 	l.tokDyn = true
 	l.tokDynSlash = true
+	l.tokPlainStop = true
 }
 
 func (l *shellLexer) flushTok() {
 	if !l.hasTok {
 		return
 	}
+	val := l.tok.String()
+	eq := strings.IndexByte(val, '=')
 	l.curSeg.tokens = append(l.curSeg.tokens, shellToken{
-		val:               l.tok.String(),
+		val:               val,
 		dynamic:           l.tokDyn,
 		dynamicAfterSlash: l.tokDynSlash,
+		literal:           !l.tokDyn && l.tokPlainLen == len(val),
+		valueOnlyAssign:   eq > 0 && eq < l.tokPlainLen && !l.tokOpaqueDyn && isEnvAssignmentToken(val),
+		subcmds:           append([]string(nil), l.subcmds[l.tokSubFrom:]...),
+		evaluates:         l.tokEvalDyn,
 	})
+	l.tokSubFrom = len(l.subcmds)
 	l.tok.Reset()
 	l.hasTok = false
 	l.tokDyn = false
 	l.tokDynSlash = false
+	l.tokPlainLen = 0
+	l.tokPlainStop = false
+	l.tokOpaqueDyn = false
+	l.tokEvalDyn = false
 }
 
 func (l *shellLexer) flushSeg(nextPiped bool) {
@@ -510,13 +599,21 @@ func (l *shellLexer) flushSeg(nextPiped bool) {
 	} else {
 		l.heredocs = nil
 	}
-	l.curSeg = shellSegment{pipedStdin: nextPiped}
+	// A pipe into `(`: the empty segment between `|` and `(` is dropped, so
+	// hand its piped stdin to the first segment inside the subshell, which
+	// reads it (`echo 'git push' | (sh)`).
+	carried := !hasContent && l.curSeg.pipedStdin
+	l.curSeg = shellSegment{pipedStdin: nextPiped || carried}
 }
 
 func (l *shellLexer) stepUnquoted() {
 	if !l.hasTok && l.startsIONumberRedir() {
+		start := l.pos
 		for l.pos < len(l.src) && l.src[l.pos] >= '0' && l.src[l.pos] <= '9' {
 			l.pos++
+		}
+		if fd := l.src[start:l.pos]; fd != "0" && fd != "1" && fd != "2" {
+			l.curSeg.fdRedir = true
 		}
 		l.handleRedir()
 		return
@@ -533,7 +630,7 @@ func (l *shellLexer) stepUnquoted() {
 		l.readDollarInWord(false)
 	case '`':
 		l.subcmds = append(l.subcmds, l.readBacktickSubst())
-		l.markDynamic("$()")
+		l.markStringDynamic("$()")
 	case ' ', '\t', '\r':
 		l.flushTok()
 		l.pos++
@@ -544,6 +641,9 @@ func (l *shellLexer) stepUnquoted() {
 		l.pos++
 		l.consumePendingHeredocs()
 	case ';', '(', ')':
+		if ch != ';' {
+			l.grouped = true
+		}
 		l.flushSeg(false)
 		l.pos++
 	case '&':
@@ -558,7 +658,7 @@ func (l *shellLexer) stepUnquoted() {
 	case '{', '}':
 		l.stepBrace(ch)
 	default:
-		l.writeLiteralByte(ch)
+		l.writePlainByte(ch)
 		l.pos++
 	}
 }
@@ -593,6 +693,7 @@ func (l *shellLexer) consumeBackslash() {
 func (l *shellLexer) readSingleQuoted() {
 	l.pos++
 	l.hasTok = true
+	l.tokPlainStop = true
 	for l.pos < len(l.src) && l.src[l.pos] != '\'' {
 		l.writeLiteralByte(l.src[l.pos])
 		l.pos++
@@ -605,6 +706,7 @@ func (l *shellLexer) readSingleQuoted() {
 func (l *shellLexer) readDoubleQuoted() {
 	l.pos++
 	l.hasTok = true
+	l.tokPlainStop = true
 	for l.pos < len(l.src) {
 		ch := l.src[l.pos]
 		switch ch {
@@ -615,7 +717,7 @@ func (l *shellLexer) readDoubleQuoted() {
 			l.consumeDoubleQuoteBackslash()
 		case '`':
 			l.subcmds = append(l.subcmds, l.readBacktickSubst())
-			l.markDynamic("$()")
+			l.markStringDynamic("$()")
 		case '$':
 			l.readDollarInWord(true)
 		default:
@@ -654,13 +756,28 @@ func (l *shellLexer) readDollarInWord(inDouble bool) {
 	next := l.src[l.pos+1]
 	switch {
 	case next == '(':
+		// `$((...))` is arithmetic, not a command substitution: bash
+		// evaluates variable values inside it as expressions, and an array
+		// subscript there (`a[$(cmd)]`) runs commands hidden in a variable
+		// the gate never sees, so it stays opaque.
+		arith := l.pos+2 < len(l.src) && l.src[l.pos+2] == '('
 		l.pos += 2
-		l.subcmds = append(l.subcmds, l.readParenBody())
-		l.markDynamic("$()")
+		body := l.readParenBody()
+		l.subcmds = append(l.subcmds, body)
+		if arith {
+			l.markEvalDynamic("$()")
+		} else {
+			l.markStringDynamic("$()")
+		}
 	case next == '{':
 		l.pos += 2
+		start := l.pos
 		l.readBraceBody()
-		l.markDynamic("${}")
+		if braceBodyEvaluates(l.src[start:l.pos]) {
+			l.markEvalDynamic("${}")
+		} else {
+			l.markDynamic("${}")
+		}
 	case !inDouble && next == '\'':
 		l.pos += 2
 		l.skipANSICBody()
@@ -669,6 +786,11 @@ func (l *shellLexer) readDollarInWord(inDouble bool) {
 		l.pos++
 		l.markDynamic("")
 		l.readDoubleQuoted()
+	case next == '[':
+		// `$[...]` is bash's old arithmetic expansion: it evaluates like
+		// `$((...))`. The bracket text that follows is lexed as usual.
+		l.pos++
+		l.markEvalDynamic("$")
 	case isShellParamStart(next):
 		l.pos += 2
 		if isASCIILetterOrUnderscore(next) {
@@ -676,7 +798,7 @@ func (l *shellLexer) readDollarInWord(inDouble bool) {
 				l.pos++
 			}
 		}
-		l.markDynamic("$v")
+		l.markStringDynamic("$v")
 	default:
 		l.writeLiteralByte('$')
 		l.pos++
@@ -855,7 +977,7 @@ func (l *shellLexer) stepAmpersand() {
 		if l.pos < len(l.src) && l.src[l.pos] == '>' {
 			l.pos++
 		}
-		_ = l.readRedirectTarget()
+		l.noteRedirTarget(l.readRedirectTarget(), false, true)
 		return
 	}
 	l.flushSeg(false)
@@ -883,7 +1005,7 @@ func (l *shellLexer) stepPipe() {
 
 func (l *shellLexer) stepBrace(ch byte) {
 	if !l.hasTok && (l.pos+1 >= len(l.src) || isShellWordDelimiter(l.src[l.pos+1])) {
-		l.writeLiteralByte(ch)
+		l.writePlainByte(ch)
 		l.pos++
 		return
 	}
@@ -902,6 +1024,9 @@ func isShellWordDelimiter(b byte) bool {
 func (l *shellLexer) handleRedir() {
 	ch := l.src[l.pos]
 	if l.pos+1 < len(l.src) && l.src[l.pos+1] == '(' {
+		// Process substitution: its body reads or writes through a file
+		// descriptor other commands can reach, like a group.
+		l.grouped = true
 		l.pos += 2
 		l.subcmds = append(l.subcmds, l.readParenBody())
 		l.markDynamic(string(ch) + "()")
@@ -926,18 +1051,43 @@ func (l *shellLexer) handleRedir() {
 		}
 		delim := l.readRedirectTarget()
 		if delim.val != "" {
-			l.heredocs = append(l.heredocs, pendingHeredoc{segIdx: -1, delim: delim.val, strip: strip})
+			l.heredocs = append(l.heredocs, pendingHeredoc{segIdx: -1, delim: delim.val, strip: strip, expand: delim.literal || delim.dynamic})
 		}
 		return
 	}
 	if ch == '>' {
 		l.curSeg.hasOutRedir = true
+	} else {
+		// `< file`, `<&3`, `<> file`: stdin is content the gate cannot
+		// see, so an interpreter reading it (`sh < script`) fails closed
+		// just as it does for a pipe.
+		l.curSeg.stdinDyn = true
 	}
 	l.pos++
+	dup := l.pos < len(l.src) && l.src[l.pos] == '&'
 	if l.pos < len(l.src) && (l.src[l.pos] == '>' || l.src[l.pos] == '&' || l.src[l.pos] == '|') {
 		l.pos++
 	}
-	_ = l.readRedirectTarget()
+	l.noteRedirTarget(l.readRedirectTarget(), dup, ch == '>')
+}
+
+// noteRedirTarget flags a redirect that reaches a file descriptor other
+// than stdin/stdout/stderr (`>&3`, `>/dev/fd/3`, `>/proc/self/fd/3`, a
+// socket, or an output target that is dynamic): another command, such as
+// `exec 3> >(sh)`, may be reading what this one writes.
+func (l *shellLexer) noteRedirTarget(target shellToken, dup, out bool) {
+	v := target.val
+	switch {
+	case target.dynamic && out:
+		l.curSeg.fdRedir = true
+	case dup:
+		if v != "0" && v != "1" && v != "2" && v != "-" {
+			l.curSeg.fdRedir = true
+		}
+	case strings.HasPrefix(v, "/dev/fd/") || strings.HasPrefix(v, "/proc/") ||
+		strings.HasPrefix(v, "/dev/tcp/") || strings.HasPrefix(v, "/dev/udp/"):
+		l.curSeg.fdRedir = true
+	}
 }
 
 func (l *shellLexer) readRedirectTarget() shellToken {
@@ -954,6 +1104,12 @@ func (l *shellLexer) readRedirectTarget() shellToken {
 	if len(l.curSeg.tokens) > 0 {
 		out = l.curSeg.tokens[0]
 	}
+	for _, tok := range l.curSeg.tokens {
+		if tok.evaluates {
+			savedSeg.opaqueRedir = true
+		}
+		savedSeg.redirSubcmds = append(savedSeg.redirSubcmds, tok.subcmds...)
+	}
 	l.curSeg = savedSeg
 	return out
 }
@@ -969,7 +1125,32 @@ func (l *shellLexer) consumePendingHeredocs() {
 		if hd.segIdx >= 0 && hd.segIdx < len(l.segments) {
 			l.segments[hd.segIdx].stdinBodies = append(l.segments[hd.segIdx].stdinBodies, body)
 		}
+		if hd.expand {
+			l.subcmds = append(l.subcmds, heredocSubstitutions(body)...)
+		}
 	}
+	l.tokSubFrom = len(l.subcmds)
+}
+
+// heredocSubstitutions returns the command substitution bodies bash runs
+// while expanding an unquoted here-doc: `$(...)`, backticks, and those
+// nested in `${...}`. Quotes are literal in a here-doc body, so only
+// backslash escapes are honoured.
+func heredocSubstitutions(body string) []string {
+	sub := &shellLexer{src: body}
+	for sub.pos < len(sub.src) {
+		switch sub.src[sub.pos] {
+		case '\\':
+			sub.pos += 2
+		case '`':
+			sub.subcmds = append(sub.subcmds, sub.readBacktickSubst())
+		case '$':
+			sub.readDollarInWord(true)
+		default:
+			sub.pos++
+		}
+	}
+	return sub.subcmds
 }
 
 func (l *shellLexer) readHeredocBody(delim string, stripTabs bool) string {
@@ -1007,7 +1188,10 @@ var gitFlagsTakingArg = map[string]bool{
 	"--config-env": true,
 }
 
-func segmentIsGitPush(seg shellSegment, writesPushText bool, depth int) bool {
+func segmentIsGitPush(seg shellSegment, writesPushText, assignOnlyOK bool, depth int) bool {
+	if assignOnlyOK && segmentOnlyAssignsVariables(seg) {
+		return false
+	}
 	res := skipShellWrappers(seg, writesPushText, depth)
 	if res.nestedPush {
 		return true
@@ -1038,6 +1222,420 @@ func segmentIsGitPush(seg shellSegment, writesPushText bool, depth int) bool {
 		}
 	}
 	return false
+}
+
+// assignmentLeadKeywords are the reserved words after which bash still
+// parses `NAME=value` as an assignment (`if f=$(ls); then`, `do n=$1`).
+// `exec`, `builtin`, `coproc`, `time` and the closing words are left out on
+// purpose: after them the word is a command or an argument.
+var assignmentLeadKeywords = map[string]bool{
+	"!":     true,
+	"{":     true,
+	"if":    true,
+	"then":  true,
+	"elif":  true,
+	"else":  true,
+	"while": true,
+	"until": true,
+	"do":    true,
+}
+
+// segmentOnlyAssignsVariables reports whether a segment is nothing but shell
+// variable assignments, such as `f=$(ls -t dir/* | head -1)`, so it runs no
+// command of its own. skipShellWrappers fails closed on any dynamic first
+// word because `$cmd push` or `$(printf git) push` can expand to git; a
+// bare assignment is not a command word, though, and without this a harmless
+// `f=$(ls ...)` staged a "git push to a remote" card. It stays safe because:
+//   - command substitution bodies are collected in subcmds and checked on
+//     their own by bashCommandRunsGitPushDepth, so `f=$(git push)` is caught,
+//     and beyond that every body must only run inert commands
+//     (substBodyIsInert): no interpreter, script file, `source`, `find
+//     -exec`, `xargs` or anything else that can run a program the gate cannot
+//     read, so `f=$(sh /tmp/push-script)` keeps failing closed;
+//   - only `$(...)`, backticks and simple `$param` count (valueOnlyAssign):
+//     `$((...))` and `${...}` can evaluate a variable's text as arithmetic,
+//     whose array subscripts run hidden commands, so those stay opaque;
+//   - `NAME=` must be unquoted literal source, so `"f"=$(...)` or `\f=$(...)`
+//     (a command named `f=...` to bash) and `$x=$(...)` stay opaque;
+//   - every word must be an assignment, so a later dynamic command word
+//     (`f=$(ls) $f push`, `X=$(y) git push`) still takes the normal path;
+//   - assignments to variables that steer which program or config later
+//     commands use (gitSensitiveAssignName) are not let through with an
+//     unknown value;
+//   - a segment that receives stdin (a pipe, here-doc or here-string) is
+//     left to the normal path: with no command name, bash hands a pipe's
+//     stdin to the substitution, so `echo 'git push' | f=$(sh)` runs the
+//     piped text, and the body `sh` alone looks harmless once parsed apart.
+//     The caller extends this to stdin that reaches the segment from
+//     around it: when any segment at this level receives stdin and the
+//     script has a group, loop, conditional, function or `exec`
+//     (`{ f=$(sh); } < f`, `cat f | while :; do f=$(sh); done`,
+//     `exec < f; f=$(sh)`), the shortcut is off for the whole level;
+//   - the value must not be evaluated as arithmetic. Assigning to a variable
+//     with the integer attribute evaluates the value, and an array subscript
+//     there runs commands (`x='a[$(git push)]'; OPTIND=$x`). Bash's own
+//     integer and behaviour variables are refused by name
+//     (gitSensitiveAssignName), and a user attribute (`declare -i`/`-n`,
+//     `typeset`, `local`) can only come from the same `bash -c` script, so
+//     the caller only allows this at depth 0 when no word in the script,
+//     including strings run later such as a trap body, can set one
+//     (anySegmentMaySetVarAttributes). Deeper scripts (eval strings,
+//     substitution bodies, `sh -c`) cannot see their parent's attributes and
+//     keep failing closed.
+//
+// Literal-value assignments never reach here dynamic, so their verdict is
+// unchanged.
+func segmentOnlyAssignsVariables(seg shellSegment) bool {
+	if seg.pipedStdin || seg.stdinDyn || len(seg.stdinBodies) > 0 || seg.opaqueRedir || seg.fdRedir {
+		// An evaluating redirect target (`> "${x@P}"`) runs hidden text.
+		return false
+	}
+	for _, body := range seg.redirSubcmds {
+		if !substBodyIsInert(body, 1) {
+			return false
+		}
+	}
+	sawAssign := false
+	for _, tok := range seg.tokens {
+		if !sawAssign && tok.literal && assignmentLeadKeywords[tok.val] {
+			continue
+		}
+		if !tok.valueOnlyAssign || gitSensitiveAssignName(tok.val) {
+			return false
+		}
+		for _, body := range tok.subcmds {
+			if !substBodyIsInert(body, 1) {
+				return false
+			}
+		}
+		sawAssign = true
+	}
+	return sawAssign
+}
+
+// inertCommands only read files or their arguments and print text: none
+// of them runs another program, interprets its input as code, or changes
+// shell state (every body runs in a subshell). The command word must be the
+// bare literal name, so `./ls` or `/tmp/x/cat` is not one of them, and the
+// caller turns the shortcut off when the script can redefine a name
+// (functions, alias, hash, PATH).
+var inertCommands = map[string]bool{
+	"ls": true, "cat": true, "head": true, "tail": true, "wc": true,
+	"grep": true, "egrep": true, "fgrep": true, "sort": true, "uniq": true,
+	"cut": true, "tr": true, "tac": true, "nl": true, "paste": true,
+	"column": true, "date": true, "pwd": true, "basename": true,
+	"dirname": true, "realpath": true, "readlink": true, "stat": true,
+	"du": true, "df": true, "echo": true, "printf": true, "jq": true,
+	"mktemp": true, "whoami": true, "id": true, "file": true, "seq": true,
+	"md5sum": true, "sha1sum": true, "sha256sum": true, "base64": true,
+	"true": true, "false": true,
+}
+
+// substBodyIsInert reports whether a command substitution body only runs
+// inertCommands. `sort --compress-program=PROG` runs PROG and `printf -v`
+// assigns through an evaluated subscript, so those flags, and any dynamic
+// word after sort or printf that could expand to one, are refused.
+func substBodyIsInert(body string, depth int) bool {
+	if depth > 4 {
+		return false
+	}
+	segments, subcmds, grouped := parseShellScript(body)
+	if grouped {
+		return false
+	}
+	for _, sub := range subcmds {
+		if !substBodyIsInert(sub, depth+1) {
+			return false
+		}
+	}
+	for _, seg := range segments {
+		if len(seg.stdinBodies) > 0 || seg.opaqueRedir || seg.fdRedir {
+			// Here-docs and here-strings: their expansions are checked
+			// above, but nothing here needs one, so stay strict.
+			return false
+		}
+		for _, sub := range seg.redirSubcmds {
+			if !substBodyIsInert(sub, depth+1) {
+				return false
+			}
+		}
+		for _, tok := range seg.tokens {
+			// `echo ${x@P}` runs prompt expansion and `echo $((x))`
+			// evaluates x's text as arithmetic, whose subscripts run
+			// commands. Globs (`ls dir/*`) only list file names.
+			if tok.evaluates {
+				return false
+			}
+		}
+		i := 0
+		for i < len(seg.tokens) && seg.tokens[i].literal && isEnvAssignmentToken(seg.tokens[i].val) && !gitSensitiveAssignName(seg.tokens[i].val) {
+			i++
+		}
+		if i >= len(seg.tokens) {
+			continue
+		}
+		cmd := seg.tokens[i]
+		if !cmd.literal || !inertCommands[cmd.val] {
+			return false
+		}
+		if cmd.val == "sort" || cmd.val == "printf" {
+			for _, arg := range seg.tokens[i+1:] {
+				// A dynamic word could be the flag itself (`sort $opt`).
+				// `--co` is the shortest unambiguous abbreviation of
+				// sort's --compress-program.
+				if arg.dynamic || (cmd.val == "sort" && strings.HasPrefix(arg.val, "--co")) ||
+					(cmd.val == "printf" && strings.HasPrefix(arg.val, "-v")) {
+					return false
+				}
+			}
+		}
+	}
+	return true
+}
+
+// attributeSettingWords can give a variable the integer or nameref
+// attribute in the current shell (`declare -i f`, `local -n r`), or run text
+// later in the current shell where one could hide: `eval`, `source`/`.`,
+// `alias`, a `trap` body (a DEBUG trap runs before the very next command),
+// a `mapfile -C` callback, PS4 under xtrace, `enable -f` loading a builtin.
+//
+// It also lists the words that change what a command name runs, which
+// inertCommands relies on: `function`, `alias`, `hash`, `enable`, `shopt`
+// (a `name() {` definition is caught by its parentheses).
+var attributeSettingWords = []string{
+	"declare", "typeset", "local", "eval", "source", "alias", "trap",
+	"mapfile", "readarray", "enable", "PS4", "PROMPT_COMMAND",
+	"function", "hash", "shopt", "exec", "coproc",
+}
+
+// anySegmentMaySetVarAttributes reports whether any word of the script
+// could set a variable attribute (attributeSettingWords). It matches each
+// name as a whole word anywhere inside every token, not just as the command
+// word, so wrappers (`builtin declare`), function bodies, and strings run
+// later (`trap 'declare -gi f' DEBUG`, `cmd=declare`) are covered; `.` must
+// be the whole word. Over-matching (`/usr/local/bin`) only keeps the old,
+// fail-closed verdict.
+func anySegmentMaySetVarAttributes(segments []shellSegment) bool {
+	for _, seg := range segments {
+		for _, tok := range seg.tokens {
+			if tok.val == "." {
+				return true
+			}
+			if tokenNamesSensitiveVar(tok.val) || tok.evaluates || variableWritingBuiltins[tok.val] {
+				// `PATH=/tmp/x`, `BASH_CMDS[ls]=/tmp/x`, `read PATH`, or an
+				// evaluating expansion (`${PATH:=x}`, `$((x))` with
+				// x='PATH=0') would make `f=$(ls)` run something else.
+				return true
+			}
+			if varFlagCommands[executableBaseName(tok.val)] && segmentHasVarFlag(seg, tok) {
+				// `printf -v PATH %s /tmp/x`, `[ -v 'a[x]' ]`, `wait -p v`
+				return true
+			}
+			if assigningCommands[executableBaseName(tok.val)] && segmentHasDynamicArg(seg, tok) {
+				// `v='PATH=/tmp/x'; export "$v"`
+				return true
+			}
+			for _, w := range attributeSettingWords {
+				if containsASCIIWordFold(tok.val, w) {
+					return true
+				}
+			}
+		}
+		for _, body := range seg.stdinBodies {
+			for _, w := range attributeSettingWords {
+				if containsASCIIWordFold(body, w) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// variableWritingBuiltins assign a variable named by an argument, which may
+// be PATH (`read PATH`, `getopts o PATH`, `let PATH=1`), unset it, or
+// evaluate arithmetic that can assign (`[[ 1 -eq x ]]` with x='PATH=0').
+var variableWritingBuiltins = map[string]bool{
+	"read": true, "getopts": true, "let": true, "unset": true, "[[": true,
+}
+
+// assigningCommands assign `NAME=value` arguments; a dynamic argument may
+// carry a sensitive one (`export "$v"` with v='PATH=/tmp/x').
+var assigningCommands = map[string]bool{
+	"export": true, "readonly": true,
+}
+
+// segmentHasDynamicArg reports whether any word of the segment other than
+// the command word itself is dynamic.
+func segmentHasDynamicArg(seg shellSegment, cmd shellToken) bool {
+	for _, tok := range seg.tokens {
+		if tok.val != cmd.val && tok.dynamic {
+			return true
+		}
+	}
+	return false
+}
+
+// varFlagCommands take a flag naming a variable, written or tested through
+// an evaluated subscript: `printf -v`, `test -v`/`[ -v` (and `-R`),
+// `wait -p`.
+var varFlagCommands = map[string]bool{
+	"printf": true, "test": true, "[": true, "wait": true,
+}
+
+// braceBodyEvaluates reports whether a `${...}` body (between the braces)
+// can evaluate a variable's text: a subscript `[`, indirection `!`, `@P`
+// prompt expansion, an assignment `=`, nested arithmetic, or a `:` that is
+// a substring offset rather than `:-`, `:=`, `:+` or `:?`. Plain forms such
+// as `${f}`, `${f:-x}`, `${f#p}`, `${f/a/b}` and `${#f}` only yield text.
+func braceBodyEvaluates(body string) bool {
+	if strings.HasPrefix(body, "!") || strings.ContainsAny(body, "[=") ||
+		strings.Contains(body, "@P") || strings.Contains(body, "$((") || strings.Contains(body, "$[") {
+		return true
+	}
+	for i := 0; i < len(body); i++ {
+		if body[i] != ':' {
+			continue
+		}
+		if i+1 >= len(body) || !strings.ContainsRune("-=+?", rune(body[i+1])) {
+			return true
+		}
+	}
+	return false
+}
+
+// tokenNamesSensitiveVar reports whether a word names a sensitive variable
+// as a whole word or as the target of an assignment: `PATH=x`, `PATH+=x`,
+// an element (`BASH_CMDS[ls]=x` rewrites the command hash table), or a bare
+// `PATH`, which is how every variable-writing form passes the name
+// (`for PATH in`, `read PATH`, `export PATH`, `getopts o PATH`,
+// `printf -v PATH`, `select PATH in`). Over-matching a word that merely
+// mentions the name only keeps the old, fail-closed verdict.
+func tokenNamesSensitiveVar(tok string) bool {
+	end := 0
+	for end < len(tok) && (isASCIIAlnumOrUnderscore(tok[end])) {
+		end++
+	}
+	if end == 0 || !isASCIILetterOrUnderscore(tok[0]) {
+		return false
+	}
+	if end < len(tok) && tok[end] != '=' && tok[end] != '+' && tok[end] != '[' {
+		return false
+	}
+	return gitSensitiveAssignName(tok[:end])
+}
+
+// segmentHasVarFlag reports whether a varFlagCommands segment may pass a
+// variable-naming flag (`-v`, `-R`, `-p`), literally or via a dynamic word.
+func segmentHasVarFlag(seg shellSegment, cmd shellToken) bool {
+	for _, tok := range seg.tokens {
+		if tok.val == cmd.val {
+			continue
+		}
+		if tok.dynamic || strings.HasPrefix(tok.val, "-v") || strings.HasPrefix(tok.val, "-R") || strings.HasPrefix(tok.val, "-p") {
+			return true
+		}
+	}
+	return false
+}
+
+// stdinCarryingWords are the reserved words (and `exec`) whose pipe or
+// redirect reaches commands in other segments: `{ ...; } < f`,
+// `... | while ...; do ...; done`, `exec < f`, a function body.
+var stdinCarryingWords = map[string]bool{
+	"{": true, "}": true, "if": true, "then": true, "elif": true, "else": true,
+	"fi": true, "while": true, "until": true, "for": true, "select": true,
+	"do": true, "done": true, "case": true, "esac": true, "exec": true,
+	"coproc": true, "function": true,
+}
+
+// anySegmentIsCompound reports whether any word of the script is one of
+// stdinCarryingWords, so a pipe or redirect on one segment may feed another.
+func anySegmentIsCompound(segments []shellSegment) bool {
+	for _, seg := range segments {
+		for _, tok := range seg.tokens {
+			if stdinCarryingWords[tok.val] {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// anySegmentReceivesStdin reports whether any segment is fed by a pipe, a
+// here-doc or here-string, or an input redirect.
+func anySegmentReceivesStdin(segments []shellSegment) bool {
+	for _, seg := range segments {
+		if seg.pipedStdin || seg.stdinDyn || len(seg.stdinBodies) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// gitSensitiveVarNames are variables whose value changes which program a
+// later command resolves to, which git config it reads, or what the shell
+// runs on its own (BASH_ENV, PS4 under xtrace, PROMPT_COMMAND, EXECIGNORE),
+// plus bash's own variables that carry the integer attribute or evaluate
+// their value (OPTIND, RANDOM, HISTCMD, ...; every BASH* name is covered by
+// prefix in gitSensitiveAssignName).
+var gitSensitiveVarNames = map[string]bool{
+	"PATH":            true,
+	"HOME":            true,
+	"XDG_CONFIG_HOME": true,
+	"PREFIX":          true,
+	"ENV":             true,
+	"PS0":             true,
+	"PS1":             true,
+	"PS2":             true,
+	"PS3":             true,
+	"PS4":             true,
+	"PROMPT_COMMAND":  true,
+	"IFS":             true,
+	"SHELLOPTS":       true,
+	"CDPATH":          true,
+	"EXECIGNORE":      true,
+	"GLOBIGNORE":      true,
+	"GLOBSORT":        true,
+	"POSIXLY_CORRECT": true,
+	"TIMEFORMAT":      true,
+	"GCONV_PATH":      true,
+	"SSH_ASKPASS":     true,
+	"OPTIND":          true,
+	"OPTERR":          true,
+	"OPTARG":          true,
+	"RANDOM":          true,
+	"SRANDOM":         true,
+	"SECONDS":         true,
+	"LINENO":          true,
+	"HISTCMD":         true,
+	"HISTSIZE":        true,
+	"HISTFILESIZE":    true,
+	"EPOCHSECONDS":    true,
+	"EPOCHREALTIME":   true,
+	"COLUMNS":         true,
+	"LINES":           true,
+	"TMOUT":           true,
+	"MAILCHECK":       true,
+	"FUNCNEST":        true,
+	"SHLVL":           true,
+	"PPID":            true,
+	"UID":             true,
+	"EUID":            true,
+	"GROUPS":          true,
+	"FUNCNAME":        true,
+	"DIRSTACK":        true,
+	"PIPESTATUS":      true,
+}
+
+// gitSensitiveAssignName matches names exactly: the bash tool runs
+// `bash -c`, where variable names are case-sensitive and git reads only the
+// upper-case GIT_* environment, so `git_ref=$(git rev-parse HEAD)` is a
+// plain shell variable.
+func gitSensitiveAssignName(tok string) bool {
+	name, _, _ := strings.Cut(tok, "=")
+	return strings.HasPrefix(name, "GIT_") || strings.HasPrefix(name, "BASH") ||
+		strings.HasPrefix(name, "LD_") || gitSensitiveVarNames[name]
 }
 
 func nonGitCommandEmbedsGitPush(args []shellToken, depth int) bool {
@@ -1136,6 +1734,12 @@ func skipShellWrappers(seg shellSegment, writesPushText bool, depth int) wrapper
 		}
 		if isEnvAssignmentToken(t.val) || shellControlKeywords[t.val] {
 			i++
+			continue
+		}
+		if t.val == "function" && i+1 < len(tokens) {
+			// `function name { body; }`: the body's first command follows
+			// the name (and the `{` keyword skipped next round).
+			i += 2
 			continue
 		}
 		base := executableBaseName(t.val)
@@ -1477,7 +2081,7 @@ func gitAliasTargetRunsPush(target string, depth int) bool {
 	if strings.HasPrefix(target, "!") {
 		return bashCommandRunsGitPushDepth(strings.TrimPrefix(target, "!"), depth+1)
 	}
-	subSegs, subCmds := parseShellScript(target)
+	subSegs, subCmds, _ := parseShellScript(target)
 	for _, sc := range subCmds {
 		if bashCommandRunsGitPushDepth(sc, depth+1) {
 			return true
