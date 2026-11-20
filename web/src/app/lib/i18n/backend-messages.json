@@ -899,12 +899,6 @@
       ]
     },
     {
-      "message": "chat-written shared file {0} has no content",
-      "fields": [
-        "%s"
-      ]
-    },
-    {
       "message": "clear pending fallback rollout state: {0}",
       "fields": [
         "%w"
@@ -1623,12 +1617,6 @@
       "message": "server connected, but sharing with everyone failed: {0}",
       "fields": [
         "%w"
-      ]
-    },
-    {
-      "message": "shared file {0} has no content",
-      "fields": [
-        "%s"
       ]
     },
     {
