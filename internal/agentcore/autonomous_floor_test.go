@@ -471,6 +471,8 @@ func TestGitPushFloorBareAssignment(t *testing.T) {
 		`j=$(jq -r '.id' x.json); n=$(grep -c foo x)`,
 		`ls | head -1; f=$(date)`,
 		`n=$(wc -l < x)`,
+		`printf '%s\n' a; f=$(ls)`,
+		`echo "${HOME}"; f=$(ls)`,
 		`f=$(ls) > "$(date +%F).txt"`,
 		`for x in a b; do n=$(wc -l < "$x"); done`,
 		`export f=$(ls)`, // a command word, already allowed before
@@ -565,6 +567,19 @@ func TestGitPushFloorBareAssignment(t *testing.T) {
 		`function ls { sh x; }; f=$(ls)`,
 		`PATH=/tmp/x; f=$(ls)`,
 		`hash -p /tmp/x ls; f=$(ls)`,
+		`printf -v PATH %s /tmp/reviewbin; f=$(ls)`,
+		`builtin printf -v PATH %s /tmp/x; f=$(ls)`,
+		`printf $o PATH %s /tmp/x; f=$(ls)`,
+		`read PATH < x; f=$(ls)`,
+		`getopts o PATH; f=$(ls)`,
+		`let PATH=1; f=$(ls)`,
+		`unset PATH; f=$(ls)`,
+		`export PATH=/tmp/x; f=$(ls)`,
+		`PATH+=:/tmp/x; f=$(ls)`,
+		`BASH_CMDS[ls]=/tmp/x; f=$(ls)`,
+		`BASH_ALIASES[ls]=x; f=$(ls)`,
+		`: ${PATH:=/tmp/x}; f=$(ls)`,
+		`echo $((PATH=1)); f=$(ls)`,
 		`shopt -s expand_aliases; f=$(ls)`,
 		// Stdin that reaches the substitution from a redirect, an enclosing
 		// group or loop, a function call or exec.
