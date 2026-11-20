@@ -1892,13 +1892,19 @@ export function ConversationSidebar({
   // and the teammates' chats they pinned for themselves (their own pin;
   // nothing changes for the owner), in one hand-set order. A chat is listed
   // once: a teammate's row wins over a copy in the own list.
-  const pinnedTeam = listedTeamChats.filter((c) => c.pinned);
+  //
+  // With Pinned hidden, a pinned project and a teammate's chat the person
+  // pinned stay where they are listed otherwise (Projects; Chats or Team
+  // chats): hiding the list must not take them out of the sidebar. A layout
+  // saved before Pinned existed starts with it hidden when Chats was, and
+  // its pinned projects were in Projects then.
+  const pinnedTeam = pinnedSec.hidden ? [] : listedTeamChats.filter((c) => c.pinned);
   const pinnedTeamIds = new Set(pinnedTeam.map((c) => c.id));
   const pinnedChats = pinnedGroup(
     pinnedUnfiled(conversations, knownProjectIds).filter((c) => !pinnedTeamIds.has(c.id) && !topChatIds.has(c.id)),
     pinnedTeam,
   );
-  const pinnedProjects = projects.filter((p) => p.pinned && !topProjectIds.has(p.id));
+  const pinnedProjects = pinnedSec.hidden ? [] : projects.filter((p) => p.pinned && !topProjectIds.has(p.id));
   const pinned = pinnedEntries(pinnedChats, pinnedProjects, chatOrders?.[PINNED_ORDER_SCOPE]);
   // Reorder mode: the scope being ordered ("pinned" or "project:<id>"), whose
   // rows become a drag-and-arrow list until Done (or Escape). One at a time.
@@ -2005,7 +2011,11 @@ export function ConversationSidebar({
     : groupByDate(chatList, recentSort, new Date(nowSeconds * 1000));
   // The person's chats that are about to be deleted, in the order the list
   // shows them, for the notice under the heading and its jump to the first.
-  const expiring = sortRecent(recentOwn, recentSort).filter((c) => expiresIn(c) !== null);
+  // A chat kept at the top is not in the list, but it is deleted like any
+  // other temporary chat, so it counts here too (after the listed ones: the
+  // jump goes to a row in the list when there is one).
+  const keptAtTop = recentUnfiled(conversations, knownProjectIds).filter((c) => topChatIds.has(c.id));
+  const expiring = [...sortRecent(recentOwn, recentSort), ...keptAtTop].filter((c) => expiresIn(c) !== null);
   const showFirstExpiring = () => {
     const first = expiring[0];
     if (!first) return;
@@ -2053,7 +2063,7 @@ export function ConversationSidebar({
   // the top (those are listed there), most recently updated first. Built only
   // when its inputs change: the rail re-renders on every streamed event.
   const listedProjects = useMemo(
-    () => projects.filter((p) => !p.pinned && !topProjectIds.has(p.id)),
+    () => projects.filter((p) => !(p.pinned && !pinnedSec.hidden) && !topProjectIds.has(p.id)),
     // topProjectIds is rebuilt each render from the layout.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [projects, railLayout],

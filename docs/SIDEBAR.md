@@ -311,7 +311,10 @@ only written again when its owner next changes something.
   choice for their pinned chats too: the new section starts hidden or folded
   the same way (`Normalize` in `internal/sidebar`, `normalizeLayout` in
   `layout.ts`), and nothing they had put out of sight comes back on its own.
-  From then on Pinned is its own setting.
+  From then on Pinned is its own setting. While Pinned is hidden, a pinned
+  project is listed under Projects and a pinned teammate's chat with the
+  other teammates' chats, where they were before the section existed: hiding
+  the list never takes them out of the sidebar.
 - **Pins** are untouched: a person's pinned chats, the teammates' chats they
   pinned, and pinned projects are the same rows in the same tables. A saved
   hand-set order of pinned chats is kept as it is; pinned projects, which that
@@ -389,7 +392,10 @@ migration.
   shared with the caller's team or that they take part in through
   Multiplayer, and a patrol a participant set up in the caller's own chat.
   Each entry now also carries `last_run_at`, `run_count`, `approval_mode`,
-  `mine`, and for a teammate's patrol `owner_email`, `multiplayer` and
+  `mine`, `owns_chat` (false for a patrol the caller set up in a teammate's
+  Multiplayer chat: its approval mode is the chat owner's to change, so the
+  page shows it without a control), and for a teammate's patrol
+  `owner_email`, `multiplayer` and
   `team_visible`; the caller's own active patrols carry `skipped` when runs
   are being held behind an approval card (`store.PatrolSkips`). The caller's
   own entries are unchanged otherwise, so an older client reads the list as

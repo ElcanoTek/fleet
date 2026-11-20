@@ -6185,6 +6185,8 @@
   "{0} runs skipped · approval waiting": "{0} execuções ignoradas · aprovação pendente",
   "Open chat": "Abrir chat",
   "It is the chat's setting, so it applies to every patrol in that chat.": "É uma definição do chat, por isso aplica-se a todas as patrulhas desse chat.",
+  "It is the chat's setting. Only the chat's owner can change it.": "É uma definição do chat. Só o dono do chat a pode alterar.",
+  "No patrols are shared with you yet.": "Ainda não há patrulhas partilhadas consigo.",
   "Whose it is": "De quem é",
   "{0} set this patrol up. You can read its chat; only they can run, pause or change it.": "{0} configurou esta patrulha. Pode ler o respetivo chat; só essa pessoa a pode executar, pausar ou alterar.",
   "A teammate": "Um colega",

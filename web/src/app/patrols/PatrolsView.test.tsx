@@ -109,14 +109,14 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function Page({ startAdding = false }: { startAdding?: boolean }) {
+function Page({ startAdding = false, canWrite }: { startAdding?: boolean; canWrite?: boolean }) {
   const [adding, setAdding] = useState(startAdding);
   return (
     <>
       <button type="button" data-testid="open-form" onClick={() => setAdding(true)}>
         New patrol
       </button>
-      <PatrolsView adding={adding} setAdding={setAdding} />
+      <PatrolsView adding={adding} setAdding={setAdding} canWrite={canWrite} />
     </>
   );
 }
@@ -201,6 +201,68 @@ describe("the Patrols page", () => {
     expect(runs[1]).toHaveTextContent("Ran when asked (Run now) · Run #43");
     expect(runs[2]).toHaveTextContent("Skipped: an approval was waiting");
     expect(calls.filter((c) => c.url === "/api/patrols/pt-1")).toHaveLength(1);
+  });
+
+  const modeCalls = () => calls.filter((c) => c.method === "POST" && c.url.endsWith("/auto-approve"));
+
+  it("switching a running patrol's chat to Autonomous asks once more first", async () => {
+    render(<Page />);
+    await waitFor(() => expect(card("pt-1")).toBeTruthy());
+    expand("pt-1");
+    const mine = within(card("pt-1"));
+    fireEvent.click(await mine.findByTestId("patrol-mode-autonomous"));
+    // Nothing is sent until the person confirms.
+    expect(mine.getByTestId("patrols-autonomous-confirm")).toBeInTheDocument();
+    expect(modeCalls()).toHaveLength(0);
+    fireEvent.click(mine.getByRole("button", { name: "Keep current" }));
+    expect(mine.queryByTestId("patrols-autonomous-confirm")).toBeNull();
+    expect(modeCalls()).toHaveLength(0);
+    fireEvent.click(mine.getByTestId("patrol-mode-autonomous"));
+    fireEvent.click(mine.getByRole("button", { name: "Switch to Autonomous" }));
+    await waitFor(() => expect(modeCalls()).toHaveLength(1));
+    expect(modeCalls()[0].body).toMatchObject({ approval_mode: "autonomous" });
+  });
+
+  it("a paused patrol alone in its chat switches without the extra ask; other modes never ask", async () => {
+    render(<Page />);
+    await waitFor(() => expect(card("pt-2")).toBeTruthy());
+    expand("pt-2");
+    fireEvent.click(await within(card("pt-2")).findByTestId("patrol-mode-autonomous"));
+    await waitFor(() => expect(modeCalls()).toHaveLength(1));
+    expect(within(card("pt-2")).queryByTestId("patrols-autonomous-confirm")).toBeNull();
+  });
+
+  it("a patrol I set up in a teammate's chat shows the chat's approval mode without a control", async () => {
+    list = [patrol({ owns_chat: false })];
+    render(<Page />);
+    await waitFor(() => expect(card("pt-1")).toBeTruthy());
+    expand("pt-1");
+    const mine = within(card("pt-1"));
+    expect(await mine.findByTestId("patrol-mode-readonly")).toHaveTextContent("Only the chat's owner can change it.");
+    expect(mine.queryByTestId("patrol-mode-autonomous")).toBeNull();
+    // It is still mine to run, edit and remove.
+    expect(mine.getByTestId("patrol-run-now")).toBeInTheDocument();
+    await waitFor(() => expect(mine.getByTestId("patrol-edit")).toBeEnabled());
+    fireEvent.click(mine.getByTestId("patrol-edit"));
+    // The edit form leaves the mode out, so a save cannot half-fail on it.
+    await waitFor(() => expect(mine.getByRole("button", { name: /save/i })).toBeInTheDocument());
+    expect(mine.queryByText("Approval mode while patrolling")).toBeNull();
+  });
+
+  it("a read-only Viewer is offered nothing that changes a patrol", async () => {
+    render(<Page startAdding canWrite={false} />);
+    await waitFor(() => expect(screen.getAllByTestId("patrol-card")).toHaveLength(3));
+    expect(screen.queryByTestId("patrol-run-now")).toBeNull();
+    expect(screen.queryByTestId("patrol-pause")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Start patrol" })).toBeNull();
+    expand("pt-1");
+    const mine = within(card("pt-1"));
+    await waitFor(() => expect(mine.getByTestId("patrol-prompt")).toBeInTheDocument());
+    expect(mine.queryByTestId("patrol-mode-autonomous")).toBeNull();
+    expect(mine.queryByTestId("patrol-edit")).toBeNull();
+    expect(mine.queryByTestId("patrol-remove")).toBeNull();
+    // Reading stays: the way into the chat.
+    expect(mine.getByTestId("patrol-open-chat")).toBeInTheDocument();
   });
 
   it("says so, with a way to retry, when a patrol's history cannot be read", async () => {
@@ -340,6 +402,30 @@ describe("starting a patrol from the page", () => {
     expect(api.createSchedule.mock.calls[0][0]).toBe("c-9");
     expect(api.createSchedule.mock.calls[0][1].allow_multiple).toBe(true);
     expect(calls.some((c) => c.method === "POST" && c.url === "/api/conversations")).toBe(false);
+  });
+
+  it("a chat list that failed to load is offered again once a retry succeeds", async () => {
+    let failChats = true;
+    const base = globalThis.fetch as unknown as (input: string, init?: RequestInit) => Promise<Response>;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string, init?: RequestInit) => {
+        if (String(input) === "/api/conversations" && (init?.method ?? "GET") === "GET" && failChats) {
+          return new Response("{}", { status: 500 });
+        }
+        return base(input, init);
+      }),
+    );
+    render(<Page startAdding />);
+    await waitFor(() => expect(screen.getAllByTestId("patrol-card")).toHaveLength(3));
+    fireEvent.click(screen.getByRole("button", { name: "An existing chat" }));
+    expect(await screen.findByText("Couldn't load your chats.")).toBeInTheDocument();
+    failChats = false;
+    fireEvent.click(screen.getByRole("button", { name: "A new chat" }));
+    fireEvent.click(screen.getByRole("button", { name: "An existing chat" }));
+    const picker = await screen.findByTestId("patrols-new-chat");
+    await waitFor(() => expect(within(picker).getByRole("option", { name: "Existing chat" })).toBeInTheDocument());
+    expect(screen.queryByText("Couldn't load your chats.")).toBeNull();
   });
 
   it("the guided setup is one click from the form", async () => {

@@ -3,7 +3,7 @@ import { MenuItem } from "@/app/shared/ui/Menu";
 import { Icon } from "@/app/shared/ui/Icon";
 import { readDashboardView } from "@/app/chat/ui/dashboard/prefs";
 import { HomeIcon } from "./glyphs";
-import { isKeptAtTop, isStartPage, keepAtTop, removeFromTop, setStartPage, type ShortcutTarget } from "./layout";
+import { isKeptAtTop, isStartPage, keepAtTop, removeFromTop, setHome, setStartPage, type ShortcutTarget } from "./layout";
 import { updateSidebarLayout, useSidebar } from "./store";
 import { useCanCustomize } from "./useCanCustomize";
 
@@ -59,7 +59,7 @@ export function StartPageItem({ target, onDone }: { target: ShortcutTarget; onDo
       onClick={() => {
         onDone();
         updateSidebarLayout((l) =>
-          isStartPage(l, target.kind, target.ref) ? { ...l, home: "" } : setStartPage(l, withView(target)),
+          isStartPage(l, target.kind, target.ref) ? setHome(l, "") : setStartPage(l, withView(target)),
         );
       }}
     >

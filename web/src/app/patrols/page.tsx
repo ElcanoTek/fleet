@@ -9,6 +9,7 @@ import { t as tr } from "@/app/lib/i18n";
 
 import { useState } from "react";
 import { AppSidebar } from "@/app/shared/sidebar/AppSidebar";
+import { useCustomizeAccess } from "@/app/shared/sidebar/useCanCustomize";
 import { useRailCollapse } from "@/app/shared/ui/NavRail";
 import { PageTopBar } from "@/app/shared/ui/PageTopBar";
 import { Icon } from "@/app/shared/ui/Icon";
@@ -18,6 +19,10 @@ export default function PatrolsPage() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [adding, setAdding] = useState(false);
   const collapse = useRailCollapse();
+  // A read-only Viewer's changes are all refused by the server (the `mutate`
+  // gate), so the page offers them none. Only a confirmed Viewer loses the
+  // controls: a role still being read, or one that could not be, keeps them.
+  const canWrite = useCustomizeAccess().account !== "viewer";
 
   return (
     <div className="grid h-[100dvh] grid-cols-[minmax(0,1fr)] overflow-hidden text-[var(--color-text-primary)] sm:grid-cols-[auto_minmax(0,1fr)]">
@@ -31,7 +36,7 @@ export default function PatrolsPage() {
           subtitle={tr("Chats that check in on a schedule, with full history, workspace files and enabled connectors.")}
           icon="sparkles"
           onMenu={() => setSidebarOpen(true)}
-          actions={
+          actions={!canWrite ? null : (
             <button
               type="button"
               data-testid="patrols-new"
@@ -42,10 +47,10 @@ export default function PatrolsPage() {
               <Icon name="plus" className="size-4" />
               {tr("New patrol")}
             </button>
-          }
+          )}
         />
         <main className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
-          <PatrolsView adding={adding} setAdding={setAdding} />
+          <PatrolsView adding={adding} setAdding={setAdding} canWrite={canWrite} />
         </main>
       </div>
     </div>

@@ -7,7 +7,7 @@ import {
   approvalModeLabel,
   formatCountdown,
 } from "@/app/chat/ui/PatrolBanner";
-import { ApprovalSegmented, PatrolForm, editBody, type PatrolFormValues } from "@/app/chat/ui/PatrolsDialog";
+import { ApprovalSegmented, AutonomousConfirm, PatrolForm, editBody, type PatrolFormValues } from "@/app/chat/ui/PatrolsDialog";
 import { matchesSearch, searchTokens } from "@/app/chat/ui/conversationOrganization";
 import { conversationApiUrl } from "@/app/lib/conversationApiUrl";
 import { currentDefaultModel } from "@/app/lib/modelAliases";
@@ -161,7 +161,15 @@ function PatrolCard({
   onChanged,
   onError,
   requireAutonomousAccept,
+  canWrite,
+  chatArmed,
 }: {
+  // False for a read-only Viewer: the server refuses every change they
+  // could make, so the row is for reading.
+  canWrite: boolean;
+  // A patrol in this patrol's chat is running: switching the chat to
+  // Autonomous asks once more first, as the chat's own Patrols dialog does.
+  chatArmed: boolean;
   patrol: PatrolBrief;
   now: number;
   expanded: boolean;
@@ -172,9 +180,17 @@ function PatrolCard({
   onError: (message: string) => void;
   requireAutonomousAccept: (then: () => void) => void;
 }) {
-  const mine = isOwnPatrol(patrol);
+  const own = isOwnPatrol(patrol);
+  // `mine` gates the controls: the person's own patrol, on an account that
+  // may change things.
+  const mine = own && canWrite;
+  // The approval mode is the chat's, and only the chat's owner may change it:
+  // a patrol set up in a teammate's Multiplayer chat is theirs to run and
+  // edit, but its mode is read here.
+  const canSetMode = mine && patrol.owns_chat !== false;
   const paused = patrol.status === "paused";
-  const skipped = mine && !paused && (patrol.skipped?.count ?? 0) > 0;
+  const [confirmingAutonomous, setConfirmingAutonomous] = useState(false);
+  const skipped = own && !paused && (patrol.skipped?.count ?? 0) > 0;
   const [detail, setDetail] = useState<Detail | null>(null);
   const [detailState, setDetailState] = useState<"idle" | "loading" | "failed">("idle");
   const [busy, setBusy] = useState(false);
@@ -223,16 +239,25 @@ function PatrolCard({
     }
   };
 
-  const changeMode = (mode: ConversationApprovalMode) => {
-    if (mode === patrol.approval_mode) return;
+  const applyMode = (mode: ConversationApprovalMode) => {
     void act(async () => {
       const outcome = await setApprovalMode(patrol.conversation_id, mode);
       if (outcome === "accept") {
-        requireAutonomousAccept(() => changeMode(mode));
+        requireAutonomousAccept(() => applyMode(mode));
         return;
       }
       if (outcome !== "ok") throw new Error(outcome);
     }, tr("Couldn't change the approval mode"));
+  };
+  const changeMode = (mode: ConversationApprovalMode) => {
+    setConfirmingAutonomous(false);
+    if (mode === (patrol.approval_mode ?? "manual")) return;
+    // A running patrol's next run would act without cards: ask once more.
+    if (mode === "autonomous" && chatArmed) {
+      setConfirmingAutonomous(true);
+      return;
+    }
+    applyMode(mode);
   };
 
   const prompt = detail?.patrol.prompt ?? "";
@@ -291,7 +316,7 @@ function PatrolCard({
               <span className="min-w-0 text-[0.9rem] font-semibold text-[var(--color-text-primary)] sm:truncate">
                 {patrol.title || patrol.conversation_title || tr("Patrol")}
               </span>
-              {!mine && patrol.owner_email ? (
+              {!own && patrol.owner_email ? (
                 <>
                   <OwnerAvatar email={patrol.owner_email} />
                   <span className="sr-only">{tr("Shared by {0}", [patrol.owner_email])}</span>
@@ -384,7 +409,7 @@ function PatrolCard({
       {expanded && !editing ? (
         <div className="grid gap-4 border-t border-[var(--color-divider)] px-4 pb-4 pt-3.5 sm:pl-[3.4rem]">
           <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-            {mine ? (
+            {canSetMode ? (
               <div className="grid content-start gap-2">
                 <span className={LABEL_CLASS}>{tr("Approval mode")}</span>
                 <ApprovalSegmented
@@ -393,9 +418,30 @@ function PatrolCard({
                   value={patrol.approval_mode ?? "manual"}
                   onChange={changeMode}
                 />
+                {confirmingAutonomous ? (
+                  <AutonomousConfirm
+                    onKeep={() => setConfirmingAutonomous(false)}
+                    onConfirm={() => {
+                      setConfirmingAutonomous(false);
+                      applyMode("autonomous");
+                    }}
+                  />
+                ) : null}
                 <p className="m-0 text-[0.78rem] leading-[1.45] text-[var(--color-text-muted)]">
                   {APPROVAL_MODE_OPTIONS.find((o) => o.id === (patrol.approval_mode ?? "manual"))?.desc}{" "}
                   {tr("It is the chat's setting, so it applies to every patrol in that chat.")}
+                </p>
+              </div>
+            ) : own ? (
+              <div className="grid content-start gap-1.5" data-testid="patrol-mode-readonly">
+                <span className={LABEL_CLASS}>{tr("Approval mode")}</span>
+                <p className="m-0 text-[0.84rem] leading-[1.5] text-[var(--color-text-secondary)]">
+                  {approvalModeLabel(patrol.approval_mode ?? "manual")}
+                </p>
+                <p className="m-0 text-[0.78rem] leading-[1.45] text-[var(--color-text-muted)]">
+                  {patrol.owns_chat === false
+                    ? tr("It is the chat's setting. Only the chat's owner can change it.")
+                    : tr("It is the chat's setting, so it applies to every patrol in that chat.")}
                 </p>
               </div>
             ) : (
@@ -441,7 +487,7 @@ function PatrolCard({
             </div>
           </div>
 
-          {mine && prompt ? (
+          {own && prompt ? (
             <div className="grid gap-1.5">
               <span className={LABEL_CLASS}>{tr("Each run")}</span>
               <p
@@ -526,20 +572,29 @@ function PatrolCard({
             patrolOnly
             schedule={asSchedule({ ...patrol, prompt: detail.patrol.prompt })}
             approvalMode={patrol.approval_mode ?? "manual"}
+            showApprovalMode={canSetMode}
             onRequireAutonomousAccept={requireAutonomousAccept}
-            confirmAutonomous={!paused}
+            confirmAutonomous={chatArmed}
             canCancel
             onCancel={() => setEditing(false)}
             onSubmit={async (v) => {
               const sc = asSchedule({ ...patrol, prompt: detail.patrol.prompt });
+              let acceptMode: ConversationApprovalMode | null = null;
               const ok = await act(async () => {
                 const body = editBody(sc, v);
                 if (Object.keys(body).length > 0) await updateSchedule(patrol.conversation_id, patrol.id, body);
-                if (v.approvalMode !== (patrol.approval_mode ?? "manual")) {
+                if (canSetMode && v.approvalMode !== (patrol.approval_mode ?? "manual")) {
                   const outcome = await setApprovalMode(patrol.conversation_id, v.approvalMode);
-                  if (outcome !== "ok" && outcome !== "accept") throw new Error(outcome);
+                  // The schedule is saved; the mode waits for the person's
+                  // acceptance of what Autonomous does, then is applied.
+                  if (outcome === "accept") acceptMode = v.approvalMode;
+                  else if (outcome !== "ok") throw new Error(outcome);
                 }
               }, tr("Couldn't save patrol"));
+              if (ok && acceptMode) {
+                const mode = acceptMode;
+                requireAutonomousAccept(() => applyMode(mode));
+              }
               if (ok) setEditing(false);
               return ok;
             }}
@@ -581,7 +636,10 @@ function NewPatrolForm({
         const res = await fetch("/api/conversations", { cache: "no-store" });
         if (!res.ok) throw new Error(String(res.status));
         const data = (await res.json()) as { conversations?: OwnChat[] };
-        if (live) setChats((data.conversations ?? []).filter((c) => !c.lockdown));
+        if (live) {
+          setChats((data.conversations ?? []).filter((c) => !c.lockdown));
+          setChatsFailed(false);
+        }
       } catch {
         if (live) setChatsFailed(true);
       }
@@ -705,7 +763,10 @@ function NewPatrolForm({
 export function PatrolsView({
   adding,
   setAdding,
+  canWrite = true,
 }: {
+  // False for a read-only Viewer: nothing that changes a patrol is offered.
+  canWrite?: boolean;
   // The new-patrol form is open (the header's New patrol button owns it).
   adding: boolean;
   setAdding: (open: boolean) => void;
@@ -764,6 +825,11 @@ export function PatrolsView({
   const mine = shown.filter(isOwnPatrol);
   const shared = shown.filter((p) => !isOwnPatrol(p));
   const requireAutonomousAccept = useCallback((then: () => void) => setPendingRisk(() => then), []);
+  // The chats with a running patrol, the caller's or a teammate's.
+  const armedChats = useMemo(
+    () => new Set(patrols.filter((p) => p.status === "active").map((p) => p.conversation_id)),
+    [patrols],
+  );
 
   const card = (p: PatrolBrief) => (
     <PatrolCard
@@ -779,6 +845,8 @@ export function PatrolsView({
       onChanged={reload}
       onError={setError}
       requireAutonomousAccept={requireAutonomousAccept}
+      canWrite={canWrite}
+      chatArmed={armedChats.has(p.conversation_id)}
     />
   );
 
@@ -824,6 +892,10 @@ export function PatrolsView({
             {tr("Try again")}
           </button>
         </div>
+      ) : patrols.length === 0 && !canWrite ? (
+        <p className="m-0 py-6 text-[0.875rem] text-[var(--color-text-muted)]" data-testid="patrols-empty-readonly">
+          {tr("No patrols are shared with you yet.")}
+        </p>
       ) : patrols.length === 0 ? (
         adding ? (
           form
@@ -889,7 +961,7 @@ export function PatrolsView({
             </span>
           </div>
 
-          {adding ? form : null}
+          {adding && canWrite ? form : null}
 
           {shown.length === 0 ? (
             <p className="m-0 py-4 text-[0.875rem] text-[var(--color-text-muted)]">

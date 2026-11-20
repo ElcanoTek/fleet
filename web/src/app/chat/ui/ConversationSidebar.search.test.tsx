@@ -6,7 +6,7 @@ import { filterConversations } from "./conversationOrganization";
 import { DEFAULT_BRANDING } from "@/app/lib/useClientConfig";
 import type { ConversationSummary, ServerConfig } from "./chat-experience";
 import type { Project } from "./ProjectsModal";
-import { BUILTIN_LAYOUT, updateSection, type SectionId } from "@/app/shared/sidebar/layout";
+import { BUILTIN_LAYOUT, keepAtTop, updateSection, type SectionId } from "@/app/shared/sidebar/layout";
 import { getSidebarState, loadSidebar, resetSidebarStoreForTests } from "@/app/shared/sidebar/store";
 import { resetPatrolCacheForTests } from "@/app/shared/sidebar/targets";
 
@@ -335,6 +335,22 @@ describe("ConversationSidebar — search looks everywhere", () => {
     expect(screen.queryByTestId("search-hidden-note")).toBeNull();
     // The list is not inside a hidden container.
     expect(screen.getByTestId("search-results").closest(".hidden")).toBeNull();
+  });
+
+  it("with Pinned hidden, a pinned project is still listed under Projects", async () => {
+    // A layout saved before Pinned existed starts with it hidden when Chats
+    // was; its pinned projects were in Projects then and must stay findable.
+    const projects = [{ ...PROJECTS[0], pinned: true }];
+    await renderRail(layoutWith({ pinned: { hidden: true }, chats: { hidden: true } }), { overrides: { projects } });
+    expect(screen.queryByTestId("pinned-section")).toBeNull();
+    expect(within(screen.getByTestId("projects-section")).getByText("Pacing playbook")).toBeTruthy();
+  });
+
+  it("with Pinned shown, a pinned project is in Pinned and not again under Projects", async () => {
+    const projects = [{ ...PROJECTS[0], pinned: true }];
+    await renderRail(layoutWith({}), { overrides: { projects } });
+    expect(within(screen.getByTestId("pinned-section")).getByText("Pacing playbook")).toBeTruthy();
+    expect(within(screen.getByTestId("projects-section")).queryByText("Pacing playbook")).toBeNull();
   });
 
   it("finds chats in hidden sections, says they are hidden, and brings a section back", async () => {
@@ -709,6 +725,15 @@ describe("ConversationSidebar — one list for all chats", () => {
       await renderRail(unifiedLayout(), withRetention({ ...retention, conversationTtlDays: 365 }));
       expect(statuses("expiring")).toHaveLength(0);
       expect(screen.queryByTestId("expiring-chats-notice")).toBeNull();
+    });
+
+    it("still counts a temporary chat the person keeps at the top", async () => {
+      // Kept at the top is not pinned: the chat is deleted like the rest, so
+      // the notice must not go quiet about it.
+      const layout = keepAtTop(unifiedLayout(), { kind: "chat", ref: "soon", title: "Idle for months" });
+      await renderRail(layout, withRetention());
+      expect(expiringTitles()).toEqual(["Nearly gone"]);
+      expect(screen.getByTestId("expiring-chats-notice").textContent).toContain("2 chats will be deleted soon.");
     });
 
     it("says so when the person is close to the most temporary chats they keep", async () => {

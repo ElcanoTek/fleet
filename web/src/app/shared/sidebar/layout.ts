@@ -355,6 +355,14 @@ export function isStartPage(layout: SidebarLayout, kind: ItemKind, ref: string):
   return Boolean(item && layout.home === item.id);
 }
 
+// The item that was the start page, if it was kept only for that (a hidden
+// shortcut), goes with the job. Only that one item: a shortcut the person
+// hid in Customize is theirs to keep, with its name and icon.
+function dropFormerStartPage(next: SidebarLayout, formerHome: string | undefined) {
+  if (!formerHome || formerHome === next.home) return;
+  next.items = next.items.filter((i) => i.id !== formerHome || i.kind === "builtin" || !i.hidden);
+}
+
 /**
  * setStartPage makes a target the page fleet opens to, wherever it is in the
  * sidebar. A target that is not a top item is added to the layout hidden: it
@@ -376,8 +384,7 @@ export function setStartPage(layout: SidebarLayout, target: ShortcutTarget): Sid
     next.items.push(item);
   }
   next.home = item.id;
-  // The item that was the start page, if it was kept only for that, goes.
-  next.items = next.items.filter((i) => i.kind === "builtin" || !i.hidden || i.id === next.home);
+  dropFormerStartPage(next, layout.home);
   return normalizeLayout(next);
 }
 
@@ -428,8 +435,7 @@ export function moveItemTo(layout: SidebarLayout, id: string, to: number): Sideb
 export function setHome(layout: SidebarLayout, id: string): SidebarLayout {
   const next = cloneLayout(layout);
   next.home = id && id !== "patrols" && next.items.some((i) => i.id === id) ? id : "";
-  // An item kept only to be the start page goes with the job.
-  next.items = next.items.filter((i) => i.kind === "builtin" || !i.hidden || i.id === next.home);
+  dropFormerStartPage(next, layout.home);
   return normalizeLayout(next);
 }
 

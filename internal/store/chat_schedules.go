@@ -653,6 +653,11 @@ type UserPatrol struct {
 	// open: listed to read, and OwnerEmail says whose it is.
 	Mine       bool   `json:"mine"`
 	OwnerEmail string `json:"owner_email,omitempty"`
+	// OwnsChat is true when the patrol's chat is the caller's own. The
+	// approval mode is the chat's, and only its owner may change it
+	// (SetApprovalMode), so a patrol the caller set up in a teammate's
+	// Multiplayer chat is Mine with OwnsChat false.
+	OwnsChat bool `json:"owns_chat"`
 	// Multiplayer and TeamVisible say how the patrol's chat is shared, so a
 	// teammate's row links to the page that opens for them: the chat itself
 	// (Multiplayer) or its read-only team view.
@@ -692,6 +697,7 @@ func scanUserPatrol(row rowScanner, caller string) (UserPatrol, error) {
 		p.LastRunAt = &lastRun.Int64
 	}
 	p.Mine = strings.EqualFold(creator, caller)
+	p.OwnsChat = strings.EqualFold(p.ConversationOwner, caller)
 	if !p.Mine {
 		p.OwnerEmail = creator
 	}

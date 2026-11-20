@@ -76,6 +76,8 @@ export type PatrolBrief = {
   owner_email?: string;
   /** False for a teammate's patrol the caller can only read. Absent (an older server) means the caller's own. */
   mine?: boolean;
+  /** False when the patrol's chat is someone else's (the caller set the patrol up in a teammate's Multiplayer chat): its approval mode is the chat owner's to change. Absent (an older server) reads as the caller's chat. */
+  owns_chat?: boolean;
   /** How a teammate's patrol's chat is shared with the caller. */
   multiplayer?: boolean;
   team_visible?: boolean;

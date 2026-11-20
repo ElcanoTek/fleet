@@ -279,6 +279,22 @@ describe("the start page", () => {
     expect(ids(l)).toEqual(["chat", "patrols", "tasks"]);
   });
 
+  it("a shortcut the person hid is kept when the start page is set, changed or cleared", () => {
+    // Hidden in Customize, with its own name: not a start page's leftover.
+    let l = keepAtTop(BUILTIN_LAYOUT, { kind: "chat", ref: "c9", title: "Pacing board" });
+    const hiddenId = findShortcut(l, "chat", "c9")!.id;
+    l = updateItem(l, hiddenId, { hidden: true });
+    l = setStartPage(l, { kind: "project", ref: "p1" });
+    expect(findShortcut(l, "chat", "c9")?.hidden).toBe(true);
+    l = setStartPage(l, { kind: "chat", ref: "c1" });
+    // The project kept only to be the start page went; the hidden shortcut did not.
+    expect(findShortcut(l, "project", "p1")).toBeUndefined();
+    expect(findShortcut(l, "chat", "c9")?.title).toBe("Pacing board");
+    l = setHome(l, "");
+    expect(findShortcut(l, "chat", "c1")).toBeUndefined();
+    expect(findShortcut(l, "chat", "c9")?.hidden).toBe(true);
+  });
+
   it("a top item made the start page stays at the top when another takes over", () => {
     let l = keepAtTop(BUILTIN_LAYOUT, { kind: "chat", ref: "c1" });
     l = setStartPage(l, { kind: "chat", ref: "c1" });

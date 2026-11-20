@@ -900,15 +900,15 @@ func TestGetUserPatrolAndRuns(t *testing.T) {
 	if err != nil || mine == nil {
 		t.Fatalf("GetUserPatrol(me) = %+v, %v", mine, err)
 	}
-	if !mine.Mine || mine.Prompt != "check the deals" || mine.OwnerEmail != "" || mine.ApprovalMode != ConversationApprovalAuto {
-		t.Errorf("my patrol = %+v, want mine, with its prompt, in an auto-approve chat", mine)
+	if !mine.Mine || !mine.OwnsChat || mine.Prompt != "check the deals" || mine.OwnerEmail != "" || mine.ApprovalMode != ConversationApprovalAuto {
+		t.Errorf("my patrol = %+v, want mine, in my own chat, with its prompt, in an auto-approve chat", mine)
 	}
 	theirs, err := s.GetUserPatrol(ctx, other, sc.ID)
 	if err != nil || theirs == nil {
 		t.Fatalf("GetUserPatrol(other) = %+v, %v", theirs, err)
 	}
-	if theirs.Mine || theirs.Prompt != "" || theirs.OwnerEmail != me {
-		t.Errorf("someone else's read = %+v, want not mine, no prompt, the creator named", theirs)
+	if theirs.Mine || theirs.OwnsChat || theirs.Prompt != "" || theirs.OwnerEmail != me {
+		t.Errorf("someone else's read = %+v, want not mine, not their chat, no prompt, the creator named", theirs)
 	}
 	if none, err := s.GetUserPatrol(ctx, me, "no-such-patrol"); err != nil || none != nil {
 		t.Errorf("an unknown ID = %+v, %v; want nil, nil", none, err)

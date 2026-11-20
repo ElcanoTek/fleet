@@ -152,7 +152,7 @@ export type PatrolFormValues = {
 // next run then takes live platform actions without stopping for cards.
 // The Patrol bar's dropdown asks the same; every path that can switch the
 // mode (the dialog's mode control and both forms) goes through this.
-function AutonomousConfirm({
+export function AutonomousConfirm({
   onKeep,
   onConfirm,
 }: {
