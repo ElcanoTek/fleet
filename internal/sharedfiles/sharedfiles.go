@@ -342,7 +342,9 @@ func collapsedFolderLine(group []store.SharedFile) string {
 			fmt.Fprintf(&b, " — %s", d)
 		}
 	} else {
-		fmt.Fprintf(&b, "; list them with %s", codeSpan("bash ls -l "+tools.SharedFilesDirName+"/"+folder+"/"))
+		// Never a ready-made command: the folder name is user-written text,
+		// so it is shown only as a path, never as something to execute.
+		b.WriteString("; list that folder to see them")
 	}
 	b.WriteString("\n")
 	return b.String()

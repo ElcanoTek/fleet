@@ -338,14 +338,19 @@ func (s *Server) downloadSharedFile(w http.ResponseWriter, r *http.Request, id s
 		return
 	}
 	var src io.ReadSeeker
+	modTime := time.Unix(f.UpdatedAt, 0)
 	if f.IsChatWritten() {
-		// A chat-written file's text lives in the database (ADR-0114).
-		content, _, ok, err := s.store.SharedFileContent(r.Context(), f.ID)
+		// A chat-written file's text lives in the database (ADR-0114). It can
+		// change twice within one second, so it is validated by its content
+		// hash (ETag), never by the whole-second modification time.
+		content, sha, ok, err := s.store.SharedFileContent(r.Context(), f.ID)
 		if err != nil || !ok {
 			http.Error(w, "shared file content is missing", http.StatusNotFound)
 			return
 		}
 		src = strings.NewReader(content)
+		w.Header().Set("ETag", `"`+sha+`"`)
+		modTime = time.Time{}
 	} else {
 		lib := s.sharedFilesLibrary()
 		file, err := os.Open(filepath.Join(lib.CanonicalDir, f.ID))
@@ -360,7 +365,7 @@ func (s *Server) downloadSharedFile(w http.ResponseWriter, r *http.Request, id s
 		w.Header().Set("Content-Type", f.ContentType)
 	}
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", f.Name))
-	http.ServeContent(w, r, f.Name, time.Unix(f.UpdatedAt, 0), src)
+	http.ServeContent(w, r, f.Name, modTime, src)
 }
 
 func (s *Server) patchSharedFile(w http.ResponseWriter, r *http.Request, id string) {

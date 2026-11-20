@@ -162,8 +162,10 @@ resolution and no-follow policy `view_file` uses, so a CSV built in
 - One folder level (`folder/name`), as for uploads; a deeper path is refused,
   never flattened. Chat-created names and folders may use only letters,
   digits, spaces and `. _ - ( ) + , = @ # & '`: every conversation sees these
-  paths inside the prompt's Markdown, so a backtick, bracket or asterisk from
-  one user's chat must not be able to break out of that formatting. (The block
+  paths inside the prompt's Markdown, so nothing from one user's chat may act as a Markdown delimiter
+  (backtick, bracket, asterisk) or a shell metacharacter (`& ; | # $ ' ( )` …)
+  in anyone else's, and a big folder's line never suggests a command built
+  from its name. (The block
   also renders every path with a code-span fence its contents cannot close.) A name that would be sanitized differently is refused with
   the usable spelling, so a model never reads back a path it did not write.
 - Admin uploads (`origin = 'admin'`) are read-only to chats. Admins can rename

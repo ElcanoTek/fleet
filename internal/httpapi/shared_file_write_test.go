@@ -312,3 +312,36 @@ func TestUnstageFreedPathKeepsANewOwner(t *testing.T) {
 		t.Fatalf("stale copy still present: %v", err)
 	}
 }
+
+// A chat file can change twice within one second, so its download is
+// revalidated by content hash: the old ETag no longer matches after a write,
+// and If-Modified-Since never yields a 304.
+func TestChatSharedFileDownloadRevalidatesByHash(t *testing.T) {
+	t.Parallel()
+	srv, h := sharedFilesFixture(t)
+	first := writeOK(t, srv, map[string]any{"path": "opt/log.csv", "mode": "create", "content": "a\n", "description": "log"})
+	files, _ := srv.store.ListSharedFiles(context.Background())
+	get := func(hdr, val string) *httptest.ResponseRecorder {
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/shared-files/"+files[0].ID+"/download", nil)
+		req = req.WithContext(asUser(req.Context(), "member@x"))
+		if hdr != "" {
+			req.Header.Set(hdr, val)
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+	if rec := get("", ""); rec.Header().Get("ETag") != `"`+first.SHA256+`"` || rec.Header().Get("Last-Modified") != "" {
+		t.Fatalf("headers: ETag=%q Last-Modified=%q", rec.Header().Get("ETag"), rec.Header().Get("Last-Modified"))
+	}
+	if rec := get("If-None-Match", `"`+first.SHA256+`"`); rec.Code != http.StatusNotModified {
+		t.Fatalf("unchanged revalidation = %d", rec.Code)
+	}
+	writeOK(t, srv, map[string]any{"path": "opt/log.csv", "mode": "append", "content": "b\n"})
+	if rec := get("If-None-Match", `"`+first.SHA256+`"`); rec.Code != http.StatusOK || rec.Body.String() != "a\nb\n" {
+		t.Fatalf("changed revalidation = %d %q", rec.Code, rec.Body.String())
+	}
+	if rec := get("If-Modified-Since", "Mon, 01 Jan 2400 00:00:00 GMT"); rec.Code != http.StatusOK {
+		t.Fatalf("If-Modified-Since gave %d", rec.Code)
+	}
+}

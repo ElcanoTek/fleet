@@ -61,7 +61,7 @@ scheduled run write a TEXT file into the shared library:
   and stages it inside a transaction holding the row `FOR SHARE`, so a write,
   rename or delete on another replica waits for it and restages after it.
 - **Paths are safe to show everyone:** chat-created names and folders use only
-  letters, digits, spaces and `. _ - ( ) + , = @ # & '`; the prompt block also
+  letters, digits, spaces and `. _ - , + @ =`; the prompt block also
   renders every path with a code-span fence its contents cannot close.
 - **Who:** any non-Viewer user, recorded as `updated_by` with the chat (or
   `task:<id>`) it came from. Admin uploads (`origin = 'admin'`) stay

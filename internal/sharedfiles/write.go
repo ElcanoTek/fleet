@@ -77,21 +77,22 @@ func ParseChatPath(raw string) (folder, name string, err error) {
 }
 
 // checkChatPathChars allows a chat-created path segment only letters, digits,
-// spaces and . _ - ( ) + , = @ # & '. Every conversation on the server is shown
-// these paths inside the prompt's Markdown, so a backtick, bracket, asterisk or
-// similar delimiter written by one user's chat could break out of that
-// formatting in everyone else's; uploads (an admin's choice) keep the wider
-// SanitizeName rules.
+// spaces and . _ - , + @ =. Every conversation on the server is shown these
+// paths in its prompt, so nothing one user's chat writes there may act as a
+// Markdown delimiter (backtick, bracket, asterisk) or a shell metacharacter
+// (& ; | # $ ' " ( ) < > ~ and friends) in anyone else's — a model must never be
+// handed a path that turns into a command. Uploads (an admin's choice) keep the
+// wider SanitizeName rules.
 func checkChatPathChars(seg string) error {
 	for _, r := range seg {
 		if unicode.IsLetter(r) || unicode.IsDigit(r) {
 			continue
 		}
 		switch r {
-		case ' ', '.', '_', '-', '(', ')', '+', ',', '=', '@', '#', '&', '\'':
+		case ' ', '.', '_', '-', ',', '+', '@', '=':
 			continue
 		}
-		return fmt.Errorf("%q contains %q: shared file and folder names written by chats may use letters, digits, spaces and . _ - ( ) + , = @ # & ' only", seg, r)
+		return fmt.Errorf("%q contains %q: shared file and folder names written by chats may use letters, digits, spaces and . _ - , + @ = only", seg, r)
 	}
 	return nil
 }
