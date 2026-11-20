@@ -788,7 +788,7 @@ func TestArchivePausesChatSchedules(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.CreateChatSchedule(ctx, ChatScheduleInput{ConversationID: conv.ID, UserEmail: owner, Prompt: "yearly", CronExpr: "0 9 1 7 *", AllowMultiple: true}); err != nil {
+	if _, err := s.CreateChatSchedule(ctx, ChatScheduleInput{ConversationID: conv.ID, UserEmail: owner, Prompt: "yearly", CronExpr: "0 9 29 2 *", AllowMultiple: true}); err != nil {
 		t.Fatal(err)
 	}
 	// One run already waiting in the queue.
