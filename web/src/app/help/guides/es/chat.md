@@ -465,7 +465,9 @@ en la conversación como **Mensaje de un administrador** con su correo, nunca
 como palabras tuyas, y una nota breve en el chat dice qué se cambió y por qué.
 La respuesta se ejecuta con tus conexiones y siempre te pregunta antes de
 cualquier acción que requiera aprobación, aunque el chat apruebe
-automáticamente.
+automáticamente. Un administrador también puede archivar o eliminar un chat;
+un chat eliminado se queda 30 días en una papelera, así que pídele que lo
+restaure si fue un error.
 
 ### Conversaciones largas
 

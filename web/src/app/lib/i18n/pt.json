@@ -6109,11 +6109,21 @@
   "a reason is required: it is recorded and shown in the chat": "é preciso um motivo: ele é registrado e mostrado no chat",
   "change the instructions or the status, not both at once": "altere as instruções ou o status, não os dois ao mesmo tempo",
   "chat administration is not available": "a administração de chats não está disponível",
-  "kind must be message, stop or transfer (archive through PATCH)": "kind deve ser message, stop ou transfer (archive é feito com PATCH)",
   "nothing to change: send prompt (with expect_sha256) or status": "nada para alterar: envie prompt (com expect_sha256) ou status",
   "the patrol's instructions changed since you opened them; reload and edit again": "as instruções da patrulha mudaram desde que você as abriu; recarregue e edite de novo",
   "A Lockdown chat keeps its model.": "Um chat em Lockdown mantém seu modelo.",
   "The server is carrying it out…": "O servidor está executando…",
   "Auto-approve (owner’s choice)": "Aprovação automática (escolha do proprietário)",
-  "this chat is archived; unarchive it before running a patrol or timer": "este chat está arquivado; desarquive-o antes de executar uma patrulha ou um temporizador"
+  "this chat is archived; unarchive it before running a patrol or timer": "este chat está arquivado; desarquive-o antes de executar uma patrulha ou um temporizador",
+  "kind must be message, stop, transfer, delete, restore or purge (archive through PATCH)": "kind deve ser message, stop, transfer, delete, restore ou purge (archive é feito com PATCH)",
+  "deleted for good on {0}": "excluído definitivamente em {0}",
+  "deleted · gone {0}": "excluído · apagado em {0}",
+  "Delete permanently": "Excluir definitivamente",
+  "In the recycle bin": "Na lixeira",
+  "Move to recycle bin": "Mover para a lixeira",
+  "Prefer archiving. Delete moves the chat to the recycle bin: it disappears and stops, and is deleted for good after 30 days unless restored. Delete permanently is for emergencies, such as a full disk, and cannot be undone.": "Prefira arquivar. Excluir move o chat para a lixeira: ele desaparece e para, e é excluído definitivamente após 30 dias, a menos que seja restaurado. Excluir definitivamente é para emergências, como um disco cheio, e não pode ser desfeito.",
+  "Restore brings the chat back for its owner; its patrols stay paused until someone resumes them. Delete permanently removes it and its files now.": "Restaurar devolve o chat ao proprietário; as patrulhas continuam pausadas até alguém retomá-las. Excluir definitivamente apaga o chat e seus arquivos agora.",
+  "Show the recycle bin (deleted chats, restorable for 30 days)": "Mostrar a lixeira (chats excluídos, restauráveis por 30 dias)",
+  "Type the chat’s title to delete permanently": "Digite o título do chat para excluí-lo definitivamente",
+  "type the chat's title to confirm a permanent delete": "digite o título do chat para confirmar a exclusão definitiva"
 }

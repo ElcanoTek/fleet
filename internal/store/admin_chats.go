@@ -38,6 +38,11 @@ const (
 	// (payload "unarchive") a chat through the owner's archive path, which
 	// also revokes a shared chat's participants.
 	AdminRequestArchive = "archive"
+	// AdminRequestDelete moves a chat to the recycle bin; AdminRequestRestore
+	// takes it back out; AdminRequestPurge deletes it permanently at once.
+	AdminRequestDelete  = "delete"
+	AdminRequestRestore = "restore"
+	AdminRequestPurge   = "purge"
 
 	AdminRequestPending = "pending"
 	// AdminRequestRunning is a stop, transfer or archive a server process
@@ -55,6 +60,10 @@ const NoticeAdminUpdated = "admin_updated"
 // an admin message becomes; the rest is the admin request id, so a request
 // delivered twice finds its own row.
 const AdminMessageClientInputPrefix = "admin-message:"
+
+// AdminRecycleBinDays is how long a deleted chat stays in the recycle bin:
+// the tombstone purge in SweepExpired removes it this long after deletion.
+const AdminRecycleBinDays = 30
 
 // MaxAdminMessageBytes bounds a message an administrator sends into a chat.
 const MaxAdminMessageBytes = 32 * 1024
@@ -179,6 +188,10 @@ type AdminChat struct {
 	PendingApprovals int      `json:"pending_approvals"`
 	QueuedInputs     int      `json:"queued_inputs"`
 	TurnRunning      bool     `json:"turn_running"`
+	// DeletedAt and PurgesAt are set on a chat in the recycle bin: when it was
+	// deleted, and when the tombstone purge removes it for good.
+	DeletedAt *int64 `json:"deleted_at,omitempty"`
+	PurgesAt  *int64 `json:"purges_at,omitempty"`
 }
 
 // AdminChatFilter narrows AdminListChats.
@@ -191,7 +204,9 @@ type AdminChatFilter struct {
 	ActiveWithinDays int
 	// IncludeArchived also lists archived chats.
 	IncludeArchived bool
-	Limit           int
+	// Deleted lists the recycle bin (deleted chats not yet purged) instead.
+	Deleted bool
+	Limit   int
 }
 
 const adminChatSelect = `
@@ -202,17 +217,24 @@ const adminChatSelect = `
 	       (SELECT count(*) FROM sched.chat_schedules s WHERE s.conversation_id = c.id AND s.status = 'active' AND s.cron_expr <> ''),
 	       (SELECT count(*) FROM chat.approvals a WHERE a.conversation_id = c.id AND a.status = 'pending'),
 	       (SELECT count(*) FROM chat.chat_input_queue q WHERE q.conversation_id = c.id AND q.state = 'queued' AND q.mode <> 'direct'),
-	       EXISTS (SELECT 1 FROM chat.turns t WHERE t.conversation_id = c.id AND t.status = 'running')
+	       EXISTS (SELECT 1 FROM chat.turns t WHERE t.conversation_id = c.id AND t.status = 'running'),
+	       EXTRACT(EPOCH FROM c.deleted_at)::bigint
 	  FROM chat.conversations c`
 
 func scanAdminChat(row interface{ Scan(dest ...any) error }) (AdminChat, error) {
 	var c AdminChat
 	var participants []byte
+	var deletedAt sql.NullInt64
 	err := row.Scan(&c.ID, &c.Title, &c.OwnerEmail, &c.Model, &c.ApprovalMode,
 		&c.Persona, &c.ProjectID, &c.Lockdown, &c.Archived,
 		&c.Multiplayer, &participants, &c.TeamShared,
 		&c.CreatedAt, &c.UpdatedAt,
-		&c.ActivePatrols, &c.PendingApprovals, &c.QueuedInputs, &c.TurnRunning)
+		&c.ActivePatrols, &c.PendingApprovals, &c.QueuedInputs, &c.TurnRunning, &deletedAt)
+	if err == nil && deletedAt.Valid {
+		d := deletedAt.Int64
+		purge := d + int64(AdminRecycleBinDays*24*3600)
+		c.DeletedAt, c.PurgesAt = &d, &purge
+	}
 	if err == nil && len(participants) > 0 {
 		_ = json.Unmarshal(participants, &c.Participants)
 	}
@@ -235,14 +257,14 @@ func (s *Store) AdminListChats(ctx context.Context, f AdminChatFilter) ([]AdminC
 		limit = 100
 	}
 	rows, err := s.db.QueryContext(ctx, adminChatSelect+`
-		 WHERE c.deleted_at IS NULL
-		   AND ($1 OR c.archived_at IS NULL)
+		 WHERE (c.deleted_at IS NULL) <> $6
+		   AND ($1 OR $6 OR c.archived_at IS NULL)
 		   AND ($2 = '' OR lower(c.user_email) = lower($2))
 		   AND ($3 = '' OR c.title ILIKE $3 OR c.id LIKE $3)
 		   AND ($4 = 0 OR c.updated_at >= $4)
 		 ORDER BY c.updated_at DESC, c.id
 		 LIMIT $5`,
-		f.IncludeArchived, strings.TrimSpace(f.OwnerEmail), search, since, limit)
+		f.IncludeArchived, strings.TrimSpace(f.OwnerEmail), search, since, limit, f.Deleted)
 	if err != nil {
 		return nil, err
 	}
@@ -266,13 +288,17 @@ func likeEscape(p string) string {
 // MinChatScheduleIDPrefix characters) into the full id of a chat that is not
 // deleted.
 func (s *Store) ResolveAdminChatID(ctx context.Context, idOrPrefix string) (string, error) {
+	return s.resolveAdminChatID(ctx, idOrPrefix, false)
+}
+
+func (s *Store) resolveAdminChatID(ctx context.Context, idOrPrefix string, includeDeleted bool) (string, error) {
 	p := strings.TrimSpace(idOrPrefix)
 	if len(p) < MinChatScheduleIDPrefix {
 		return "", fmt.Errorf("%w: give the chat id or at least its first %d characters", ErrInvalidChatSchedule, MinChatScheduleIDPrefix)
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id FROM chat.conversations WHERE deleted_at IS NULL AND (id = $1 OR id LIKE $2) ORDER BY (id = $1) DESC LIMIT 3`,
-		p, likeEscape(p)+"%")
+		`SELECT id FROM chat.conversations WHERE ($3 OR deleted_at IS NULL) AND (id = $1 OR id LIKE $2) ORDER BY (id = $1) DESC LIMIT 3`,
+		p, likeEscape(p)+"%", includeDeleted)
 	if err != nil {
 		return "", err
 	}
@@ -297,6 +323,20 @@ func (s *Store) ResolveAdminChatID(ctx context.Context, idOrPrefix string) (stri
 		return "", ErrAdminChatAmbiguous
 	}
 	return ids[0], nil
+}
+
+// AdminGetChatAny returns one chat by id or unique prefix, including a chat
+// in the recycle bin (DeletedAt set).
+func (s *Store) AdminGetChatAny(ctx context.Context, idOrPrefix string) (AdminChat, error) {
+	id, err := s.resolveAdminChatID(ctx, idOrPrefix, true)
+	if err != nil {
+		return AdminChat{}, err
+	}
+	c, err := scanAdminChat(s.db.QueryRowContext(ctx, adminChatSelect+` WHERE c.id = $1`, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return AdminChat{}, ErrConversationNotFound
+	}
+	return c, err
 }
 
 // AdminGetChat returns one chat by id or unique prefix.
@@ -648,12 +688,24 @@ func (s *Store) CreateAdminRequest(ctx context.Context, in AdminRequestInput) (A
 		if payload != "archive" && payload != "unarchive" {
 			return AdminRequest{}, errors.New(`an archive request's payload is "archive" or "unarchive"`)
 		}
+	case AdminRequestDelete, AdminRequestRestore, AdminRequestPurge:
+		payload = ""
 	default:
 		return AdminRequest{}, fmt.Errorf("unknown admin request kind %q", in.Kind)
 	}
-	chat, err := s.AdminGetChat(ctx, in.ConversationID)
+	var chat AdminChat
+	switch in.Kind {
+	case AdminRequestRestore, AdminRequestPurge:
+		// These act on a chat in the recycle bin (a purge also on a live one).
+		chat, err = s.AdminGetChatAny(ctx, in.ConversationID)
+	default:
+		chat, err = s.AdminGetChat(ctx, in.ConversationID)
+	}
 	if err != nil {
 		return AdminRequest{}, err
+	}
+	if in.Kind == AdminRequestRestore && chat.DeletedAt == nil {
+		return AdminRequest{}, fmt.Errorf("%w: this chat is not in the recycle bin", ErrAdminChatNotAllowed)
 	}
 	if in.Kind == AdminRequestMessage && (chat.Archived || chat.Lockdown) {
 		return AdminRequest{}, fmt.Errorf("%w: an archived or Lockdown chat takes no admin messages", ErrAdminChatNotAllowed)
@@ -913,3 +965,85 @@ func (s *Store) QueueAdminMessage(ctx context.Context, requestID string) (row In
 // MaxAdminQueuedInputs is how many inputs may already wait in a chat's queue
 // for an admin message to join them (the chat route's own cap).
 var MaxAdminQueuedInputs = 20
+
+// AdminMoveChatToBin deletes a chat into the recycle bin, in one transaction
+// under the chat's row lock: it pauses every active patrol and timer in the
+// chat, whoever owns it (a fire in flight is revoked, their queued turns are
+// cancelled), then tombstones the chat (deleted_at = now()). Nothing can be
+// created or resumed in between, because both need the same lock. The
+// tombstone purge removes it AdminRecycleBinDays later unless it is restored.
+// This tombstones whatever FLEET_CONVERSATION_SOFT_DELETE says: an
+// administrator's delete can always be undone for that window. Everything
+// else (pin, sharing, participants, their paused patrols and pending cards)
+// is left as it was, so a restore gives the chat back whole. It returns how
+// many schedules it paused.
+func (s *Store) AdminMoveChatToBin(ctx context.Context, convID, notice string) (int, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := s.lockLiveConversation(ctx, tx, convID); err != nil {
+		return 0, err
+	}
+	now := time.Now().Unix()
+	res, err := tx.ExecContext(ctx,
+		`UPDATE `+chatSchedulesTable+`
+		    SET status = 'paused', updated_at = $2,
+		        lease_owner = NULL, lease_expires_at = NULL, fire_id = NULL,
+		        fire_trigger = NULL, fire_run_number = NULL, fire_failures = 0
+		  WHERE conversation_id = $1 AND status = 'active'`, convID, now)
+	if err != nil {
+		return 0, err
+	}
+	paused, _ := res.RowsAffected()
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE chat_input_queue SET state = 'cancelled', updated_at = $1
+		  WHERE conversation_id = $2 AND state = 'queued'`, now, convID); err != nil {
+		return 0, err
+	}
+	// The notice is written in the same transaction, so the chat never says
+	// it was moved to the bin unless it was; it is there if it is restored.
+	if n := strings.TrimSpace(notice); n != "" {
+		if err := s.appendNoticeTx(ctx, tx, convID, NoticeAdminUpdated, pgtext.Content(n)); err != nil {
+			return 0, err
+		}
+	}
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE chat.conversations SET deleted_at = NOW(), updated_at = $2 WHERE id = $1 AND deleted_at IS NULL`,
+		convID, now); err != nil {
+		return 0, err
+	}
+	return int(paused), tx.Commit()
+}
+
+// AdminRestoreChat takes a chat out of the recycle bin. Its patrols stay
+// paused (the delete paused them); the owner or an administrator resumes them.
+func (s *Store) AdminRestoreChat(ctx context.Context, convID string) error {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE chat.conversations SET deleted_at = NULL, updated_at = $2
+		  WHERE id = $1 AND deleted_at IS NOT NULL`,
+		convID, time.Now().Unix())
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("%w: this chat is not in the recycle bin", ErrAdminChatNotAllowed)
+	}
+	return nil
+}
+
+// AdminPurgeChat deletes a chat permanently, live or in the recycle bin: the
+// row goes, and its messages, approvals, queue rows, schedules and files'
+// rows with it (foreign-key cascade). Its workspace directory is left for
+// SweepOrphanWorkspaces. The record of admin actions on it stays.
+func (s *Store) AdminPurgeChat(ctx context.Context, convID string) error {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM chat.conversations WHERE id = $1`, convID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrConversationNotFound
+	}
+	return nil
+}

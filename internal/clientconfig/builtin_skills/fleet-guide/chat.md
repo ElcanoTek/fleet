@@ -1585,7 +1585,9 @@ ask a patrol to publish a log it keeps. It appears in the transcript as
 **Message from an administrator** with their email, never as your words, and
 a short note in the chat says what was changed and why. The reply runs with
 your connections, and always asks you before anything that needs approval,
-even if the chat is set to approve automatically.
+even if the chat is set to approve automatically. An administrator can also
+archive or delete a chat; a deleted chat stays in a recycle bin for 30 days,
+so ask them to restore it if it was a mistake.
 
 ### Long conversations
 

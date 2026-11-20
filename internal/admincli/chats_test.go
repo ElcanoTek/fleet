@@ -198,3 +198,23 @@ func TestCLIAdminActorDefault(t *testing.T) {
 		t.Fatalf("--as actor = %+v", got)
 	}
 }
+
+func TestChatsDelete_RecycleBinAndPermanent(t *testing.T) {
+	f := withFakeChatsStore(t)
+	f.polls = []store.AdminRequest{{ID: "req-1", State: store.AdminRequestPending}}
+	run := func(args ...string) int {
+		return chatsRequest(store.AdminRequestDelete, args, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+	}
+	if run("dfe4adc7", "--reason", "forked by mistake") != 0 || f.requests[0].Kind != store.AdminRequestDelete {
+		t.Fatalf("delete = %+v", f.requests)
+	}
+	if run("dfe4adc7", "--permanent", "--reason", "disk full") == 0 {
+		t.Fatal("--permanent without --yes must be refused")
+	}
+	if run("dfe4adc7", "--permanent", "--yes", "--reason", "disk full") != 0 || f.requests[len(f.requests)-1].Kind != store.AdminRequestPurge {
+		t.Fatalf("permanent delete = %+v", f.requests)
+	}
+	if len(f.requests) != 2 {
+		t.Fatalf("requests = %d, want 2", len(f.requests))
+	}
+}

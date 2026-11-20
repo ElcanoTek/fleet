@@ -73,10 +73,23 @@ Operator tools for looking after chats that belong to someone else
   operator edits without the owner's view of what is pending. Bringing the
   owner path in line is left for its own change.
 
+### Deleting chats ([ADR-0116](adr/0116-admin-chat-delete-recycle-bin.md))
+
+- **Delete → recycle bin.** The chat stops, every patrol and timer in it is
+  paused and it is tombstoned, in one transaction. Sharing, participants and
+  their paused patrols are left as they were, so a restore gives the chat
+  back whole. It is restorable for 30 days, then purged.
+- **Restore.** The chat comes back, with its patrols still paused.
+- **Delete permanently.** For emergencies: the chat is gone now and the
+  workspace sweep reclaims its files. You type the chat's title (browser) or
+  pass `--permanent --yes` (CLI).
+
 ## Deferred
 
-- Answering someone else's approval cards, turning on Autonomous mode, and
-  deleting a chat stay with the owner on purpose (ADR-0115).
+- Answering someone else's approval cards and turning on Autonomous mode stay
+  with the owner on purpose (ADR-0115).
+- No bulk delete; the storage clean-up on Settings → Admin → Server covers
+  old unused chats in bulk.
 - An open chat tab does not refresh live when an administrator posts a notice
   or changes a setting; the change shows on the next load or turn.
 - No bulk actions (the same message or patrol edit across many chats).

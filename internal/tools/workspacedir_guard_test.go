@@ -50,6 +50,7 @@ var conversationPathUses = map[string]reviewedUse{
 	"internal/tools/workspace.go:EnsureWorkspaceDir":                          {2, "returns the path after EnsureConversationDir succeeded (or alongside its error)"},
 
 	// The workspace ROOT (empty id): operator configuration, not a conversation.
+	"internal/httpapi/admin_chats.go:Server.adminPurge":                   {1, "workspace root (empty id), for the orphan sweep after a permanent delete"},
 	"internal/httpapi/admin_storage.go:Server.handleAdminStorage":         {1, "workspace root (empty id)"},
 	"internal/httpapi/admin_storage.go:Server.handleAdminStorageCleanup":  {1, "workspace root (empty id)"},
 	"internal/httpapi/maintenance.go:Server.RunMaintenance":               {3, "workspace root (empty id)"},

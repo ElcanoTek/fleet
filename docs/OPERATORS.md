@@ -929,6 +929,10 @@ fleet chats history <chat_id> [--tail 30] [--tools]
 fleet chats send <chat_id> --message "..." --reason "..." [--wait]
 fleet chats stop <chat_id> --reason "..." [--wait]
 fleet chats transfer <chat_id> --to EMAIL --reason "..." [--wait]
+fleet chats delete <chat_id> --reason "..."                       # to the recycle bin (restorable 30 days)
+fleet chats list --deleted                                        # the recycle bin
+fleet chats restore <chat_id> --reason "..."
+fleet chats delete <chat_id> --permanent --yes --reason "..."     # emergency: gone now, files reclaimed
 fleet chats notice <chat_id> --text "..."
 fleet chats set <chat_id> [--title T] [--model SLUG] [--approval-mode manual] [--archive|--unarchive] --reason "..."
 fleet chats actions [<chat_id>]                # the record of admin changes
@@ -952,8 +956,13 @@ takes `--reason`, is recorded in `chat.admin_actions` as `--as` (default
   Autonomous are the owner's own decision. A Lockdown chat keeps its model. `--archive` /
   `--unarchive` are carried out by the server like `stop` (archiving also
   revokes a shared chat's participants); follow them with `fleet chats request`.
-- Deleting a chat and answering someone else's approval cards are not
-  administrator actions.
+- **Prefer archiving.** `delete` moves a chat to the recycle bin: it stops,
+  disappears, has its patrols paused, and is deleted for good after 30 days
+  unless restored (whatever `FLEET_CONVERSATION_SOFT_DELETE` says).
+  `delete --permanent --yes` is for emergencies such as a full disk: the chat
+  and its files go now and cannot be restored
+  ([ADR-0116](adr/0116-admin-chat-delete-recycle-bin.md)).
+- Answering someone else's approval cards is not an administrator action.
 
 ### Changing a patrol's instructions
 

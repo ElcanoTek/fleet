@@ -137,9 +137,10 @@ queued `admin` rows: neither has a client waiting to submit again.
 - An administrator's message spends the owner's connectors and model budget,
   as a patrol does. The audit table and the notice in the chat are how the
   owner sees that it happened.
-- What an administrator can do is the owner's set of actions minus three:
-  answering approval cards, turning on Autonomous mode, and deleting the chat.
-  Deleting stays the owner's (or the retention sweep's).
+- What an administrator can do is the owner's set of actions minus two:
+  answering approval cards and turning on Autonomous mode. Deleting a chat was
+  a third, until [ADR-0116](0116-admin-chat-delete-recycle-bin.md) added it
+  through a recycle bin.
 - `chat.admin_actions` and `chat.admin_requests` grow with use. They are small
   (one row per change), and are covered by the nightly backup.
 - The down migration drops both tables, deletes `admin` queue rows that never

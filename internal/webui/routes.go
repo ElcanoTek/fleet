@@ -225,7 +225,7 @@ func chatRoutes() []chatRoute {
 		{"POST /api/admin/storage/cleanup", fixed("/admin/storage/cleanup"), jsonBodyAlways, passthroughJSON},
 		{"POST /api/admin/teams/rename", fixed("/admin/teams/rename"), jsonBodyAlways, textJSON},
 		{"GET /api/admin/chats", func(r *http.Request) string {
-			return "/admin/chats" + passThroughQuery(r, "owner", "q", "active_days", "archived", "limit")
+			return "/admin/chats" + passThroughQuery(r, "owner", "q", "active_days", "archived", "deleted", "limit")
 		}, noBody, textJSON},
 		{"GET /api/admin/chat-actions", func(r *http.Request) string {
 			return "/admin/chat-actions" + passThroughQuery(r, "limit")

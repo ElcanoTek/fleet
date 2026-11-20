@@ -23,6 +23,8 @@ import (
 //	fleet chats send    <chat_id> (--message TEXT | --file PATH|-) --reason TEXT [--wait] [--timeout 10m]
 //	fleet chats stop    <chat_id> --reason TEXT [--wait]
 //	fleet chats transfer <chat_id> --to EMAIL --reason TEXT [--wait]
+//	fleet chats delete  <chat_id> --reason TEXT [--permanent --yes] [--wait]
+//	fleet chats restore <chat_id> --reason TEXT [--wait]
 //	fleet chats notice  <chat_id> --text TEXT
 //	fleet chats set     <chat_id> [--title T] [--model SLUG] [--approval-mode manual] [--archive|--unarchive] --reason TEXT
 //	fleet chats actions [<chat_id>] [--limit N] [--json]
@@ -54,6 +56,10 @@ func cmdChats(argv []string) int {
 		return chatsRequest(store.AdminRequestStop, argv[1:], os.Stdin, out, errW)
 	case "transfer":
 		return chatsRequest(store.AdminRequestTransfer, argv[1:], os.Stdin, out, errW)
+	case "delete", "rm":
+		return chatsRequest(store.AdminRequestDelete, argv[1:], os.Stdin, out, errW)
+	case "restore", "undelete":
+		return chatsRequest(store.AdminRequestRestore, argv[1:], os.Stdin, out, errW)
 	case "notice":
 		return chatsNotice(argv[1:], out)
 	case "set":
@@ -74,12 +80,15 @@ func cmdChats(argv []string) int {
 
 const chatsUsage = `fleet chats — administer any chat on this box (ADR-0115; also Settings -> Chats)
 
-  fleet chats list     [--user EMAIL] [--search TEXT] [--active-days N] [--archived] [--limit N] [--json]
+  fleet chats list     [--user EMAIL] [--search TEXT] [--active-days N] [--archived | --deleted] [--limit N] [--json]
   fleet chats show     <chat_id> [--json]                 (owner, model, approvals, patrols, queue, recent admin changes)
   fleet chats history  <chat_id> [--tail 30] [--tools] [--json]
   fleet chats send     <chat_id> (--message TEXT | --file PATH|-) --reason TEXT [--wait] [--timeout 10m]
   fleet chats stop     <chat_id> --reason TEXT [--wait]   (the owner's Stop: running turn + queued inputs)
   fleet chats transfer <chat_id> --to EMAIL --reason TEXT [--wait]
+  fleet chats delete   <chat_id> --reason TEXT [--wait]   (to the recycle bin: restorable for 30 days)
+  fleet chats delete   <chat_id> --permanent --yes --reason TEXT [--wait]   (emergency: deleted at once, files reclaimed)
+  fleet chats restore  <chat_id> --reason TEXT [--wait]   (out of the recycle bin; its patrols stay paused)
   fleet chats notice   <chat_id> --text TEXT              (a note in the chat; the model never sees it)
   fleet chats set      <chat_id> [--title T] [--model SLUG] [--approval-mode manual] [--archive|--unarchive] --reason TEXT
   fleet chats actions  [<chat_id>] [--limit 50] [--json]  (the record of admin changes)
@@ -147,6 +156,7 @@ func chatsList(argv []string, out io.Writer) int {
 	search := fs.String("search", "", "title or id contains")
 	days := fs.Int("active-days", 0, "only chats active in the last N days")
 	archived := fs.Bool("archived", false, "include archived chats")
+	deleted := fs.Bool("deleted", false, "list the recycle bin (deleted chats not yet purged)")
 	limit := fs.Int("limit", 50, "maximum rows")
 	asJSON := fs.Bool("json", false, "JSON output")
 	if err := fs.Parse(argv); err != nil {
@@ -161,7 +171,7 @@ func chatsList(argv []string, out io.Writer) int {
 	}
 	defer closeFn()
 	chats, err := st.AdminListChats(context.Background(), store.AdminChatFilter{
-		OwnerEmail: *owner, Search: *search, ActiveWithinDays: *days, IncludeArchived: *archived, Limit: *limit,
+		OwnerEmail: *owner, Search: *search, ActiveWithinDays: *days, IncludeArchived: *archived, Deleted: *deleted, Limit: *limit,
 	})
 	if err != nil {
 		return errf(1, "list chats: %v", err)
@@ -189,6 +199,9 @@ func chatsList(argv []string, out io.Writer) int {
 		}
 		if c.Lockdown {
 			flags = append(flags, "lockdown")
+		}
+		if c.PurgesAt != nil {
+			flags = append(flags, "deleted; purged "+fmtTime(*c.PurgesAt))
 		}
 		rows = append(rows, []string{shortScheduleID(c.ID), truncateRunes(c.Title, 44), c.OwnerEmail, c.ApprovalMode, fmtTime(c.UpdatedAt), strings.Join(flags, " ")})
 	}
@@ -338,7 +351,11 @@ func chatsRequest(kind string, argv []string, stdin io.Reader, out, errW io.Writ
 	timeout := fs.Duration("timeout", 10*time.Minute, "how long --wait waits")
 	asJSON := fs.Bool("json", false, "JSON output")
 	var message, file, to *string
+	var permanent, yes *bool
 	switch kind {
+	case store.AdminRequestDelete:
+		permanent = fs.Bool("permanent", false, "delete at once instead of to the recycle bin (an emergency, e.g. a full disk; cannot be undone)")
+		yes = fs.Bool("yes", false, "confirm a --permanent delete")
 	case store.AdminRequestMessage:
 		message = fs.String("message", "", "the message")
 		file = fs.String("file", "", "read the message from a file (- for stdin)")
@@ -351,6 +368,12 @@ func chatsRequest(kind string, argv []string, stdin io.Reader, out, errW io.Writ
 	id, err := patrolIDArg(fs, lead)
 	if err != nil {
 		return errf(1, "%v", err)
+	}
+	if kind == store.AdminRequestDelete && *permanent {
+		if !*yes {
+			return errf(1, "--permanent cannot be undone: add --yes to confirm (or drop --permanent to use the recycle bin)")
+		}
+		kind = store.AdminRequestPurge
 	}
 	payload := ""
 	switch kind {
