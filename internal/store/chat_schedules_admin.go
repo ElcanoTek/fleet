@@ -96,6 +96,9 @@ type AdminChatSchedulePromptEdit struct {
 	// in the same transaction, so the chat's people see that the patrol's
 	// instructions were changed and why.
 	Notice string
+	// Actor, when set, is recorded in chat.admin_actions with Reason.
+	Actor  *AdminActor
+	Reason string
 }
 
 // PromptSHA256 is the hex sha256 of a patrol prompt as stored.
@@ -346,6 +349,18 @@ func (s *Store) AdminSetChatSchedulePrompt(ctx context.Context, in AdminChatSche
 			return before, after, err
 		}
 	}
+	if in.Actor != nil {
+		if err := in.Actor.validate(); err != nil {
+			return before, after, err
+		}
+		detail := fmt.Sprintf("prompt sha256 %s -> %s", shortSHA(before.PromptSHA256), shortSHA(PromptSHA256(prompt)))
+		if title != before.Title {
+			detail += fmt.Sprintf("; title %q -> %q", before.Title, title)
+		}
+		if err := recordAdminAction(ctx, tx, *in.Actor, "patrol_prompt", before.ConversationID, id, strings.TrimSpace(in.Reason), detail); err != nil {
+			return before, after, err
+		}
+	}
 	after, err = scanAdminChatSchedule(tx.QueryRowContext(ctx, adminChatScheduleSelect+` WHERE s.id = $1`, id))
 	if err != nil {
 		return before, after, err
@@ -409,4 +424,50 @@ func rewriteQueuedPatrolRuns(ctx context.Context, tx *sql.Tx, sched AdminChatSch
 		}
 	}
 	return len(todo), nil
+}
+
+// AdminSetChatScheduleStatus pauses or resumes a live schedule as an
+// administrator, through the owner's own path (UpdateChatSchedule: a pause
+// revokes a fire in flight and cancels the patrol's queued turns; a resume
+// computes the next run), then records it and writes a notice into the chat.
+func (s *Store) AdminSetChatScheduleStatus(ctx context.Context, a AdminActor, idOrPrefix, status, reason string) (AdminChatSchedule, error) {
+	if err := a.validate(); err != nil {
+		return AdminChatSchedule{}, err
+	}
+	why, err := cleanAdminReason(reason)
+	if err != nil {
+		return AdminChatSchedule{}, err
+	}
+	if status != ChatScheduleStatusActive && status != ChatScheduleStatusPaused {
+		return AdminChatSchedule{}, fmt.Errorf("%w: status must be active or paused", ErrInvalidChatSchedule)
+	}
+	cur, err := s.AdminGetChatSchedule(ctx, idOrPrefix)
+	if err != nil {
+		return AdminChatSchedule{}, err
+	}
+	if cur.Status == status {
+		return cur, nil
+	}
+	if _, err := s.UpdateChatSchedule(ctx, cur.UserEmail, cur.ConversationID, cur.ID, ChatSchedulePatch{Status: &status}); err != nil {
+		return AdminChatSchedule{}, err
+	}
+	verb := "paused"
+	if status == ChatScheduleStatusActive {
+		verb = "resumed"
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return AdminChatSchedule{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := s.appendNoticeTx(ctx, tx, cur.ConversationID, NoticePatrolUpdated, adminNoticeText(fmt.Sprintf("%s the patrol %q", verb, cur.Title), why)); err != nil {
+		return AdminChatSchedule{}, err
+	}
+	if err := recordAdminAction(ctx, tx, a, "patrol_"+strings.TrimSuffix(verb, "d"), cur.ConversationID, cur.ID, why, ""); err != nil {
+		return AdminChatSchedule{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return AdminChatSchedule{}, err
+	}
+	return s.AdminGetChatSchedule(ctx, cur.ID)
 }

@@ -39,6 +39,13 @@ const (
 	// mode is server-owned so client-supplied client_input_id values cannot
 	// spoof patrol provenance.
 	InputModePatrol = "patrol"
+	// InputModeAdmin marks a message an administrator sent into the chat with
+	// the admin tools (migration 0207, ADR-0115). The row's UserEmail is the
+	// chat's owner — the turn runs as the owner, with the owner's connectors
+	// and approval mode — and SenderEmail is the administrator, whom the turn
+	// records as the message's sender. Server-owned like patrol: only the
+	// admin request executor writes it.
+	InputModeAdmin = "admin"
 
 	InputStateQueued    = "queued"
 	InputStateRunning   = "running"
@@ -76,6 +83,9 @@ type InputQueueRow struct {
 	// ViewContext is the JSON presentation context the submission was sent
 	// from (dashboard view, migration 094); "" for none. Opaque to the store.
 	ViewContext string
+	// SenderEmail is the administrator who wrote an InputModeAdmin row
+	// (migration 0207); "" on every other row.
+	SenderEmail string
 }
 
 // AcceptedInputSeq returns the acceptance counter's current value: every row
@@ -238,12 +248,12 @@ func (s *Store) insertInputTx(ctx context.Context, tx *sql.Tx, r InputQueueRow) 
 	}
 	res, err := tx.ExecContext(ctx,
 		`INSERT INTO chat_input_queue
-		   (id, conversation_id, user_email, client_input_id, submission_id, message, attachments, mode, state, position, created_at, updated_at, accepted_seq, view_context)
+		   (id, conversation_id, user_email, client_input_id, submission_id, message, attachments, mode, state, position, created_at, updated_at, accepted_seq, view_context, sender_email)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
 		         (SELECT COALESCE(MAX(position), 0) + 1 FROM chat_input_queue WHERE conversation_id = $2),
-		         $10, $10, $11, NULLIF($12, ''))
+		         $10, $10, $11, NULLIF($12, ''), $13)
 		 ON CONFLICT (conversation_id, client_input_id) DO NOTHING`,
-		r.ID, r.ConversationID, r.UserEmail, r.ClientInputID, r.SubmissionID, r.Message, r.Attachments, r.Mode, r.State, now, r.AcceptedSeq, r.ViewContext,
+		r.ID, r.ConversationID, r.UserEmail, r.ClientInputID, r.SubmissionID, r.Message, r.Attachments, r.Mode, r.State, now, r.AcceptedSeq, r.ViewContext, r.SenderEmail,
 	)
 	if err != nil {
 		return InputQueueRow{}, false, err
@@ -290,7 +300,7 @@ func (s *Store) getInputByClientID(ctx context.Context, convID, clientID string)
 const inputQueueColumns = `id, conversation_id, user_email, client_input_id,
        COALESCE(submission_id, ''), message, attachments,
        mode, state, position, COALESCE(turn_id, ''), created_at, updated_at,
-       COALESCE(accepted_seq, 0), COALESCE(view_context, '')`
+       COALESCE(accepted_seq, 0), COALESCE(view_context, ''), sender_email`
 
 const inputQueueSelect = `SELECT ` + inputQueueColumns + `
   FROM chat_input_queue`
@@ -301,7 +311,7 @@ func scanInputRow(row rowScanner) (InputQueueRow, error) {
 	var r InputQueueRow
 	err := row.Scan(&r.ID, &r.ConversationID, &r.UserEmail, &r.ClientInputID, &r.SubmissionID,
 		&r.Message, &r.Attachments, &r.Mode, &r.State, &r.Position, &r.TurnID, &r.CreatedAt,
-		&r.UpdatedAt, &r.AcceptedSeq, &r.ViewContext)
+		&r.UpdatedAt, &r.AcceptedSeq, &r.ViewContext, &r.SenderEmail)
 	return r, err
 }
 

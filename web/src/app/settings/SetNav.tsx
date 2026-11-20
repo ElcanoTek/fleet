@@ -3,7 +3,7 @@ import { t as tr } from "@/app/lib/i18n";
 // organized into 3 functional groups:
 //   1. Workspace (General, Team)
 //   2. Model Context & Tools (Connections, Skills, Personas, Memories, Prompts, Shared files)
-//   3. Admin (Overview, Server, System checks, Users, Features, Sidebar, Providers — rendered only for admins)
+//   3. Admin (Overview, Server, System checks, Users, Chats, Features, Sidebar, Providers — rendered only for admins)
 //
 // ≤900px the nav leaves its sticky column and stacks the groups above the
 // content with each group's items wrapping horizontally.
@@ -37,6 +37,7 @@ export const ADMIN_SUBS = [
   { href: "/settings/admin/server", label: tr("Server") },
   { href: "/settings/admin/doctor", label: tr("System checks") },
   { href: "/settings/admin/users", label: tr("Users") },
+  { href: "/settings/admin/chats", label: tr("Chats") },
   { href: "/settings/admin/features", label: tr("Features") },
   { href: "/settings/admin/sidebar", label: tr("Sidebar") },
   { href: "/settings/admin/providers", label: tr("Providers") },

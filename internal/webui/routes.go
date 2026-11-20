@@ -224,6 +224,22 @@ func chatRoutes() []chatRoute {
 		{"GET /api/admin/storage", fixed("/admin/storage"), noBody, passthroughJSON},
 		{"POST /api/admin/storage/cleanup", fixed("/admin/storage/cleanup"), jsonBodyAlways, passthroughJSON},
 		{"POST /api/admin/teams/rename", fixed("/admin/teams/rename"), jsonBodyAlways, textJSON},
+		{"GET /api/admin/chats", func(r *http.Request) string {
+			return "/admin/chats" + passThroughQuery(r, "owner", "q", "active_days", "archived", "limit")
+		}, noBody, textJSON},
+		{"GET /api/admin/chat-actions", func(r *http.Request) string {
+			return "/admin/chat-actions" + passThroughQuery(r, "limit")
+		}, noBody, textJSON},
+		{"GET /api/admin/chat-requests/{id}", func(r *http.Request) string { return "/admin/chat-requests/" + p(r, "id") }, noBody, textJSON},
+		{"GET /api/admin/chats/{id}", func(r *http.Request) string { return "/admin/chats/" + p(r, "id") }, noBody, textJSON},
+		{"PATCH /api/admin/chats/{id}", func(r *http.Request) string { return "/admin/chats/" + p(r, "id") }, jsonBodyAlways, textJSON},
+		{"GET /api/admin/chats/{id}/history", func(r *http.Request) string {
+			return "/admin/chats/" + p(r, "id") + "/history" + passThroughQuery(r, "tail", "tools")
+		}, noBody, textJSON},
+		{"POST /api/admin/chats/{id}/requests", func(r *http.Request) string { return "/admin/chats/" + p(r, "id") + "/requests" }, jsonBodyAlways, textJSON},
+		{"POST /api/admin/chats/{id}/notice", func(r *http.Request) string { return "/admin/chats/" + p(r, "id") + "/notice" }, jsonBodyAlways, textJSON},
+		{"GET /api/admin/patrols/{id}", func(r *http.Request) string { return "/admin/patrols/" + p(r, "id") }, noBody, textJSON},
+		{"PATCH /api/admin/patrols/{id}", func(r *http.Request) string { return "/admin/patrols/" + p(r, "id") }, jsonBodyAlways, textJSON},
 		{"GET /api/admin/users", fixed("/admin/users"), noBody, textJSON},
 		{"POST /api/admin/users", fixed("/admin/users"), jsonBodyIfAny, textJSON},
 		{"PATCH /api/admin/users/{email}", func(r *http.Request) string { return "/admin/users/" + p(r, "email") }, jsonBodyIfAny, textJSON},

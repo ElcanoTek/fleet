@@ -942,7 +942,7 @@ export type Message = {
    * one-shot timer. Both render as notices, never as the user's bubble, and
    * offer no Edit.
    */
-  kind?: "text" | "summary" | "approval_resume" | "chat_patrol";
+  kind?: "text" | "summary" | "approval_resume" | "chat_patrol" | "admin_message";
   /**
    * Notices fleet wrote into the conversation that are not a turn — e.g. an
    * automatic continue that was skipped or dropped by a restart, or an
@@ -1303,6 +1303,28 @@ export type HistoryEntry = {
 export const APPROVAL_RESUME_KIND = "approval_resume";
 /** TextContent.kind of a turn fleet started from an in-chat patrol or timer. */
 export const CHAT_PATROL_KIND = "chat_patrol";
+/**
+ * TextContent.kind of a message an administrator sent into the chat with the
+ * admin tools (ADR-0115): the turn ran as the chat's owner, and admin_email
+ * names the administrator.
+ */
+export const ADMIN_MESSAGE_KIND = "admin_message";
+
+/**
+ * adminMessageBody returns the administrator's own words from an admin
+ * message's turn input, without the header and footer fleet wraps them in for
+ * the model (store.AdminMessageInputText).
+ */
+export function adminMessageBody(text: string): string {
+  let body = text.trim();
+  if (body.startsWith("[Message from an administrator:")) {
+    const nl = body.indexOf("\n");
+    body = nl >= 0 ? body.slice(nl + 1) : "";
+  }
+  const footer = body.lastIndexOf("\n\n(Sent by a Fleet administrator of this workspace");
+  if (footer >= 0) body = body.slice(0, footer);
+  return body.trim();
+}
 /** agent.EntryTypeNotice: a UI-only note fleet wrote into the conversation. */
 export const NOTICE_ENTRY_TYPE = "notice";
 
@@ -1377,10 +1399,15 @@ export function historyToMessages(entries: HistoryEntry[]): Message[] {
         text?: string;
         kind?: string;
         sender_email?: string;
+        admin_email?: string;
         steered?: boolean;
       };
+      // An admin message names its administrator in admin_email (the turn
+      // itself is the owner's, so it carries no sender_email).
       const senderEmail =
-        typeof userContent.sender_email === "string" &&
+        typeof userContent.admin_email === "string" && userContent.admin_email.trim()
+          ? userContent.admin_email.trim()
+          : typeof userContent.sender_email === "string" &&
         userContent.sender_email.trim()
           ? userContent.sender_email.trim()
           : undefined;
@@ -1399,7 +1426,9 @@ export function historyToMessages(entries: HistoryEntry[]): Message[] {
           ? { kind: APPROVAL_RESUME_KIND }
           : userContent.kind === CHAT_PATROL_KIND
             ? { kind: CHAT_PATROL_KIND }
-            : {}),
+            : userContent.kind === ADMIN_MESSAGE_KIND
+              ? { kind: ADMIN_MESSAGE_KIND }
+              : {}),
         state: "done",
       });
       continue;

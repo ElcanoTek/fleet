@@ -123,6 +123,10 @@ type chatRequest struct {
 	// (docs/RESUME-AFTER-APPROVAL.md). Message is then fleet's labelled
 	// notice, not the user's words.
 	inputKind string
+	// adminSender is the administrator who wrote an admin message (a queue
+	// row of mode 'admin', ADR-0115): the turn runs as the chat's owner and
+	// records the administrator on the entry (admin_email). Server-set only.
+	adminSender string
 }
 
 // conversationIDHeaderName names the conversation a POST /chat response is
@@ -978,7 +982,7 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	// Not the user's words when fleet started the turn: the same marker the
 	// persisted entry carries (TextContent.Kind), so a reattach renders the
 	// notice row the reload path renders.
-	userEvent := buildUserMessageEvent(req.Message, req.inputKind, injected, conv, userWords, user)
+	userEvent := buildUserMessageEvent(req.Message, req.inputKind, injected, conv, userWords, user, req.adminSender)
 	buf.Emit("user.message", userEvent)
 	if queueRowID != "" {
 		// Same reason as the metadata events above: seed the queue snapshot so
@@ -1003,6 +1007,7 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	var releasedOnce sync.Once
 	releaseOnce := func() { releasedOnce.Do(releaseSlot) }
 	convSnapshot := cloneConversationSnapshot(conv)
+	turnCtx = withAdminSender(turnCtx, req.adminSender)
 	// Deliberate: the turn must outlive the HTTP request (see the detachment
 	// comment above); Stop routes through /cancel.
 	go func() {
@@ -1085,7 +1090,7 @@ func appendMultiplayerSenderBlock(injected string, conv *store.Conversation, use
 	return injected
 }
 
-func buildUserMessageEvent(message, inputKind, injected string, conv *store.Conversation, userWords bool, user string) map[string]any {
+func buildUserMessageEvent(message, inputKind, injected string, conv *store.Conversation, userWords bool, user, adminSender string) map[string]any {
 	_ = userWords
 	userEvent := withInputKind(map[string]any{"text": message}, "kind", inputKind)
 	if injected != "" {
@@ -1093,6 +1098,10 @@ func buildUserMessageEvent(message, inputKind, injected string, conv *store.Conv
 	}
 	if conv != nil && (conv.Multiplayer || (conv.UserEmail != "" && !strings.EqualFold(conv.UserEmail, user))) && user != "" {
 		userEvent["sender_email"] = user
+	}
+	if adminSender != "" {
+		// Not sender_email: the turn is the owner's (see TextContent.AdminEmail).
+		userEvent["admin_email"] = adminSender
 	}
 	return userEvent
 }
@@ -1362,6 +1371,7 @@ func (s *Server) runTurnAsync(
 		SteerSource:    steerSourceOrNil(steer),
 		InputKind:      inputKind,
 		SenderEmail:    senderEmail,
+		AdminEmail:     adminEmailForTurn(turnCtx, inputKind),
 		MCPUser:        mcpUser,
 	}, buf)
 	s.cancelAutoSubmitsIfTurnStopped(turnCtx, conv.ID)
@@ -1567,7 +1577,7 @@ func (s *Server) prepareTurnExecutionContext(
 	turnStager := s.newTurnStager(turnCtx, conv, user, buf)
 	turnStager.inputKind = inputKind
 	var availableOptional []agent.OptionalServerInfo
-	if inputKind != agent.InputKindChatPatrol {
+	if !unattendedTurn(inputKind) {
 		availableOptional = s.availableOptionalConnectorsForUser(turnCtx, user, conv.MCPAccounts)
 		turnCtx = tools.WithEnableMCPConnectorsHandler(turnCtx, s.newEnableMCPConnectorsHandler(conv, user, buf, turnStager, availableOptional))
 	}
@@ -1598,10 +1608,16 @@ func (s *Server) appendTurnApprovalModeContext(ctx context.Context, injectedCont
 	if conv == nil || !strings.EqualFold(ownerEmail, user) {
 		return injectedContext
 	}
+	if inputKind == agent.InputKindAdminMessage {
+		// The stager runs an administrator's message in Manual whatever the
+		// chat's mode (approvalStager.effectiveApprovalMode), so no note
+		// promises the model otherwise.
+		return injectedContext
+	}
 	var note string
 	switch s.effectiveOwnerApprovalMode(ctx, ownerEmail, conv) {
 	case store.ConversationApprovalAutonomous:
-		if inputKind == agent.InputKindChatPatrol {
+		if unattendedTurn(inputKind) {
 			note = "[Conversation approval mode: autonomous. Bundle-configured critical tools and self-addressed emails to the owner run without asking and record receipt cards in chat; external emails/chats/invites, recurring schedules, connector_studio probes/writes, destructive storage/permission actions, bundle-blocked tools, and git push still stage an approval card.]"
 		} else {
 			note = "[Conversation approval mode: autonomous. Bundle-configured critical tools, optional connectors, self-addressed emails to the owner, and eligible prefilled show_ui forms (after a 10s server countdown) run without asking and record receipt cards in chat; external emails/chats/invites, recurring schedules (schedule_task, manage_tasks, chat_patrol create/update), connector_studio probes/writes, destructive storage/permission actions, bundle-blocked tools, and git push still stage an approval card.]"

@@ -15,7 +15,7 @@ import { labelForModel } from "@/app/lib/modelAliases";
 // hourly cap), or one dropped by a restart.
 
 import { useId, useState } from "react";
-import { MODEL_UPGRADED_NOTICE_KIND, type NoticeItem } from "./history";
+import { MODEL_UPGRADED_NOTICE_KIND, adminMessageBody, type NoticeItem } from "./history";
 import { Icon } from "./Icon";
 
 export function AutoContinueNotice({ text }: { text: string }) {
@@ -88,6 +88,30 @@ export function PatrolTurnNotice({ text }: { text: string }) {
           {text.trim()}
         </pre>
       </div>
+    </div>
+  );
+}
+
+/**
+ * AdminMessageNotice is a message an administrator sent into the chat with
+ * the admin tools (ADR-0115). The turn ran as the chat's owner, but the words
+ * are the administrator's, so it is labelled with who sent them instead of
+ * rendering as the owner's bubble.
+ */
+export function AdminMessageNotice({ sender, text }: { sender?: string; text: string }) {
+  const body = adminMessageBody(text);
+  return (
+    <div
+      data-testid="admin-message-notice"
+      className="w-full rounded-[var(--radius-lg)] border border-[color-mix(in_srgb,var(--color-warning)_32%,var(--color-border))] bg-[color-mix(in_srgb,var(--color-warning)_6%,var(--color-overlay-soft))] px-3 py-2 text-left text-[0.82rem] leading-[1.55] text-[var(--color-text-primary)]"
+    >
+      <div className="mb-1 flex items-center gap-2 text-[0.7rem] font-semibold uppercase tracking-[0.07em] text-[var(--color-text-secondary)]">
+        <Icon name="shield" className="size-3.5 shrink-0 text-[var(--color-warning)]" />
+        <span className="min-w-0 truncate">
+          {sender ? tr("Message from an administrator · {0}", [sender]) : tr("Message from an administrator")}
+        </span>
+      </div>
+      <p className="m-0 whitespace-pre-wrap [overflow-wrap:anywhere]">{body}</p>
     </div>
   );
 }

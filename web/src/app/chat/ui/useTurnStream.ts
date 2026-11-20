@@ -12,6 +12,7 @@ import {
   applyTurnOutcome,
   APPROVAL_RESUME_KIND,
   CHAT_PATROL_KIND,
+  ADMIN_MESSAGE_KIND,
   clearRetryNotice,
   historyToMessages,
   parseApprovalCardData,
@@ -2397,11 +2398,14 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         injected_context?: string;
         kind?: string;
         sender_email?: string;
+        admin_email?: string;
       };
       const text = (p.text ?? "").trim();
       if (!text) return;
       const senderEmail =
-        typeof p.sender_email === "string" && p.sender_email.trim()
+        typeof p.admin_email === "string" && p.admin_email.trim()
+          ? p.admin_email.trim()
+          : typeof p.sender_email === "string" && p.sender_email.trim()
           ? p.sender_email.trim()
           : undefined;
       // A turn fleet started itself after an approval card was settled
@@ -2413,7 +2417,9 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           ? APPROVAL_RESUME_KIND
           : p.kind === CHAT_PATROL_KIND
             ? CHAT_PATROL_KIND
-            : undefined;
+            : p.kind === ADMIN_MESSAGE_KIND
+              ? ADMIN_MESSAGE_KIND
+              : undefined;
       // The server-added suffix for this turn, on its own field since
       // migration 056 (docs/ATTACHMENT-SCOPING.md). Carried onto the bubble so
       // a reattach mid-turn shows the collapsed "context fleet added" note the

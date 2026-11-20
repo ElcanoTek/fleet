@@ -457,6 +457,16 @@ Se comparte **en modo de solo lectura**: cada conversación tiene un único prop
 
 **Detener** detiene el turno actual; la respuesta parcial queda en la transcripción, marcada como **Turno detenido.** y con **Reintentar** en el último turno, incluso después de recargar. Los turnos que la plataforma termina antes de tiempo se marcan igual: por alcanzar el límite por turno (4 horas por defecto), el límite de coste o tokens, o por un reinicio del servidor, que además incluye una nota explicativa. Escribir y enviar durante un turno no lo interrumpe: el mensaje espera en una cola bajo el editor, con **Enviar ahora** para adelantarlo y un control para quitarlo. Los mensajes en cola se ejecutan por orden cuando termina el turno actual, cada uno como su propio turno visible; la cola se conserva al recargar o cambiar de chat.
 
+### Mensajes de un administrador
+
+Un administrador del espacio de trabajo puede enviar un mensaje a tu chat, por
+ejemplo para pedir a una patrulla que publique un registro que lleva. Aparece
+en la conversación como **Mensaje de un administrador** con su correo, nunca
+como palabras tuyas, y una nota breve en el chat dice qué se cambió y por qué.
+La respuesta se ejecuta con tus conexiones y siempre te pregunta antes de
+cualquier acción que requiera aprobación, aunque el chat apruebe
+automáticamente.
+
 ### Conversaciones largas
 
 A medida que crece una conversación, **Resumir mensajes anteriores** en **Más opciones** (`•••`) muestra lo lleno que está el chat como porcentaje de la ventana de contexto del modelo. Con **Mostrar detalles** activo, una línea de totales sobre el editor muestra el mismo porcentaje junto al coste acumulado de la conversación. Cuando la conversación se llena, un aviso lo indica y el asistente empieza a tardar más y a costar más por turno. **Resumir mensajes anteriores**, en **Más opciones** o en el aviso, sustituye los turnos antiguos por un resumen breve para que la conversación vuelva a caber cómodamente; la transcripción conserva su historial y solo se reduce la vista de trabajo del asistente. Si la conversación cambia mientras se escribe el resumen, por ejemplo por una respuesta desde otra pestaña o un reintento, no se guarda y el chat indica *«La conversación cambió mientras se resumía, por lo que no se guardó el resumen. Vuelve a resumirla».* Vuelve a resumir para incluir su estado actual. No necesitas vigilarlo: por defecto, cuando una petición alcanza cerca del 90 % del límite del modelo, la plataforma resume por sí sola la parte más antigua de esa vista, entre turnos o en medio de uno largo que sigue obteniendo datos; una nota en la respuesta lo indica. Si un modelo sigue rechazando una petición por ser demasiado larga, la plataforma resume y reintenta sola en lugar de dar el turno por fallido. Si el tema cambia por completo, empezar otra conversación es más barato y claro que compactar la anterior.

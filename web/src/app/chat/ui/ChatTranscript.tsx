@@ -71,6 +71,7 @@ const MessageMarkdown = memo(function MessageMarkdown({
 import {
   APPROVAL_RESUME_KIND,
   CHAT_PATROL_KIND,
+  ADMIN_MESSAGE_KIND,
   humanToolLabel,
   shortModelName,
   truncateUserPreview,
@@ -86,7 +87,7 @@ export {
 };
 import { currentAdvancedModel } from "@/app/lib/modelAliases";
 import { advancedRetryAllowed, anySwitchSuggestionPending, useQueuedSwitchRetry } from "./useQueuedSwitchRetry";
-import { AutoContinueNotice, FleetNotices, PatrolTurnNotice } from "./FleetNotices";
+import { AdminMessageNotice, AutoContinueNotice, FleetNotices, PatrolTurnNotice } from "./FleetNotices";
 import { InjectedContextNote } from "./InjectedContextNote";
 import {
   buildTranscriptRows,
@@ -1557,6 +1558,16 @@ export const UserTurn = memo(function UserTurn({
     return (
       <>
         <PatrolTurnNotice text={message.content} />
+        <InjectedContextNote text={message.injectedContext} />
+      </>
+    );
+  }
+  if (message.kind === ADMIN_MESSAGE_KIND) {
+    // A message an administrator sent with the admin tools (ADR-0115): not
+    // the owner's words, so it is labelled with who sent it and offers no Edit.
+    return (
+      <>
+        <AdminMessageNotice sender={message.senderEmail} text={message.content} />
         <InjectedContextNote text={message.injectedContext} />
       </>
     );

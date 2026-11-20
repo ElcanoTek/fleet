@@ -1002,9 +1002,10 @@ func ChatPatrolInputText(sched ChatSchedule, runNumber int) string {
 }
 
 // ListQueuedPatrolConversations returns conversations that currently have a
-// queued patrol input row in chat_input_queue (for example, a patrol row
-// returned to 'queued' by RecoverInputQueue on daemon restart) so the periodic
-// schedule sweep can kick their queue drain.
+// queued patrol or admin-message input row in chat_input_queue (for example,
+// a row returned to 'queued' by RecoverInputQueue on daemon restart) so the
+// periodic schedule sweep can kick their queue drain. Neither kind has a
+// client waiting to submit again, which is what would otherwise kick it.
 func (s *Store) ListQueuedPatrolConversations(ctx context.Context) ([]string, error) {
 	if s == nil || s.db == nil {
 		return nil, nil
@@ -1013,7 +1014,7 @@ func (s *Store) ListQueuedPatrolConversations(ctx context.Context) ([]string, er
 		`SELECT DISTINCT conversation_id
 		   FROM chat_input_queue
 		  WHERE state = 'queued'
-		    AND mode = 'patrol'
+		    AND mode IN ('patrol', 'admin')
 		  ORDER BY conversation_id ASC
 		  LIMIT 25`,
 	)

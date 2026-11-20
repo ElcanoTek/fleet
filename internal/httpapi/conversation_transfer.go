@@ -44,105 +44,11 @@ func (s *Server) handleConversationTransfer(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	// The chat must be idle, and stay idle until the transfer is done. A
-	// participant's turn swaps the owner's private subtrees (attachments,
-	// personal skills) out of the workspace and back
-	// (activateTurnPrivateWorkspace); moving the chat under one could hand
-	// those to the new owner when the turn puts them back. So:
-	//
-	//   - beginTransfer refuses while a turn is running and, under the same
-	//     lock registration takes, marks the chat as changing hands: no turn
-	//     can register until the deferred end (registerTurnGated).
-	//   - the workspace lock is the one a turn, or an approval being
-	//     executed, holds from the moment it prepares the workspace until it
-	//     has put it back. Holding it here means the last turn's restore has
-	//     finished, and nothing else touches the workspace meanwhile.
-	endTransfer, idle := s.beginTransfer(convID)
-	if !idle {
-		http.Error(w, "a turn is running in this chat; stop it or wait for it to finish, then transfer", http.StatusConflict)
+	res, err := s.transferConversation(ctx, conv, req.ToEmail)
+	if err != nil {
+		http.Error(w, err.Error(), transferErrorStatus(err))
 		return
 	}
-	defer endTransfer()
-	unlockWorkspace, ok := s.lockWorkspaceWithin(convID, transferWorkspaceWait)
-	if !ok {
-		http.Error(w, "a turn is running in this chat; stop it or wait for it to finish, then transfer", http.StatusConflict)
-		return
-	}
-	defer unlockWorkspace()
-	// A process that died during a participant's turn leaves the workspace
-	// half-swapped, with nothing holding the lock after the restart. Put it
-	// back the way every turn does before it starts, so what is purged and
-	// moved below is the real layout; if that cannot be done, nothing moves.
-	if err := s.recoverWorkspaceForTransfer(convID); err != nil {
-		logging.From(ctx).Error("conversations: transfer could not recover the workspace", "conv_id", safe.LogSafe(convID), "err", safe.LogSafe(err.Error()))
-		http.Error(w, "transfer failed", http.StatusInternalServerError)
-		return
-	}
-	// The previous owner's personal skills are theirs, not part of the chat,
-	// and must be gone before the chat is anyone else's: they are removed
-	// first, and a failure stops the transfer. Nothing is lost if the
-	// transfer is then refused, because skills are written into the workspace
-	// again at the start of each of their turns (materializeUserSkills).
-	if err := s.purgeOwnerSkills(ctx, convID); err != nil {
-		logging.From(ctx).Error("conversations: transfer could not clear user skills", "conv_id", safe.LogSafe(convID), "err", safe.LogSafe(err.Error()))
-		http.Error(w, "transfer failed", http.StatusInternalServerError)
-		return
-	}
-	// Everyone who could reach the chat until now, so each of them is
-	// reconciled against its new audience below.
-	seeds := append([]string{conv.UserEmail}, conv.MultiplayerParticipants...)
-	if conv.Multiplayer {
-		if roster, rerr := s.store.ListMultiplayerRoster(ctx, conv.UserEmail, convID); rerr == nil {
-			seeds = append(seeds, roster...)
-		}
-	}
-	// The store re-checks the owner under the row lock, so a request admitted
-	// here cannot move a chat that changed hands in between.
-	res, err := s.store.TransferConversation(ctx, conv.UserEmail, convID, req.ToEmail)
-	switch {
-	case errors.Is(err, store.ErrConversationNotFound):
-		http.Error(w, "not found", http.StatusNotFound)
-		return
-	case errors.Is(err, store.ErrTransferTarget):
-		// Written out, like the other refusals here, so the browser's
-		// catalog of known errors has them and shows them translated.
-		http.Error(w, "that person can't take this chat: they need an active Fleet account that can chat", http.StatusBadRequest)
-		return
-	case errors.Is(err, store.ErrTransferNotAllowed):
-		http.Error(w, "an archived or Lockdown chat can't be transferred", http.StatusConflict)
-		return
-	case err != nil:
-		logging.From(ctx).Error("conversations: transfer failed", "conv_id", safe.LogSafe(convID), "err", safe.LogSafe(err.Error()))
-		http.Error(w, "transfer failed", http.StatusInternalServerError)
-		return
-	}
-	// The transfer is committed. What follows must run even if the request
-	// has gone away since, or the previous audience would keep a turn,
-	// approvals or a live stream on a chat that is no longer theirs.
-	ctx = context.WithoutCancel(ctx)
-	// From here no submission admitted under the previous owner may register
-	// a turn (registerTurnGated compares this under the same lock).
-	s.inflightMu.Lock()
-	if s.ownershipEpochs == nil {
-		s.ownershipEpochs = make(map[string]uint64)
-	}
-	s.ownershipEpochs[convID]++
-	s.inflightMu.Unlock()
-	// The chat is now private to its new owner: stop a turn the previous
-	// owner or a participant still has running, drop their queued inputs,
-	// pending approvals, session approvals and patrols, and detach their live
-	// streams — the same reconciliation a participant's removal gets.
-	s.enforceMultiplayerRevocation(ctx, convID, res.Conversation, seeds)
-	s.cancelConversationAutoSubmits(ctx, convID)
-	// The chat's persistent sandbox, where the deployment keeps one, holds
-	// the previous owner's live Python state: variables, imports and threads
-	// that were never part of the transcript or the workspace. The new
-	// owner's first turn starts a fresh one.
-	s.releasePersistentSandbox(convID)
-	// A new owner who took part in the chat as a participant has attachments
-	// of their own in the participant stash; as the owner, theirs live in the
-	// workspace.
-	s.promoteParticipantAttachments(ctx, convID, res.ToEmail)
 	logging.From(ctx).Info("conversations: chat transferred",
 		"user", safe.LogSafe(user), "conv_id", safe.LogSafe(convID),
 		"from", safe.LogSafe(res.FromEmail), "to", safe.LogSafe(res.ToEmail),
@@ -395,4 +301,129 @@ func (s *Server) recoverWorkspaceForTransfer(convID string) error {
 		return err
 	}
 	return recoverInterruptedParticipantWorkspace(convID, stash)
+}
+
+// transferConversation moves an idle chat to toEmail and reconciles everyone
+// who could reach it before (the owner's transfer route, and an
+// administrator's transfer request, ADR-0115). conv is the chat as the
+// caller read it (GetConversationOwnerAndMultiplayer) when it decided the
+// transfer may happen; the store re-checks its owner under the row lock, so
+// a chat that changed hands since is not moved. It returns one of the
+// errTransfer* refusals when the transfer did not happen.
+func (s *Server) transferConversation(ctx context.Context, conv *store.Conversation, toEmail string) (*store.ConversationTransfer, error) {
+	convID := conv.ID
+	// The chat must be idle, and stay idle until the transfer is done. A
+	// participant's turn swaps the owner's private subtrees (attachments,
+	// personal skills) out of the workspace and back
+	// (activateTurnPrivateWorkspace); moving the chat under one could hand
+	// those to the new owner when the turn puts them back. So:
+	//
+	//   - beginTransfer refuses while a turn is running and, under the same
+	//     lock registration takes, marks the chat as changing hands: no turn
+	//     can register until the deferred end (registerTurnGated).
+	//   - the workspace lock is the one a turn, or an approval being
+	//     executed, holds from the moment it prepares the workspace until it
+	//     has put it back. Holding it here means the last turn's restore has
+	//     finished, and nothing else touches the workspace meanwhile.
+	endTransfer, idle := s.beginTransfer(convID)
+	if !idle {
+		return nil, errTransferBusy
+	}
+	defer endTransfer()
+	unlockWorkspace, ok := s.lockWorkspaceWithin(convID, transferWorkspaceWait)
+	if !ok {
+		return nil, errTransferBusy
+	}
+	defer unlockWorkspace()
+	// A process that died during a participant's turn leaves the workspace
+	// half-swapped, with nothing holding the lock after the restart. Put it
+	// back the way every turn does before it starts, so what is purged and
+	// moved below is the real layout; if that cannot be done, nothing moves.
+	if err := s.recoverWorkspaceForTransfer(convID); err != nil {
+		logging.From(ctx).Error("conversations: transfer could not recover the workspace", "conv_id", safe.LogSafe(convID), "err", safe.LogSafe(err.Error()))
+		return nil, errTransferFailed
+	}
+	// The previous owner's personal skills are theirs, not part of the chat,
+	// and must be gone before the chat is anyone else's: they are removed
+	// first, and a failure stops the transfer. Nothing is lost if the
+	// transfer is then refused, because skills are written into the workspace
+	// again at the start of each of their turns (materializeUserSkills).
+	if err := s.purgeOwnerSkills(ctx, convID); err != nil {
+		logging.From(ctx).Error("conversations: transfer could not clear user skills", "conv_id", safe.LogSafe(convID), "err", safe.LogSafe(err.Error()))
+		return nil, errTransferFailed
+	}
+	// Everyone who could reach the chat until now, so each of them is
+	// reconciled against its new audience below.
+	seeds := append([]string{conv.UserEmail}, conv.MultiplayerParticipants...)
+	if conv.Multiplayer {
+		if roster, rerr := s.store.ListMultiplayerRoster(ctx, conv.UserEmail, convID); rerr == nil {
+			seeds = append(seeds, roster...)
+		}
+	}
+	// The store re-checks the owner under the row lock, so a request admitted
+	// here cannot move a chat that changed hands in between.
+	res, err := s.store.TransferConversation(ctx, conv.UserEmail, convID, toEmail)
+	switch {
+	case errors.Is(err, store.ErrConversationNotFound):
+		return nil, errTransferNotFound
+	case errors.Is(err, store.ErrTransferTarget):
+		return nil, errTransferTarget
+	case errors.Is(err, store.ErrTransferNotAllowed):
+		return nil, errTransferNotAllowed
+	case err != nil:
+		logging.From(ctx).Error("conversations: transfer failed", "conv_id", safe.LogSafe(convID), "err", safe.LogSafe(err.Error()))
+		return nil, errTransferFailed
+	}
+	// The transfer is committed. What follows must run even if the request
+	// has gone away since, or the previous audience would keep a turn,
+	// approvals or a live stream on a chat that is no longer theirs.
+	ctx = context.WithoutCancel(ctx)
+	// From here no submission admitted under the previous owner may register
+	// a turn (registerTurnGated compares this under the same lock).
+	s.inflightMu.Lock()
+	if s.ownershipEpochs == nil {
+		s.ownershipEpochs = make(map[string]uint64)
+	}
+	s.ownershipEpochs[convID]++
+	s.inflightMu.Unlock()
+	// The chat is now private to its new owner: stop a turn the previous
+	// owner or a participant still has running, drop their queued inputs,
+	// pending approvals, session approvals and patrols, and detach their live
+	// streams — the same reconciliation a participant's removal gets.
+	s.enforceMultiplayerRevocation(ctx, convID, res.Conversation, seeds)
+	s.cancelConversationAutoSubmits(ctx, convID)
+	// The chat's persistent sandbox, where the deployment keeps one, holds
+	// the previous owner's live Python state: variables, imports and threads
+	// that were never part of the transcript or the workspace. The new
+	// owner's first turn starts a fresh one.
+	s.releasePersistentSandbox(convID)
+	// A new owner who took part in the chat as a participant has attachments
+	// of their own in the participant stash; as the owner, theirs live in the
+	// workspace.
+	s.promoteParticipantAttachments(ctx, convID, res.ToEmail)
+	return res, nil
+}
+
+// The transfer refusals, written out as errors.New so the browser's catalog
+// of known server errors has them and shows them translated.
+var (
+	errTransferBusy       = errors.New("a turn is running in this chat; stop it or wait for it to finish, then transfer")
+	errTransferFailed     = errors.New("transfer failed")
+	errTransferNotFound   = errors.New("not found")
+	errTransferTarget     = errors.New("that person can't take this chat: they need an active Fleet account that can chat")
+	errTransferNotAllowed = errors.New("an archived or Lockdown chat can't be transferred")
+)
+
+// transferErrorStatus is the HTTP status of a transfer refusal.
+func transferErrorStatus(err error) int {
+	switch {
+	case errors.Is(err, errTransferBusy), errors.Is(err, errTransferNotAllowed):
+		return http.StatusConflict
+	case errors.Is(err, errTransferNotFound):
+		return http.StatusNotFound
+	case errors.Is(err, errTransferTarget):
+		return http.StatusBadRequest
+	default:
+		return http.StatusInternalServerError
+	}
 }
