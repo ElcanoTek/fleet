@@ -480,6 +480,7 @@ func TestGitPushFloorBareAssignment(t *testing.T) {
 		`{ f=$(ls); }`,
 		"f=$(ls)\necho $f",
 		"f=\\\n$(ls)",
+		"cat <<'EOF'\n$(not run)\nEOF\nf=$(ls)",
 		`git_ref=$(date)`, // lower-case: bash names are case-sensitive; git reads GIT_*
 	} {
 		if bashCommandRunsGitPush(cmd) {
@@ -530,6 +531,12 @@ func TestGitPushFloorBareAssignment(t *testing.T) {
 		`f=$(if true; then sh x; fi)`,
 		`f=$( (sh x) )`,
 		`f=$(PATH=/tmp/x ls)`,
+		// Here-doc bodies expand substitutions before the command reads them.
+		"f=$(cat <<EOF\n$($(printf '\\x67it') $(printf '\\x70ush'))\nEOF\n)",
+		"f=$(cat <<EOF\n`sh x`\nEOF\n)",
+		"f=$(cat <<< \"$(sh x)\")",
+		"cat <<EOF\n$($(printf '\\x67it') $(printf '\\x70ush'))\nEOF",
+		"cat <<-EOF\n\t${x:-$(sh -c 'git push')}\nEOF",
 		// Names an inert command could resolve to something else.
 		`ls() { sh x; }; f=$(ls)`,
 		`function ls { sh x; }; f=$(ls)`,

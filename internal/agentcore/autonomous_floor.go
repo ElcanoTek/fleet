@@ -455,6 +455,9 @@ type pendingHeredoc struct {
 	segIdx int
 	delim  string
 	strip  bool
+	// expand: the delimiter is unquoted, so bash expands `$(...)`,
+	// backticks and `${...}` in the body before the command reads it.
+	expand bool
 }
 
 type shellLexer struct {
@@ -1005,7 +1008,7 @@ func (l *shellLexer) handleRedir() {
 		}
 		delim := l.readRedirectTarget()
 		if delim.val != "" {
-			l.heredocs = append(l.heredocs, pendingHeredoc{segIdx: -1, delim: delim.val, strip: strip})
+			l.heredocs = append(l.heredocs, pendingHeredoc{segIdx: -1, delim: delim.val, strip: strip, expand: delim.literal || delim.dynamic})
 		}
 		return
 	}
@@ -1053,7 +1056,32 @@ func (l *shellLexer) consumePendingHeredocs() {
 		if hd.segIdx >= 0 && hd.segIdx < len(l.segments) {
 			l.segments[hd.segIdx].stdinBodies = append(l.segments[hd.segIdx].stdinBodies, body)
 		}
+		if hd.expand {
+			l.subcmds = append(l.subcmds, heredocSubstitutions(body)...)
+		}
 	}
+	l.tokSubFrom = len(l.subcmds)
+}
+
+// heredocSubstitutions returns the command substitution bodies bash runs
+// while expanding an unquoted here-doc: `$(...)`, backticks, and those
+// nested in `${...}`. Quotes are literal in a here-doc body, so only
+// backslash escapes are honoured.
+func heredocSubstitutions(body string) []string {
+	sub := &shellLexer{src: body}
+	for sub.pos < len(sub.src) {
+		switch sub.src[sub.pos] {
+		case '\\':
+			sub.pos += 2
+		case '`':
+			sub.subcmds = append(sub.subcmds, sub.readBacktickSubst())
+		case '$':
+			sub.readDollarInWord(true)
+		default:
+			sub.pos++
+		}
+	}
+	return sub.subcmds
 }
 
 func (l *shellLexer) readHeredocBody(delim string, stripTabs bool) string {
@@ -1245,6 +1273,11 @@ func substBodyIsInert(body string, depth int) bool {
 		}
 	}
 	for _, seg := range segments {
+		if len(seg.stdinBodies) > 0 {
+			// Here-docs and here-strings: their expansions are checked
+			// above, but nothing here needs one, so stay strict.
+			return false
+		}
 		i := 0
 		for i < len(seg.tokens) && seg.tokens[i].literal && isEnvAssignmentToken(seg.tokens[i].val) && !gitSensitiveAssignName(seg.tokens[i].val) {
 			i++
