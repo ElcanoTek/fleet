@@ -35,7 +35,7 @@ import (
 // the chat saying the instructions were changed and why.
 func cmdPatrol(argv []string) int {
 	if len(argv) == 0 {
-		return errf(1, "usage: fleet patrol list|show|set-prompt (fleet patrol <verb> --help)")
+		return errf(1, "usage: fleet patrol list|show|set-prompt|pause|resume (fleet patrol <verb> --help)")
 	}
 	switch argv[0] {
 	case "list", "ls":
@@ -44,6 +44,10 @@ func cmdPatrol(argv []string) int {
 		return patrolShow(argv[1:], os.Stdout)
 	case "set-prompt":
 		return patrolSetPrompt(argv[1:], os.Stdin, os.Stdout, os.Stderr)
+	case "pause":
+		return patrolSetStatus(store.ChatScheduleStatusPaused, argv[1:], os.Stdout)
+	case "resume":
+		return patrolSetStatus(store.ChatScheduleStatusActive, argv[1:], os.Stdout)
 	case "-h", "--help", "help":
 		fmt.Fprint(os.Stderr, patrolUsage)
 		return 0
@@ -57,7 +61,8 @@ const patrolUsage = `fleet patrol — operator access to chat patrols
   fleet patrol list [--user EMAIL] [--conversation ID] [--timers] [--all] [--limit N] [--json]
   fleet patrol show <schedule_id> [--json | --prompt-only]
   fleet patrol set-prompt <schedule_id> --file <path|-> --expect-sha256 <hex> --reason <text>
-                          [--title <text>] [--notify=false] [--backup-dir DIR] [--dry-run] [--yes] [--json]
+                          [--title <text>] [--notify=false] [--backup-dir DIR] [--dry-run] [--yes] [--json] [--as WHO]
+  fleet patrol pause|resume <schedule_id> --reason <text> [--as WHO]
 
 A schedule id may be shortened to its first 8+ characters. set-prompt prints the
 diff, refuses when the prompt changed since --expect-sha256 was read (from show),
@@ -68,6 +73,7 @@ type patrolAdminStore interface {
 	AdminListChatSchedules(ctx context.Context, f store.AdminChatScheduleFilter) ([]store.AdminChatSchedule, error)
 	AdminGetChatSchedule(ctx context.Context, idOrPrefix string) (store.AdminChatSchedule, error)
 	AdminSetChatSchedulePrompt(ctx context.Context, in store.AdminChatSchedulePromptEdit) (before, after store.AdminChatSchedule, err error)
+	AdminSetChatScheduleStatus(ctx context.Context, a store.AdminActor, idOrPrefix, status, reason string) (store.AdminChatSchedule, error)
 }
 
 // openPatrolStore is swapped by tests.
@@ -234,6 +240,7 @@ func patrolSetPrompt(argv []string, stdin io.Reader, out, errW io.Writer) int {
 	dryRun := fs.Bool("dry-run", false, "print the diff and change nothing")
 	yes := fs.Bool("yes", false, "apply without the confirmation prompt")
 	asJSON := fs.Bool("json", false, "JSON output")
+	as := fs.String("as", "", "record the change as this administrator (default <unix user>@<host>)")
 	if err := fs.Parse(argv); err != nil {
 		return 1
 	}
@@ -310,7 +317,8 @@ func patrolSetPrompt(argv []string, stdin io.Reader, out, errW io.Writer) int {
 		return errf(1, "save the old prompt before changing it: %v (use --backup-dir to pick a writable directory)", err)
 	}
 	res.BackupPath = backup
-	edit := store.AdminChatSchedulePromptEdit{ID: cur.ID, ExpectSHA256: want, Prompt: newPrompt, Title: titlePtr}
+	actor := cliAdminActor(*as)
+	edit := store.AdminChatSchedulePromptEdit{ID: cur.ID, ExpectSHA256: want, Prompt: newPrompt, Title: titlePtr, Actor: &actor, Reason: reasonText}
 	if *notify {
 		edit.Notice = patrolUpdatedNotice(newTitle, reasonText)
 		res.Notice = edit.Notice
@@ -523,4 +531,37 @@ func lineDiff(a, b string, context int) string {
 		return "(no line changes)\n"
 	}
 	return sb.String()
+}
+
+func patrolSetStatus(status string, argv []string, out io.Writer) int {
+	lead, argv := splitLeadingID(argv)
+	verb := "pause"
+	if status == store.ChatScheduleStatusActive {
+		verb = "resume"
+	}
+	fs := flag.NewFlagSet("patrol "+verb, flag.ContinueOnError)
+	dbURL := fs.String("database-url", "", "chat Postgres DSN")
+	reason := fs.String("reason", "", "why; recorded and shown in the chat (required)")
+	as := fs.String("as", "", "record the change as this administrator (default <unix user>@<host>)")
+	if err := fs.Parse(argv); err != nil {
+		return 1
+	}
+	id, err := patrolIDArg(fs, lead)
+	if err != nil {
+		return errf(1, "%v", err)
+	}
+	if strings.TrimSpace(*reason) == "" {
+		return errf(1, "--reason is required: it is recorded and shown in the chat")
+	}
+	st, closeFn, code := openPatrolStore(*dbURL)
+	if st == nil {
+		return code
+	}
+	defer closeFn()
+	after, err := st.AdminSetChatScheduleStatus(context.Background(), cliAdminActor(*as), id, status, *reason)
+	if err != nil {
+		return errf(1, "%s patrol %s: %v", verb, id, err)
+	}
+	fmt.Fprintf(out, "patrol %s (%q in %q) is now %s; next run %s UTC\n", shortScheduleID(after.ID), after.Title, after.ConversationTitle, after.Status, patrolNextRun(after))
+	return 0
 }

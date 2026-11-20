@@ -913,12 +913,47 @@ between keep theirs. The API form also refuses an owner for whom the
 database directly, so it cannot run that check. See
 [`docs/TASK-OWNERSHIP.md`](TASK-OWNERSHIP.md).
 
-## patrol set-prompt — changing a chat patrol's instructions
+## Chat administration — fleet chats and fleet patrol
 
-A chat patrol (the recurring run someone sets from a chat's Patrol bar) can
-only be edited in the app by its owner. When an operator has to change one —
-a client's patrol still names a retired tool, or a log it writes has moved —
-use `fleet patrol`, never a hand-written `UPDATE` on `sched.chat_schedules`:
+An administrator can look after any chat on the box, from the host or from
+**Settings → Admin → Chats** in the browser
+([ADR-0115](adr/0115-chat-administration.md)). Never use a hand-written
+`UPDATE` on chat or schedule tables instead: these commands keep the chat's
+bookkeeping right, record who did what and why, and note every change in the
+chat itself.
+
+```
+fleet chats list [--user EMAIL] [--search TEXT] [--active-days N] [--archived]
+fleet chats show <chat_id>                     # owner, model, approvals, patrols, queue, recent admin changes
+fleet chats history <chat_id> [--tail 30] [--tools]
+fleet chats send <chat_id> --message "..." --reason "..." [--wait]
+fleet chats stop <chat_id> --reason "..." [--wait]
+fleet chats transfer <chat_id> --to EMAIL --reason "..." [--wait]
+fleet chats notice <chat_id> --text "..."
+fleet chats set <chat_id> [--title T] [--model SLUG] [--approval-mode manual|auto] [--archive|--unarchive] --reason "..."
+fleet chats actions [<chat_id>]                # the record of admin changes
+fleet chats request <request_id>               # progress of a send / stop / transfer
+```
+
+A chat or patrol id may be shortened to its first 8 characters. Every change
+takes `--reason`, is recorded in `chat.admin_actions` as `--as` (default
+`<unix user>@<host>`), and is noted in the chat.
+
+- **send** runs as the chat's owner, with the owner's connectors and approval
+  mode, like a patrol run. The chat shows it as a message from the
+  administrator, and the model is told the owner did not write it. Approval
+  cards it stages go to the owner. Archived and Lockdown chats take no admin
+  messages.
+- **send, stop and transfer** are carried out by the running server: the CLI
+  records an admin request and the server executes it on its next scheduler
+  pass (`FLEET_SCHED_TICK_SECONDS`, 30 s by default). `--wait` follows it to
+  the end; for a message it waits for the turn and prints the reply.
+- **set** can change the approval mode to `manual` or `auto` only. Autonomous
+  is the owner's own decision. A Lockdown chat keeps its model.
+- Deleting a chat and answering someone else's approval cards are not
+  administrator actions.
+
+### Changing a patrol's instructions
 
 ```
 fleet patrol list [--user EMAIL] [--conversation ID] [--timers] [--all] [--json]
@@ -928,9 +963,10 @@ fleet patrol set-prompt <schedule_id> --file /tmp/patrol.txt \
     --expect-sha256 <sha256 from show> --reason "why it changed" --dry-run
 fleet patrol set-prompt <schedule_id> --file /tmp/patrol.txt \
     --expect-sha256 <sha256 from show> --reason "why it changed" --yes
+fleet patrol pause|resume <schedule_id> --reason "..."
 ```
 
-A schedule id may be shortened to its first 8 characters. `set-prompt`:
+`set-prompt`:
 
 - prints the diff first; `--dry-run` stops there;
 - refuses when the prompt changed after you read it (the sha256 no longer
@@ -945,9 +981,8 @@ A schedule id may be shortened to its first 8 characters. `set-prompt`:
   the old prompt is superseded and the next run uses the new one, and rewrites
   any run already waiting in the chat's queue to carry the new prompt;
 - writes a notice into the chat (`An administrator updated the instructions of
-  the patrol "…". Reason: …`) so the chat's people see what changed and why.
-  The notice is UI-only: it never reaches the model or the prompt cache.
-  `--notify=false` skips it.
+  the patrol "…". Reason: …`). The notice is UI-only: it never reaches the
+  model or the prompt cache. `--notify=false` skips it.
 
 Tell the patrol's owner as well: the notice says the instructions changed, not
 what they now say.

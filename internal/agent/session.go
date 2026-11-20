@@ -120,6 +120,13 @@ const InputKindApprovalResume = "approval_resume"
 // schedule fires (migration 086).
 const InputKindChatPatrol = "chat_patrol"
 
+// InputKindAdminMessage is TextContent.Kind / TurnInput.InputKind for a
+// message an administrator sent into the chat with the admin tools
+// (ADR-0115). The turn runs as the chat's owner; TextContent.SenderEmail
+// names the administrator. Like the other fleet-started kinds it is an
+// unattended turn: nobody is at the owner's keyboard.
+const InputKindAdminMessage = "admin_message"
+
 // EntryTypeNotice is a UI-only history entry fleet writes to tell the reader
 // something happened that is not a turn, e.g. an automatic resume that was
 // skipped or dropped, or a workspace model upgrade. Its content is

@@ -37,6 +37,11 @@ func (f *fakePatrolStore) AdminSetChatSchedulePrompt(_ context.Context, in store
 	return before, f.sched, nil
 }
 
+func (f *fakePatrolStore) AdminSetChatScheduleStatus(_ context.Context, _ store.AdminActor, _ string, status, _ string) (store.AdminChatSchedule, error) {
+	f.sched.Status = status
+	return f.sched, nil
+}
+
 func withFakePatrolStore(t *testing.T) *fakePatrolStore {
 	t.Helper()
 	prompt := oldPatrolPrompt

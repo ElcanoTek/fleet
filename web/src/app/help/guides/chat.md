@@ -1578,6 +1578,15 @@ front and a control to remove it. Queued messages run in order once the current
 turn finishes, each appearing on screen as its own turn, and the queue survives a
 reload or a switch to another chat.
 
+### Messages from an administrator
+
+A workspace administrator can send a message into your chat, for example to
+ask a patrol to publish a log it keeps. It appears in the transcript as
+**Message from an administrator** with their email, never as your words, and
+a short note in the chat says what was changed and why. The reply runs with
+your connections and your approval setting, so any approval card it raises is
+yours to answer.
+
 ### Long conversations
 
 As a conversation grows, **Summarize earlier messages** in **More options** (`•••`)

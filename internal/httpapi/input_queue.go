@@ -622,6 +622,12 @@ func (s *Server) launchQueuedTurn(convID string, row *store.InputQueueRow) bool 
 		// The turn fleet starts when an in-chat patrol or timer schedule fires
 		// (chat_schedules.go): its input is a patrol header, not a user bubble.
 		req.inputKind = agent.InputKindChatPatrol
+	case store.InputModeAdmin:
+		// A message an administrator sent with the admin tools (ADR-0115):
+		// the turn runs as the owner (the row's user) and records the
+		// administrator as the sender.
+		req.inputKind = agent.InputKindAdminMessage
+		req.adminSender = row.SenderEmail
 	}
 	if !strings.HasPrefix(row.ClientInputID, store.UIAutoSubmitClientInputPrefix) && row.Mode != store.InputModeResume {
 		s.cancelConversationAutoSubmits(lctx, convID)

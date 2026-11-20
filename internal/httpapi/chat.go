@@ -123,6 +123,10 @@ type chatRequest struct {
 	// (docs/RESUME-AFTER-APPROVAL.md). Message is then fleet's labelled
 	// notice, not the user's words.
 	inputKind string
+	// adminSender is the administrator who wrote an admin message (a queue
+	// row of mode 'admin', ADR-0115): the turn runs as the chat's owner and
+	// records the administrator as the message's sender. Server-set only.
+	adminSender string
 }
 
 // conversationIDHeaderName names the conversation a POST /chat response is
@@ -978,7 +982,7 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	// Not the user's words when fleet started the turn: the same marker the
 	// persisted entry carries (TextContent.Kind), so a reattach renders the
 	// notice row the reload path renders.
-	userEvent := buildUserMessageEvent(req.Message, req.inputKind, injected, conv, userWords, user)
+	userEvent := buildUserMessageEvent(req.Message, req.inputKind, injected, conv, userWords, user, req.adminSender)
 	buf.Emit("user.message", userEvent)
 	if queueRowID != "" {
 		// Same reason as the metadata events above: seed the queue snapshot so
@@ -1003,6 +1007,7 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	var releasedOnce sync.Once
 	releaseOnce := func() { releasedOnce.Do(releaseSlot) }
 	convSnapshot := cloneConversationSnapshot(conv)
+	turnCtx = withAdminSender(turnCtx, req.adminSender)
 	// Deliberate: the turn must outlive the HTTP request (see the detachment
 	// comment above); Stop routes through /cancel.
 	go func() {
@@ -1085,7 +1090,7 @@ func appendMultiplayerSenderBlock(injected string, conv *store.Conversation, use
 	return injected
 }
 
-func buildUserMessageEvent(message, inputKind, injected string, conv *store.Conversation, userWords bool, user string) map[string]any {
+func buildUserMessageEvent(message, inputKind, injected string, conv *store.Conversation, userWords bool, user, adminSender string) map[string]any {
 	_ = userWords
 	userEvent := withInputKind(map[string]any{"text": message}, "kind", inputKind)
 	if injected != "" {
@@ -1093,6 +1098,9 @@ func buildUserMessageEvent(message, inputKind, injected string, conv *store.Conv
 	}
 	if conv != nil && (conv.Multiplayer || (conv.UserEmail != "" && !strings.EqualFold(conv.UserEmail, user))) && user != "" {
 		userEvent["sender_email"] = user
+	}
+	if adminSender != "" {
+		userEvent["sender_email"] = adminSender
 	}
 	return userEvent
 }
@@ -1579,6 +1587,9 @@ func (s *Server) prepareTurnExecutionContext(
 	senderEmail := ""
 	if conv.Multiplayer || (conv.UserEmail != "" && !strings.EqualFold(conv.UserEmail, user)) {
 		senderEmail = user
+	}
+	if admin := adminSenderFrom(turnCtx); admin != "" && inputKind == agent.InputKindAdminMessage {
+		senderEmail = admin
 	}
 	promptConv := conv
 	if s.store != nil && conv != nil && conv.ID != "" {
