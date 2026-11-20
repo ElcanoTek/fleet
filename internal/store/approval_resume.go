@@ -64,12 +64,14 @@ const (
 const approvalTimedOutPrefix = "Approval timed out"
 
 // ArmApprovalResume marks a still-pending approval as one whose settlement
-// starts a resume turn. false = no pending row matched (already resolved).
-func (s *Store) ArmApprovalResume(ctx context.Context, userEmail, approvalID string) (bool, error) {
+// starts a resume turn. stagedByResume records that a resume turn staged the
+// card, so its timeout starts no further turn (timedOutResumeSkippedTx).
+// false = no pending row matched (already resolved).
+func (s *Store) ArmApprovalResume(ctx context.Context, userEmail, approvalID string, stagedByResume bool) (bool, error) {
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE approvals SET resume_state = 'armed'
+		`UPDATE approvals SET resume_state = 'armed', staged_by_resume = $3
 		  WHERE id = $1 AND user_email = $2 AND status = 'pending' AND resume_state = ''`,
-		approvalID, userEmail)
+		approvalID, userEmail, stagedByResume)
 	if err != nil {
 		return false, err
 	}
@@ -259,13 +261,11 @@ func (s *Store) ClaimApprovalResume(ctx context.Context, req ApprovalResumeReque
 	}
 
 	if allTimedOut {
-		var hasSchedule bool
-		if err := tx.QueryRowContext(ctx,
-			`SELECT EXISTS (SELECT 1 FROM `+chatSchedulesTable+` WHERE conversation_id = $1 AND status IN ('active', 'paused'))`,
-			req.ConversationID).Scan(&hasSchedule); err != nil {
+		skip, err := timedOutResumeSkippedTx(ctx, tx, req.ConversationID, ids)
+		if err != nil {
 			return out, err
 		}
-		if hasSchedule {
+		if skip {
 			out.Skipped = ApprovalResumeSkipTimedOut
 			if err := markApprovalResumeTx(ctx, tx, ids, ApprovalResumeSkipped); err != nil {
 				return out, err
@@ -403,6 +403,41 @@ func selectApprovalResumeUserTx(ctx context.Context, tx *sql.Tx, req ApprovalRes
 		return "", blockedOut, nil
 	}
 	return "", allOutstanding, nil
+}
+
+// timedOutResumeSkippedTx decides whether cards that all timed out start no
+// resume turn: in a conversation with a schedule (its next run picks the work
+// up), or when a resume turn staged them (stagedByResumeTurnsTx).
+func timedOutResumeSkippedTx(ctx context.Context, tx *sql.Tx, convID string, ids []string) (bool, error) {
+	var hasSchedule bool
+	if err := tx.QueryRowContext(ctx,
+		`SELECT EXISTS (SELECT 1 FROM `+chatSchedulesTable+` WHERE conversation_id = $1 AND status IN ('active', 'paused'))`,
+		convID).Scan(&hasSchedule); err != nil {
+		return false, err
+	}
+	if hasSchedule {
+		return true, nil
+	}
+	return stagedByResumeTurnsTx(ctx, tx, ids)
+}
+
+// stagedByResumeTurnsTx reports whether a resume turn staged every given
+// card (approvals.staged_by_resume, set when the card was armed). Such a card
+// that then times out must not start another resume: nobody answered the
+// first unattended turn's card, so a second turn would only stage it again and
+// time out again, one paid turn per expiry until someone opens the chat.
+func stagedByResumeTurnsTx(ctx context.Context, tx *sql.Tx, ids []string) (bool, error) {
+	for _, id := range ids {
+		var staged bool
+		if err := tx.QueryRowContext(ctx,
+			`SELECT staged_by_resume FROM approvals WHERE id = $1`, id).Scan(&staged); err != nil {
+			return false, err
+		}
+		if !staged {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 // approvalResumeOutcome names a settled card's outcome from its row.

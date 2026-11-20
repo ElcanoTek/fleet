@@ -769,6 +769,7 @@ func (s *Server) stageEnableMCPConnectorsApproval(
 	_ = json.Unmarshal([]byte(rawInput), &currentArgs)
 	approval, superseded, err := s.store.StageEnableMCPConnectorsApproval(
 		ctx, user, conv.ID, tools.EnableMCPConnectorsToolName, toolCallID, rawInput, expiry,
+		turnStager != nil && turnStager.inputKind == agent.InputKindApprovalResume,
 		func(supersededArgsJSON []string) string {
 			return mergeStagedEnableMCPConnectorsArgs(currentArgs, supersededArgsJSON)
 		},

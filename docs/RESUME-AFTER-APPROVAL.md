@@ -224,6 +224,15 @@ running twice.
 - **"Pending" excludes preview cards.** A `preview_email` card is
   display-only and never expires, so waiting for it could block a resume
   forever.
+- **A timeout resumes once, never in a chain.** When every settled card timed
+  out and a resume turn staged them, no further turn starts
+  (`ApprovalResumeSkipTimedOut`, the same outcome as a conversation with a
+  schedule). The card carries that fact itself (`approvals.staged_by_resume`,
+  migration 0206, written when it is armed), because the turn and queue rows
+  can be swept before a long timeout expires. Nobody answered the first unattended turn's card, so another turn
+  would only stage it again: on 2026-11-20 one unanswered chat had run a paid
+  turn at each daily expiry for three days. A card the user approves or
+  declines still resumes, whichever turn staged it.
 - **The approve POST is the web's trigger.** Nothing pushes a server-started
   turn to an open tab; the web follows after the POST (or after a reload with
   an executing card) and otherwise relies on tab return and reload. So a turn

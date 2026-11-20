@@ -40,6 +40,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/metrics"
@@ -226,7 +227,7 @@ func (a *approvalStager) armApprovalResume(approval *store.Approval) {
 	if !agentcore.ResumeAfterApproval(approval.ToolName) && !a.isPatrolOrPatrolResume() {
 		return
 	}
-	ok, err := a.store.ArmApprovalResume(a.ctx, a.userEmail, approval.ID)
+	ok, err := a.store.ArmApprovalResume(a.ctx, a.userEmail, approval.ID, a.inputKind == agent.InputKindApprovalResume)
 	if err != nil || !ok {
 		logging.From(a.ctx).Error("approval resume: arm failed", "approval_id", safe.LogSafe(approval.ID), "ok", ok, "err", err)
 		return
