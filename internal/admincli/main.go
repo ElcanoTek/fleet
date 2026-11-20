@@ -29,6 +29,7 @@
 //	fleet sched user add|update|set-role|del|list
 //	fleet sched apikey create|list|revoke|rotate|delete
 //	fleet sched task list|export|import|set-model|set-credentials|set-description|set-limits|set-owner|tag|estimate|batch-create
+//	fleet patrol list|show|set-prompt                 (operator access to chat patrols; set-prompt is diffed, CAS-guarded, backed up, noticed)
 //	fleet sched trigger create|list|delete|rotate
 //	fleet sched dlq list|replay
 //	fleet sched budget list|create|delete
@@ -116,6 +117,8 @@ func Run(argv []string) int {
 		return acp.Run(argv[1:])
 	case "sched":
 		return cmdSched(argv[1:])
+	case "patrol", "patrols":
+		return cmdPatrol(argv[1:])
 	case "admin":
 		return cmdAdmin(argv[1:])
 	case "account-events":
@@ -268,6 +271,11 @@ Users, credentials, notes:
   fleet sched apikey revoke <key-id>
   fleet sched apikey rotate <key-id> [--grace-hours 24]   (fresh secret, same type/scope; old key valid through the grace window)
   fleet sched apikey delete <key-id>
+  fleet patrol list [--user EMAIL] [--conversation ID] [--timers] [--all] [--json]   (chat patrols across every user)
+  fleet patrol show <schedule_id> [--json | --prompt-only]   (one patrol: owner, schedule, prompt + its sha256)
+  fleet patrol set-prompt <schedule_id> --file <path|-> --expect-sha256 <hex> --reason <text> [--title T] [--notify=false] [--dry-run] [--yes]
+                                                      (operator prompt edit: prints the diff, refuses a stale edit, backs the old prompt
+                                                       up under /var/backups/fleet/patrol-prompts, notes the change in the chat)
   fleet sched task list [--status scheduled] [--limit 50] [--json]   (most recent first; the daily-driver read)
   fleet sched task export > tasks.json    (versioned JSON of scheduled tasks → stdout)
   fleet sched task import [--replace-status] < tasks.json

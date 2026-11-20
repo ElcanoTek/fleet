@@ -913,6 +913,44 @@ between keep theirs. The API form also refuses an owner for whom the
 database directly, so it cannot run that check. See
 [`docs/TASK-OWNERSHIP.md`](TASK-OWNERSHIP.md).
 
+## patrol set-prompt — changing a chat patrol's instructions
+
+A chat patrol (the recurring run someone sets from a chat's Patrol bar) can
+only be edited in the app by its owner. When an operator has to change one —
+a client's patrol still names a retired tool, or a log it writes has moved —
+use `fleet patrol`, never a hand-written `UPDATE` on `sched.chat_schedules`:
+
+```
+fleet patrol list [--user EMAIL] [--conversation ID] [--timers] [--all] [--json]
+fleet patrol show <schedule_id> --prompt-only > /tmp/patrol.txt   # edit this copy
+fleet patrol show <schedule_id>                                   # note the prompt's sha256
+fleet patrol set-prompt <schedule_id> --file /tmp/patrol.txt \
+    --expect-sha256 <sha256 from show> --reason "why it changed" --dry-run
+fleet patrol set-prompt <schedule_id> --file /tmp/patrol.txt \
+    --expect-sha256 <sha256 from show> --reason "why it changed" --yes
+```
+
+A schedule id may be shortened to its first 8 characters. `set-prompt`:
+
+- prints the diff first; `--dry-run` stops there;
+- refuses when the prompt changed after you read it (the sha256 no longer
+  matches), so an owner's newer edit is never overwritten — read it again and
+  rebuild the edit;
+- saves the old prompt, byte for byte, to
+  `/var/backups/fleet/patrol-prompts/<id>-<time>-v<def_version>.txt`
+  (`--backup-dir` to change), and prints the command that restores it;
+- changes only the prompt (and the title with `--title`): the owner, status,
+  cron and next run stay as they are;
+- bumps `def_version` like the owner's own edit, so a run already claimed under
+  the old prompt is superseded and the next run uses the new one;
+- writes a notice into the chat (`An administrator updated the instructions of
+  the patrol "…". Reason: …`) so the chat's people see what changed and why.
+  The notice is UI-only: it never reaches the model or the prompt cache.
+  `--notify=false` skips it.
+
+Tell the patrol's owner as well: the notice says the instructions changed, not
+what they now say.
+
 ## Where the sandbox build fits
 
 The execution sandbox is a **per-client bundle artifact**: each bundle ships its
