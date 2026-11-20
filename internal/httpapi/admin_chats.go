@@ -30,7 +30,7 @@ type adminChatStore interface {
 	AdminListChats(ctx context.Context, f store.AdminChatFilter) ([]store.AdminChat, error)
 	AdminGetChat(ctx context.Context, idOrPrefix string) (store.AdminChat, error)
 	AdminGetChatAny(ctx context.Context, idOrPrefix string) (store.AdminChat, error)
-	AdminMoveChatToBin(ctx context.Context, convID string) (int, error)
+	AdminMoveChatToBin(ctx context.Context, convID, notice string) (int, error)
 	AdminRestoreChat(ctx context.Context, convID string) error
 	AdminPurgeChat(ctx context.Context, convID string) error
 	AdminChatTranscript(ctx context.Context, convID string, o store.AdminTranscriptOptions) ([]store.AdminTranscriptEntry, error)
@@ -243,9 +243,8 @@ func (s *Server) executeClaimedAdminRequest(ctx context.Context, st adminChatSto
 func (s *Server) adminDeleteToBin(ctx context.Context, st adminChatStore, r store.AdminRequest) {
 	// Nothing is stopped until the move has succeeded: a failed delete must
 	// leave the chat exactly as it was.
-	_ = st.AppendAdminRequestNotice(ctx, r.ConversationID,
+	paused, err := st.AdminMoveChatToBin(ctx, r.ConversationID,
 		fmt.Sprintf("An administrator moved this chat to the recycle bin; it is deleted for good after %d days unless restored. Reason: %s", store.AdminRecycleBinDays, r.Reason))
-	paused, err := st.AdminMoveChatToBin(ctx, r.ConversationID)
 	if err != nil {
 		s.finishAdminRequest(ctx, st, r, store.AdminRequestFailed, "delete failed: "+err.Error(), "")
 		return

@@ -422,7 +422,7 @@ func TestAdminRecycleBin(t *testing.T) {
 	if err := s.SetPinned(ctx, owner, c.ID, true); err != nil {
 		t.Fatal(err)
 	}
-	paused, err := s.AdminMoveChatToBin(ctx, c.ID)
+	paused, err := s.AdminMoveChatToBin(ctx, c.ID, "moved to the bin")
 	if err != nil || paused != 1 {
 		t.Fatalf("to bin = %d, %v", paused, err)
 	}

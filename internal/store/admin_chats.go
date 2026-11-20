@@ -977,7 +977,7 @@ var MaxAdminQueuedInputs = 20
 // else (pin, sharing, participants, their paused patrols and pending cards)
 // is left as it was, so a restore gives the chat back whole. It returns how
 // many schedules it paused.
-func (s *Store) AdminMoveChatToBin(ctx context.Context, convID string) (int, error) {
+func (s *Store) AdminMoveChatToBin(ctx context.Context, convID, notice string) (int, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
@@ -1001,6 +1001,13 @@ func (s *Store) AdminMoveChatToBin(ctx context.Context, convID string) (int, err
 		`UPDATE chat_input_queue SET state = 'cancelled', updated_at = $1
 		  WHERE conversation_id = $2 AND state = 'queued'`, now, convID); err != nil {
 		return 0, err
+	}
+	// The notice is written in the same transaction, so the chat never says
+	// it was moved to the bin unless it was; it is there if it is restored.
+	if n := strings.TrimSpace(notice); n != "" {
+		if err := s.appendNoticeTx(ctx, tx, convID, NoticeAdminUpdated, pgtext.Content(n)); err != nil {
+			return 0, err
+		}
 	}
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE chat.conversations SET deleted_at = NOW(), updated_at = $2 WHERE id = $1 AND deleted_at IS NULL`,
