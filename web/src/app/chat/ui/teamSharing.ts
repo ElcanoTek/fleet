@@ -68,14 +68,61 @@ export type BranchOrigin = {
    */
   withheld_truncated?: boolean;
   source_still_shared: boolean;
+  /**
+   * The branch's owner may take part in the source as a Multiplayer chat
+   * right now (computed per read): the link back opens it live, not
+   * read-only. Absent from older servers, which read as false.
+   */
+  source_multiplayer?: boolean;
 };
 
 export type TeamLinkStatus = {
-  status: "owner" | "open" | "not_on_team" | "not_shared";
+  /**
+   * owner: the viewer's own chat. multiplayer: a Multiplayer chat the viewer
+   * may take part in — open it live. open: the read-only view. not_on_team /
+   * not_shared: dead ends (docs/TEAM-SHARING.md).
+   */
+  status: "owner" | "multiplayer" | "open" | "not_on_team" | "not_shared";
   team_id?: string;
   viewer_email: string;
   project?: { id: string; name: string };
 };
+
+/**
+ * Where a team link lands, from the server's answer (null: the lookup
+ * failed). "boot": the chat is the viewer's own and the boot opens it like
+ * ?c=. "live": a Multiplayer chat they take part in, opened in the chat view
+ * as its Team chats row opens it (falling back to the read-only view if that
+ * changed since). "read_only": the viewer, which also reports a failed
+ * lookup's error. "notice": a dead end that says why.
+ */
+export type TeamLinkRoute = "boot" | "live" | "read_only" | "notice";
+
+export function teamLinkRoute(status: TeamLinkStatus | null): TeamLinkRoute {
+  switch (status?.status) {
+    case "owner":
+      return "boot";
+    case "multiplayer":
+      return "live";
+    case "not_on_team":
+    case "not_shared":
+      return "notice";
+    default:
+      return "read_only";
+  }
+}
+
+/**
+ * Where the branch banner's link back to the source opens: live while the
+ * server says the branch's owner may take part in it as a Multiplayer chat,
+ * read-only while it is still shared with their team, and nowhere (no link)
+ * otherwise.
+ */
+export function branchSourceRoute(origin: BranchOrigin): "live" | "read_only" | null {
+  if (origin.source_multiplayer) return "live";
+  if (origin.source_still_shared) return "read_only";
+  return null;
+}
 
 export type SourcesFile = {
   path: string;
@@ -125,7 +172,10 @@ function conversationUrl(conversationId: string, suffix: string): string {
   return url;
 }
 
-/** The team link a teammate opens: lands on the read-only view. */
+/**
+ * The team link a teammate opens: the live chat when it is in Multiplayer mode
+ * and they may take part, the read-only view otherwise (teamLinkRoute).
+ */
 export function teamLinkUrl(conversationId: string, origin?: string): string {
   const base =
     origin ?? (typeof window !== "undefined" ? window.location.origin : "");

@@ -415,6 +415,12 @@ type BranchOrigin struct {
 	// still team-view the source. The banner links back only while it is
 	// true, so it never offers a door that 404s.
 	SourceStillShared bool `json:"source_still_shared"`
+	// SourceMultiplayer is computed per read too: whether the branch's owner
+	// may take part in the source as a Multiplayer chat right now
+	// (GetMultiplayerConversation). The banner's link then opens the live
+	// chat instead of the read-only view, and is offered even when the source
+	// is not team-shared with them (an explicitly added participant).
+	SourceMultiplayer bool `json:"source_multiplayer"`
 }
 
 // RecordBranchOrigin stores the origin of a freshly created teammate branch.
@@ -496,6 +502,11 @@ func (s *Store) GetBranchOrigin(ctx context.Context, ownerEmail, convID string) 
 		return nil, err
 	}
 	o.SourceStillShared = still
+	mp, err := s.GetMultiplayerConversation(ctx, ownerEmail, o.SourceConversationID)
+	if err != nil {
+		return nil, err
+	}
+	o.SourceMultiplayer = mp != nil
 	return o, nil
 }
 
@@ -621,11 +632,18 @@ func (s *Store) ViewerBranches(ctx context.Context, viewerEmail string, sourceID
 // ── the team link ───────────────────────────────────────────────────────────
 
 // Team link statuses (GET /conversations/{id}/team-link).
+//
+// TeamLinkMultiplayer is a chat in Multiplayer mode that the caller may take
+// part in (GetMultiplayerConversation answers it): the link opens the live
+// chat, as the Team chats row and the project home do, never the read-only
+// view. It tells the caller nothing new: a participant can already read the
+// whole chat through GET /conversations/{id}.
 const (
-	TeamLinkOwner     = "owner"
-	TeamLinkOpen      = "open"
-	TeamLinkNotOnTeam = "not_on_team"
-	TeamLinkNotShared = "not_shared"
+	TeamLinkOwner       = "owner"
+	TeamLinkMultiplayer = "multiplayer"
+	TeamLinkOpen        = "open"
+	TeamLinkNotOnTeam   = "not_on_team"
+	TeamLinkNotShared   = "not_shared"
 )
 
 // TeamLink is what a team link resolves to for one signed-in caller. It
@@ -678,6 +696,20 @@ func (s *Store) ResolveTeamLink(ctx context.Context, callerEmail, convID string)
 			return TeamLink{Status: TeamLinkOwner}, nil
 		}
 		return notShared, nil
+	}
+	// A participant joins the live chat, whatever the team stamp says: the
+	// same rule the chat, stream and branch routes use, so a team link and
+	// the sidebar never disagree about where one chat opens. An explicitly
+	// added participant from another team, or anyone on a teamless owner's
+	// Multiplayer chat, is routed here too instead of to a dead end. Anyone
+	// the rule refuses (excluded, a read-only viewer account, lockdown,
+	// archived, Multiplayer off) falls through to the team-share statuses.
+	mp, err := s.GetMultiplayerConversation(ctx, callerEmail, convID)
+	if err != nil {
+		return TeamLink{}, err
+	}
+	if mp != nil {
+		return TeamLink{Status: TeamLinkMultiplayer}, nil
 	}
 	team, err := s.callerTeam(ctx, callerEmail)
 	if err != nil {

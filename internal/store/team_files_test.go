@@ -294,6 +294,155 @@ func TestResolveTeamLink(t *testing.T) {
 	check("dana@x.com", c.ID, TeamLinkNotShared, "", "")
 }
 
+// A team link to a Multiplayer chat opens it live for anyone the
+// participation rule admits (the rule GET /conversations/{id} applies), and
+// the read-only view or a dead end for everyone else — the same answer the
+// Team chats row gives, so the two never disagree about one chat.
+func TestResolveTeamLinkMultiplayer(t *testing.T) {
+	t.Parallel()
+
+	f := newTeamFixture(t)
+	c := f.sharedChat(t, "alice@x.com", f.project.ID, "Opti workbench")
+	if _, err := f.s.SetConversationMultiplayer(f.ctx, "alice@x.com", c.ID, true, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	check := func(when, who, wantStatus, wantTeam string) {
+		t.Helper()
+		tl, err := f.s.ResolveTeamLink(f.ctx, who, c.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if tl.Status != wantStatus || tl.TeamID != wantTeam || tl.Project != nil {
+			t.Errorf("%s: %s: %+v, want %s team=%q", when, who, tl, wantStatus, wantTeam)
+		}
+	}
+	// A teammate the rule admits joins; the owner is still the owner; another
+	// team and the teamless are told only the audience, as before.
+	check("on", "alice@x.com", TeamLinkOwner, "")
+	check("on", "bob@x.com", TeamLinkMultiplayer, "")
+	check("on", "dana@x.com", TeamLinkNotOnTeam, "quant")
+	check("on", "carol@x.com", TeamLinkNotOnTeam, "quant")
+
+	// Explicitly added from another team: joins, instead of the dead end.
+	if _, err := f.s.SetConversationMultiplayer(f.ctx, "alice@x.com", c.ID, true, []string{"dana@x.com"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	check("participant", "dana@x.com", TeamLinkMultiplayer, "")
+
+	// Excluded by the owner: back to the read-only view (the chat is still
+	// shared with the team), never the live chat.
+	if _, err := f.s.SetConversationMultiplayer(f.ctx, "alice@x.com", c.ID, true, nil, []string{"bob@x.com"}); err != nil {
+		t.Fatal(err)
+	}
+	check("excluded", "bob@x.com", TeamLinkOpen, "")
+	if _, err := f.s.SetConversationMultiplayer(f.ctx, "alice@x.com", c.ID, true, nil, []string{}); err != nil {
+		t.Fatal(err)
+	}
+	check("re-included", "bob@x.com", TeamLinkMultiplayer, "")
+
+	// A read-only viewer account cannot take part: read-only view.
+	viewer := "viewer"
+	if _, err := f.s.SetUserRoleTeam(f.ctx, "bob@x.com", &viewer, nil); err != nil {
+		t.Fatal(err)
+	}
+	check("viewer role", "bob@x.com", TeamLinkOpen, "")
+	member := "member"
+	if _, err := f.s.SetUserRoleTeam(f.ctx, "bob@x.com", &member, nil); err != nil {
+		t.Fatal(err)
+	}
+	check("member again", "bob@x.com", TeamLinkMultiplayer, "")
+
+	// Lockdown refuses multiplayer: the team share's read-only view stands.
+	if _, err := f.s.db.ExecContext(f.ctx, `UPDATE conversations SET lockdown = TRUE WHERE id = $1`, c.ID); err != nil {
+		t.Fatal(err)
+	}
+	check("lockdown", "bob@x.com", TeamLinkOpen, "")
+	if _, err := f.s.db.ExecContext(f.ctx, `UPDATE conversations SET lockdown = FALSE WHERE id = $1`, c.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	// Multiplayer off: the chat stays shared with the team (it lives in the
+	// team's project), so the link opens the read-only view again.
+	if _, err := f.s.SetConversationMultiplayer(f.ctx, "alice@x.com", c.ID, false, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	check("off", "bob@x.com", TeamLinkOpen, "")
+	check("off", "dana@x.com", TeamLinkNotOnTeam, "quant")
+
+	// Archived: nobody joins and nothing is shared.
+	if _, err := f.s.SetConversationMultiplayer(f.ctx, "alice@x.com", c.ID, true, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.SetArchived(f.ctx, "alice@x.com", c.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	tl, err := f.s.ResolveTeamLink(f.ctx, "bob@x.com", c.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tl.Status != TeamLinkNotShared {
+		t.Errorf("archived: %+v, want not_shared", tl)
+	}
+
+	// A teamless owner's Multiplayer chat is open to everyone on the
+	// instance: a link to it joins, where it used to say "not shared".
+	solo, err := f.s.CreateConversation(f.ctx, "carol@x.com", "Solo", "victoria", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.s.SetConversationMultiplayer(f.ctx, "carol@x.com", solo.ID, true, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if tl, err := f.s.ResolveTeamLink(f.ctx, "dana@x.com", solo.ID); err != nil || tl.Status != TeamLinkMultiplayer {
+		t.Errorf("teamless owner: %+v, %v, want multiplayer", tl, err)
+	}
+}
+
+// A branch's origin says whether its owner may take part in the source as a
+// Multiplayer chat, read per request: the banner's link back opens the live
+// chat while that holds, and the read-only view once it does not.
+func TestBranchOriginSourceMultiplayer(t *testing.T) {
+	t.Parallel()
+
+	f := newTeamFixture(t)
+	c := f.sharedChat(t, "alice@x.com", f.project.ID, "Opti workbench")
+	if _, err := f.s.SetConversationMultiplayer(f.ctx, "alice@x.com", c.ID, true, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	msgs, err := f.s.LoadHistory(f.ctx, c.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fork, err := f.s.BranchConversation(f.ctx, "bob@x.com", c.ID, msgs[len(msgs)-1].ID, "fork")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.RecordBranchOrigin(f.ctx, fork.ID, BranchOrigin{
+		SourceConversationID: c.ID, SourceOwnerEmail: "alice@x.com", SourceTitle: c.Title, BranchedAt: fork.CreatedAt,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	origin := func(when string, wantShared, wantMP bool) {
+		t.Helper()
+		o, err := f.s.GetBranchOrigin(f.ctx, "bob@x.com", fork.ID)
+		if err != nil || o == nil {
+			t.Fatalf("%s: origin = %+v, %v", when, o, err)
+		}
+		if o.SourceStillShared != wantShared || o.SourceMultiplayer != wantMP {
+			t.Errorf("%s: still_shared=%v multiplayer=%v, want %v/%v", when, o.SourceStillShared, o.SourceMultiplayer, wantShared, wantMP)
+		}
+	}
+	origin("multiplayer", true, true)
+	if _, err := f.s.SetConversationMultiplayer(f.ctx, "alice@x.com", c.ID, true, nil, []string{"bob@x.com"}); err != nil {
+		t.Fatal(err)
+	}
+	origin("excluded", true, false)
+	if _, err := f.s.SetConversationMultiplayer(f.ctx, "alice@x.com", c.ID, false, nil, []string{}); err != nil {
+		t.Fatal(err)
+	}
+	origin("multiplayer off", true, false)
+}
+
 func TestProjectUserState(t *testing.T) {
 	t.Parallel()
 

@@ -28,7 +28,21 @@ describe("BranchOriginBanner", () => {
       /Branched from sam@example\.com’s chat on Oct \d+\. Shared files came with it as your own copies\./,
     );
     fireEvent.click(screen.getByRole("button", { name: "Open Sam’s chat" }));
-    expect(onOpenSource).toHaveBeenCalledWith("src-conv");
+    expect(onOpenSource).toHaveBeenCalledWith("src-conv", "read_only");
+  });
+
+  it("links back live to a Multiplayer source the reader takes part in", () => {
+    const onOpenSource = vi.fn();
+    // An explicitly added participant need not be on the owner's team, so the
+    // link stands even when the source is not shared with them.
+    render(
+      <BranchOriginBanner
+        origin={{ ...ORIGIN, source_still_shared: false, source_multiplayer: true }}
+        onOpenSource={onOpenSource}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Open Sam’s chat" }));
+    expect(onOpenSource).toHaveBeenCalledWith("src-conv", "live");
   });
 
   it("does not promise files when none came with the branch", () => {

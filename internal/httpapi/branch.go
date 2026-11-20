@@ -245,6 +245,12 @@ func (s *Server) carrySharedFilesIntoBranch(ctx context.Context, src *store.Team
 	if err := s.store.RecordBranchOrigin(recordCtx, branch.ID, origin); err != nil {
 		logging.From(ctx).Error("branch files: record origin failed", "branch_id", safe.LogSafe(branch.ID), "err", safe.LogSafe(err.Error()))
 	}
+	// Computed per read, like GetBranchOrigin does: whether the banner's
+	// link back opens the source live. A failed read answers false — the
+	// link then falls back to the read-only view, never to a wider door.
+	if mp, err := s.store.GetMultiplayerConversation(recordCtx, branch.UserEmail, src.ID); err == nil {
+		origin.SourceMultiplayer = mp != nil
+	}
 	return &origin
 }
 
