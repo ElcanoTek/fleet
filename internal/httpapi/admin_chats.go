@@ -234,35 +234,47 @@ func (s *Server) executeClaimedAdminRequest(ctx context.Context, st adminChatSto
 
 // adminDeleteToBin is an administrator's delete: stop the chat's work, note
 // it in the chat (seen if it is restored), then move it to the recycle bin
-// (patrols paused, tombstoned) and revoke everyone who could reach it — the
-// owner's delete path (handleConversationDelete), except that the
-// participants' private attachments are kept until the chat is purged, so a
-// restore gives everything back.
+// (schedules paused and the chat tombstoned, in one transaction). Nothing
+// else is taken apart — sharing, participants, their paused patrols and
+// pending cards, private attachments — so a restore gives the chat back
+// whole; a tombstoned chat is already unreachable to everyone. Only what
+// lives in this process is released: the sandbox and session approvals.
 func (s *Server) adminDeleteToBin(ctx context.Context, st adminChatStore, r store.AdminRequest) {
 	s.adminStopConversation(ctx, r.ConversationID)
-	actor := store.AdminActor{Email: r.Actor, Via: r.Via}
-	_ = st.AdminAppendNotice(ctx, actor, r.ConversationID,
+	_ = st.AppendAdminRequestNotice(ctx, r.ConversationID,
 		fmt.Sprintf("An administrator moved this chat to the recycle bin; it is deleted for good after %d days unless restored. Reason: %s", store.AdminRecycleBinDays, r.Reason))
 	paused, err := st.AdminMoveChatToBin(ctx, r.ConversationID)
 	if err != nil {
 		s.finishAdminRequest(ctx, st, r, store.AdminRequestFailed, "delete failed: "+err.Error(), "")
 		return
 	}
-	s.revokeDeletedConversation(ctx, r.ConversationID, false)
+	// A turn that slipped in between the stop and the tombstone.
+	s.adminStopConversation(ctx, r.ConversationID)
+	s.releasePersistentSandbox(r.ConversationID)
+	s.sessionApprovals.Forget(r.ConversationID)
 	s.finishAdminRequest(ctx, st, r, store.AdminRequestDone,
 		fmt.Sprintf("moved to the recycle bin (%d patrol(s) paused); deleted for good after %d days unless restored", paused, store.AdminRecycleBinDays), "")
 }
 
 // adminPurge deletes a chat permanently at once — the emergency path for a
-// full disk. The chat's workspace is reclaimed by the orphan sweep, started
-// right away.
+// full disk. The row is deleted FIRST: if that fails, nothing else has been
+// taken away. Then the owner's delete clean-up runs (handleConversationDelete:
+// participants' turns and streams, the private stash, the sandbox, session
+// approvals), and the orphan sweep reclaims the workspace right away.
 func (s *Server) adminPurge(ctx context.Context, st adminChatStore, r store.AdminRequest) {
+	owner := ""
+	if c, err := st.AdminGetChatAny(ctx, r.ConversationID); err == nil {
+		owner = c.OwnerEmail
+	}
 	s.adminStopConversation(ctx, r.ConversationID)
-	s.revokeDeletedConversation(ctx, r.ConversationID, true)
 	if err := st.AdminPurgeChat(ctx, r.ConversationID); err != nil {
 		s.finishAdminRequest(ctx, st, r, store.AdminRequestFailed, "permanent delete failed: "+err.Error(), "")
 		return
 	}
+	s.enforceMultiplayerRevocation(ctx, r.ConversationID, &store.Conversation{UserEmail: owner}, nil)
+	s.removeConversationPrivateStash(r.ConversationID)
+	s.releasePersistentSandbox(r.ConversationID)
+	s.sessionApprovals.Forget(r.ConversationID)
 	s.finishAdminRequest(ctx, st, r, store.AdminRequestDone, "deleted permanently; its files are reclaimed by the workspace sweep", "")
 	s.background.Go("httpapi.admin_purge_sweep", func() {
 		sctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
@@ -273,28 +285,6 @@ func (s *Server) adminPurge(ctx context.Context, st adminChatStore, r store.Admi
 			logging.From(sctx).Info("admin purge: reclaimed workspaces", "count", n)
 		}
 	})
-}
-
-// revokeDeletedConversation is the clean-up half of the owner's delete
-// (handleConversationDelete): everyone who could reach the chat loses its
-// turns, approvals and live streams, and its sandbox and session approvals
-// are released. dropStash also removes the participants' private
-// attachments, which a permanent delete does and a recycle-bin delete keeps.
-func (s *Server) revokeDeletedConversation(ctx context.Context, convID string, dropStash bool) {
-	owner := ""
-	if conv, err := s.store.GetConversationOwnerAndMultiplayer(ctx, convID); err == nil && conv != nil {
-		owner = conv.UserEmail
-	} else if c, ok := s.adminChats(); ok {
-		if binned, aerr := c.AdminGetChatAny(ctx, convID); aerr == nil {
-			owner = binned.OwnerEmail
-		}
-	}
-	s.enforceMultiplayerRevocation(ctx, convID, &store.Conversation{UserEmail: owner}, nil)
-	if dropStash {
-		s.removeConversationPrivateStash(convID)
-	}
-	s.releasePersistentSandbox(convID)
-	s.sessionApprovals.Forget(convID)
 }
 
 func (s *Server) finishAdminRequest(ctx context.Context, st adminChatStore, r store.AdminRequest, state, result, notice string) {
@@ -565,7 +555,12 @@ func (s *Server) adminChatRequest(w http.ResponseWriter, r *http.Request, st adm
 		payload = body.ToEmail
 	case store.AdminRequestStop, store.AdminRequestDelete, store.AdminRequestRestore:
 	case store.AdminRequestPurge:
-		if c := strings.TrimSpace(body.Confirm); c == "" || (c != strings.TrimSpace(chat.Title) && c != chat.ID) {
+		// The title; the id only for a chat that has none.
+		want := strings.TrimSpace(chat.Title)
+		if want == "" {
+			want = chat.ID
+		}
+		if strings.TrimSpace(body.Confirm) != want {
 			http.Error(w, "type the chat's title to confirm a permanent delete", http.StatusBadRequest)
 			return
 		}

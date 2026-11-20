@@ -1582,8 +1582,10 @@ func (s *Store) Delete(ctx context.Context, userEmail, convID string) error {
 		}
 		return nil
 	}
+	// deleted_at IS NULL: a chat an administrator moved to the recycle bin
+	// (ADR-0116) is not the owner's to hard-delete out from under a restore.
 	res, err := s.db.ExecContext(ctx,
-		`DELETE FROM conversations WHERE id = $1 AND user_email = $2`,
+		`DELETE FROM conversations WHERE id = $1 AND user_email = $2 AND deleted_at IS NULL`,
 		convID, userEmail,
 	)
 	if err != nil {

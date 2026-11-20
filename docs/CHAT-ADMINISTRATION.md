@@ -75,9 +75,10 @@ Operator tools for looking after chats that belong to someone else
 
 ### Deleting chats ([ADR-0116](adr/0116-admin-chat-delete-recycle-bin.md))
 
-- **Delete → recycle bin.** The chat stops, its patrols are paused, it is
-  tombstoned and its participants are revoked. It is restorable for 30 days,
-  then purged.
+- **Delete → recycle bin.** The chat stops, every patrol and timer in it is
+  paused and it is tombstoned, in one transaction. Sharing, participants and
+  their paused patrols are left as they were, so a restore gives the chat
+  back whole. It is restorable for 30 days, then purged.
 - **Restore.** The chat comes back, with its patrols still paused.
 - **Delete permanently.** For emergencies: the chat is gone now and the
   workspace sweep reclaims its files. You type the chat's title (browser) or

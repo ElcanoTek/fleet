@@ -966,47 +966,48 @@ func (s *Store) QueueAdminMessage(ctx context.Context, requestID string) (row In
 // for an admin message to join them (the chat route's own cap).
 var MaxAdminQueuedInputs = 20
 
-// AdminMoveChatToBin deletes a chat into the recycle bin: it pauses the
-// chat's live patrols and timers (through the owner's own path, which also
-// revokes a run in flight), then tombstones the chat (deleted_at = now()).
-// The tombstone purge removes it AdminRecycleBinDays later unless it is
-// restored. This tombstones whatever FLEET_CONVERSATION_SOFT_DELETE says: an
-// administrator's delete can always be undone for that window. It returns how
-// many patrols it paused.
+// AdminMoveChatToBin deletes a chat into the recycle bin, in one transaction
+// under the chat's row lock: it pauses every active patrol and timer in the
+// chat, whoever owns it (a fire in flight is revoked, their queued turns are
+// cancelled), then tombstones the chat (deleted_at = now()). Nothing can be
+// created or resumed in between, because both need the same lock. The
+// tombstone purge removes it AdminRecycleBinDays later unless it is restored.
+// This tombstones whatever FLEET_CONVERSATION_SOFT_DELETE says: an
+// administrator's delete can always be undone for that window. Everything
+// else (pin, sharing, participants, their paused patrols and pending cards)
+// is left as it was, so a restore gives the chat back whole. It returns how
+// many schedules it paused.
 func (s *Store) AdminMoveChatToBin(ctx context.Context, convID string) (int, error) {
-	var owner string
-	if err := s.db.QueryRowContext(ctx,
-		`SELECT user_email FROM chat.conversations WHERE id = $1 AND deleted_at IS NULL`, convID).Scan(&owner); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return 0, ErrConversationNotFound
-		}
-		return 0, err
-	}
-	scheds, err := s.AdminListChatSchedules(ctx, AdminChatScheduleFilter{ConversationID: convID})
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
 	}
-	paused := 0
-	st := ChatScheduleStatusPaused
-	for _, sc := range scheds {
-		if sc.Status != ChatScheduleStatusActive || sc.ConversationID != convID {
-			continue
-		}
-		if _, err := s.UpdateChatSchedule(ctx, sc.UserEmail, convID, sc.ID, ChatSchedulePatch{Status: &st}); err != nil {
-			return paused, err
-		}
-		paused++
+	defer func() { _ = tx.Rollback() }()
+	if err := s.lockLiveConversation(ctx, tx, convID); err != nil {
+		return 0, err
 	}
-	res, err := s.db.ExecContext(ctx,
-		`UPDATE chat.conversations SET deleted_at = NOW(), pinned = FALSE, updated_at = $2 WHERE id = $1 AND deleted_at IS NULL`,
-		convID, time.Now().Unix())
+	now := time.Now().Unix()
+	res, err := tx.ExecContext(ctx,
+		`UPDATE `+chatSchedulesTable+`
+		    SET status = 'paused', updated_at = $2,
+		        lease_owner = NULL, lease_expires_at = NULL, fire_id = NULL,
+		        fire_trigger = NULL, fire_run_number = NULL, fire_failures = 0
+		  WHERE conversation_id = $1 AND status = 'active'`, convID, now)
 	if err != nil {
-		return paused, err
+		return 0, err
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return paused, ErrConversationNotFound
+	paused, _ := res.RowsAffected()
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE chat_input_queue SET state = 'cancelled', updated_at = $1
+		  WHERE conversation_id = $2 AND state = 'queued'`, now, convID); err != nil {
+		return 0, err
 	}
-	return paused, nil
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE chat.conversations SET deleted_at = NOW(), updated_at = $2 WHERE id = $1 AND deleted_at IS NULL`,
+		convID, now); err != nil {
+		return 0, err
+	}
+	return int(paused), tx.Commit()
 }
 
 // AdminRestoreChat takes a chat out of the recycle bin. Its patrols stay

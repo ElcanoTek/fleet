@@ -729,7 +729,8 @@ function DeletePanel({ chat, onDone }: { chat: AdminChat; onDone: () => void }) 
       setBusy(false);
     }
   };
-  const titleMatches = confirm.trim() !== "" && (confirm.trim() === chat.title.trim() || confirm.trim() === chat.id);
+  // The title; the id only for a chat that has none (the server checks too).
+  const titleMatches = confirm.trim() !== "" && confirm.trim() === (chat.title.trim() || chat.id);
   return (
     <ConnPanel>
       <ConnPanelHead title={binned ? tr("In the recycle bin") : tr("Delete")}>

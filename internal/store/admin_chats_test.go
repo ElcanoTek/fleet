@@ -419,9 +419,16 @@ func TestAdminRecycleBin(t *testing.T) {
 	if _, err := s.CreateAdminRequest(ctx, AdminRequestInput{Actor: cliAdmin, Kind: AdminRequestRestore, ConversationID: c.ID, Reason: "r"}); !errors.Is(err, ErrAdminChatNotAllowed) {
 		t.Fatalf("restore of a live chat err = %v", err)
 	}
+	if err := s.SetPinned(ctx, owner, c.ID, true); err != nil {
+		t.Fatal(err)
+	}
 	paused, err := s.AdminMoveChatToBin(ctx, c.ID)
 	if err != nil || paused != 1 {
 		t.Fatalf("to bin = %d, %v", paused, err)
+	}
+	// The owner cannot hard-delete a binned chat out from under a restore.
+	if err := s.Delete(ctx, owner, c.ID); !errors.Is(err, ErrConversationNotFound) {
+		t.Fatalf("owner delete of a binned chat err = %v", err)
 	}
 	if _, err := s.AdminGetChat(ctx, c.ID); !errors.Is(err, ErrConversationNotFound) {
 		t.Fatalf("a binned chat is still live: %v", err)
@@ -448,6 +455,18 @@ func TestAdminRecycleBin(t *testing.T) {
 	back, err := s.AdminGetChat(ctx, c.ID)
 	if err != nil || back.ActivePatrols != 0 {
 		t.Fatalf("restored = %+v, %v (patrols stay paused)", back, err)
+	}
+	// Restored whole: still pinned, its patrol paused (not cancelled) and resumable.
+	if conv, _ := s.Get(ctx, owner, c.ID); conv == nil || !conv.Pinned {
+		t.Fatalf("restore lost the pin: %+v", conv)
+	}
+	scheds, _ := s.ListChatSchedules(ctx, owner, c.ID, false)
+	active := ChatScheduleStatusActive
+	if len(scheds) != 1 || scheds[0].Status != ChatScheduleStatusPaused {
+		t.Fatalf("schedules after restore = %+v", scheds)
+	}
+	if _, err := s.UpdateChatSchedule(ctx, owner, c.ID, scheds[0].ID, ChatSchedulePatch{Status: &active}); err != nil {
+		t.Fatalf("resume after restore: %v", err)
 	}
 	if err := s.AdminRestoreChat(ctx, c.ID); !errors.Is(err, ErrAdminChatNotAllowed) {
 		t.Fatalf("second restore err = %v", err)

@@ -287,6 +287,9 @@ func TestAdminMessageTurnIsManual(t *testing.T) {
 	a.liveApprovalMode = func(context.Context) string { return store.ConversationApprovalAutonomous }
 	if a.effectiveApprovalMode() != store.ConversationApprovalManual {
 		t.Fatal("the live approval mode overrode Manual on an admin-message turn")
+	}
+}
+
 func TestAdminChatDeleteRestorePurge(t *testing.T) {
 	_, st, _, h := adminChatsFixture(t)
 	ctx := context.Background()
