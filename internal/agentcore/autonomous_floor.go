@@ -441,13 +441,12 @@ type shellToken struct {
 	// subcmds are the bodies of the command and process substitutions
 	// inside this word (also listed in the script's own subcmds).
 	subcmds []string
-	// evaluates: the word has a `${...}` or `$((...))` expansion, which can
-	// evaluate a variable's text (`${x@P}` prompt expansion, arithmetic
-	// whose array subscripts run commands); see markEvalDynamic.
+	// evaluates: the word has an expansion that evaluates a variable's
+	// text: `$((...))`, `$[...]`, or a `${...}` that braceBodyEvaluates
+	// (`${x@P}` prompt expansion; subscripts, offsets and indirection, which
+	// are arithmetic whose array subscripts run commands and whose `=`
+	// assigns, e.g. `x='PATH=0'; echo ${s:x}`).
 	evaluates bool
-	// mayAssign: one of those expansions can assign a shell variable
-	// (`${PATH:=x}`, `$((PATH=1))`, `$[...]`): its text has an `=`.
-	mayAssign bool
 }
 
 type shellSegment struct {
@@ -486,15 +485,14 @@ type shellLexer struct {
 	// from unquoted, unescaped source text; tokPlainStop ends that run at
 	// the first quote, escape or expansion. tokOpaqueDyn marks a word with
 	// an expansion other than `$(...)`, backticks or a simple `$param`.
-	tokPlainLen   int
-	tokPlainStop  bool
-	tokOpaqueDyn  bool
-	tokEvalDyn    bool
-	tokEvalAssign bool
-	tokSubFrom    int
-	subcmds       []string
-	heredocs      []pendingHeredoc
-	grouped       bool
+	tokPlainLen  int
+	tokPlainStop bool
+	tokOpaqueDyn bool
+	tokEvalDyn   bool
+	tokSubFrom   int
+	subcmds      []string
+	heredocs     []pendingHeredoc
+	grouped      bool
 }
 
 // parseShellScript splits a script into segments and the bodies of its
@@ -538,8 +536,8 @@ func (l *shellLexer) markDynamic(placeholder string) {
 	l.markStringDynamic(placeholder)
 }
 
-// markEvalDynamic records a `${...}` or `$((...))` expansion: opaque, and
-// able to evaluate a variable's text as a prompt string or arithmetic.
+// markEvalDynamic records an expansion that is opaque and can evaluate a
+// variable's text as a prompt string or arithmetic (see shellToken.evaluates).
 func (l *shellLexer) markEvalDynamic(placeholder string) {
 	l.tokEvalDyn = true
 	l.markDynamic(placeholder)
@@ -572,7 +570,6 @@ func (l *shellLexer) flushTok() {
 		valueOnlyAssign:   eq > 0 && eq < l.tokPlainLen && !l.tokOpaqueDyn && isEnvAssignmentToken(val),
 		subcmds:           append([]string(nil), l.subcmds[l.tokSubFrom:]...),
 		evaluates:         l.tokEvalDyn,
-		mayAssign:         l.tokEvalAssign,
 	})
 	l.tokSubFrom = len(l.subcmds)
 	l.tok.Reset()
@@ -583,7 +580,6 @@ func (l *shellLexer) flushTok() {
 	l.tokPlainStop = false
 	l.tokOpaqueDyn = false
 	l.tokEvalDyn = false
-	l.tokEvalAssign = false
 }
 
 func (l *shellLexer) flushSeg(nextPiped bool) {
@@ -762,9 +758,6 @@ func (l *shellLexer) readDollarInWord(inDouble bool) {
 		body := l.readParenBody()
 		l.subcmds = append(l.subcmds, body)
 		if arith {
-			if strings.Contains(body, "=") {
-				l.tokEvalAssign = true
-			}
 			l.markEvalDynamic("$()")
 		} else {
 			l.markStringDynamic("$()")
@@ -773,10 +766,11 @@ func (l *shellLexer) readDollarInWord(inDouble bool) {
 		l.pos += 2
 		start := l.pos
 		l.readBraceBody()
-		if strings.Contains(l.src[start:l.pos], "=") {
-			l.tokEvalAssign = true
+		if braceBodyEvaluates(l.src[start:l.pos]) {
+			l.markEvalDynamic("${}")
+		} else {
+			l.markDynamic("${}")
 		}
-		l.markEvalDynamic("${}")
 	case !inDouble && next == '\'':
 		l.pos += 2
 		l.skipANSICBody()
@@ -789,7 +783,6 @@ func (l *shellLexer) readDollarInWord(inDouble bool) {
 		// `$[...]` is bash's old arithmetic expansion: it evaluates like
 		// `$((...))`. The bracket text that follows is lexed as usual.
 		l.pos++
-		l.tokEvalAssign = true
 		l.markEvalDynamic("$")
 	case isShellParamStart(next):
 		l.pos += 2
@@ -1398,13 +1391,18 @@ func anySegmentMaySetVarAttributes(segments []shellSegment) bool {
 			if tok.val == "." {
 				return true
 			}
-			if tokenWritesSensitiveName(tok.val) || tok.mayAssign || variableWritingBuiltins[tok.val] {
-				// `PATH=/tmp/x`, `BASH_CMDS[ls]=/tmp/x`, `${PATH:=/tmp/x}`
-				// or `read PATH` would make `f=$(ls)` run something else.
+			if tokenNamesSensitiveVar(tok.val) || tok.evaluates || variableWritingBuiltins[tok.val] {
+				// `PATH=/tmp/x`, `BASH_CMDS[ls]=/tmp/x`, `read PATH`, or an
+				// evaluating expansion (`${PATH:=x}`, `$((x))` with
+				// x='PATH=0') would make `f=$(ls)` run something else.
 				return true
 			}
-			if executableBaseName(tok.val) == "printf" && segmentHasPrintfVarFlag(seg) {
-				// `printf -v PATH %s /tmp/x`
+			if varFlagCommands[executableBaseName(tok.val)] && segmentHasVarFlag(seg, tok) {
+				// `printf -v PATH %s /tmp/x`, `[ -v 'a[x]' ]`, `wait -p v`
+				return true
+			}
+			if assigningCommands[executableBaseName(tok.val)] && segmentHasDynamicArg(seg, tok) {
+				// `v='PATH=/tmp/x'; export "$v"`
 				return true
 			}
 			for _, w := range attributeSettingWords {
@@ -1425,34 +1423,86 @@ func anySegmentMaySetVarAttributes(segments []shellSegment) bool {
 }
 
 // variableWritingBuiltins assign a variable named by an argument, which may
-// be PATH (`read PATH`, `getopts o PATH`, `let PATH=1`) or unset it.
+// be PATH (`read PATH`, `getopts o PATH`, `let PATH=1`), unset it, or
+// evaluate arithmetic that can assign (`[[ 1 -eq x ]]` with x='PATH=0').
 var variableWritingBuiltins = map[string]bool{
-	"read": true, "getopts": true, "let": true, "unset": true,
+	"read": true, "getopts": true, "let": true, "unset": true, "[[": true,
 }
 
-// tokenWritesSensitiveName reports whether a word assigns a sensitive name,
-// directly (`PATH=x`, `PATH+=x`) or through an element (`BASH_CMDS[ls]=x`,
-// which rewrites the command hash table), even after export/local/readonly.
-func tokenWritesSensitiveName(tok string) bool {
-	end := 0
-	for end < len(tok) && (isASCIIAlnumOrUnderscore(tok[end])) {
-		end++
-	}
-	if end == 0 || end == len(tok) || !isASCIILetterOrUnderscore(tok[0]) {
-		return false
-	}
-	switch tok[end] {
-	case '=', '+', '[':
-		return gitSensitiveAssignName(tok[:end])
+// assigningCommands assign `NAME=value` arguments; a dynamic argument may
+// carry a sensitive one (`export "$v"` with v='PATH=/tmp/x').
+var assigningCommands = map[string]bool{
+	"export": true, "readonly": true,
+}
+
+// segmentHasDynamicArg reports whether any word of the segment other than
+// the command word itself is dynamic.
+func segmentHasDynamicArg(seg shellSegment, cmd shellToken) bool {
+	for _, tok := range seg.tokens {
+		if tok.val != cmd.val && tok.dynamic {
+			return true
+		}
 	}
 	return false
 }
 
-// segmentHasPrintfVarFlag reports whether a segment that runs printf may
-// pass it `-v` (literally, or through a dynamic word).
-func segmentHasPrintfVarFlag(seg shellSegment) bool {
+// varFlagCommands take a flag naming a variable, written or tested through
+// an evaluated subscript: `printf -v`, `test -v`/`[ -v` (and `-R`),
+// `wait -p`.
+var varFlagCommands = map[string]bool{
+	"printf": true, "test": true, "[": true, "wait": true,
+}
+
+// braceBodyEvaluates reports whether a `${...}` body (between the braces)
+// can evaluate a variable's text: a subscript `[`, indirection `!`, `@P`
+// prompt expansion, an assignment `=`, nested arithmetic, or a `:` that is
+// a substring offset rather than `:-`, `:=`, `:+` or `:?`. Plain forms such
+// as `${f}`, `${f:-x}`, `${f#p}`, `${f/a/b}` and `${#f}` only yield text.
+func braceBodyEvaluates(body string) bool {
+	if strings.HasPrefix(body, "!") || strings.ContainsAny(body, "[=") ||
+		strings.Contains(body, "@P") || strings.Contains(body, "$((") || strings.Contains(body, "$[") {
+		return true
+	}
+	for i := 0; i < len(body); i++ {
+		if body[i] != ':' {
+			continue
+		}
+		if i+1 >= len(body) || !strings.ContainsRune("-=+?", rune(body[i+1])) {
+			return true
+		}
+	}
+	return false
+}
+
+// tokenNamesSensitiveVar reports whether a word names a sensitive variable
+// as a whole word or as the target of an assignment: `PATH=x`, `PATH+=x`,
+// an element (`BASH_CMDS[ls]=x` rewrites the command hash table), or a bare
+// `PATH`, which is how every variable-writing form passes the name
+// (`for PATH in`, `read PATH`, `export PATH`, `getopts o PATH`,
+// `printf -v PATH`, `select PATH in`). Over-matching a word that merely
+// mentions the name only keeps the old, fail-closed verdict.
+func tokenNamesSensitiveVar(tok string) bool {
+	end := 0
+	for end < len(tok) && (isASCIIAlnumOrUnderscore(tok[end])) {
+		end++
+	}
+	if end == 0 || !isASCIILetterOrUnderscore(tok[0]) {
+		return false
+	}
+	if end < len(tok) && tok[end] != '=' && tok[end] != '+' && tok[end] != '[' {
+		return false
+	}
+	return gitSensitiveAssignName(tok[:end])
+}
+
+// segmentHasVarFlag reports whether a varFlagCommands segment may pass a
+// variable-naming flag (`-v`, `-R`, `-p`), literally or via a dynamic word.
+func segmentHasVarFlag(seg shellSegment, cmd shellToken) bool {
 	for _, tok := range seg.tokens {
-		if tok.dynamic || strings.HasPrefix(tok.val, "-v") {
+		if tok.val == cmd.val {
+			continue
+		}
+		if tok.dynamic || strings.HasPrefix(tok.val, "-v") || strings.HasPrefix(tok.val, "-R") || strings.HasPrefix(tok.val, "-p") {
 			return true
 		}
 	}
