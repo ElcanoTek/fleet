@@ -259,13 +259,11 @@ func (s *Store) ClaimApprovalResume(ctx context.Context, req ApprovalResumeReque
 	}
 
 	if allTimedOut {
-		var hasSchedule bool
-		if err := tx.QueryRowContext(ctx,
-			`SELECT EXISTS (SELECT 1 FROM `+chatSchedulesTable+` WHERE conversation_id = $1 AND status IN ('active', 'paused'))`,
-			req.ConversationID).Scan(&hasSchedule); err != nil {
+		skip, err := timedOutResumeSkippedTx(ctx, tx, req.ConversationID, ids)
+		if err != nil {
 			return out, err
 		}
-		if hasSchedule {
+		if skip {
 			out.Skipped = ApprovalResumeSkipTimedOut
 			if err := markApprovalResumeTx(ctx, tx, ids, ApprovalResumeSkipped); err != nil {
 				return out, err
@@ -403,6 +401,48 @@ func selectApprovalResumeUserTx(ctx context.Context, tx *sql.Tx, req ApprovalRes
 		return "", blockedOut, nil
 	}
 	return "", allOutstanding, nil
+}
+
+// timedOutResumeSkippedTx decides whether cards that all timed out start no
+// resume turn: in a conversation with a schedule (its next run picks the work
+// up), or when a resume turn staged them (stagedByResumeTurnsTx).
+func timedOutResumeSkippedTx(ctx context.Context, tx *sql.Tx, convID string, ids []string) (bool, error) {
+	var hasSchedule bool
+	if err := tx.QueryRowContext(ctx,
+		`SELECT EXISTS (SELECT 1 FROM `+chatSchedulesTable+` WHERE conversation_id = $1 AND status IN ('active', 'paused'))`,
+		convID).Scan(&hasSchedule); err != nil {
+		return false, err
+	}
+	if hasSchedule {
+		return true, nil
+	}
+	return stagedByResumeTurnsTx(ctx, tx, convID, ids)
+}
+
+// stagedByResumeTurnsTx reports whether every given card was staged while a
+// resume turn of the conversation was running. Such a card that then times out
+// must not start another resume: nobody answered the first unattended turn's
+// card, so a second turn would only stage it again and time out again, one
+// paid turn per expiry until someone opens the chat.
+func stagedByResumeTurnsTx(ctx context.Context, tx *sql.Tx, convID string, ids []string) (bool, error) {
+	for _, id := range ids {
+		var staged bool
+		if err := tx.QueryRowContext(ctx,
+			`SELECT EXISTS (
+			   SELECT 1 FROM approvals a
+			     JOIN chat_input_queue q ON q.conversation_id = a.conversation_id AND q.mode = 'resume'
+			     JOIN turns t ON t.turn_id = q.turn_id
+			    WHERE a.id = $1 AND a.conversation_id = $2
+			      AND a.created_at >= t.started_at
+			      AND (COALESCE(t.finished_at, 0) = 0 OR a.created_at <= t.finished_at))`,
+			id, convID).Scan(&staged); err != nil {
+			return false, err
+		}
+		if !staged {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 // approvalResumeOutcome names a settled card's outcome from its row.
