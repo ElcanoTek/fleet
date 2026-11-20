@@ -919,46 +919,33 @@ func (m *Manager) needsSetupForPrompt(persona string, hidden []string) []clientc
 	if len(meta) == 0 {
 		return nil
 	}
-	// A running server registers as <connector> or <connector>_<account>
-	// (agentcore.RegisteredMCPName). Resolve each to the LONGEST declared
-	// connector name it matches, so a running `jira_prod` connector does not
-	// mark an unconfigured `jira` as running.
-	declared := make([]string, 0, len(meta))
-	for _, c := range meta {
-		if n := strings.ToLower(strings.TrimSpace(c.Name)); n != "" {
-			declared = append(declared, n)
-		}
-	}
+	// A connector that is running is configured, whatever the snapshot says.
+	// "Running" is the picker's own test: the base connector names in the
+	// optional and always-on catalogs (never a parse of registered names,
+	// which carry account suffixes that can collide with other connectors).
 	running := map[string]bool{}
-	for _, st := range m.MCPCatalog() {
-		reg := strings.ToLower(st.ServerName)
-		best := ""
-		for _, n := range declared {
-			if (reg == n || strings.HasPrefix(reg, n+"_")) && len(n) > len(best) {
-				best = n
-			}
-		}
-		if best != "" {
-			running[best] = true
-		}
+	for _, srv := range m.MCPServerCatalog() {
+		running[strings.TrimSpace(srv.Name)] = true
 	}
-	isRunning := func(name string) bool { return running[name] }
+	for _, srv := range m.AlwaysOnMCPServerCatalog() {
+		running[strings.TrimSpace(srv.Name)] = true
+	}
 	policy := m.personaPolicy(persona)
 	out := make([]clientconfig.ConnectorMeta, 0)
 	seen := map[string]bool{}
 	for _, c := range meta {
-		raw := strings.ToLower(strings.TrimSpace(c.Name))
-		if c.Configured || raw == "" || isRunning(raw) {
+		name := strings.TrimSpace(c.Name)
+		if c.Configured || name == "" || running[name] {
 			continue
 		}
-		safe := agentcore.PromptSafeName(raw)
+		safe := agentcore.PromptSafeName(strings.ToLower(name))
 		if safe == "" || seen[safe] {
 			continue
 		}
 		if len(c.Tools) > 0 {
 			visible := 0
 			for _, t := range c.Tools {
-				full := agentcore.MCPToolName(raw, t)
+				full := agentcore.MCPToolName(name, t) // case kept: persona patterns match the runtime name
 				if agentcore.InteractiveHiddenIn(hidden, full) || !agentcore.PersonaPermitsTool(policy, full) {
 					continue
 				}

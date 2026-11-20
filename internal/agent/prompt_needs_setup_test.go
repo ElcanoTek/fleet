@@ -24,7 +24,7 @@ func TestBuildSystemPrompt_NeedsSetupConnectors(t *testing.T) {
 		// The snapshot says unconfigured but the server is running: running wins.
 		{Name: "stale_mcp", DisplayName: "Stale", Tools: []string{"stale_read"}},
 	})
-	m.mcpCatalog = []mcp.ServerTool{{ServerName: "stale_mcp", Tool: mcp.Tool{Name: "stale_read"}}}
+	m.alwaysOnServerMetadata = []AlwaysOnServerInfo{{Name: "stale_mcp"}}
 
 	got, err := m.buildSystemPrompt("victoria", nil, "conv-x", nil, "", nil, nil, nil, hostedMCPRoster{}, nil)
 	if err != nil {
@@ -94,22 +94,37 @@ func TestNeedsSetupForPrompt_RespectsHiddenAndPersona(t *testing.T) {
 	}
 }
 
-// A running connector whose name extends an unconfigured one (`jira_prod`
-// next to `jira`) does not hide the unconfigured one; an account-qualified
-// registration of the connector itself (`stale_mcp_acme`) does.
-func TestNeedsSetupForPrompt_RunningNamesResolveToLongestConnector(t *testing.T) {
+// Running state comes from the picker's base-name catalogs, never from
+// parsing registered names: a running `jira_prod` (or one on account `acme`,
+// registered as `jira_prod_acme`) hides neither `jira` nor `jira_prod_acme`.
+func TestNeedsSetupForPrompt_RunningIsTheBaseNameCatalog(t *testing.T) {
 	m := fixtureManager(t)
 	m.SetConnectorMeta([]clientconfig.ConnectorMeta{
 		{Name: "jira", Tools: []string{"search"}},
 		{Name: "jira_prod", Configured: true, Tools: []string{"search"}},
-		{Name: "stale_mcp", Tools: []string{"read"}},
+		{Name: "jira_prod_acme", Tools: []string{"search"}},
+		{Name: "opt_mcp", Tools: []string{"read"}},
 	})
-	m.mcpCatalog = []mcp.ServerTool{
-		{ServerName: "jira_prod", Tool: mcp.Tool{Name: "search"}},
-		{ServerName: "stale_mcp_acme", Tool: mcp.Tool{Name: "read"}},
-	}
+	m.mcpCatalog = []mcp.ServerTool{{ServerName: "jira_prod_acme", Tool: mcp.Tool{Name: "search"}}}
+	m.alwaysOnServerMetadata = []AlwaysOnServerInfo{{Name: "jira_prod"}}
+	m.optionalServerMetadata = []OptionalServerInfo{{Name: "opt_mcp"}}
 	got := m.needsSetupForPrompt("victoria", nil)
-	if len(got) != 1 || got[0].Name != "jira" {
-		t.Fatalf("got %+v, want only jira", got)
+	names := []string{}
+	for _, c := range got {
+		names = append(names, c.Name)
+	}
+	if strings.Join(names, ",") != "jira,jira_prod_acme" {
+		t.Fatalf("got %v, want [jira jira_prod_acme]", names)
+	}
+}
+
+// The persona policy is matched against the runtime tool name, which keeps
+// the connector name's case.
+func TestNeedsSetupForPrompt_PersonaMatchKeepsCase(t *testing.T) {
+	m := fixtureManager(t)
+	m.SetConnectorMeta([]clientconfig.ConnectorMeta{{Name: "Salesforce", Tools: []string{"read"}}})
+	m.personaPolicies = map[string]agentcore.PersonaToolPermissions{"victoria": {Deny: []string{"mcp_Salesforce_read"}}}
+	if got := m.needsSetupForPrompt("victoria", nil); len(got) != 0 {
+		t.Fatalf("denied connector listed: %+v", got)
 	}
 }
