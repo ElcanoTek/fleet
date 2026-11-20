@@ -6051,11 +6051,11 @@
   "Active in": "Ativo em",
   "Admin changes to this chat": "Alterações de administração neste chat",
   "Administrator · {0}": "Administrador · {0}",
-  "A message runs as {0}, with their connections and approval setting; any approval card it raises goes to them. It is shown in the chat as yours.": "Uma mensagem é executada como {0}, com as conexões e a configuração de aprovações dessa pessoa; qualquer cartão de aprovação que ela gerar vai para essa pessoa. No chat, aparece como sua.",
+  "A message runs as {0}, with their connections. Anything that needs approval asks them first, whatever the chat’s approval setting. It is shown in the chat as yours.": "Uma mensagem é executada como {0}, com as conexões dessa pessoa. Qualquer ação que exija aprovação pergunta a ela primeiro, seja qual for a configuração de aprovações do chat. No chat, aparece como sua.",
   "Any time": "Qualquer data",
   "Approvals": "Aprovações",
   "Archived and Lockdown chats take no admin messages.": "Chats arquivados e em Lockdown não aceitam mensagens de administração.",
-  "Autonomous approvals stay the owner’s own decision, and a Lockdown chat keeps its model. A notice is a note in the chat that the assistant never reads.": "As aprovações autônomas continuam sendo decisão do proprietário, e um chat em Lockdown mantém seu modelo. Um aviso é uma nota no chat que o assistente nunca lê.",
+  "You can turn a chat’s approvals down to Manual, never up: automatic approvals are the owner’s own decision. A Lockdown chat keeps its model. A notice is a note in the chat that the assistant never reads.": "Você pode reduzir as aprovações de um chat para Manual, nunca aumentar: as aprovações automáticas são decisão do proprietário. Um chat em Lockdown mantém seu modelo. Um aviso é uma nota no chat que o assistente nunca lê.",
   "Autonomous (owner’s choice)": "Autônomo (escolha do proprietário)",
   "Cancel editing": "Cancelar edição",
   "Chat settings and notices": "Configurações e avisos do chat",
@@ -6065,7 +6065,7 @@
   "Done: {0}": "Concluído: {0}",
   "Edit instructions": "Editar instruções",
   "Failed: {0}": "Falhou: {0}",
-  "Find any chat in this workspace and look after it: read it, send it a message, stop it, hand it to someone else, or fix its patrols. Every change asks for a reason, is recorded, and is noted in the chat itself. A message you send runs as the chat’s owner, with their connections and approval setting, and is labelled as yours.": "Encontre qualquer chat deste espaço de trabalho e cuide dele: leia, envie uma mensagem, pare, passe para outra pessoa ou corrija as patrulhas. Cada alteração pede um motivo, é registrada e anotada no próprio chat. Uma mensagem que você envia é executada como o proprietário do chat, com as conexões e a configuração de aprovações dessa pessoa, e aparece como sua.",
+  "Find any chat in this workspace and look after it: read it, send it a message, stop it, hand it to someone else, or fix its patrols. Every change asks for a reason, is recorded, and is noted in the chat itself. A message you send runs as the chat’s owner, with their connections, is labelled as yours, and always asks the owner before anything that needs approval.": "Encontre qualquer chat deste espaço de trabalho e cuide dele: leia, envie uma mensagem, pare, passe para outra pessoa ou corrija as patrulhas. Cada alteração pede um motivo, é registrada e anotada no próprio chat. Uma mensagem que você envia é executada como o proprietário do chat, com as conexões dessa pessoa, aparece como sua e sempre pergunta ao proprietário antes de qualquer ação que exija aprovação.",
   "Fleet": "Fleet",
   "Include archived": "Incluir arquivados",
   "Instructions updated and noted in the chat.": "Instruções atualizadas e anotadas no chat.",
@@ -6113,5 +6113,6 @@
   "nothing to change: send prompt (with expect_sha256) or status": "nada para alterar: envie prompt (com expect_sha256) ou status",
   "the patrol's instructions changed since you opened them; reload and edit again": "as instruções da patrulha mudaram desde que você as abriu; recarregue e edite de novo",
   "A Lockdown chat keeps its model.": "Um chat em Lockdown mantém seu modelo.",
-  "The server is carrying it out…": "O servidor está executando…"
+  "The server is carrying it out…": "O servidor está executando…",
+  "Auto-approve (owner’s choice)": "Aprovação automática (escolha do proprietário)"
 }

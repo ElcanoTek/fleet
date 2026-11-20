@@ -125,7 +125,7 @@ type chatRequest struct {
 	inputKind string
 	// adminSender is the administrator who wrote an admin message (a queue
 	// row of mode 'admin', ADR-0115): the turn runs as the chat's owner and
-	// records the administrator as the message's sender. Server-set only.
+	// records the administrator on the entry (admin_email). Server-set only.
 	adminSender string
 }
 
@@ -1100,7 +1100,8 @@ func buildUserMessageEvent(message, inputKind, injected string, conv *store.Conv
 		userEvent["sender_email"] = user
 	}
 	if adminSender != "" {
-		userEvent["sender_email"] = adminSender
+		// Not sender_email: the turn is the owner's (see TextContent.AdminEmail).
+		userEvent["admin_email"] = adminSender
 	}
 	return userEvent
 }
@@ -1370,6 +1371,7 @@ func (s *Server) runTurnAsync(
 		SteerSource:    steerSourceOrNil(steer),
 		InputKind:      inputKind,
 		SenderEmail:    senderEmail,
+		AdminEmail:     adminEmailForTurn(turnCtx, inputKind),
 		MCPUser:        mcpUser,
 	}, buf)
 	s.cancelAutoSubmitsIfTurnStopped(turnCtx, conv.ID)
@@ -1588,9 +1590,6 @@ func (s *Server) prepareTurnExecutionContext(
 	if conv.Multiplayer || (conv.UserEmail != "" && !strings.EqualFold(conv.UserEmail, user)) {
 		senderEmail = user
 	}
-	if admin := adminSenderFrom(turnCtx); admin != "" && inputKind == agent.InputKindAdminMessage {
-		senderEmail = admin
-	}
 	promptConv := conv
 	if s.store != nil && conv != nil && conv.ID != "" {
 		if latest, lerr := s.store.Get(turnCtx, convOwnerEmail(conv, user), conv.ID); lerr == nil && latest != nil {
@@ -1607,6 +1606,12 @@ func (s *Server) prepareTurnExecutionContext(
 func (s *Server) appendTurnApprovalModeContext(ctx context.Context, injectedContext string, conv *store.Conversation, user, inputKind string) string {
 	ownerEmail := convOwnerEmail(conv, user)
 	if conv == nil || !strings.EqualFold(ownerEmail, user) {
+		return injectedContext
+	}
+	if inputKind == agent.InputKindAdminMessage {
+		// The stager runs an administrator's message in Manual whatever the
+		// chat's mode (approvalStager.effectiveApprovalMode), so no note
+		// promises the model otherwise.
 		return injectedContext
 	}
 	var note string

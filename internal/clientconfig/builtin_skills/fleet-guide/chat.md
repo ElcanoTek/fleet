@@ -1584,8 +1584,8 @@ A workspace administrator can send a message into your chat, for example to
 ask a patrol to publish a log it keeps. It appears in the transcript as
 **Message from an administrator** with their email, never as your words, and
 a short note in the chat says what was changed and why. The reply runs with
-your connections and your approval setting, so any approval card it raises is
-yours to answer.
+your connections, and always asks you before anything that needs approval,
+even if the chat is set to approve automatically.
 
 ### Long conversations
 

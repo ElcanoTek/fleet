@@ -38,6 +38,7 @@ type adminChatStore interface {
 	FinishAdminRequest(ctx context.Context, id, state, result string) (bool, error)
 	ClaimAdminRequest(ctx context.Context, id string) (bool, error)
 	FailStaleAdminRequests(ctx context.Context, olderThan time.Duration) (int, error)
+	AppendAdminRequestNotice(ctx context.Context, convID, text string) error
 	QueueAdminMessage(ctx context.Context, requestID string) (store.InputQueueRow, bool, error)
 	AdminListChatSchedules(ctx context.Context, f store.AdminChatScheduleFilter) ([]store.AdminChatSchedule, error)
 	AdminGetChatSchedule(ctx context.Context, idOrPrefix string) (store.AdminChatSchedule, error)
@@ -74,6 +75,15 @@ func withAdminSender(ctx context.Context, email string) context.Context {
 func adminSenderFrom(ctx context.Context) string {
 	v, _ := ctx.Value(adminSenderKey{}).(string)
 	return v
+}
+
+// adminEmailForTurn is the administrator to record on an admin-message
+// turn's input; "" for every other turn.
+func adminEmailForTurn(ctx context.Context, inputKind string) string {
+	if inputKind != agent.InputKindAdminMessage {
+		return ""
+	}
+	return adminSenderFrom(ctx)
 }
 
 // ---------------------------------------------------------------------------
@@ -177,7 +187,12 @@ func (s *Server) executeClaimedAdminRequest(ctx context.Context, st adminChatSto
 	case store.AdminRequestArchive:
 		archive := r.Payload == "archive"
 		conv, err := s.store.GetConversationOwnerAndMultiplayer(ctx, r.ConversationID)
-		if err != nil || conv == nil {
+		if err != nil {
+			log.Error("admin requests: archive read failed", "err", safe.LogSafe(err.Error()))
+			s.finishAdminRequest(ctx, st, r, store.AdminRequestFailed, "could not read the chat; ask again", "")
+			return
+		}
+		if conv == nil {
 			s.finishAdminRequest(ctx, st, r, store.AdminRequestFailed, "the chat no longer exists", "")
 			return
 		}
@@ -212,8 +227,7 @@ func (s *Server) finishAdminRequest(ctx context.Context, st adminChatStore, r st
 		return
 	}
 	if ok && notice != "" {
-		actor := store.AdminActor{Email: r.Actor, Via: r.Via}
-		if err := st.AdminAppendNotice(ctx, actor, r.ConversationID, notice); err != nil {
+		if err := st.AppendAdminRequestNotice(ctx, r.ConversationID, notice); err != nil {
 			logging.From(ctx).Warn("admin requests: notice failed", "admin_request", r.ID, "err", safe.LogSafe(err.Error()))
 		}
 	}

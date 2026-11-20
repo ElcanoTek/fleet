@@ -85,20 +85,25 @@ func TestAdminUpdateChat(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	title, model, auto := "New title", "provider/m2", ConversationApprovalAuto
+	title, model, manual := "New title", "provider/m2", ConversationApprovalManual
+	if err := s.SetApprovalMode(ctx, owner, c.ID, ConversationApprovalAuto); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := s.AdminUpdateChat(ctx, cliAdmin, c.ID, AdminChatChange{Title: &title}, " "); !errors.Is(err, ErrAdminReasonRequired) {
 		t.Fatalf("no reason err = %v", err)
 	}
-	after, err := s.AdminUpdateChat(ctx, cliAdmin, c.ID, AdminChatChange{Title: &title, Model: &model, ApprovalMode: &auto}, "client asked")
+	after, err := s.AdminUpdateChat(ctx, cliAdmin, c.ID, AdminChatChange{Title: &title, Model: &model, ApprovalMode: &manual}, "client asked")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if after.Title != title || after.Model != model || after.ApprovalMode != ConversationApprovalAuto {
+	if after.Title != title || after.Model != model || after.ApprovalMode != ConversationApprovalManual {
 		t.Fatalf("after = %+v", after)
 	}
-	autonomous := ConversationApprovalAutonomous
-	if _, err := s.AdminUpdateChat(ctx, cliAdmin, c.ID, AdminChatChange{ApprovalMode: &autonomous}, "r"); !errors.Is(err, ErrAdminChatNotAllowed) {
-		t.Fatalf("autonomous err = %v", err)
+	// An administrator can turn approvals down, never up.
+	for _, up := range []string{ConversationApprovalAuto, ConversationApprovalAutonomous} {
+		if _, err := s.AdminUpdateChat(ctx, cliAdmin, c.ID, AdminChatChange{ApprovalMode: &up}, "r"); !errors.Is(err, ErrAdminChatNotAllowed) {
+			t.Fatalf("raising approvals to %s err = %v", up, err)
+		}
 	}
 	bad := "has space"
 	if _, err := s.AdminUpdateChat(ctx, cliAdmin, c.ID, AdminChatChange{Model: &bad}, "r"); err == nil {
@@ -242,7 +247,7 @@ func TestAdminChatTranscriptAndNotice(t *testing.T) {
 		entry(t, "assistant", "tool_call", agent.ToolCallContent{ID: "1", Name: "run_python", Input: `{"code":"1"}`}),
 		entry(t, "tool", "tool_result", agent.ToolResultContent{ID: "1", Name: "run_python", Text: "ok"}),
 		entry(t, "assistant", "text", agent.TextContent{Text: strings.Repeat("x", 50)}),
-		entry(t, "user", "text", agent.TextContent{Text: "[Message from an administrator: r@x]\nhello", Kind: agent.InputKindAdminMessage, SenderEmail: "r@x"}),
+		entry(t, "user", "text", agent.TextContent{Text: "[Message from an administrator: r@x]\nhello", Kind: agent.InputKindAdminMessage, AdminEmail: "r@x"}),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -379,6 +384,20 @@ func TestAdminRequests_ClaimAndStale(t *testing.T) {
 	}
 	if n, err := s.FailStaleAdminRequests(ctx, -time.Second); err != nil || n != 1 {
 		t.Fatalf("stale sweep = %d, %v", n, err)
+	}
+	// A request nobody picks up expires instead of acting hours later.
+	late, err := s.CreateAdminRequest(ctx, AdminRequestInput{Actor: cliAdmin, Kind: AdminRequestStop, ConversationID: c.ID, Reason: "r"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE chat.admin_requests SET created_at = created_at - 3600 WHERE id = $1`, late.ID); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := s.FailStaleAdminRequests(ctx, time.Hour); err != nil || n != 1 {
+		t.Fatalf("expiry sweep = %d, %v", n, err)
+	}
+	if got, _ := s.GetAdminRequest(ctx, late.ID); got.State != AdminRequestFailed || !strings.Contains(got.Result, "expired") {
+		t.Fatalf("expired request = %+v", got)
 	}
 	if got, _ := s.GetAdminRequest(ctx, req.ID); got.State != AdminRequestFailed || !strings.Contains(got.Result, "interrupted") {
 		t.Fatalf("stale request = %+v", got)

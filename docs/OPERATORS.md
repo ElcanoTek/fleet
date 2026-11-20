@@ -930,7 +930,7 @@ fleet chats send <chat_id> --message "..." --reason "..." [--wait]
 fleet chats stop <chat_id> --reason "..." [--wait]
 fleet chats transfer <chat_id> --to EMAIL --reason "..." [--wait]
 fleet chats notice <chat_id> --text "..."
-fleet chats set <chat_id> [--title T] [--model SLUG] [--approval-mode manual|auto] [--archive|--unarchive] --reason "..."
+fleet chats set <chat_id> [--title T] [--model SLUG] [--approval-mode manual] [--archive|--unarchive] --reason "..."
 fleet chats actions [<chat_id>]                # the record of admin changes
 fleet chats request <request_id>               # progress of a send / stop / transfer
 ```
@@ -939,17 +939,17 @@ A chat or patrol id may be shortened to its first 8 characters. Every change
 takes `--reason`, is recorded in `chat.admin_actions` as `--as` (default
 `<unix user>@<host>`), and is noted in the chat.
 
-- **send** runs as the chat's owner, with the owner's connectors and approval
-  mode, like a patrol run. The chat shows it as a message from the
-  administrator, and the model is told the owner did not write it. Approval
-  cards it stages go to the owner. Archived and Lockdown chats take no admin
+- **send** runs as the chat's owner, with the owner's connectors. It always
+  runs in Manual approvals, whatever the chat is set to: anything that needs
+  approval stages a card for the owner. The chat shows it as a message from
+  the administrator, and the model is told the owner did not write it. Archived and Lockdown chats take no admin
   messages.
 - **send, stop and transfer** are carried out by the running server: the CLI
   records an admin request and the server executes it on its next scheduler
   pass (`FLEET_SCHED_TICK_SECONDS`, 30 s by default). `--wait` follows it to
   the end; for a message it waits for the turn and prints the reply.
-- **set** can change the approval mode to `manual` or `auto` only. Autonomous
-  is the owner's own decision. A Lockdown chat keeps its model. `--archive` /
+- **set** can turn the approval mode down to `manual` only. Auto-approve and
+  Autonomous are the owner's own decision. A Lockdown chat keeps its model. `--archive` /
   `--unarchive` are carried out by the server like `stop` (archiving also
   revokes a shared chat's participants); follow them with `fleet chats request`.
 - Deleting a chat and answering someone else's approval cards are not

@@ -394,6 +394,9 @@ func decodeTranscriptContent(e *AdminTranscriptEntry, content []byte) {
 		var c agent.TextContent
 		if json.Unmarshal(content, &c) == nil {
 			e.Text, e.Kind, e.Sender = c.Text, c.Kind, c.SenderEmail
+			if c.AdminEmail != "" {
+				e.Sender = c.AdminEmail
+			}
 		}
 	case agent.EntryTypeNotice:
 		var c agent.NoticeContent
@@ -462,9 +465,9 @@ func (s *Store) lockLiveConversation(ctx context.Context, tx *sql.Tx, convID str
 type AdminChatChange struct {
 	Title *string
 	Model *string
-	// ApprovalMode may only be manual or auto: Autonomous runs SSP writes
-	// without a card and is the owner's own decision (it needs their
-	// acceptance), so an administrator can never turn it on.
+	// ApprovalMode may only be manual: an administrator can take a chat's
+	// automatic approvals away, never grant them. Auto-approve and Autonomous
+	// let actions run without a card and are the owner's own decision.
 	ApprovalMode *string
 }
 
@@ -530,8 +533,8 @@ func (s *Store) AdminUpdateChat(ctx context.Context, a AdminActor, convID string
 	}
 	if c.ApprovalMode != nil {
 		m := strings.ToLower(strings.TrimSpace(*c.ApprovalMode))
-		if m != ConversationApprovalManual && m != ConversationApprovalAuto {
-			return AdminChat{}, fmt.Errorf("%w: an administrator can set approval mode to manual or auto only; Autonomous is the owner's own decision", ErrAdminChatNotAllowed)
+		if m != ConversationApprovalManual {
+			return AdminChat{}, fmt.Errorf("%w: an administrator can only turn a chat's approvals down to manual; Auto-approve and Autonomous are the owner's own decision", ErrAdminChatNotAllowed)
 		}
 		if m != cur.ApprovalMode {
 			steps = append(steps, step{"set the chat's approvals to " + m, func() error { return s.SetApprovalMode(ctx, owner, cur.ID, m) }})
@@ -749,7 +752,8 @@ func (s *Store) ClaimAdminRequest(ctx context.Context, id string) (bool, error) 
 
 // FailStaleAdminRequests settles requests a server process claimed and never
 // finished (it stopped part-way) as failed, rather than carrying a transfer or
-// archive out a second time blind. It returns how many it settled.
+// archive out a second time blind, and expires pending requests older than
+// AdminRequestPendingTTL. It returns how many it settled.
 func (s *Store) FailStaleAdminRequests(ctx context.Context, olderThan time.Duration) (int, error) {
 	now := time.Now()
 	res, err := s.db.ExecContext(ctx,
@@ -761,7 +765,44 @@ func (s *Store) FailStaleAdminRequests(ctx context.Context, olderThan time.Durat
 		return 0, err
 	}
 	n, err := res.RowsAffected()
-	return int(n), err
+	if err != nil {
+		return 0, err
+	}
+	// A request nobody picked up in time (the server was down or draining
+	// for an update) expires: it must not act hours later on a chat whose
+	// state has moved on.
+	res, err = s.db.ExecContext(ctx,
+		`UPDATE chat.admin_requests
+		    SET state = 'failed', result = 'expired: the server did not pick it up in time; ask again', updated_at = $1
+		  WHERE state = 'pending' AND created_at < $2`,
+		now.Unix(), now.Add(-AdminRequestPendingTTL).Unix())
+	if err != nil {
+		return int(n), err
+	}
+	m, err := res.RowsAffected()
+	return int(n + m), err
+}
+
+// AdminRequestPendingTTL is how long a request may wait for the server
+// before it expires unexecuted. A var so tests can shorten it.
+var AdminRequestPendingTTL = 15 * time.Minute
+
+// AppendAdminRequestNotice writes the chat notice for a carried-out admin
+// request. The request itself is the audit record (request_<kind>), so this
+// adds no second one.
+func (s *Store) AppendAdminRequestNotice(ctx context.Context, convID, text string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := s.lockLiveConversation(ctx, tx, convID); err != nil {
+		return err
+	}
+	if err := s.appendNoticeTx(ctx, tx, convID, NoticeAdminUpdated, pgtext.Content(text)); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // FinishAdminRequest settles a pending or claimed request. It reports false
@@ -815,10 +856,12 @@ func (s *Store) QueueAdminMessage(ctx context.Context, requestID string) (row In
 	if r.Kind != AdminRequestMessage {
 		return InputQueueRow{}, false, fmt.Errorf("admin request %s is a %s, not a message", r.ID, r.Kind)
 	}
+	// Read under the chat's row lock (the one insertInputTx takes), so a
+	// transfer or archive cannot land between this check and the queue row.
 	var owner string
 	var archived, lockdown bool
 	err = tx.QueryRowContext(ctx,
-		`SELECT user_email, archived_at IS NOT NULL, lockdown FROM chat.conversations WHERE id = $1 AND deleted_at IS NULL`, r.ConversationID).
+		`SELECT user_email, archived_at IS NOT NULL, lockdown FROM chat.conversations WHERE id = $1 AND deleted_at IS NULL FOR UPDATE`, r.ConversationID).
 		Scan(&owner, &archived, &lockdown)
 	fail := func(msg string) (InputQueueRow, bool, error) {
 		if _, err := tx.ExecContext(ctx,

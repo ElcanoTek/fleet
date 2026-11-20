@@ -93,7 +93,7 @@ func renderConversationHTML(conv *store.Conversation, history []agent.HistoryEnt
 			if e.Role == "user" {
 				class = "turn user"
 			}
-			if c.Kind == agent.InputKindApprovalResume || c.Kind == agent.InputKindChatPatrol {
+			if c.Kind == agent.InputKindApprovalResume || c.Kind == agent.InputKindChatPatrol || c.Kind == agent.InputKindAdminMessage {
 				// fleet's own notice, not the user's words: no "what was
 				// asked" tint (docs/RESUME-AFTER-APPROVAL.md).
 				class = "turn assistant"

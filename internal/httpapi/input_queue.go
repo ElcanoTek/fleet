@@ -625,7 +625,7 @@ func (s *Server) launchQueuedTurn(convID string, row *store.InputQueueRow) bool 
 	case store.InputModeAdmin:
 		// A message an administrator sent with the admin tools (ADR-0115):
 		// the turn runs as the owner (the row's user) and records the
-		// administrator as the sender.
+		// administrator on the entry.
 		req.inputKind = agent.InputKindAdminMessage
 		req.adminSender = row.SenderEmail
 	}

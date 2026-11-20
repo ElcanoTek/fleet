@@ -24,7 +24,7 @@ import (
 //	fleet chats stop    <chat_id> --reason TEXT [--wait]
 //	fleet chats transfer <chat_id> --to EMAIL --reason TEXT [--wait]
 //	fleet chats notice  <chat_id> --text TEXT
-//	fleet chats set     <chat_id> [--title T] [--model SLUG] [--approval-mode manual|auto] [--archive|--unarchive] --reason TEXT
+//	fleet chats set     <chat_id> [--title T] [--model SLUG] [--approval-mode manual] [--archive|--unarchive] --reason TEXT
 //	fleet chats actions [<chat_id>] [--limit N] [--json]
 //	fleet chats request <request_id> [--json]
 //
@@ -81,14 +81,14 @@ const chatsUsage = `fleet chats — administer any chat on this box (ADR-0115; a
   fleet chats stop     <chat_id> --reason TEXT [--wait]   (the owner's Stop: running turn + queued inputs)
   fleet chats transfer <chat_id> --to EMAIL --reason TEXT [--wait]
   fleet chats notice   <chat_id> --text TEXT              (a note in the chat; the model never sees it)
-  fleet chats set      <chat_id> [--title T] [--model SLUG] [--approval-mode manual|auto] [--archive|--unarchive] --reason TEXT
+  fleet chats set      <chat_id> [--title T] [--model SLUG] [--approval-mode manual] [--archive|--unarchive] --reason TEXT
   fleet chats actions  [<chat_id>] [--limit 50] [--json]  (the record of admin changes)
   fleet chats request  <request_id> [--json]              (an admin request's progress)
   fleet chats patrol   list|show|set-prompt|pause|resume  (same as fleet patrol)
 
 Every change is recorded as --as (default <unix user>@<host>) and noted
-in the chat. An admin message runs as the chat's owner, with the owner's connectors and
-approval mode, labelled as yours; approval cards it stages still go to the owner. send, stop and
+in the chat. An admin message runs as the chat's owner, with the owner's connectors, labelled
+as yours; it always runs in Manual, so anything that needs approval asks the owner. send, stop and
 transfer are carried out by the running server on its next scheduler pass (30 s by default).
 `
 
@@ -594,7 +594,7 @@ func chatsSet(argv []string, out io.Writer) int {
 	as := fs.String("as", "", "record the change as this administrator")
 	title := fs.String("title", "", "rename the chat")
 	model := fs.String("model", "", "switch the chat's model")
-	mode := fs.String("approval-mode", "", "manual or auto (Autonomous is the owner's own decision)")
+	mode := fs.String("approval-mode", "", "manual (an administrator can turn approvals down, never up)")
 	archive := fs.Bool("archive", false, "archive the chat")
 	unarchive := fs.Bool("unarchive", false, "restore the chat from the archive")
 	reason := fs.String("reason", "", "why; recorded and shown in the chat (required)")

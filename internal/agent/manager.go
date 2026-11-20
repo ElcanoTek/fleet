@@ -178,6 +178,9 @@ type TurnInput struct {
 	// on the user entry (TextContent.SenderEmail) so every participant in the
 	// shared thread can see who sent which message.
 	SenderEmail string
+	// AdminEmail is the administrator who wrote an InputKindAdminMessage
+	// input (ADR-0115); persisted on the user entry as TextContent.AdminEmail.
+	AdminEmail string
 
 	// MCPUser is the signed-in user who SENT this turn, for the bundle's
 	// ${FLEET_USER_EMAIL} env token (ADR-0087). The HTTP
@@ -1732,7 +1735,7 @@ func assembleTurnMessages(ctx context.Context, in TurnInput, now time.Time) ([]f
 	note, _ := agentcore.RuntimeDateMessage(today) // RuntimeToday always yields a valid day
 	messages = append(messages, note)
 	initialSender := in.SenderEmail
-	userEntry := mustEntry("user", "text", TextContent{Text: in.UserMessage, Images: imageRefs, Kind: in.InputKind, RuntimeToday: today, SenderEmail: initialSender})
+	userEntry := mustEntry("user", "text", TextContent{Text: in.UserMessage, Images: imageRefs, Kind: in.InputKind, RuntimeToday: today, SenderEmail: initialSender, AdminEmail: in.AdminEmail})
 	userEntry.InjectedContext = in.InjectedContext
 	return messages, userEntry, nil
 }

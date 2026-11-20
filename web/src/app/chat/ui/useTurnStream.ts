@@ -2398,11 +2398,14 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         injected_context?: string;
         kind?: string;
         sender_email?: string;
+        admin_email?: string;
       };
       const text = (p.text ?? "").trim();
       if (!text) return;
       const senderEmail =
-        typeof p.sender_email === "string" && p.sender_email.trim()
+        typeof p.admin_email === "string" && p.admin_email.trim()
+          ? p.admin_email.trim()
+          : typeof p.sender_email === "string" && p.sender_email.trim()
           ? p.sender_email.trim()
           : undefined;
       // A turn fleet started itself after an approval card was settled

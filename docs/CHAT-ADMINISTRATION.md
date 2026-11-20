@@ -15,13 +15,14 @@ Operator tools for looking after chats that belong to someone else
 - **Message, stop, transfer.** These are recorded in `chat.admin_requests` and
   carried out by the running server: on the scheduler pass for the CLI, at once
   for the browser.
-  - A message becomes a queue row of mode `admin`. It runs as the owner,
-    recorded with the administrator as sender (`sender_email`), kind
-    `admin_message`.
+  - A message becomes a queue row of mode `admin`. It runs as the owner, in
+    Manual approvals whatever the chat's mode, with the administrator
+    recorded on the entry (`admin_email`), kind `admin_message`. The owner
+    sees the turn's full work, as for their own turns.
   - Stop is the owner's Stop. Transfer is the owner's transfer: one function,
     `transferConversation`, which both paths call.
 - **Settings.** Title (manual rename path), model (not on a Lockdown chat) and
-  approval mode (manual or auto only), validated together before any is
+  approval mode (down to manual only), validated together before any is
   written. Archive is a server request, because it revokes a shared chat's
   participants.
 - **Notices.** UI-only notes in the chat.

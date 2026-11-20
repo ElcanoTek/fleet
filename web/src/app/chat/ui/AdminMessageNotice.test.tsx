@@ -21,7 +21,7 @@ describe("admin messages", () => {
 
   it("keeps the kind and the sender through history", () => {
     const [m] = historyToMessages([
-      { role: "user", type: "text", content: { text: WRAPPED, kind: ADMIN_MESSAGE_KIND, sender_email: "robbie@ops" } },
+      { role: "user", type: "text", content: { text: WRAPPED, kind: ADMIN_MESSAGE_KIND, admin_email: "robbie@ops" } },
     ]);
     expect(m.kind).toBe(ADMIN_MESSAGE_KIND);
     expect(m.senderEmail).toBe("robbie@ops");

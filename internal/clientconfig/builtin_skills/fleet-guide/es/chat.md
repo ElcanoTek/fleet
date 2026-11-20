@@ -463,8 +463,9 @@ Un administrador del espacio de trabajo puede enviar un mensaje a tu chat, por
 ejemplo para pedir a una patrulla que publique un registro que lleva. Aparece
 en la conversación como **Mensaje de un administrador** con su correo, nunca
 como palabras tuyas, y una nota breve en el chat dice qué se cambió y por qué.
-La respuesta se ejecuta con tus conexiones y tu configuración de aprobaciones,
-así que cualquier tarjeta de aprobación que genere te toca responderla a ti.
+La respuesta se ejecuta con tus conexiones y siempre te pregunta antes de
+cualquier acción que requiera aprobación, aunque el chat apruebe
+automáticamente.
 
 ### Conversaciones largas
 

@@ -1305,7 +1305,7 @@ export const APPROVAL_RESUME_KIND = "approval_resume";
 export const CHAT_PATROL_KIND = "chat_patrol";
 /**
  * TextContent.kind of a message an administrator sent into the chat with the
- * admin tools (ADR-0115): the turn ran as the chat's owner, and sender_email
+ * admin tools (ADR-0115): the turn ran as the chat's owner, and admin_email
  * names the administrator.
  */
 export const ADMIN_MESSAGE_KIND = "admin_message";
@@ -1399,10 +1399,15 @@ export function historyToMessages(entries: HistoryEntry[]): Message[] {
         text?: string;
         kind?: string;
         sender_email?: string;
+        admin_email?: string;
         steered?: boolean;
       };
+      // An admin message names its administrator in admin_email (the turn
+      // itself is the owner's, so it carries no sender_email).
       const senderEmail =
-        typeof userContent.sender_email === "string" &&
+        typeof userContent.admin_email === "string" && userContent.admin_email.trim()
+          ? userContent.admin_email.trim()
+          : typeof userContent.sender_email === "string" &&
         userContent.sender_email.trim()
           ? userContent.sender_email.trim()
           : undefined;

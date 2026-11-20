@@ -212,7 +212,7 @@ export default function AdminChatsPage() {
   return (
     <SetSection
       title={tr("Chats")}
-      intro={tr("Find any chat in this workspace and look after it: read it, send it a message, stop it, hand it to someone else, or fix its patrols. Every change asks for a reason, is recorded, and is noted in the chat itself. A message you send runs as the chat’s owner, with their connections and approval setting, and is labelled as yours.")}
+      intro={tr("Find any chat in this workspace and look after it: read it, send it a message, stop it, hand it to someone else, or fix its patrols. Every change asks for a reason, is recorded, and is noted in the chat itself. A message you send runs as the chat’s owner, with their connections, is labelled as yours, and always asks the owner before anything that needs approval.")}
     >
       <ConnGroup>
         <div className="mb-3 grid gap-2 sm:grid-cols-[1fr_1fr_auto_auto] sm:items-end">
@@ -461,7 +461,7 @@ function MessagePanel({ chat, onDone }: { chat: AdminChat; onDone: () => void })
     <ConnPanel>
       <ConnPanelHead title={tr("Message, stop or transfer")} />
       <ConnPanelSub>
-        {tr("A message runs as {0}, with their connections and approval setting; any approval card it raises goes to them. It is shown in the chat as yours.", [chat.owner_email])}
+        {tr("A message runs as {0}, with their connections. Anything that needs approval asks them first, whatever the chat’s approval setting. It is shown in the chat as yours.", [chat.owner_email])}
       </ConnPanelSub>
       <form className="grid gap-2" onSubmit={onSend}>
         <Field label={tr("Reason (recorded and shown in the chat)")}>
@@ -504,7 +504,7 @@ function MessagePanel({ chat, onDone }: { chat: AdminChat; onDone: () => void })
 function ChatSettingsPanel({ chat, onDone }: { chat: AdminChat; onDone: () => void }) {
   const [title, setTitle] = useState(chat.title);
   const [model, setModel] = useState(chat.model);
-  const [mode, setMode] = useState(chat.approval_mode === "autonomous" ? "" : chat.approval_mode);
+  const [mode, setMode] = useState(chat.approval_mode);
   const [archivedState, setArchivedState] = useState(chat.archived);
   const [notice, setNotice] = useState("");
   const [reason, setReason] = useState("");
@@ -514,7 +514,7 @@ function ChatSettingsPanel({ chat, onDone }: { chat: AdminChat; onDone: () => vo
     const body: Record<string, unknown> = { reason };
     if (title.trim() && title.trim() !== chat.title) body.title = title.trim();
     if (model.trim() && model.trim() !== chat.model) body.model = model.trim();
-    if (mode && mode !== chat.approval_mode) body.approval_mode = mode;
+    if (mode === "manual" && chat.approval_mode !== "manual") body.approval_mode = "manual";
     if (archivedState !== chat.archived) body.archived = archivedState;
     if (Object.keys(body).length === 1) {
       setStatus({ text: tr("Nothing to change."), error: false });
@@ -542,7 +542,7 @@ function ChatSettingsPanel({ chat, onDone }: { chat: AdminChat; onDone: () => vo
     <ConnPanel>
       <ConnPanelHead title={tr("Chat settings and notices")} />
       <ConnPanelSub>
-        {tr("Autonomous approvals stay the owner’s own decision, and a Lockdown chat keeps its model. A notice is a note in the chat that the assistant never reads.")}
+        {tr("You can turn a chat’s approvals down to Manual, never up: automatic approvals are the owner’s own decision. A Lockdown chat keeps its model. A notice is a note in the chat that the assistant never reads.")}
       </ConnPanelSub>
       <div className="grid gap-2 sm:grid-cols-2">
         <Field label={tr("Title")}>
@@ -560,9 +560,9 @@ function ChatSettingsPanel({ chat, onDone }: { chat: AdminChat; onDone: () => vo
         </Field>
         <Field label={tr("Approvals")}>
           <select className={SETTINGS_INPUT} value={mode} onChange={(e) => setMode(e.target.value)}>
-            {mode === "" ? <option value="">{tr("Autonomous (owner’s choice)")}</option> : null}
+            {chat.approval_mode === "autonomous" ? <option value="autonomous">{tr("Autonomous (owner’s choice)")}</option> : null}
+            {chat.approval_mode === "auto" ? <option value="auto">{tr("Auto-approve (owner’s choice)")}</option> : null}
             <option value="manual">{tr("Manual")}</option>
-            <option value="auto">{tr("Auto-approve")}</option>
           </select>
         </Field>
         <label className="flex items-center gap-2 text-[0.8rem] text-[var(--color-text-secondary)]">

@@ -463,9 +463,9 @@ Um administrador do espaço de trabalho pode enviar uma mensagem ao seu chat,
 por exemplo para pedir a uma patrulha que publique um registro que mantém. Ela
 aparece na conversa como **Mensagem de um administrador** com o e-mail dessa
 pessoa, nunca como palavras suas, e uma nota curta no chat diz o que foi
-alterado e por quê. A resposta é executada com as suas conexões e a sua
-configuração de aprovações, então qualquer cartão de aprovação que ela gerar é
-você quem responde.
+alterado e por quê. A resposta é executada com as suas conexões e
+pergunta sempre a você antes de qualquer ação que exija aprovação, mesmo que o
+chat aprove automaticamente.
 
 ### Conversas longas
 

@@ -52,11 +52,18 @@ Add chat administration, with one store layer and two ways in:
 - **Send a message.** It becomes a queue row of a new mode, `admin`
   (migration 0207):
   - The row's user is the chat's **owner**, so the turn runs with the owner's
-    connectors and approval mode, exactly like a patrol run.
-  - The row's new `sender_email` column holds the **administrator**. The turn
-    records them as the message's sender (`TextContent.SenderEmail`), and the
-    input kind `admin_message` makes the chat show it as an administrator's
-    message, not the owner's bubble.
+    connectors, like a patrol run.
+  - It always runs in **Manual** approvals, whatever the chat's mode. Auto and
+    Autonomous are the owner's consent to their own instructions, not to an
+    administrator's, and the owner's "approve for the rest of the chat"
+    choices are not used either. Every critical action stages a card for the
+    owner.
+  - The queue row's new `sender_email` column holds the **administrator**.
+    The turn records them on the user entry as `TextContent.AdminEmail`
+    (`admin_email`), not as `SenderEmail`: the turn is the owner's, so the
+    per-participant privacy filter shows the owner all of its work. The input
+    kind `admin_message` makes the chat show it as an administrator's message,
+    not the owner's bubble.
   - The model receives the words under a header naming the administrator, and a
     footer saying the owner did not write them.
   - Any approval card the turn stages goes to the owner. Administrators cannot
@@ -76,9 +83,9 @@ Add chat administration, with one store layer and two ways in:
 - **Change settings.** Title (through the manual rename path, which also
   renames a title the owner locked), model and approval mode. The whole change
   is validated before any of it is written:
-  - The approval mode may only be set to **manual** or **auto**. Autonomous
-    runs SSP writes without a card and needs the owner's own acceptance, so an
-    administrator can never turn it on.
+  - The approval mode may only be turned down to **manual**. Auto-approve and
+    Autonomous let actions run without a card and are the owner's own
+    decision, so an administrator can never turn them on.
   - A Lockdown chat keeps its model.
 - **Post a notice.** A UI-only note in the chat that the model never sees.
 - **Edit a patrol.**

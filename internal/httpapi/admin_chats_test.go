@@ -60,10 +60,12 @@ func TestAdminRequest_MessageRunsAsOwnerFromAdmin(t *testing.T) {
 	srv.DrainTurns(ctx)
 
 	eng.mu.Lock()
-	kind, msg, user, sender := eng.lastInputKind, eng.lastUserMessage, eng.lastUserEmail, eng.lastSenderEmail
+	kind, msg, user, sender, admin := eng.lastInputKind, eng.lastUserMessage, eng.lastUserEmail, eng.lastSenderEmail, eng.lastAdminEmail
 	eng.mu.Unlock()
-	if kind != agent.InputKindAdminMessage || user != "owner@x" || sender != "robbie@ops" {
-		t.Fatalf("turn kind=%q user=%q sender=%q; want admin_message as owner@x from robbie@ops", kind, user, sender)
+	// The turn is the owner's (no participant sender, so the owner sees its
+	// work); the administrator is recorded separately.
+	if kind != agent.InputKindAdminMessage || user != "owner@x" || sender != "" || admin != "robbie@ops" {
+		t.Fatalf("turn kind=%q user=%q sender=%q admin=%q; want admin_message as owner@x, admin robbie@ops", kind, user, sender, admin)
 	}
 	if !strings.Contains(msg, "[Message from an administrator: robbie@ops]") || !strings.Contains(msg, "Publish the team log now.") {
 		t.Fatalf("turn message = %q", msg)
@@ -122,7 +124,7 @@ func TestAdminChatRoutes(t *testing.T) {
 	if rec := adminDo(t, h, "admin@x", http.MethodPatch, "/admin/chats/"+conv.ID, `{"title":"X"}`); rec.Code != http.StatusBadRequest {
 		t.Fatalf("patch without reason = %d", rec.Code)
 	}
-	if rec := adminDo(t, h, "admin@x", http.MethodPatch, "/admin/chats/"+conv.ID, `{"approval_mode":"autonomous","reason":"r"}`); rec.Code != http.StatusBadRequest {
+	if rec := adminDo(t, h, "admin@x", http.MethodPatch, "/admin/chats/"+conv.ID, `{"approval_mode":"auto","reason":"r"}`); rec.Code != http.StatusBadRequest {
 		t.Fatalf("autonomous = %d", rec.Code)
 	}
 	if rec := adminDo(t, h, "admin@x", http.MethodPatch, "/admin/chats/"+conv.ID, `{"title":"Workbench (team)","reason":"tidy"}`); rec.Code != http.StatusOK {
@@ -244,5 +246,46 @@ func TestUnattendedTurnKinds(t *testing.T) {
 		if got := unattendedTurn(kind); got != want {
 			t.Errorf("unattendedTurn(%q) = %t, want %t", kind, got, want)
 		}
+	}
+}
+
+// The owner sees everything an administrator's message did in their chat: the
+// admin is recorded as admin_email, not as a participant sender, so the
+// per-participant filter treats the turn as the owner's.
+func TestOwnerSeesAdminMessageTurnWork(t *testing.T) {
+	mk := func(role, typ string, c any) agent.HistoryEntry {
+		b, err := json.Marshal(c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return agent.HistoryEntry{Role: role, Type: typ, Content: b}
+	}
+	hist := []agent.HistoryEntry{
+		mk("user", "text", agent.TextContent{Text: "[Message from an administrator: admin@x]\npublish", Kind: agent.InputKindAdminMessage, AdminEmail: "admin@x"}),
+		mk("assistant", "tool_call", agent.ToolCallContent{ID: "1", Name: "run_python", Input: "{}"}),
+		mk("tool", "tool_result", agent.ToolResultContent{ID: "1", Name: "run_python", Text: "ok"}),
+		mk("assistant", "text", agent.TextContent{Text: "Done."}),
+		mk("system", agent.EntryTypeNotice, agent.NoticeContent{Kind: store.NoticeAdminUpdated, Text: "An administrator renamed the chat."}),
+	}
+	got := historyForParticipant(hist, "owner@x", "owner@x")
+	if len(got) != len(hist) {
+		t.Fatalf("the owner sees %d of %d entries of an admin-message turn", len(got), len(hist))
+	}
+}
+
+// An administrator's message always runs in Manual approvals, whatever the
+// chat's mode, and does not ride the owner's session approvals.
+func TestAdminMessageTurnIsManual(t *testing.T) {
+	a := &approvalStager{convApprovalMode: store.ConversationApprovalAutonomous, convAutoApprove: true}
+	if a.effectiveApprovalMode() != store.ConversationApprovalAutonomous {
+		t.Fatal("fixture: an owner turn should be autonomous")
+	}
+	a.inputKind = agent.InputKindAdminMessage
+	if a.effectiveApprovalMode() != store.ConversationApprovalManual || a.isAutoApprove() || a.isAutonomous() {
+		t.Fatalf("an admin-message turn ran in %s", a.effectiveApprovalMode())
+	}
+	a.liveApprovalMode = func(context.Context) string { return store.ConversationApprovalAutonomous }
+	if a.effectiveApprovalMode() != store.ConversationApprovalManual {
+		t.Fatal("the live approval mode overrode Manual on an admin-message turn")
 	}
 }
