@@ -4365,6 +4365,7 @@
   "cannot read {0}: {1}": "no se puede leer {0}: {1}",
   "card is not valid UTF-8": "La tarjeta no es UTF-8 válido",
   "card is {0} bytes, over the {1}-byte limit": "La tarjeta ocupa {0} bytes; supera el límite de {1} bytes",
+  "card_sha256 names approval {0}, which is not approved": "card_sha256 identifica la aprobación {0}, que no está aprobada",
   "catch-all (any model)": "general (cualquier modelo)",
   "categories.": "categorías.",
   "catwalk providers response contained no usable entries": "La respuesta de proveedores de catwalk no contenía entradas utilizables",
