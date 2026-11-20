@@ -919,21 +919,30 @@ func (m *Manager) needsSetupForPrompt(persona string, hidden []string) []clientc
 	if len(meta) == 0 {
 		return nil
 	}
+	// A running server registers as <connector> or <connector>_<account>
+	// (agentcore.RegisteredMCPName). Resolve each to the LONGEST declared
+	// connector name it matches, so a running `jira_prod` connector does not
+	// mark an unconfigured `jira` as running.
+	declared := make([]string, 0, len(meta))
+	for _, c := range meta {
+		if n := strings.ToLower(strings.TrimSpace(c.Name)); n != "" {
+			declared = append(declared, n)
+		}
+	}
 	running := map[string]bool{}
 	for _, st := range m.MCPCatalog() {
-		running[strings.ToLower(st.ServerName)] = true
-	}
-	isRunning := func(name string) bool {
-		if running[name] {
-			return true
-		}
-		for r := range running {
-			if strings.HasPrefix(r, name+"_") {
-				return true
+		reg := strings.ToLower(st.ServerName)
+		best := ""
+		for _, n := range declared {
+			if (reg == n || strings.HasPrefix(reg, n+"_")) && len(n) > len(best) {
+				best = n
 			}
 		}
-		return false
+		if best != "" {
+			running[best] = true
+		}
 	}
+	isRunning := func(name string) bool { return running[name] }
 	policy := m.personaPolicy(persona)
 	out := make([]clientconfig.ConnectorMeta, 0)
 	seen := map[string]bool{}

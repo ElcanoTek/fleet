@@ -93,3 +93,23 @@ func TestNeedsSetupForPrompt_RespectsHiddenAndPersona(t *testing.T) {
 		t.Fatalf("persona filter: got %v, want [notools_mcp pubmatic_publisher_mcp]", names)
 	}
 }
+
+// A running connector whose name extends an unconfigured one (`jira_prod`
+// next to `jira`) does not hide the unconfigured one; an account-qualified
+// registration of the connector itself (`stale_mcp_acme`) does.
+func TestNeedsSetupForPrompt_RunningNamesResolveToLongestConnector(t *testing.T) {
+	m := fixtureManager(t)
+	m.SetConnectorMeta([]clientconfig.ConnectorMeta{
+		{Name: "jira", Tools: []string{"search"}},
+		{Name: "jira_prod", Configured: true, Tools: []string{"search"}},
+		{Name: "stale_mcp", Tools: []string{"read"}},
+	})
+	m.mcpCatalog = []mcp.ServerTool{
+		{ServerName: "jira_prod", Tool: mcp.Tool{Name: "search"}},
+		{ServerName: "stale_mcp_acme", Tool: mcp.Tool{Name: "read"}},
+	}
+	got := m.needsSetupForPrompt("victoria", nil)
+	if len(got) != 1 || got[0].Name != "jira" {
+		t.Fatalf("got %+v, want only jira", got)
+	}
+}
