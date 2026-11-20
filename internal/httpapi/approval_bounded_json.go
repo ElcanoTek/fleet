@@ -188,3 +188,17 @@ func objectKey(dec *json.Decoder) (string, error) {
 	}
 	return key, nil
 }
+
+// approvalGroupCardDigests is a group decision's card_sha256 map (approval id
+// to the echoed card digest), bounded like narrow_args.
+type approvalGroupCardDigests map[string]string
+
+// UnmarshalJSON reads the map with its size bounded as it goes.
+func (m *approvalGroupCardDigests) UnmarshalJSON(b []byte) error {
+	var bounded approvalGroupNarrowArgs
+	if err := bounded.UnmarshalJSON(b); err != nil {
+		return err
+	}
+	*m = approvalGroupCardDigests(bounded)
+	return nil
+}

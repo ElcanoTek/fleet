@@ -559,6 +559,10 @@ export function ApprovalCard({
     // A narrowed approval (docs/APPROVAL-NARROWING.md): the ticked values of
     // the tool's narrowable list argument. Absent approves the call whole.
     approvedValues?: string[],
+    // The digest of the describer card this surface rendered, echoed so
+    // fleet can tell the server which card the person approved. Only the
+    // generic action card renders that card, so only it passes one.
+    renderedCardSha256?: string,
   ) => {
     if (submitting || approval.status !== "pending" || !conversationId) return;
     if (executing && !approved) return;
@@ -589,6 +593,7 @@ export function ApprovalCard({
           scope: executing || approval.noSessionApproval || narrowing ? "once" : applyAll ? "session" : "once",
           ...(!executing && edits && Object.keys(edits).length > 0 ? { edits } : {}),
           ...(narrowing ? { approved_values: approvedValues, narrowed_arg: narrowedArg } : {}),
+          ...(approved && !executing && renderedCardSha256 ? { card_sha256: renderedCardSha256 } : {}),
         }),
       });
       if (!response.ok) {
@@ -770,7 +775,9 @@ export function ApprovalCard({
         approval={card}
         submitting={submitting}
         submitError={submitError}
-        onResolve={(approved, approvedValues) => void resolve(approved, undefined, approvedValues)}
+        onResolve={(approved, approvedValues) =>
+          void resolve(approved, undefined, approvedValues, card.card ? card.cardSha256 : undefined)
+        }
         onStop={() => void stop()}
         applyAll={applyAll}
         onApplyAllChange={setApplyAll}

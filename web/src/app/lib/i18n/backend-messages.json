@@ -909,6 +909,12 @@
       ]
     },
     {
+      "message": "card_sha256 names approval {0}, which is not approved",
+      "fields": [
+        "%s"
+      ]
+    },
+    {
       "message": "clear pending fallback rollout state: {0}",
       "fields": [
         "%w"
