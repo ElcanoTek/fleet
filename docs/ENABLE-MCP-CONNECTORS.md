@@ -22,6 +22,10 @@ During interactive chat turns where an `enable_mcp_connectors` handler is wired 
   - Every model-visible tool result and error string uses `agentcore.PromptSafeName` so untrusted remote connector labels never enter model context.
   - Turn callers that do not wire an `enable_mcp_connectors` handler (scheduled jobs, dataset runs, eval harnesses) neither advertise `enable_mcp_connectors` in the tool roster nor render the prompt section.
 
+### 1b. Connectors not set up on this server
+
+`buildSystemPrompt` also renders a **`Connectors not set up on this server`** section naming the manifest connectors whose credentials are not set on the box (the Tools picker's **Needs setup** rows). It reads the same connector snapshot as the picker (`Manager.ConnectorMeta()`: set at boot by `SetConnectorMeta`, replaced by every MCP reload), so nothing is listed by hand: once a connector's credentials are set and Fleet reloads, it leaves the section. A connector that is running is treated as configured, and one whose every declared tool `interactive_hidden_tools` or the persona policy hides is left out. Rows are sorted by `promptSafeName`, capped at `MaxNeedsSetupInPrompt = 25`, and labels and descriptions are clamped like the optional catalog's. The section tells the model to say the connector is not connected yet and an admin has to set it up, never to send the user to the Tools picker or Settings → Connections for it, and not to call `enable_mcp_connectors` for it. It renders on every turn kind, scheduled runs included, because it is guidance rather than a tool.
+
 ### 2. `enable_mcp_connectors` Tool & Validation
 
 - Defined in `internal/tools/enable_mcp_connectors.go` (`enable_mcp_connectors`) and wired per interactive turn via `tools.WithEnableMCPConnectorsHandler`.
