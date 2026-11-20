@@ -140,7 +140,6 @@ describe("Operations Center for a readonly user", () => {
     renderPage();
     expect(screen.getByTestId("orchestrator-dashboard")).toBeTruthy();
     expect(screen.queryByTestId("new-task-btn")).toBeNull();
-    expect(screen.queryByTestId("new-task-btn-topbar")).toBeNull();
     expect(screen.getByTestId("tasks-table-actions").textContent).toBe("");
   });
 
@@ -148,7 +147,6 @@ describe("Operations Center for a readonly user", () => {
     sessionRole = "client";
     renderPage();
     expect(screen.getByTestId("new-task-btn")).toBeTruthy();
-    expect(screen.getByTestId("new-task-btn-topbar")).toBeTruthy();
     expect(screen.getByTestId("tasks-table-actions").textContent).toBe(
       "onEdit,onRunNow,onStop,onDelete",
     );

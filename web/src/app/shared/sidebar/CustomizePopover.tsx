@@ -23,9 +23,6 @@ const LABEL = "text-[0.68rem] font-semibold uppercase tracking-[0.08em] text-[va
 
 export function CustomizeButton({ collapsed }: { collapsed: boolean }) {
   const [open, setOpen] = useState(false);
-  // A phone always reports the rail collapsed (it is a drawer there, at full
-  // width): only the desktop icon strip opens the panel to its side.
-  const strip = collapsed && typeof window !== "undefined" && window.matchMedia("(min-width: 40rem)").matches;
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
@@ -33,16 +30,18 @@ export function CustomizeButton({ collapsed }: { collapsed: boolean }) {
           type="button"
           data-testid="customize-sidebar-button"
           aria-label={tr("Customize sidebar")}
-          data-tip={collapsed && !open ? tr("Customize sidebar") : undefined}
-          title={collapsed ? undefined : tr("Customize sidebar")}
-          className={cn(RAIL_ICON_BUTTON_CLASS, collapsed && "sm:size-10", open && "bg-[var(--color-overlay-soft)] text-[var(--color-text-primary)]")}
+          title={tr("Customize sidebar")}
+          // The icon strip holds only the + and the top items: there the
+          // gear is not drawn (Customize stays in the account menu). A phone
+          // always reports the rail collapsed, so the test is the width's.
+          className={cn(RAIL_ICON_BUTTON_CLASS, collapsed && "sm:hidden", open && "bg-[var(--color-overlay-soft)] text-[var(--color-text-primary)]")}
         >
           <Icon name="settings" className="size-[1.05rem]" />
         </button>
       </PopoverTrigger>
       {open ? (
         <PopoverContent
-          side={strip ? "right" : "bottom"}
+          side="bottom"
           align="start"
           collisionPadding={12}
           data-testid="customize-popover"

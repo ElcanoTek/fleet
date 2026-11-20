@@ -28,7 +28,6 @@ import {
 } from "@/app/shared/ui/railStyles";
 import { labelChipStyle } from "@/app/shared/lib/labelColors";
 import { Kbd } from "@/components/ui/kbd";
-import { cn } from "@/lib/utils";
 import { Icon } from "./Icon";
 import {
   CHAT_SCOPES,
@@ -3126,30 +3125,16 @@ export function ConversationSidebar({
           </Kbd>
         )}
       </div>
-      {/* Collapsed: search is an icon that opens the sidebar on the field. */}
-      {railCollapsed ? (
-        <button
-          type="button"
-          aria-label={tr("Search")}
-          data-tip={tr("Search ({0})", [searchShortcut])}
-          className={cn(RAIL_ICON_BUTTON_CLASS, "hidden sm:inline-flex sm:size-10")}
-          onClick={() => {
-            collapse.setCollapsed(false);
-            requestAnimationFrame(() => searchRef.current?.focus());
-          }}
-        >
-          <Icon name="search" className="size-[1.05rem]" />
-        </button>
-      ) : null}
+      {/* The icon strip keeps only the + (its menu starts a chat too) and
+          the top items: search and the pen come back with the sidebar. */}
       <button
         type="button"
         aria-label={tr("New chat")}
         data-testid="new-chat-button"
-        data-tip={railCollapsed ? tr("New chat") : undefined}
-        title={railCollapsed ? undefined : tr("New chat")}
+        title={tr("New chat")}
         className={[
           "inline-flex size-9 shrink-0 items-center justify-center rounded-[var(--radius-md)] bg-[var(--color-primary-fill)] text-[var(--color-on-primary-fill)] transition hover:bg-[var(--color-primary-fill-hover)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] any-pointer-coarse:size-11",
-          railCollapsed ? "sm:size-10" : "",
+          railCollapsed ? "sm:hidden" : "",
         ].join(" ")}
         onClick={newChat}
       >
@@ -3267,39 +3252,6 @@ export function ConversationSidebar({
     </div>
   ) : null;
 
-  // The icon strip (≥sm, collapsed): the pinned chats and projects as icons,
-  // under the top items. Everything else is one click away: the brand mark
-  // opens the sidebar.
-  const collapsedPinned =
-    railCollapsed && !pinnedSec.hidden && pinned.length > 0 ? (
-      <div className="hidden flex-col items-center gap-1 sm:flex" data-testid="rail-pinned-icons">
-        {pinned.map((e) => {
-          const title = e.kind === "chat" ? e.chat.title : e.project.name;
-          const active = e.kind === "chat" ? openConversationId === e.chat.id : openProjectId === e.project.id;
-          return (
-            <button
-              key={e.id}
-              type="button"
-              aria-label={title}
-              aria-current={active ? "page" : undefined}
-              data-tip={title}
-              className={[
-                "inline-flex size-10 items-center justify-center rounded-[var(--radius-md)] transition focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]",
-                active ? "bg-[var(--rail-active)]" : "hover:bg-[var(--rail-hover)]",
-              ].join(" ")}
-              onClick={() => {
-                if (e.kind === "project") onOpenProjectHome(e.project.id);
-                else if (teamRowIds.has(e.chat.id) && onSelectTeamSharedConversation) onSelectTeamSharedConversation(e.chat);
-                else void loadConversation(e.chat.id);
-              }}
-            >
-              <Icon name={e.kind === "chat" ? "message" : "briefcase"} className={railIconClass(active)} />
-            </button>
-          );
-        })}
-      </div>
-    ) : null;
-
   return (
     <SidebarTargetsContext.Provider value={sidebarTargets}>
       <NavRail
@@ -3321,7 +3273,6 @@ export function ConversationSidebar({
           ) : null
         }
       >
-        {collapsedPinned}
         {/* The arrow-key handler is delegated from the rows (buttons) inside. */}
         {/* eslint-disable-next-line jsx-a11y/no-static-element-interactions */}
         <div

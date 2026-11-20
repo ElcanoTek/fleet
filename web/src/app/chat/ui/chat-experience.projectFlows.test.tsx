@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { ChatExperience, type ConversationSummary } from "./chat-experience";
 import { ChatToastProvider } from "./ChatToasts";
 import { clearChatSession } from "./chatSessionStore";
+import { resetSidebarStoreForTests } from "@/app/shared/sidebar/store";
 
 // jsdom has no layout, so the real virtualizer mounts no transcript rows; the
 // file-state tests below assert on rendered replies, so every row renders.
@@ -119,6 +120,12 @@ async function mountChat() {
   );
   // Projects loaded into the rail.
   await screen.findByRole("button", { name: "Open project Quant" });
+}
+
+// The + beside the pen: everything a person can start.
+async function pickNew(testId: string) {
+  fireEvent.click(screen.getByTestId("new-menu-button"));
+  fireEvent.click(await screen.findByTestId(testId));
 }
 
 async function openRowMenu(title: string) {
@@ -251,10 +258,10 @@ describe("moving only moves (B11)", () => {
 });
 
 describe("New project (B27)", () => {
-  it("opens from the rail's + and lands on the new project's home", async () => {
+  it("opens from the rail's + menu and lands on the new project's home", async () => {
     const fetchMock = mockBackend();
     await mountChat();
-    fireEvent.click(screen.getByRole("button", { name: "Create project" }));
+    await pickNew("new-menu-project");
     const dialog = await screen.findByRole("dialog", { name: "New project" });
     fireEvent.change(screen.getByPlaceholderText("e.g. Knowertech: Q4 planning"), {
       target: { value: "Q4 planning" },
@@ -619,7 +626,7 @@ describe("a create that lands after its dialog was dismissed (Codex round 15)", 
     // …dismissed while the create is in flight, and a plain New project opened.
     fireEvent.click(within(first).getByRole("button", { name: "Close new project" }));
     await waitFor(() => expect(first).not.toBeInTheDocument());
-    fireEvent.click(screen.getByRole("button", { name: "Create project" }));
+    await pickNew("new-menu-project");
     const second = await screen.findByRole("dialog", { name: "New project" });
 
     release();
@@ -664,8 +671,12 @@ describe("bulk delete across teams", () => {
       return base(input, init);
     });
     await mountChat();
-    await openRowMenu("Shared chat");
-    fireEvent.click(await screen.findByRole("menuitem", { name: /^Select/ }));
+    // Select mode starts from the Chats menu; a project's chats are ticked
+    // under their project like any other row.
+    fireEvent.click(screen.getByTestId("recent-sort"));
+    fireEvent.click(await screen.findByTestId("chats-menu-select"));
+    fireEvent.click(screen.getByRole("button", { name: /^Project Quant \(/ }));
+    fireEvent.click(await screen.findByText("Shared chat"));
     fireEvent.click(screen.getByRole("button", { name: /^Project Ops desk \(/ }));
     fireEvent.click(await screen.findByText("Ops chat"));
     fireEvent.click(screen.getByRole("button", { name: "Delete selected" }));
@@ -675,5 +686,95 @@ describe("bulk delete across teams", () => {
         "1 of these is shared with Elcano and 1 with Ops. They lose access to them and their 5 shared files.",
       ),
     );
+  });
+});
+
+// The + menu and the tidy ⋯ menu, on the full page (docs/SIDEBAR.md).
+describe("the + menu starts things", () => {
+  it("lists a chat, a patrol and a background task, then a project", async () => {
+    mockBackend();
+    await mountChat();
+    fireEvent.click(screen.getByTestId("new-menu-button"));
+    const menu = await screen.findByRole("menu", { name: "New" });
+    expect(within(menu).getAllByRole("menuitem").map((i) => i.getAttribute("data-testid"))).toEqual([
+      "new-menu-chat",
+      "new-menu-patrol",
+      "new-menu-task",
+      "new-menu-project",
+    ]);
+    // No sealed chats on this deployment: the item is not offered.
+    expect(within(menu).queryByTestId("new-menu-sealed")).toBeNull();
+  });
+
+  it("New chat leaves the open chat for an empty one", async () => {
+    mockBackend();
+    await mountChat();
+    await pickNew("new-menu-chat");
+    await waitFor(() => expect(screen.queryByTitle("Click to rename")).toBeNull());
+    expect(screen.queryByRole("menu", { name: "New" })).toBeNull();
+  });
+});
+
+describe("a chat's ⋯ menu keeps one order", () => {
+  const items = () => screen.getAllByRole("menuitem").map((el) => el.textContent?.trim());
+
+  // The page's one read of the sidebar is shared by every test in the file;
+  // these start it over, so the first can answer it.
+  beforeEach(() => resetSidebarStoreForTests());
+  afterEach(() => resetSidebarStoreForTests());
+
+  it("an unfiled chat: where it lives, where fleet opens, make something, pass it on, put it away", async () => {
+    const fetchMock = mockBackend();
+    const base = fetchMock.getMockImplementation()!;
+    // This account's saved sidebar loads (none saved: the default one).
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) =>
+      String(input) === "/api/sidebar" && (init?.method ?? "GET") === "GET"
+        ? new Response(JSON.stringify({ layout: null, rev: 0 }))
+        : base(input, init),
+    );
+    await mountChat();
+    await openRowMenu("Alpha chat");
+    // Move to the top and Set as start page arrive once the account is known
+    // to be able to save its sidebar.
+    await waitFor(() =>
+      expect(items()).toEqual([
+        "Pin",
+        "Move to the top",
+        "Rename",
+        "Move to project",
+        "Labels",
+        "Set as start page",
+        "Add a patrol…",
+        "Make a background task…",
+        "Save as workflow…",
+        "Share…",
+        "Download chat…",
+        "Transfer ownership…",
+        "Archive",
+        "Delete…",
+      ]),
+    );
+  });
+
+  it("a project's chat is never pinned, and an account whose sidebar did not load gets no sidebar items", async () => {
+    // mockBackend has no saved sidebar to give (404): the quick sidebar
+    // items would save over a layout the page never read, so they are held.
+    mockBackend();
+    await mountChat();
+    await openRowMenu("Shared chat");
+    await screen.findByRole("menuitem", { name: "Rename" });
+    expect(items()).toEqual([
+      "Rename",
+      "Move to project",
+      "Labels",
+      "Add a patrol…",
+      "Make a background task…",
+      "Save as workflow…",
+      "Share…",
+      "Download chat…",
+      "Transfer ownership…",
+      "Archive",
+      "Delete…",
+    ]);
   });
 });

@@ -15,8 +15,9 @@ import { t as tr } from "@/app/lib/i18n";
 //   - ≥sm: an in-flow sticky column. Expanded it is as wide as the person
 //     dragged it (300px until they do); collapsed it is a 3.75rem icon strip
 //     (2.5rem squares with data-tip labels, avatar-only account menu). The
-//     collapse toggle lives in the brand row; collapsed, the brand mark is
-//     the button that expands it. Both preferences persist to localStorage
+//     collapse toggle lives in the brand row; collapsed, it sits under the
+//     logo and expands the sidebar, and the strip holds only the + and the
+//     top items. Both preferences persist to localStorage
 //     ("rail-collapsed", "rail-width"): they are about this screen, not the
 //     account. Width/padding animate on the fast motion token, gated behind
 //     `railReady` so first paint never animates, and never while dragging.
@@ -40,8 +41,6 @@ import { CloseButton } from "./CloseButton";
 import { Icon } from "./Icon";
 import { AccountMenu } from "./AccountMenu";
 import { isInteractiveTarget } from "./interactiveTarget";
-import { RAIL_ICON_BUTTON_CLASS } from "./railStyles";
-import { cn } from "@/lib/utils";
 import { readPref, writePref } from "@/app/shared/lib/storage";
 
 // Which destination the page is. "patrols" and "orchestrator" light their
@@ -171,6 +170,7 @@ export function NavRail({
   // arrives here as the proxied /api/brand/logo path. Callers pass
   // `branding.logo_url || undefined` so an unset bundle falls back here.
   brandLogoSrc = "/logos/fleet-mark.svg",
+  eyebrow = tr("Internal"),
   opsCount,
   sidebarOpen,
   setSidebarOpen,
@@ -183,6 +183,7 @@ export function NavRail({
   activeView: RailView;
   brandName: string;
   brandLogoSrc?: string;
+  eyebrow?: string;
   opsCount?: number;
   sidebarOpen: boolean;
   setSidebarOpen: (open: boolean) => void;
@@ -449,14 +450,6 @@ export function NavRail({
   }, [collapsed, sidebarOpen, railReady]);
 
   const width = collapse.width ?? null;
-  const brandMark = (
-    // A plain <img>, never an optimizer: the bundle mark arrives as
-    // "/api/brand/logo" (no extension) and may be an SVG. Under next/image
-    // that combination rendered a broken image on every page;
-    // NavRail.test.tsx keeps the src pointing at the route.
-    <img src={brandLogoSrc} alt={brandName} width={28} height={28} fetchPriority="high" decoding="async" className="size-7 shrink-0" style={{ color: "transparent" }} />
-  );
-
   return (
     <>
       {/* Mobile backdrop — taps outside the drawer dismiss it. */}
@@ -526,68 +519,62 @@ export function NavRail({
           } as React.CSSProperties
         }
       >
-        {/* Brand row — mark + name, then the gear (Customize) and the
-            collapse toggle. Collapsed (≥sm) the mark is the button that
-            expands the sidebar, with the gear under it. */}
+        {/* Brand row — the logo and name exactly as they have always been
+            drawn, then the gear (Customize) and the collapse toggle at the
+            row's end. Collapsed (≥sm) it stacks the logo above the toggle,
+            which is then the button that expands the sidebar. */}
         <div
           className={[
-            "flex shrink-0 items-center gap-0.5 pb-2 pl-[calc(var(--rail-pad-l)+0.25rem)] pr-2",
+            "flex shrink-0 items-center pb-2 pl-[calc(var(--rail-pad-l)+0.25rem)] pr-2",
             // justify-between stays on below sm in both states: narrow
             // viewports always report collapsed, and dropping it there parked
             // the drawer's close X against the brand name instead of at the
             // row's end.
-            collapsed ? "sm:flex-col sm:gap-1.5 sm:px-0" : "",
+            collapsed ? "justify-between sm:flex-col sm:justify-start sm:gap-2 sm:px-0" : "justify-between",
           ].join(" ")}
         >
-          <div className={["flex min-w-0 flex-1 items-center gap-2.5", collapsed ? "sm:hidden" : ""].join(" ")}>
-            {brandMark}
-            <span className="min-w-0 truncate font-heading text-[1rem] font-bold text-[var(--color-text-primary)]">
-              {brandName}
+          <div className={["flex min-w-0 items-center gap-2.5", collapsed ? "sm:flex-col" : ""].join(" ")}>
+            {/* A plain <img>, never an optimizer: the bundle mark arrives as
+                "/api/brand/logo" (no extension) and may be an SVG. Under
+                next/image that combination rendered a broken image on every
+                page; NavRail.test.tsx keeps the src pointing at the route. */}
+            <img src={brandLogoSrc} alt={brandName} width={28} height={28} fetchPriority="high" decoding="async" style={{ color: "transparent" }} />
+            <span className={["flex min-w-0 flex-col leading-[1.05]", collapsed ? "sm:hidden" : ""].join(" ")}>
+              <span className="text-[0.6rem] uppercase tracking-[0.1em] text-[var(--color-text-muted)]">
+                {eyebrow}
+              </span>
+              <span className="truncate font-heading text-[0.95rem] font-bold text-[var(--color-text-primary)]">
+                {brandName}
+              </span>
             </span>
           </div>
-          {collapsed ? (
-            // The strip has no room for a toggle of its own: the mark opens
-            // the sidebar, and says so on hover and to a screen reader.
+          <div className={["ml-auto flex shrink-0 items-center gap-0.5", collapsed ? "sm:ml-0" : ""].join(" ")}>
+            <CustomizeButton collapsed={collapsed} />
             <button
               ref={collapseToggleRef}
+              aria-label={collapsed ? tr("Expand sidebar") : tr("Collapse sidebar")}
+              aria-expanded={!collapsed}
+              data-tip={collapsed ? tr("Expand") : tr("Collapse")}
+              data-testid={collapsed ? "rail-expand" : "rail-collapse"}
+              className={[
+                "hidden shrink-0 items-center justify-center rounded-[var(--radius-md)] text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:inline-flex",
+                collapsed ? "size-10" : "size-[1.9rem]",
+              ].join(" ")}
               type="button"
-              aria-label={tr("Expand sidebar")}
-              aria-expanded={false}
-              data-tip={tr("Expand")}
-              data-testid="rail-expand"
-              className="group/mark relative hidden size-10 items-center justify-center rounded-[var(--radius-md)] transition hover:bg-[var(--rail-hover)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:inline-flex"
-              onClick={() => setCollapsed(false)}
+              onClick={() => setCollapsed(!collapsed)}
             >
-              <span className="transition group-hover/mark:opacity-0 group-focus-visible/mark:opacity-0">{brandMark}</span>
-              <Icon
-                name="panel-left"
-                className="absolute size-[1.05rem] text-[var(--color-text-primary)] opacity-0 transition group-hover/mark:opacity-100 group-focus-visible/mark:opacity-100"
-              />
+              <Icon name="panel-left" className="size-4" />
             </button>
-          ) : null}
-          <CustomizeButton collapsed={collapsed} />
-          {collapsed ? null : (
-            <button
-              ref={collapseToggleRef}
-              aria-label={tr("Collapse sidebar")}
-              aria-expanded
-              data-tip={tr("Collapse")}
-              className={cn(RAIL_ICON_BUTTON_CLASS, "hidden sm:inline-flex")}
-              type="button"
-              onClick={() => setCollapsed(true)}
-            >
-              <Icon name="panel-left" className="size-[1.05rem]" />
-            </button>
-          )}
-          <CloseButton
-            className="sm:hidden"
-            label={tr("Close sidebar")}
-            onClick={() => setSidebarOpen(false)}
-          />
+            <CloseButton
+              className="sm:hidden"
+              label={tr("Close sidebar")}
+              onClick={() => setSidebarOpen(false)}
+            />
+          </div>
         </div>
 
         {/* Search, new chat and the + menu: always in reach, above the
-            scroller. Collapsed they stack as icons. */}
+            scroller. Collapsed, only the + is left. */}
         {actions ? (
           <div
             className={[
@@ -625,7 +612,8 @@ export function NavRail({
             <>
               <div
                 aria-hidden="true"
-                className={["mx-2 my-2 h-px shrink-0 bg-[var(--color-border)]", collapsed ? "sm:mx-0 sm:w-6" : ""].join(" ")}
+                // Nothing follows the top items in the icon strip.
+                className={["mx-2 my-2 h-px shrink-0 bg-[var(--color-border)]", collapsed ? "sm:hidden" : ""].join(" ")}
               />
               {children}
             </>
@@ -663,7 +651,6 @@ export function NavRail({
         {resizable ? (
           // A focusable separator IS the window-splitter pattern (WAI-ARIA):
           // the role is interactive when it takes focus and reports a value.
-          // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions
           <div
             role="separator"
             aria-orientation="vertical"
@@ -671,7 +658,6 @@ export function NavRail({
             aria-valuemin={RAIL_MIN_WIDTH}
             aria-valuemax={RAIL_MAX_WIDTH}
             aria-valuenow={width ?? RAIL_DEFAULT_WIDTH}
-            // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex
             tabIndex={0}
             data-testid="rail-resize"
             data-dragging={dragging ? "true" : undefined}

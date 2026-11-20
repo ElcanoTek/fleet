@@ -226,7 +226,6 @@ export function useSidebarLibrary(userEmail: string, onError: (message: string) 
       );
     },
     // post is a plain function of its arguments.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [change, mine],
   );
 
@@ -241,7 +240,6 @@ export function useSidebarLibrary(userEmail: string, onError: (message: string) 
         tr("Couldn't rename the chat."),
       );
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [change],
   );
 
@@ -253,7 +251,6 @@ export function useSidebarLibrary(userEmail: string, onError: (message: string) 
         tr("Couldn't update {0} — network error.", [tr("the chat")]),
       );
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [change],
   );
 
@@ -265,7 +262,6 @@ export function useSidebarLibrary(userEmail: string, onError: (message: string) 
         tr("Couldn’t save the new order. Try again."),
       );
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [change],
   );
 
@@ -277,7 +273,6 @@ export function useSidebarLibrary(userEmail: string, onError: (message: string) 
         failed,
       );
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [change],
   );
 

@@ -156,7 +156,7 @@ const sourceFilesUnder = (dir: string) =>
  * 2px pseudo-element with no content text, on a row whose real fill is a
  * translucent tint. Allowed only in these files, and each must still use it.
  */
-const NAV_BAR_FILES = ["app/shared/ui/railStyles.tsx", "app/help/ui/GuideNav.tsx", "app/settings/SetNav.tsx"];
+const NAV_BAR_FILES = ["app/help/ui/GuideNav.tsx", "app/settings/SetNav.tsx"];
 const NAV_BAR = "before:bg-[var(--color-primary)]";
 
 const rel = (file: string) => file.slice(SRC_DIR.length + 1);

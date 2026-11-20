@@ -437,7 +437,9 @@ export function teamChatsMode(layout: SidebarLayout): TeamChatsMode {
 
 export function setTeamChatsMode(layout: SidebarLayout, mode: TeamChatsMode): SidebarLayout {
   const next = updateSection(layout, "team", { hidden: mode === "hidden" });
-  next.separate_lists = mode === "own" ? true : undefined;
+  // Hiding them keeps which of the two lists they were in, so showing them
+  // again (the gear's switch) puts them back where they were.
+  if (mode !== "hidden") next.separate_lists = mode === "own" ? true : undefined;
   return normalizeLayout(next);
 }
 
@@ -499,7 +501,6 @@ function arrange(
     sections: SectionId[];
     hideSections?: SectionId[];
     separateLists?: boolean;
-    compact?: boolean;
   },
 ): SidebarLayout {
   const shortcuts = layout.items.filter((i) => i.kind !== "builtin");
@@ -529,9 +530,10 @@ function arrange(
     sections,
     // The start page stays, unless the preset hides the destination it is.
     home: layout.home && !opts.hide?.includes(layout.home as BuiltinId) ? layout.home : "",
-    compact: opts.compact || undefined,
     separate_lists: opts.separateLists || undefined,
-    // How much a row says is the person's choice, like their pins.
+    // How dense the rows are and how much each says is the person's choice,
+    // like their pins: a preset arranges the sidebar, it does not restyle it.
+    compact: layout.compact || undefined,
     status_off: layout.status_off || undefined,
     dates_off: layout.dates_off || undefined,
   };
@@ -566,7 +568,6 @@ export const PRESETS: Preset[] = [
       arrange(l, {
         order: ["shortcuts", "patrols", "tasks"],
         sections: ["pinned", "chats", "projects", "team"],
-        compact: true,
       }),
   },
   {

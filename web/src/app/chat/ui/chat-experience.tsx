@@ -4262,8 +4262,8 @@ export function ChatExperience({
         opener.focus();
         return;
       }
-      // Opened from the icon strip: its expand button is drawn again only
-      // once the sidebar has gone back to being the strip.
+      // The opener left the page (a control that only the open sidebar
+      // draws): the strip's own expand button is where the keyboard resumes.
       requestAnimationFrame(() => {
         const at = document.activeElement;
         if (at === document.body || (railEl?.contains(at) ?? false)) {

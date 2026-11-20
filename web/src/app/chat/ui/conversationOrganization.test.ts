@@ -24,6 +24,10 @@ import {
   removeLabel,
   visibleConversationOrder,
   type OrganizableConversation,
+  pinnedEntries,
+  pinnedProjectToken,
+  dateGroupOf,
+  groupByDate,
 } from "./conversationOrganization";
 
 const conv = (over: Partial<OrganizableConversation>): OrganizableConversation => ({
@@ -460,5 +464,70 @@ describe("sortRecent (Temporary)", () => {
     expect(
       visibleConversationOrder({ all: list, filtered: [], filtering: false, recentSort: "title" }).map((c) => c.id),
     ).toEqual(["b", "a", "d", "c"]);
+  });
+});
+
+describe("pinnedEntries (the Pinned section)", () => {
+  const chats = [{ id: "c1" }, { id: "c2" }];
+  const projects = [{ id: "p1" }, { id: "p2" }];
+
+  it("lists pinned projects, then pinned chats, until the person sets an order", () => {
+    expect(pinnedEntries(chats, projects).map((e) => e.id)).toEqual(["project:p1", "project:p2", "c1", "c2"]);
+    expect(pinnedEntries(chats, projects, []).map((e) => e.id)).toEqual(["project:p1", "project:p2", "c1", "c2"]);
+  });
+
+  it("mixes projects and chats in the saved order, a project named by its token", () => {
+    const order = ["c2", pinnedProjectToken("p2"), "c1", pinnedProjectToken("p1")];
+    const rows = pinnedEntries(chats, projects, order);
+    expect(rows.map((e) => e.id)).toEqual(order);
+    expect(rows.map((e) => e.kind)).toEqual(["chat", "project", "chat", "project"]);
+  });
+
+  it("puts what the order does not name yet above what it does, and ignores what is gone", () => {
+    const rows = pinnedEntries(chats, projects, ["c1", "gone", pinnedProjectToken("p1")]);
+    expect(rows.map((e) => e.id)).toEqual(["project:p2", "c2", "c1", "project:p1"]);
+  });
+});
+
+describe("the Chats list's date groups", () => {
+  // Local noon, so the groups are the reader's own days whatever the zone.
+  const now = new Date(2026, 10, 19, 12, 0, 0);
+  const at = (daysAgo: number, hour = 9) => new Date(2026, 10, 19 - daysAgo, hour, 0, 0).getTime() / 1000;
+
+  it("places a moment by the reader's calendar days", () => {
+    expect(dateGroupOf(at(0, 0), now)).toBe("today");
+    expect(dateGroupOf(at(0, 11), now)).toBe("today");
+    expect(dateGroupOf(at(1, 23), now)).toBe("yesterday");
+    expect(dateGroupOf(at(2), now)).toBe("week");
+    expect(dateGroupOf(at(6, 0), now)).toBe("week");
+    expect(dateGroupOf(at(7, 23), now)).toBe("older");
+    expect(dateGroupOf(0, now)).toBe("older");
+  });
+
+  it("splits a sorted list into runs, by last activity or by when the chat was started", () => {
+    const list = [
+      { id: "a", updated_at: at(0), created_at: at(9) },
+      { id: "b", updated_at: at(1), created_at: at(1) },
+      { id: "c", updated_at: at(3), created_at: at(3) },
+      { id: "d", updated_at: at(40) },
+    ];
+    expect(groupByDate(list, "activity", now)?.map((g) => [g.id, g.chats.map((c) => c.id)])).toEqual([
+      ["today", ["a"]],
+      ["yesterday", ["b"]],
+      ["week", ["c"]],
+      ["older", ["d"]],
+    ]);
+    // By start date "a" is an old chat, and one without created_at goes by its activity.
+    const byCreated = [list[1], list[2], list[0], list[3]];
+    expect(groupByDate(byCreated, "created", now)?.map((g) => [g.id, g.chats.map((c) => c.id)])).toEqual([
+      ["yesterday", ["b"]],
+      ["week", ["c"]],
+      ["older", ["a", "d"]],
+    ]);
+  });
+
+  it("an A–Z list has no dates to group by", () => {
+    expect(groupByDate([{ id: "a", updated_at: at(0) }], "title", now)).toBeNull();
+    expect(groupByDate([], "activity", now)).toEqual([]);
   });
 });

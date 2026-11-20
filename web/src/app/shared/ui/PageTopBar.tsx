@@ -93,7 +93,7 @@ export function PageTopBar({ title, subtitle, icon, onMenu, actions, support }: 
             <Icon name="menu" className="size-4" />
           </button>
           {icon ? (
-            <span aria-hidden="true" className="picker-icon-tile hidden size-9 shrink-0 sm:inline-flex">
+            <span aria-hidden="true" className="picker-icon-tile hidden size-9 shrink-0 sm:grid">
               <Icon name={icon} className="size-[1.05rem]" />
             </span>
           ) : null}
