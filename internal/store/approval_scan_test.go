@@ -70,7 +70,7 @@ func TestApprovalReadersScanIdenticalStructs_Pending(t *testing.T) {
 		"card":       func() (bool, error) { return s.SetApprovalCard(ctx, user, a.ID, `{"title":"Send"}`) },
 		"narrowable": func() (bool, error) { return s.SetApprovalNarrowableArg(ctx, user, a.ID, "to") },
 		"group":      func() (bool, error) { return s.SetApprovalGroup(ctx, user, a.ID, "turn-1") },
-		"resume":     func() (bool, error) { return s.ArmApprovalResume(ctx, user, a.ID) },
+		"resume":     func() (bool, error) { return s.ArmApprovalResume(ctx, user, a.ID, false) },
 	})
 	want, err := s.GetApproval(ctx, user, a.ID)
 	if err != nil || want == nil {

@@ -276,7 +276,7 @@ type chatStore interface {
 	// Resume after approval (docs/RESUME-AFTER-APPROVAL.md): arm a staged
 	// card of an opted-in tool, and claim the settled armed cards of a
 	// conversation into one resume queue row (or a recorded skip), atomically.
-	ArmApprovalResume(ctx context.Context, userEmail, approvalID string) (bool, error)
+	ArmApprovalResume(ctx context.Context, userEmail, approvalID string, stagedByResume bool) (bool, error)
 	ClaimApprovalResume(ctx context.Context, req store.ApprovalResumeRequest) (store.ApprovalResumeResult, error)
 	AppendApprovalResumeDroppedNotice(ctx context.Context, convID string) error
 	HasArmedApprovals(ctx context.Context, convID string) (bool, error)

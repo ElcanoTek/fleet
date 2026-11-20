@@ -7,7 +7,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
 )
@@ -34,7 +33,7 @@ func stageResume(t *testing.T, s *Store, convID, tool string, arm bool) *Approva
 		t.Fatalf("CreateApproval: %v", err)
 	}
 	if arm {
-		ok, err := s.ArmApprovalResume(ctx, resumeUser, a.ID)
+		ok, err := s.ArmApprovalResume(ctx, resumeUser, a.ID, false)
 		if err != nil || !ok {
 			t.Fatalf("ArmApprovalResume = %t, %v", ok, err)
 		}
@@ -433,18 +432,17 @@ func TestClaimApprovalResume_TimeoutOfResumeStagedCardSkipsResume(t *testing.T) 
 		t.Fatalf("first timeout claim = %+v, want a resume input", res)
 	}
 
-	now := time.Now().Unix()
-	turnID := "turn-resume-1"
-	if err := s.CreateTurn(ctx, turnID, conv.ID, now-60); err != nil {
-		t.Fatalf("CreateTurn: %v", err)
+	// The resume turn stages a card of its own; the stager arms it as staged
+	// by a resume turn.
+	stageByResume := func(tool string) *Approval {
+		t.Helper()
+		a := stageResume(t, s, conv.ID, tool, false)
+		if ok, err := s.ArmApprovalResume(ctx, resumeUser, a.ID, true); err != nil || !ok {
+			t.Fatalf("ArmApprovalResume = %t, %v", ok, err)
+		}
+		return a
 	}
-	if row, err := s.ClaimNextQueuedInput(ctx, conv.ID, turnID); err != nil || row == nil || row.ID != res.Input.ID {
-		t.Fatalf("ClaimNextQueuedInput = %+v, %v, want the resume row", row, err)
-	}
-	second := stageResume(t, s, conv.ID, "mcp_pages_create_page_from_template", true)
-	if err := s.FinishTurn(ctx, turnID, TurnStatusCompleted, now+60, false); err != nil {
-		t.Fatalf("FinishTurn: %v", err)
-	}
+	second := stageByResume("mcp_pages_create_page_from_template")
 	timeOut(second)
 	res = claimResume(t, s, conv.ID)
 	if res.Input != nil || res.Skipped != ApprovalResumeSkipTimedOut {
@@ -456,7 +454,7 @@ func TestClaimApprovalResume_TimeoutOfResumeStagedCardSkipsResume(t *testing.T) 
 
 	// A decision on a card the resume turn staged still resumes: only a
 	// timeout, which nobody saw, ends the chain.
-	third := stageResume(t, s, conv.ID, "mcp_pages_create_page_from_template", true)
+	third := stageByResume("mcp_pages_create_page_from_template")
 	if ok, err := s.ClaimApproval(ctx, resumeUser, third.ID, "rejected", "Declined by user."); err != nil || !ok {
 		t.Fatalf("ClaimApproval = %t, %v", ok, err)
 	}

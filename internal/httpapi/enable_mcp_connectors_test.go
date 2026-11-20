@@ -106,7 +106,7 @@ func (s *enableMCPTestStore) GetApproval(_ context.Context, user, id string) (*s
 	return &cp, nil
 }
 
-func (s *enableMCPTestStore) ArmApprovalResume(_ context.Context, _, id string) (bool, error) {
+func (s *enableMCPTestStore) ArmApprovalResume(_ context.Context, _, id string, _ bool) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.failArmResume {
