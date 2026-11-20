@@ -466,6 +466,8 @@ func TestGitPushFloorBareAssignment(t *testing.T) {
 		`d=${HOME}/x`, // already allowed before: dynamic then a slash
 		`out=$(git status --porcelain)`,
 		`ls | head -1; f=$(date)`,
+		`n=$(wc -l < x)`,
+		`for x in a b; do n=$(wc -l < "$x"); done`,
 		`export f=$(ls)`, // a command word, already allowed before
 		`OUT=$(ls); LATEST=$(ls -t | head -1)`,
 		`if f=$(ls); then echo "$f"; fi`,
@@ -508,6 +510,26 @@ func TestGitPushFloorBareAssignment(t *testing.T) {
 		`printf 'git push' | { f=$(bash); }`,
 		`f=$(sh) <<< 'git push origin main'`,
 		"f=$(sh) <<'EOF'\ngit push origin main\nEOF",
+		// Stdin that reaches the substitution from a redirect, an enclosing
+		// group or loop, a function call or exec.
+		`f=$(sh </tmp/push-script)`,
+		`f=$(bash 0<x)`,
+		`f=$(sh <&3)`,
+		`f=$(sh <>x)`,
+		`sh </tmp/push-script`,
+		`echo 'git push' | (sh)`,
+		`function fn { $(printf git) push; }; fn`,
+		`{ f=$(sh); } < /tmp/push-script`,
+		`{ true; f=$(sh); } <<< 'git push'`,
+		`echo 'git push' | { true; f=$(sh); }`,
+		`echo 'git push' | (f=$(sh))`,
+		`echo 'git push' | (true; f=$(sh))`,
+		`cat x | while read -r l; do f=$(sh); done`,
+		`while :; do f=$(sh); done < x`,
+		`exec < /tmp/push-script; f=$(sh)`,
+		`exec 0<x; f=$(sh /dev/stdin)`,
+		`fn() { f=$(sh); }; echo 'git push' | fn`,
+		`function fn { f=$(sh); }; fn < x`,
 		// Integer-attribute targets evaluate the value as arithmetic, whose
 		// array subscripts run commands hidden in a variable.
 		`x='a[$(git push)]'; OPTIND=$x`,

@@ -379,14 +379,15 @@ func bashCommandRunsGitPushDepth(cmd string, depth int) bool {
 	if depth > 4 {
 		return true
 	}
-	segments, subcmds := parseShellScript(cmd)
+	segments, subcmds, grouped := parseShellScript(cmd)
 	for _, sub := range subcmds {
 		if bashCommandRunsGitPushDepth(sub, depth+1) {
 			return true
 		}
 	}
 	writesPushText := anySegmentWritesPushText(segments)
-	assignOnlyOK := depth == 0 && !anySegmentMaySetVarAttributes(segments)
+	assignOnlyOK := depth == 0 && !anySegmentMaySetVarAttributes(segments) &&
+		!(anySegmentReceivesStdin(segments) && (grouped || anySegmentIsCompound(segments)))
 	for _, seg := range segments {
 		if segmentIsGitPush(seg, writesPushText, assignOnlyOK, depth) {
 			return true
@@ -470,15 +471,20 @@ type shellLexer struct {
 	tokOpaqueDyn bool
 	subcmds      []string
 	heredocs     []pendingHeredoc
+	grouped      bool
 }
 
-func parseShellScript(cmd string) ([]shellSegment, []string) {
+// parseShellScript splits a script into segments and the bodies of its
+// command and process substitutions. grouped reports a `(` or `)` at this
+// level (a subshell, a function definition, a case pattern), which can carry
+// a pipe or redirect into the segments inside it.
+func parseShellScript(cmd string) (segments []shellSegment, subcmds []string, grouped bool) {
 	l := &shellLexer{src: cmd}
 	for l.pos < len(l.src) {
 		l.stepUnquoted()
 	}
 	l.flushSeg(false)
-	return l.segments, l.subcmds
+	return l.segments, l.subcmds, l.grouped
 }
 
 func (l *shellLexer) writeLiteralByte(ch byte) {
@@ -558,7 +564,11 @@ func (l *shellLexer) flushSeg(nextPiped bool) {
 	} else {
 		l.heredocs = nil
 	}
-	l.curSeg = shellSegment{pipedStdin: nextPiped}
+	// A pipe into `(`: the empty segment between `|` and `(` is dropped, so
+	// hand its piped stdin to the first segment inside the subshell, which
+	// reads it (`echo 'git push' | (sh)`).
+	carried := !hasContent && l.curSeg.pipedStdin
+	l.curSeg = shellSegment{pipedStdin: nextPiped || carried}
 }
 
 func (l *shellLexer) stepUnquoted() {
@@ -592,6 +602,9 @@ func (l *shellLexer) stepUnquoted() {
 		l.pos++
 		l.consumePendingHeredocs()
 	case ';', '(', ')':
+		if ch != ';' {
+			l.grouped = true
+		}
 		l.flushSeg(false)
 		l.pos++
 	case '&':
@@ -991,6 +1004,11 @@ func (l *shellLexer) handleRedir() {
 	}
 	if ch == '>' {
 		l.curSeg.hasOutRedir = true
+	} else {
+		// `< file`, `<&3`, `<> file`: stdin is content the gate cannot
+		// see, so an interpreter reading it (`sh < script`) fails closed
+		// just as it does for a pipe.
+		l.curSeg.stdinDyn = true
 	}
 	l.pos++
 	if l.pos < len(l.src) && (l.src[l.pos] == '>' || l.src[l.pos] == '&' || l.src[l.pos] == '|') {
@@ -1139,7 +1157,12 @@ var assignmentLeadKeywords = map[string]bool{
 //   - a segment that receives stdin (a pipe, here-doc or here-string) is
 //     left to the normal path: with no command name, bash hands a pipe's
 //     stdin to the substitution, so `echo 'git push' | f=$(sh)` runs the
-//     piped text, and the body `sh` alone looks harmless once parsed apart;
+//     piped text, and the body `sh` alone looks harmless once parsed apart.
+//     The caller extends this to stdin that reaches the segment from
+//     around it: when any segment at this level receives stdin and the
+//     script has a group, loop, conditional, function or `exec`
+//     (`{ f=$(sh); } < f`, `cat f | while :; do f=$(sh); done`,
+//     `exec < f; f=$(sh)`), the shortcut is off for the whole level;
 //   - the value must not be evaluated as arithmetic. Assigning to a variable
 //     with the integer attribute evaluates the value, and an array subscript
 //     there runs commands (`x='a[$(git push)]'; OPTIND=$x`). Bash's own
@@ -1206,6 +1229,40 @@ func anySegmentMaySetVarAttributes(segments []shellSegment) bool {
 					return true
 				}
 			}
+		}
+	}
+	return false
+}
+
+// stdinCarryingWords are the reserved words (and `exec`) whose pipe or
+// redirect reaches commands in other segments: `{ ...; } < f`,
+// `... | while ...; do ...; done`, `exec < f`, a function body.
+var stdinCarryingWords = map[string]bool{
+	"{": true, "}": true, "if": true, "then": true, "elif": true, "else": true,
+	"fi": true, "while": true, "until": true, "for": true, "select": true,
+	"do": true, "done": true, "case": true, "esac": true, "exec": true,
+	"coproc": true, "function": true,
+}
+
+// anySegmentIsCompound reports whether any word of the script is one of
+// stdinCarryingWords, so a pipe or redirect on one segment may feed another.
+func anySegmentIsCompound(segments []shellSegment) bool {
+	for _, seg := range segments {
+		for _, tok := range seg.tokens {
+			if stdinCarryingWords[tok.val] {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// anySegmentReceivesStdin reports whether any segment is fed by a pipe, a
+// here-doc or here-string, or an input redirect.
+func anySegmentReceivesStdin(segments []shellSegment) bool {
+	for _, seg := range segments {
+		if seg.pipedStdin || seg.stdinDyn || len(seg.stdinBodies) > 0 {
+			return true
 		}
 	}
 	return false
@@ -1373,6 +1430,12 @@ func skipShellWrappers(seg shellSegment, writesPushText bool, depth int) wrapper
 		}
 		if isEnvAssignmentToken(t.val) || shellControlKeywords[t.val] {
 			i++
+			continue
+		}
+		if t.val == "function" && i+1 < len(tokens) {
+			// `function name { body; }`: the body's first command follows
+			// the name (and the `{` keyword skipped next round).
+			i += 2
 			continue
 		}
 		base := executableBaseName(t.val)
@@ -1714,7 +1777,7 @@ func gitAliasTargetRunsPush(target string, depth int) bool {
 	if strings.HasPrefix(target, "!") {
 		return bashCommandRunsGitPushDepth(strings.TrimPrefix(target, "!"), depth+1)
 	}
-	subSegs, subCmds := parseShellScript(target)
+	subSegs, subCmds, _ := parseShellScript(target)
 	for _, sc := range subCmds {
 		if bashCommandRunsGitPushDepth(sc, depth+1) {
 			return true
