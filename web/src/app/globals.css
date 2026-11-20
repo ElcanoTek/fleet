@@ -4850,12 +4850,15 @@ tr.sla-row-fail {
   /* Unselected only: a hover rule that also matched the selected option
      would outrank the selection rules and put body text on the primary
      fill. */
-  .seg-option:not([aria-pressed="true"], [aria-checked="true"], [aria-selected="true"]):hover:not(:disabled) {
+  .seg-option:not([aria-pressed="true"], [aria-checked="true"], [aria-selected="true"], [aria-current="page"]):hover:not(:disabled) {
     color: var(--color-text-primary);
   }
   .seg-option[aria-pressed="true"],
   .seg-option[aria-checked="true"],
-  .seg-option[aria-selected="true"] {
+  .seg-option[aria-selected="true"],
+  /* A segmented pair of links (the Customize panel's My sidebar / Workspace
+     default): the one for this page. */
+  .seg-option[aria-current="page"] {
     background: var(--color-primary-fill);
     color: var(--color-on-primary-fill);
   }

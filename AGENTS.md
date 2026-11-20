@@ -278,7 +278,7 @@ operator CLI (the `fleet-admin` shim was removed in ADR-0060); plus the
 `fleet-bench`, `fake-llm`, `sandbox-probe` and `web-e2e-server` harness binaries), `internal/` (`agentcore` the one run loop, `sandbox`,
 `mcp`, `creds`, `clientconfig`, `store`, `sched`, `httpapi`, `webui` the
 browser gateway, `websession`, …), `web/` (the Vite + React SPA the binary
-embeds: `/chat`, `/orchestrator`, `/settings`, `/admin`, `/help`), `deploy/` (the
+embeds: `/chat`, `/patrols`, `/orchestrator`, `/settings`, `/admin`, `/help`), `deploy/` (the
 systemd units + Caddyfile for the single-box install and the
 `deploy/helm/fleet` chart for the Kubernetes one), and `config/default/` (the
 generic client bundle baked in so fleet runs bare).

@@ -53,7 +53,7 @@ export function SidebarCustomizer() {
               <nav aria-label={tr("Which sidebar")} className="seg-fill mt-2" data-testid="sidebar-scope">
                 <span className="seg">
                   <span>
-                    <span aria-current="page" aria-selected="true" className="seg-option inline-flex items-center justify-center">
+                    <span aria-current="page" className="seg-option inline-flex items-center justify-center">
                       {tr("My sidebar")}
                     </span>
                   </span>
