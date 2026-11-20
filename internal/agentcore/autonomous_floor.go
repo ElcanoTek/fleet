@@ -1285,7 +1285,8 @@ var inertCommands = map[string]bool{
 
 // substBodyIsInert reports whether a command substitution body only runs
 // inertCommands. `sort --compress-program=PROG` runs PROG and `printf -v`
-// assigns through an evaluated subscript, so those flags are refused.
+// assigns through an evaluated subscript, so those flags, and any dynamic
+// word after sort or printf that could expand to one, are refused.
 func substBodyIsInert(body string, depth int) bool {
 	if depth > 4 {
 		return false
@@ -1324,12 +1325,15 @@ func substBodyIsInert(body string, depth int) bool {
 		if !cmd.literal || !inertCommands[cmd.val] {
 			return false
 		}
-		for _, arg := range seg.tokens[i+1:] {
-			if cmd.val == "sort" && strings.HasPrefix(arg.val, "--comp") {
-				return false
-			}
-			if cmd.val == "printf" && strings.HasPrefix(arg.val, "-v") {
-				return false
+		if cmd.val == "sort" || cmd.val == "printf" {
+			for _, arg := range seg.tokens[i+1:] {
+				// A dynamic word could be the flag itself (`sort $opt`).
+				// `--co` is the shortest unambiguous abbreviation of
+				// sort's --compress-program.
+				if arg.dynamic || (cmd.val == "sort" && strings.HasPrefix(arg.val, "--co")) ||
+					(cmd.val == "printf" && strings.HasPrefix(arg.val, "-v")) {
+					return false
+				}
 			}
 		}
 	}
