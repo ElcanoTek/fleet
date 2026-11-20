@@ -491,7 +491,10 @@ export function MenuSeparator() {
   // the ARIA menu pattern expects between groups of menuitems, so the divider
   // stays exposed to assistive tech without a hand-written role. border-0
   // cancels the UA/preflight rule so the 1px line is the h-px background only.
-  return <hr className="my-1 h-px border-0 bg-[var(--color-border)]" />;
+  // A divider separates two groups: one that would open or close the menu,
+  // or directly follow another (the group between them drew nothing for this
+  // account, e.g. the sidebar items on a read-only one), is not drawn.
+  return <hr className="my-1 h-px border-0 bg-[var(--color-border)] first:hidden last:hidden [&+hr]:hidden" />;
 }
 
 export default Menu;

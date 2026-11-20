@@ -1121,6 +1121,14 @@
 [data-rail-body] [data-tip]::after {
   display: none;
 }
+/* On a phone the sidebar is a drawer at full width, nothing in it is an
+   icon alone, and a label drawn past its edge made the drawer scroll
+   sideways. */
+@media (width < 40rem) {
+  .rail [data-tip]::after {
+    display: none;
+  }
+}
 [data-tip]:hover::after,
 [data-tip]:focus-visible::after,
 [data-tip-top]:hover::after,

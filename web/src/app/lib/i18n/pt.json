@@ -6142,5 +6142,6 @@
   "Couldn't rename the project.": "Não foi possível mudar o nome do projeto.",
   "Resize sidebar": "Redimensionar barra lateral",
   "Drag to resize the sidebar": "Arraste para redimensionar a barra lateral",
-  "patrol not found": "A patrulha não foi encontrada"
+  "patrol not found": "A patrulha não foi encontrada",
+  "Open chat: {0}": "Abrir chat: {0}"
 }

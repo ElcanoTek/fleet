@@ -11,7 +11,7 @@ import { ApprovalSegmented, PatrolForm, editBody, type PatrolFormValues } from "
 import { matchesSearch, searchTokens } from "@/app/chat/ui/conversationOrganization";
 import { conversationApiUrl } from "@/app/lib/conversationApiUrl";
 import { currentDefaultModel } from "@/app/lib/modelAliases";
-import { navigate } from "@/app/lib/navigation";
+import { Link } from "@/app/lib/Link";
 import { responseErrorText } from "@/app/lib/responseError";
 import { cadenceWithZone } from "@/app/launchpad/cadence";
 import { openPatrolWizard, usePatrolWizardOpen } from "@/app/launchpad/patrolWizard";
@@ -305,9 +305,13 @@ function PatrolCard({
             </span>
           </span>
         </button>
-        {/* Wraps under the name where the card is narrow (a phone), so no
-            control is ever pushed past the card's edge. */}
-        <div className="ml-auto flex min-w-0 max-w-full flex-wrap items-center justify-end gap-2 pb-1 pl-8 sm:pb-0 sm:pl-0">
+        {/* The row's state, then its controls. Beside the name where there
+            is room; on a phone, two lines of their own under it (state, then
+            controls at the card's right edge), the same on every card, so
+            nothing wraps differently from one patrol to the next. */}
+        <div className="ml-auto flex min-w-0 max-w-full flex-wrap items-center justify-end gap-2 pb-1 pl-[3.5rem] max-sm:w-full sm:pb-0 sm:pl-0">
+          {skipped || next ? (
+          <div className="flex min-w-0 flex-wrap items-center gap-2 max-sm:basis-full">
           {skipped ? (
             <span
               data-testid="patrol-skipped"
@@ -322,10 +326,13 @@ function PatrolCard({
           <span
             data-testid="patrol-next"
             title={!paused && nextAt > 0 ? `${formatCountdown(nextAt, now)} · ${new Date(nextAt * 1000).toLocaleString()}` : undefined}
-            className="min-w-[3.5rem] text-right font-[family-name:var(--font-code)] text-[0.75rem] text-[var(--color-text-secondary)]"
+            className="font-[family-name:var(--font-code)] text-[0.75rem] text-[var(--color-text-secondary)] sm:min-w-[3.5rem] sm:text-right"
           >
             {next}
           </span>
+          </div>
+          ) : null}
+          <div className="flex shrink-0 items-center gap-2">
           {mine ? (
             <>
               <button
@@ -357,11 +364,20 @@ function PatrolCard({
                 <Icon name={paused ? "play" : "pause"} className="size-3.5" />
               </button>
             </>
-          ) : (
-            <button type="button" className={PILL_BUTTON} onClick={() => navigate(openChatHref(patrol))}>
-              {tr("Open chat")}
-            </button>
-          )}
+          ) : null}
+          {/* The way into the patrol's chat: the last control on every row,
+              the person's own and a teammate's alike, so it sits in one
+              column down the page. A link, so it also opens in a new tab. */}
+          <Link
+            href={openChatHref(patrol)}
+            data-testid="patrol-open-chat"
+            aria-label={tr("Open chat: {0}", [patrol.conversation_title || patrol.title || tr("Untitled")])}
+            className={`${PILL_BUTTON} no-underline focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]`}
+          >
+            <Icon name="message" className="size-3.5" />
+            {tr("Open chat")}
+          </Link>
+          </div>
         </div>
       </div>
 
@@ -452,8 +468,10 @@ function PatrolCard({
             </div>
           ) : null}
 
+          {/* Editing and removing are the creator's; the way into the chat is
+              on the row itself, for everyone. */}
+          {mine ? (
           <div className="flex flex-wrap items-center gap-2">
-            {mine ? (
               <button
                 type="button"
                 disabled={busy || !detail}
@@ -467,14 +485,7 @@ function PatrolCard({
                 <Icon name="edit" className="size-3.5" />
                 {tr("Edit schedule & task")}
               </button>
-            ) : null}
-            <button type="button" className={PILL_BUTTON} onClick={() => navigate(openChatHref(patrol))}>
-              <Icon name="message" className="size-3.5" />
-              {tr("Open chat")}
-            </button>
             <span className="flex-1" />
-            {mine ? (
-              <>
                 <button
                   type="button"
                   data-testid="patrol-remove"
@@ -503,9 +514,8 @@ function PatrolCard({
                     {tr("The patrol stops for good. Click again to confirm.")}
                   </span>
                 ) : null}
-              </>
-            ) : null}
           </div>
+          ) : null}
         </div>
       ) : null}
 

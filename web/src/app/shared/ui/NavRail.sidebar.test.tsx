@@ -192,13 +192,15 @@ describe("NavRail — drag the edge to resize", () => {
   });
 
   it("resizes from the keyboard: arrows step, Home and End go to the limits, Enter resets", () => {
-    const setWidth = withWidth();
-    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({ left: 0, width: 300 } as DOMRect);
+    const setWidth = withWidth({ width: 400 });
+    // Steps are from the width the person set, never from the one being
+    // drawn while the sidebar eases to it.
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({ left: 0, width: 371 } as DOMRect);
     const handle = screen.getByTestId("rail-resize");
     fireEvent.keyDown(handle, { key: "ArrowRight" });
-    expect(setWidth).toHaveBeenLastCalledWith(316);
+    expect(setWidth).toHaveBeenLastCalledWith(416);
     fireEvent.keyDown(handle, { key: "ArrowLeft" });
-    expect(setWidth).toHaveBeenLastCalledWith(284);
+    expect(setWidth).toHaveBeenLastCalledWith(384);
     fireEvent.keyDown(handle, { key: "Home" });
     expect(setWidth).toHaveBeenLastCalledWith(RAIL_MIN_WIDTH);
     fireEvent.keyDown(handle, { key: "End" });
@@ -208,6 +210,12 @@ describe("NavRail — drag the edge to resize", () => {
     // Other keys are the page's.
     fireEvent.keyDown(handle, { key: "a" });
     expect(setWidth).toHaveBeenCalledTimes(5);
+  });
+
+  it("steps from the default width until the person has set one", () => {
+    const setWidth = withWidth();
+    fireEvent.keyDown(screen.getByTestId("rail-resize"), { key: "ArrowRight" });
+    expect(setWidth).toHaveBeenLastCalledWith(RAIL_DEFAULT_WIDTH + 16);
   });
 
   it("a double-click puts the width back to the default", () => {

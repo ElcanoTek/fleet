@@ -193,9 +193,11 @@ timers are not listed here; they stay in their chat's **Patrols & timers**.
 Each row shows the patrol's name, its schedule, how many times it has run, its
 chat's approval mode and the chat it lives in, with the time until its next
 run at the right (or **paused**). On a patrol of your own the row also has
-**Run now** and a pause or resume button. A patrol whose runs are being
-skipped because an approval card is waiting says so on its row, with the
-number of runs skipped.
+**Run now** and a pause or resume button. Every row ends with **Open chat**,
+which goes straight to the patrol's chat without opening the row, on your own
+patrols and on a teammate's alike. A patrol whose runs are being skipped
+because an approval card is waiting says so on its row, with the number of
+runs skipped.
 
 Click a row to open it:
 
@@ -208,13 +210,12 @@ Click a row to open it:
   the chat for that.
 - **Each run** shows what the patrol is asked to do every time it wakes;
   **Show full task** expands a long one.
-- **Edit schedule & task** changes the schedule, the task and the label,
-  **Open chat** goes to the patrol's chat, and **Remove patrol** stops it for
-  good and takes a second click to confirm.
+- **Edit schedule & task** changes the schedule, the task and the label, and
+  **Remove patrol** stops it for good and takes a second click to confirm.
 
-A teammate's patrol is there to read. Its row carries its owner's initial and
-offers **Open chat**; opening the row says whose it is and shows its recent
-runs. Only the person who set a patrol up can run, pause, change or remove it,
+A teammate's patrol is there to read. Its row carries its owner's initial
+and, like every row, **Open chat**; opening the row says whose it is and
+shows its recent runs. Only the person who set a patrol up can run, pause, change or remove it,
 and what it is asked to do each run is shown only to them.
 
 **New patrol**, at the top of the page, opens a form: say what to check and

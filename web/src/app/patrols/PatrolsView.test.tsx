@@ -138,15 +138,45 @@ describe("the Patrols page", () => {
     expect(within(card("pt-2")).getByTestId("patrol-next")).toHaveTextContent("paused");
   });
 
-  it("a teammate's patrol is there to read: one way into its chat, nothing to steer", async () => {
+  it("every row has the same way into its chat, without opening the row", async () => {
+    render(<Page />);
+    await waitFor(() => expect(screen.getAllByTestId("patrol-card")).toHaveLength(3));
+    // One link per row, the last control on each, mine and a teammate's alike.
+    for (const id of ["pt-1", "pt-2", "pt-3"]) {
+      const links = within(card(id)).getAllByRole("link");
+      expect(links).toHaveLength(1);
+      expect(links[0]).toHaveTextContent("Open chat");
+      const controls = Array.from(card(id).querySelectorAll("button, a"));
+      expect(controls[controls.length - 1]).toBe(links[0]);
+    }
+    // A real link (so it also opens in a new tab), named for its chat.
+    const mine = within(card("pt-1")).getByTestId("patrol-open-chat");
+    expect(mine).toHaveAttribute("href", "/chat?c=c-1");
+    expect(mine).toHaveAccessibleName("Open chat: North Peak Deal Updates");
+    // A teammate's chat shared with the team opens through the team link,
+    // which decides between the viewer and the chat.
+    expect(within(card("pt-3")).getByTestId("patrol-open-chat")).toHaveAttribute("href", "/chat?team=t-1");
+    // The row is not opened by using it.
+    fireEvent.click(mine);
+    expect(navigate).toHaveBeenLastCalledWith("/chat?c=c-1", expect.anything());
+    expect(card("pt-1").querySelector("button[aria-expanded]")).toHaveAttribute("aria-expanded", "false");
+    expect(calls.some((c) => c.url === "/api/patrols/pt-1")).toBe(false);
+  });
+
+  it("a teammate's Multiplayer chat opens as the chat itself", async () => {
+    list = [patrol({ id: "pt-4", conversation_id: "t-2", mine: false, owner_email: "roman@example.com", multiplayer: true, team_visible: true })];
+    render(<Page />);
+    await waitFor(() => expect(card("pt-4")).toBeTruthy());
+    expect(within(card("pt-4")).getByTestId("patrol-open-chat")).toHaveAttribute("href", "/chat?c=t-2");
+  });
+
+  it("a teammate's patrol is there to read: its chat, nothing to steer", async () => {
     render(<Page />);
     await waitFor(() => expect(card("pt-3")).toBeTruthy());
     const theirs = within(card("pt-3"));
     expect(theirs.queryByTestId("patrol-run-now")).toBeNull();
     expect(theirs.queryByTestId("patrol-pause")).toBeNull();
-    fireEvent.click(theirs.getByRole("button", { name: "Open chat" }));
-    // Shared with the team: the team link decides between the viewer and the chat.
-    expect(navigate).toHaveBeenLastCalledWith("/chat?team=t-1");
+    expect(theirs.getByTestId("patrol-open-chat")).toBeInTheDocument();
 
     expand("pt-3");
     await waitFor(() => expect(theirs.getByTestId("patrol-runs")).toBeInTheDocument());
@@ -154,6 +184,8 @@ describe("the Patrols page", () => {
     expect(theirs.queryByTestId("patrol-prompt")).toBeNull();
     expect(theirs.queryByTestId("patrol-edit")).toBeNull();
     expect(theirs.queryByTestId("patrol-remove")).toBeNull();
+    // Opening the row adds no second "Open chat": the one on the row is it.
+    expect(theirs.getAllByText("Open chat")).toHaveLength(1);
   });
 
   it("opening a row loads what each run is asked to do and what recently happened", async () => {

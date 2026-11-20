@@ -368,7 +368,9 @@ export function NavRail({
   const [dragging, setDragging] = useState(false);
   const setWidth = collapse.width !== undefined ? collapse.setWidth : undefined;
   const resizable = Boolean(setWidth) && !collapsed && !overlay;
-  const widthNow = () => Math.round(asideRef.current?.getBoundingClientRect().width ?? RAIL_DEFAULT_WIDTH);
+  // The width the person set, not the one being drawn: the sidebar eases to
+  // a new width, and stepping from a width still in motion made uneven steps.
+  const widthNow = () => collapse.width ?? RAIL_DEFAULT_WIDTH;
   const onResizePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (!setWidth || e.button !== 0) return;
     e.preventDefault();

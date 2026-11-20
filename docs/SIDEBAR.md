@@ -159,15 +159,18 @@ the redesign needed.
   chats, then **Shared with you**: the patrols teammates run in chats shared
   with them. A row is the one a chat's Patrols dialog shows, plus its chat:
   the name, the schedule, the run count, the approval mode, when it checks
-  next, **Run now** and pause or resume. A patrol whose runs are being
-  skipped behind an approval card says so once, in a chip.
+  next, **Run now** and pause or resume. Every row, the person's own and a
+  teammate's alike, ends with **Open chat**: a link to the patrol's chat that
+  needs no opening of the row, the last control on each so it sits in one
+  column down the page (on a phone each card has two lines under the name:
+  its state, then its controls). A patrol whose runs are being skipped behind
+  an approval card says so once, in a chip.
 - **Opening a row** reads `GET /api/patrols/{id}` and shows the approval mode
   (the chat's setting, changed here; Autonomous asks for the same acceptance
   as everywhere), **Recent runs**, what each run is asked to do, **Edit
-  schedule & task**, **Open chat** and **Remove patrol** (a second click
-  confirms).
+  schedule & task** and **Remove patrol** (a second click confirms).
 - **A teammate's patrol is there to read.** It shows whose it is, when it
-  runs and what recently happened, with one way into its chat. Only the
+  runs and what recently happened, with the same way into its chat. Only the
   person who set a patrol up can run, pause, edit or remove it (the server's
   rule), and its instructions are sent only to them.
 - **Starting one.** **New patrol** opens a form: **Runs in** a new chat
