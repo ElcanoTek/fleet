@@ -10,6 +10,7 @@ import (
 	"os/user"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/ElcanoTek/fleet/internal/store"
 )
@@ -17,15 +18,17 @@ import (
 // cmdChats implements `fleet chats` — chat administration from the host
 // (ADR-0115; the same powers as Settings -> Chats in the browser):
 //
-//	fleet chats list    [--user EMAIL] [--search TEXT] [--active-days N] [--archived] [--limit N] [--json]
+//	fleet chats list    [--user EMAIL] [--search TEXT] [--state S | --attention] [--active-days N] [--archived | --deleted] [--limit N] [--json]
+//	fleet chats people  [--user EMAIL] [--search TEXT] [--active-days N] [--archived] [--json]
 //	fleet chats show    <chat_id> [--json]
-//	fleet chats history <chat_id> [--tail N] [--tools] [--json]
+//	fleet chats history <chat_id> [--tail N] [--before ID] [--tools] [--json]
+//	fleet chats note    <chat_id> [--text TEXT | --file PATH|- | --clear] [--json]
 //	fleet chats send    <chat_id> (--message TEXT | --file PATH|-) --reason TEXT [--wait] [--timeout 10m]
 //	fleet chats stop    <chat_id> --reason TEXT [--wait]
 //	fleet chats transfer <chat_id> --to EMAIL --reason TEXT [--wait]
 //	fleet chats delete  <chat_id> --reason TEXT [--permanent --yes] [--wait]
 //	fleet chats restore <chat_id> --reason TEXT [--wait]
-//	fleet chats notice  <chat_id> --text TEXT
+//	fleet chats notice  <chat_id> --text TEXT [--json]
 //	fleet chats set     <chat_id> [--title T] [--model SLUG] [--approval-mode manual] [--archive|--unarchive] --reason TEXT
 //	fleet chats actions [<chat_id>] [--limit N] [--json]
 //	fleet chats request <request_id> [--json]
@@ -36,7 +39,9 @@ import (
 // CLI records them as admin requests and the server executes them on its next
 // scheduler pass (at most FLEET_SCHED_TICK_SECONDS, 30 s by default); --wait
 // follows the request to its end. Every change is recorded with --as (default
-// <unix user>@<host>) and announced in the chat.
+// <unix user>@<host>) and announced in the chat — except a pinned note
+// (ADR-0117), which is recorded and shown above the conversation instead of
+// being written into it.
 func cmdChats(argv []string) int {
 	if len(argv) == 0 {
 		fmt.Fprint(os.Stderr, chatsUsage)
@@ -46,6 +51,8 @@ func cmdChats(argv []string) int {
 	switch argv[0] {
 	case "list", "ls":
 		return chatsList(argv[1:], out)
+	case "people", "who":
+		return chatsPeople(argv[1:], out)
 	case "show", "get":
 		return chatsShow(argv[1:], out)
 	case "history", "transcript":
@@ -60,6 +67,8 @@ func cmdChats(argv []string) int {
 		return chatsRequest(store.AdminRequestDelete, argv[1:], os.Stdin, out, errW)
 	case "restore", "undelete":
 		return chatsRequest(store.AdminRequestRestore, argv[1:], os.Stdin, out, errW)
+	case "note":
+		return chatsNote(argv[1:], os.Stdin, out)
 	case "notice":
 		return chatsNotice(argv[1:], out)
 	case "set":
@@ -80,16 +89,23 @@ func cmdChats(argv []string) int {
 
 const chatsUsage = `fleet chats — administer any chat on this box (ADR-0115; also Settings -> Chats)
 
-  fleet chats list     [--user EMAIL] [--search TEXT] [--active-days N] [--archived | --deleted] [--limit N] [--json]
-  fleet chats show     <chat_id> [--json]                 (owner, model, approvals, patrols, queue, recent admin changes)
-  fleet chats history  <chat_id> [--tail 30] [--tools] [--json]
+  fleet chats list     [--user EMAIL] [--search TEXT] [--state attention|running|patrols|noted|archived]
+                       [--attention] [--active-days N] [--archived | --deleted] [--limit N] [--json]
+  fleet chats people   [--user EMAIL] [--search TEXT] [--active-days N] [--archived] [--json]
+                                                          (who needs help: each owner's chats, counted)
+  fleet chats show     <chat_id> [--json]                 (owner, model, approvals, attention, pinned note, waiting
+                                                           cards, patrols, queue, recent admin changes)
+  fleet chats history  <chat_id> [--tail 30] [--before ID] [--tools] [--json]
+  fleet chats note     <chat_id> [--json]                 (show the note pinned to the chat)
+  fleet chats note     <chat_id> (--text TEXT | --file PATH|-) [--json]   (pin or replace it)
+  fleet chats note     <chat_id> --clear [--json]         (remove it)
   fleet chats send     <chat_id> (--message TEXT | --file PATH|-) --reason TEXT [--wait] [--timeout 10m]
   fleet chats stop     <chat_id> --reason TEXT [--wait]   (the owner's Stop: running turn + queued inputs)
   fleet chats transfer <chat_id> --to EMAIL --reason TEXT [--wait]
   fleet chats delete   <chat_id> --reason TEXT [--wait]   (to the recycle bin: restorable for 30 days)
   fleet chats delete   <chat_id> --permanent --yes --reason TEXT [--wait]   (emergency: deleted at once, files reclaimed)
   fleet chats restore  <chat_id> --reason TEXT [--wait]   (out of the recycle bin; its patrols stay paused)
-  fleet chats notice   <chat_id> --text TEXT              (a note in the chat; the model never sees it)
+  fleet chats notice   <chat_id> --text TEXT [--json]     (a UI-only line in the chat; the model never sees it)
   fleet chats set      <chat_id> [--title T] [--model SLUG] [--approval-mode manual] [--archive|--unarchive] --reason TEXT
   fleet chats actions  [<chat_id>] [--limit 50] [--json]  (the record of admin changes)
   fleet chats request  <request_id> [--json]              (an admin request's progress)
@@ -99,11 +115,22 @@ Every change is recorded as --as (default <unix user>@<host>) and noted
 in the chat. An admin message runs as the chat's owner, with the owner's connectors, labelled
 as yours; it always runs in Manual, so anything that needs approval asks the owner. send, stop and
 transfer are carried out by the running server on its next scheduler pass (30 s by default).
+
+A chat needs attention (--attention, --state attention) when an approval card is waiting or its
+latest turn ended in an error. Answering someone else's approval cards is not an administrator action.
+--search matches the title, the owner's email or the id. A pinned note is shown to the chat's owner
+and Multiplayer participants above the conversation; it is not part of the chat's history, so the
+model never reads it. A chat carries one note: replacing it marks it unread.
 `
 
 // chatsStore is what `fleet chats` needs from the store.
 type chatsStore interface {
 	AdminListChats(ctx context.Context, f store.AdminChatFilter) ([]store.AdminChat, error)
+	AdminChatOverview(ctx context.Context, f store.AdminChatFilter) (store.AdminChatOverview, error)
+	AdminListPendingCards(ctx context.Context, convID string) ([]store.AdminPendingCard, error)
+	GetAdminNote(ctx context.Context, convID string) (*store.AdminNote, error)
+	AdminSetNote(ctx context.Context, a store.AdminActor, convID, text string) (store.AdminNote, error)
+	AdminClearNote(ctx context.Context, a store.AdminActor, convID string) (bool, error)
 	AdminGetChat(ctx context.Context, idOrPrefix string) (store.AdminChat, error)
 	AdminChatTranscript(ctx context.Context, convID string, o store.AdminTranscriptOptions) ([]store.AdminTranscriptEntry, error)
 	AdminAppendNotice(ctx context.Context, a store.AdminActor, convID, text string) error
@@ -153,7 +180,9 @@ func chatsList(argv []string, out io.Writer) int {
 	fs := flag.NewFlagSet("chats list", flag.ContinueOnError)
 	dbURL := fs.String("database-url", "", "chat Postgres DSN")
 	owner := fs.String("user", "", "only this owner's chats")
-	search := fs.String("search", "", "title or id contains")
+	search := fs.String("search", "", "title, owner's email or id contains")
+	state := fs.String("state", "", "only chats in one state: attention, running, patrols, noted or archived")
+	attention := fs.Bool("attention", false, "only chats that need attention (same as --state attention)")
 	days := fs.Int("active-days", 0, "only chats active in the last N days")
 	archived := fs.Bool("archived", false, "include archived chats")
 	deleted := fs.Bool("deleted", false, "list the recycle bin (deleted chats not yet purged)")
@@ -165,13 +194,23 @@ func chatsList(argv []string, out io.Writer) int {
 	if fs.NArg() > 0 {
 		return errf(1, "unexpected argument %q", fs.Arg(0))
 	}
+	chatState := strings.ToLower(strings.TrimSpace(*state))
+	if *attention {
+		if chatState != "" && chatState != store.AdminChatStateAttention {
+			return errf(1, "--attention means --state attention: it cannot be combined with --state %s", chatState)
+		}
+		chatState = store.AdminChatStateAttention
+	}
+	if !store.ValidAdminChatState(chatState) {
+		return errf(1, "unknown --state %q: %v", *state, store.ErrAdminChatState)
+	}
 	st, closeFn, code := openChatsStore(*dbURL)
 	if st == nil {
 		return code
 	}
 	defer closeFn()
 	chats, err := st.AdminListChats(context.Background(), store.AdminChatFilter{
-		OwnerEmail: *owner, Search: *search, ActiveWithinDays: *days, IncludeArchived: *archived, Deleted: *deleted, Limit: *limit,
+		OwnerEmail: *owner, Search: *search, State: chatState, ActiveWithinDays: *days, IncludeArchived: *archived, Deleted: *deleted, Limit: *limit,
 	})
 	if err != nil {
 		return errf(1, "list chats: %v", err)
@@ -182,6 +221,9 @@ func chatsList(argv []string, out io.Writer) int {
 	rows := make([][]string, 0, len(chats))
 	for _, c := range chats {
 		flags := []string{}
+		if len(c.Attention) > 0 {
+			flags = append(flags, "attention:"+strings.Join(c.Attention, "+"))
+		}
 		if c.TurnRunning {
 			flags = append(flags, "running")
 		}
@@ -193,6 +235,12 @@ func chatsList(argv []string, out io.Writer) int {
 		}
 		if c.QueuedInputs > 0 {
 			flags = append(flags, fmt.Sprintf("queued:%d", c.QueuedInputs))
+		}
+		switch {
+		case c.NoteSeen:
+			flags = append(flags, "note:seen")
+		case c.HasNote:
+			flags = append(flags, "note")
 		}
 		if c.Archived {
 			flags = append(flags, "archived")
@@ -209,6 +257,89 @@ func chatsList(argv []string, out io.Writer) int {
 		return errf(1, "%v", err)
 	}
 	return 0
+}
+
+// chatsPeople implements `fleet chats people`: the chats counted per owner,
+// those with chats needing attention first — the answer to "who needs help?".
+func chatsPeople(argv []string, out io.Writer) int {
+	fs := flag.NewFlagSet("chats people", flag.ContinueOnError)
+	dbURL := fs.String("database-url", "", "chat Postgres DSN")
+	owner := fs.String("user", "", "only this owner")
+	search := fs.String("search", "", "title, owner's email or id contains")
+	days := fs.Int("active-days", 0, "only chats active in the last N days")
+	archived := fs.Bool("archived", false, "count archived chats too")
+	asJSON := fs.Bool("json", false, "JSON output")
+	if err := fs.Parse(argv); err != nil {
+		return 1
+	}
+	if fs.NArg() > 0 {
+		return errf(1, "unexpected argument %q", fs.Arg(0))
+	}
+	st, closeFn, code := openChatsStore(*dbURL)
+	if st == nil {
+		return code
+	}
+	defer closeFn()
+	o, err := st.AdminChatOverview(context.Background(), store.AdminChatFilter{
+		OwnerEmail: *owner, Search: *search, ActiveWithinDays: *days, IncludeArchived: *archived,
+	})
+	if err != nil {
+		return errf(1, "people: %v", err)
+	}
+	if *asJSON {
+		return writeJSONOut(out, o)
+	}
+	rows := make([][]string, 0, len(o.People))
+	for _, p := range o.People {
+		rows = append(rows, []string{
+			p.Email, fmt.Sprint(p.Chats), fmt.Sprint(p.Attention), fmt.Sprint(p.CardsWaiting),
+			fmt.Sprint(p.Running), fmt.Sprint(p.Patrols), fmt.Sprint(p.Noted), fmtTime(p.LastActive),
+		})
+	}
+	if err := renderTable(out, []string{"PERSON", "CHATS", "ATTENTION", "CARDS", "RUNNING", "PATROLS", "NOTES", "LAST ACTIVE (UTC)"}, rows); err != nil {
+		return errf(1, "%v", err)
+	}
+	fmt.Fprintf(out, "\n%d chat(s): %d need attention, %d approval card(s) waiting, %d running, %d with patrols, %d with a note; %d archived, %d in the recycle bin\n",
+		o.Chats, o.Attention, o.CardsWaiting, o.Running, o.Patrols, o.Noted, o.Archived, o.Deleted)
+	return 0
+}
+
+// attentionText says why a chat needs attention, in words (the
+// store.AdminAttention* reasons).
+func attentionText(c store.AdminChat) string {
+	parts := make([]string, 0, len(c.Attention))
+	for _, r := range c.Attention {
+		switch r {
+		case store.AdminAttentionCardsWaiting:
+			parts = append(parts, "an approval card is waiting since "+fmtTime(c.WaitingSince)+" UTC")
+		case store.AdminAttentionTurnFailed:
+			parts = append(parts, "the latest turn ended in an error")
+		default:
+			parts = append(parts, r)
+		}
+	}
+	return strings.Join(parts, "; ")
+}
+
+// noteSeenText says whether anyone in the chat has pressed "Got it" on the
+// note's current text.
+func noteSeenText(n store.AdminNote) string {
+	if n.SeenAt == nil {
+		return "not seen yet"
+	}
+	if n.SeenBy == "" {
+		return "seen " + fmtTime(*n.SeenAt) + " UTC"
+	}
+	return "seen by " + n.SeenBy + " " + fmtTime(*n.SeenAt) + " UTC"
+}
+
+// printAdminNote prints a pinned note: who wrote it, whether it was seen, and
+// its text indented under that line.
+func printAdminNote(out io.Writer, n store.AdminNote) {
+	fmt.Fprintf(out, "pinned note (by %s via %s, %s UTC; %s):\n", n.Author, n.Via, fmtTime(n.UpdatedAt), noteSeenText(n))
+	for line := range strings.SplitSeq(n.Text, "\n") {
+		fmt.Fprintf(out, "  %s\n", line)
+	}
 }
 
 func chatsShow(argv []string, out io.Writer) int {
@@ -245,11 +376,19 @@ func chatsShow(argv []string, out io.Writer) int {
 	if err != nil {
 		return errf(1, "admin actions: %v", err)
 	}
+	note, err := st.GetAdminNote(ctx, c.ID)
+	if err != nil {
+		return errf(1, "note: %v", err)
+	}
+	cards, err := st.AdminListPendingCards(ctx, c.ID)
+	if err != nil {
+		return errf(1, "approval cards: %v", err)
+	}
 	if *asJSON {
 		for i := range patrols {
 			patrols[i].Prompt = ""
 		}
-		return writeJSONOut(out, map[string]any{"chat": c, "patrols": patrols, "queued_inputs": len(queue), "actions": actions})
+		return writeJSONOut(out, map[string]any{"chat": c, "patrols": patrols, "queued_inputs": len(queue), "actions": actions, "note": note, "pending_cards": cards})
 	}
 	fmt.Fprintf(out, "id:          %s\n", c.ID)
 	fmt.Fprintf(out, "title:       %s\n", c.Title)
@@ -263,6 +402,29 @@ func chatsShow(argv []string, out io.Writer) int {
 	fmt.Fprintf(out, "updated:     %s UTC (created %s)\n", fmtTime(c.UpdatedAt), fmtTime(c.CreatedAt))
 	fmt.Fprintf(out, "state:       running=%t archived=%t lockdown=%t multiplayer=%t team_shared=%t\n", c.TurnRunning, c.Archived, c.Lockdown, c.Multiplayer, c.TeamShared)
 	fmt.Fprintf(out, "waiting:     %d approval card(s), %d queued input(s)\n", c.PendingApprovals, len(queue))
+	if len(c.Attention) > 0 {
+		fmt.Fprintf(out, "attention:   %s\n", attentionText(c))
+	}
+	if note != nil {
+		fmt.Fprintln(out)
+		printAdminNote(out, *note)
+	}
+	if len(cards) > 0 {
+		// Seeing a card is all an administrator does with it: answering stays
+		// with the chat's people (ADR-0115).
+		fmt.Fprintln(out, "\nwaiting approval cards (only the chat's people can answer them):")
+		for _, k := range cards {
+			tool := k.Tool
+			if k.MCPServer != "" {
+				tool = k.MCPServer + "/" + k.Tool
+			}
+			expires := "does not expire"
+			if k.ExpiresAt > 0 {
+				expires = "expires " + fmtTime(k.ExpiresAt) + " UTC"
+			}
+			fmt.Fprintf(out, "  %-28s for %s, waiting since %s UTC, %s\n", truncateRunes(tool, 28), k.ForEmail, fmtTime(k.CreatedAt), expires)
+		}
+	}
 	if len(patrols) > 0 {
 		fmt.Fprintln(out, "\npatrols:")
 		for _, p := range patrols {
@@ -283,6 +445,7 @@ func chatsHistory(argv []string, out io.Writer) int {
 	fs := flag.NewFlagSet("chats history", flag.ContinueOnError)
 	dbURL := fs.String("database-url", "", "chat Postgres DSN")
 	tail := fs.Int("tail", 30, "how many of the latest entries")
+	before := fs.Int64("before", 0, "page back: only entries older than this entry id")
 	tools := fs.Bool("tools", false, "include tool calls and results")
 	asJSON := fs.Bool("json", false, "JSON output")
 	if err := fs.Parse(argv); err != nil {
@@ -291,6 +454,17 @@ func chatsHistory(argv []string, out io.Writer) int {
 	id, err := patrolIDArg(fs, lead)
 	if err != nil {
 		return errf(1, "%v", err)
+	}
+	if *before < 0 {
+		return errf(1, "--before must be an entry id (see the ids in fleet chats history --json)")
+	}
+	// The store's own bounds (default 30, at most 500), applied here too so a
+	// full page can be told from the last one.
+	if *tail <= 0 {
+		*tail = 30
+	}
+	if *tail > 500 {
+		*tail = 500
 	}
 	st, closeFn, code := openChatsStore(*dbURL)
 	if st == nil {
@@ -302,16 +476,25 @@ func chatsHistory(argv []string, out io.Writer) int {
 	if err != nil {
 		return errf(1, "chat %s: %v", id, err)
 	}
-	entries, err := st.AdminChatTranscript(ctx, c.ID, store.AdminTranscriptOptions{Tail: *tail, IncludeTools: *tools})
+	entries, err := st.AdminChatTranscript(ctx, c.ID, store.AdminTranscriptOptions{Tail: *tail, IncludeTools: *tools, BeforeID: *before})
 	if err != nil {
 		return errf(1, "history: %v", err)
 	}
 	if *asJSON {
 		return writeJSONOut(out, entries)
 	}
-	fmt.Fprintf(out, "%s — %s (owner %s), last %d entries\n\n", c.Title, c.ID, c.OwnerEmail, len(entries))
+	which := "last"
+	if *before > 0 {
+		which = fmt.Sprintf("before entry %d,", *before)
+	}
+	fmt.Fprintf(out, "%s — %s (owner %s), %s %d entries\n\n", c.Title, c.ID, c.OwnerEmail, which, len(entries))
 	for _, e := range entries {
 		fmt.Fprintf(out, "[%s] %s\n%s\n\n", fmtTime(e.CreatedAt), transcriptLabel(e, c.OwnerEmail), strings.TrimSpace(e.Text))
+	}
+	if len(entries) > 0 && len(entries) == *tail {
+		// A full page: there may be older entries (the hint is also printed
+		// when the page happens to end exactly at the chat's first entry).
+		fmt.Fprintf(out, "older entries: fleet chats history %s --before %d\n", c.ID, entries[0].ID)
 	}
 	return 0
 }
@@ -583,6 +766,7 @@ func chatsNotice(argv []string, out io.Writer) int {
 	dbURL := fs.String("database-url", "", "chat Postgres DSN")
 	as := fs.String("as", "", "record the change as this administrator")
 	text := fs.String("text", "", "the notice (required)")
+	asJSON := fs.Bool("json", false, "JSON output")
 	if err := fs.Parse(argv); err != nil {
 		return 1
 	}
@@ -606,7 +790,110 @@ func chatsNotice(argv []string, out io.Writer) int {
 	if err := st.AdminAppendNotice(ctx, cliAdminActor(*as), c.ID, *text); err != nil {
 		return errf(1, "notice: %v", err)
 	}
+	if *asJSON {
+		return writeJSONOut(out, map[string]any{"ok": true, "chat_id": c.ID})
+	}
 	fmt.Fprintf(out, "notice written to %q (%s)\n", c.Title, c.ID)
+	return 0
+}
+
+// chatsNote implements `fleet chats note`: show, pin (or replace) or clear
+// the note an administrator pins to a chat (ADR-0117). The chat's people see
+// it above the conversation; it is not written into the chat's history, so
+// the model never reads it.
+func chatsNote(argv []string, stdin io.Reader, out io.Writer) int {
+	lead, argv := splitLeadingID(argv)
+	fs := flag.NewFlagSet("chats note", flag.ContinueOnError)
+	dbURL := fs.String("database-url", "", "chat Postgres DSN")
+	as := fs.String("as", "", "record the change as this administrator (default <unix user>@<host>)")
+	text := fs.String("text", "", "pin this note, replacing any note already there")
+	file := fs.String("file", "", "read the note from a file (- for stdin)")
+	clearNote := fs.Bool("clear", false, "remove the pinned note")
+	asJSON := fs.Bool("json", false, "JSON output")
+	if err := fs.Parse(argv); err != nil {
+		return 1
+	}
+	id, err := patrolIDArg(fs, lead)
+	if err != nil {
+		return errf(1, "%v", err)
+	}
+	hasText, hasFile := flagWasSet(fs, "text"), flagWasSet(fs, "file")
+	given := 0
+	for _, on := range []bool{hasText, hasFile, *clearNote} {
+		if on {
+			given++
+		}
+	}
+	if given > 1 {
+		return errf(1, "give one of --text, --file or --clear")
+	}
+	body := *text
+	if hasFile {
+		b, err := readPromptFile(*file, stdin)
+		if err != nil {
+			return errf(1, "%v", err)
+		}
+		body = b
+	}
+	if hasText || hasFile {
+		// The store checks these too; refusing here saves opening it.
+		body = strings.TrimSpace(body)
+		if body == "" {
+			return errf(1, "%v", store.ErrAdminNoteEmpty)
+		}
+		if utf8.RuneCountInString(body) > store.MaxAdminNoteRunes {
+			return errf(1, "%v", store.ErrAdminNoteTooLong)
+		}
+	}
+	st, closeFn, code := openChatsStore(*dbURL)
+	if st == nil {
+		return code
+	}
+	defer closeFn()
+	ctx := context.Background()
+	c, err := st.AdminGetChat(ctx, id)
+	if err != nil {
+		return errf(1, "chat %s: %v", id, err)
+	}
+	switch {
+	case *clearNote:
+		cleared, err := st.AdminClearNote(ctx, cliAdminActor(*as), c.ID)
+		if err != nil {
+			return errf(1, "clear note: %v", err)
+		}
+		if *asJSON {
+			return writeJSONOut(out, map[string]any{"cleared": cleared})
+		}
+		if !cleared {
+			fmt.Fprintf(out, "no note was pinned to %q (%s)\n", c.Title, c.ID)
+			return 0
+		}
+		fmt.Fprintf(out, "note removed from %q (%s)\n", c.Title, c.ID)
+		return 0
+	case hasText || hasFile:
+		n, err := st.AdminSetNote(ctx, cliAdminActor(*as), c.ID, body)
+		if err != nil {
+			return errf(1, "note: %v", err)
+		}
+		if *asJSON {
+			return writeJSONOut(out, map[string]any{"note": n})
+		}
+		fmt.Fprintf(out, "note pinned to %q (%s): the chat's people see it above the conversation; the assistant never reads it\n", c.Title, c.ID)
+		return 0
+	}
+	n, err := st.GetAdminNote(ctx, c.ID)
+	if err != nil {
+		return errf(1, "note: %v", err)
+	}
+	if *asJSON {
+		return writeJSONOut(out, map[string]any{"note": n})
+	}
+	if n == nil {
+		fmt.Fprintf(out, "no note is pinned to %q (%s)\n", c.Title, c.ID)
+		return 0
+	}
+	fmt.Fprintf(out, "%s — %s (owner %s)\n", c.Title, c.ID, c.OwnerEmail)
+	printAdminNote(out, *n)
 	return 0
 }
 

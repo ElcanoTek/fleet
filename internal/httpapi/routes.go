@@ -172,6 +172,7 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("/admin/patrols/", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminPatrolItem)))))
 	mux.Handle("/admin/chat-requests/", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminChatRequest)))))
 	mux.Handle("/admin/chat-actions", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminChatActions)))))
+	mux.Handle("/admin/chat-overview", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminChatOverview)))))
 	mux.Handle("/admin/users", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminUsers)))))
 	mux.Handle("/admin/users/", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminUserItem)))))
 	// Team rename: relabels users.team_id + projects.team_id atomically.

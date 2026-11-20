@@ -141,6 +141,7 @@ import { TeamChatViewer } from "./TeamChatViewer";
 import { TeamLinkNotice, type TeamLinkNoticeState } from "./TeamLinkNotice";
 import { BranchOriginBanner } from "./TeamBranchBanners";
 import { ExpiringChatBanner } from "./ExpiringChatBanner";
+import { AdminNoteBanner, type AdminNoteState } from "./AdminNoteBanner";
 import { expiresInDays, retentionPolicy, useNowSeconds } from "./chatRetention";
 import { WithheldFilesContext } from "./LockedFiles";
 import { DownloadChatDialog, type DownloadOptions } from "./DownloadChatDialog";
@@ -1444,6 +1445,11 @@ export function ChatExperience({
   const [isLoadingMcpServers, setIsLoadingMcpServers] = useState(false);
   const [schedulesByConv, setSchedulesByConv] = useState<
     Map<string, ChatSchedule[]>
+  >(() => new Map());
+  // The note an administrator pinned to each chat this page has read
+  // (ADR-0117); absent when the chat has none.
+  const [adminNoteByConv, setAdminNoteByConv] = useState<
+    Map<string, AdminNoteState>
   >(() => new Map());
   // For the rail's patrol and temporary marks: what each chat's schedules,
   // where this page has read them, amount to.
@@ -2957,6 +2963,7 @@ export function ChatExperience({
           supersedes_content?: string;
         }>;
         schedules?: ChatSchedule[] | null;
+        admin_note?: AdminNoteState | null;
         ui_autosubmits?: UIAutoSubmitState[] | null;
         autonomous_accepted?: boolean;
       };
@@ -3104,6 +3111,14 @@ export function ChatExperience({
         const nextSchedules = new Map(prev);
         nextSchedules.set(data.conversation.id, data.schedules ?? []);
         return nextSchedules;
+      });
+      setAdminNoteByConv((prev) => {
+        const note = data.admin_note ?? null;
+        if (!note && !prev.has(data.conversation.id)) return prev;
+        const next = new Map(prev);
+        if (note) next.set(data.conversation.id, note);
+        else next.delete(data.conversation.id);
+        return next;
       });
       const receivedAtMs = Date.now();
       setUiAutoSubmitsByConv((prev) => {
@@ -6166,6 +6181,38 @@ export function ChatExperience({
     followApprovalResume,
   } = useTurnStream(turnStreamDeps);
 
+  const activeAdminNote =
+    activeConversationId && !isPendingKey(activeConversationId)
+      ? (adminNoteByConv.get(activeConversationId) ?? null)
+      : null;
+  // "Got it" on the pinned note: tell the server which text was read, and
+  // show the note as it then stands (an administrator may have replaced it).
+  const acknowledgeAdminNote = useCallback(
+    async (convId: string, updatedAt: number): Promise<boolean> => {
+      const url = conversationApiUrl(convId, "/admin-note");
+      if (!url) return false;
+      try {
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ updated_at: updatedAt }),
+        });
+        if (!res.ok) return false;
+        const body = (await res.json()) as { admin_note?: AdminNoteState | null };
+        setAdminNoteByConv((prev) => {
+          const next = new Map(prev);
+          if (body.admin_note) next.set(convId, body.admin_note);
+          else next.delete(convId);
+          return next;
+        });
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    [],
+  );
+
   const activeSchedules = useMemo(() => {
     const id = activeConversationId;
     if (!id || isPendingKey(id)) return [];
@@ -8362,6 +8409,18 @@ export function ChatExperience({
                   hideShareButton
                 />
               ) : null}
+            </div>
+          ) : null}
+
+          {/* A note an administrator pinned to this chat (ADR-0117). It is not
+              in the history, so the assistant never reads it. */}
+          {activeAdminNote && activeConversationId && !fullPageOverlay && !dashboardActive ? (
+            <div className="px-4 pt-2 sm:px-6">
+              <AdminNoteBanner
+                key={`${activeConversationId}:${activeAdminNote.updated_at}`}
+                note={activeAdminNote}
+                onAcknowledge={() => acknowledgeAdminNote(activeConversationId, activeAdminNote.updated_at)}
+              />
             </div>
           ) : null}
 

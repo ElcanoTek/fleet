@@ -30,7 +30,7 @@
 //	fleet sched apikey create|list|revoke|rotate|delete
 //	fleet sched task list|export|import|set-model|set-credentials|set-description|set-limits|set-owner|tag|estimate|batch-create
 //	fleet patrol list|show|set-prompt|set-schedule|pause|resume    (operator access to chat patrols; set-prompt is diffed, CAS-guarded, backed up, noticed; set-schedule previews the next runs, CAS-guarded, noticed)
-//	fleet chats list|show|history|send|stop|transfer|notice|set|actions|request   (chat administration, ADR-0115)
+//	fleet chats list|people|show|history|note|send|stop|transfer|delete|restore|notice|set|actions|request   (chat administration, ADR-0115)
 //	fleet sched trigger create|list|delete|rotate
 //	fleet sched dlq list|replay
 //	fleet sched budget list|create|delete
@@ -274,7 +274,7 @@ Users, credentials, notes:
   fleet sched apikey revoke <key-id>
   fleet sched apikey rotate <key-id> [--grace-hours 24]   (fresh secret, same type/scope; old key valid through the grace window)
   fleet sched apikey delete <key-id>
-  fleet chats list|show|history|send|stop|transfer|notice|set|actions|request   (administer any chat: ADR-0115; fleet chats --help)
+  fleet chats list|people|show|history|note|send|stop|transfer|delete|restore|notice|set|actions|request   (administer any chat: ADR-0115; fleet chats --help)
   fleet patrol list [--user EMAIL] [--conversation ID] [--timers] [--all] [--json]   (chat patrols across every user)
   fleet patrol show <schedule_id> [--json | --prompt-only]   (one patrol: owner, schedule, prompt + its sha256)
   fleet patrol set-prompt <schedule_id> --file <path|-> --expect-sha256 <hex> --reason <text> [--title T] [--notify=false] [--dry-run] [--yes]

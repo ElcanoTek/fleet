@@ -188,18 +188,69 @@ type AdminChat struct {
 	PendingApprovals int      `json:"pending_approvals"`
 	QueuedInputs     int      `json:"queued_inputs"`
 	TurnRunning      bool     `json:"turn_running"`
+	// WaitingSince is when the oldest approval card still waiting in the chat
+	// was staged (0 = no card is waiting).
+	WaitingSince int64 `json:"waiting_since,omitempty"`
+	// LastTurnStatus is how the chat's latest turn stands: running, completed,
+	// cancelled or error ("" for a chat that has never run a turn).
+	LastTurnStatus string `json:"last_turn_status,omitempty"`
+	// HasNote reports an administrator's note is pinned to the chat
+	// (ADR-0117); NoteSeen that someone in the chat has pressed "Got it".
+	HasNote  bool `json:"has_note"`
+	NoteSeen bool `json:"note_seen,omitempty"`
+	// Attention lists why the chat needs a person's attention (the
+	// AdminAttention* reasons); empty when it does not.
+	Attention []string `json:"attention,omitempty"`
 	// DeletedAt and PurgesAt are set on a chat in the recycle bin: when it was
 	// deleted, and when the tombstone purge removes it for good.
 	DeletedAt *int64 `json:"deleted_at,omitempty"`
 	PurgesAt  *int64 `json:"purges_at,omitempty"`
 }
 
+// Why a chat needs attention (AdminChat.Attention). The list is deliberately
+// short: each reason is something the chat's owner is stuck behind and an
+// administrator can see without reading the transcript.
+const (
+	// AdminAttentionCardsWaiting: an approval card is waiting for an answer.
+	// Only the chat's people can answer it (ADR-0115).
+	AdminAttentionCardsWaiting = "cards_waiting"
+	// AdminAttentionTurnFailed: the chat's latest turn ended in an error.
+	AdminAttentionTurnFailed = "turn_failed"
+)
+
+// The states AdminChatFilter.State narrows a listing to.
+const (
+	AdminChatStateAttention = "attention"
+	AdminChatStateRunning   = "running"
+	AdminChatStatePatrols   = "patrols"
+	AdminChatStateNoted     = "noted"
+	AdminChatStateArchived  = "archived"
+)
+
+// ErrAdminChatState is an AdminChatFilter.State this server does not know.
+var ErrAdminChatState = errors.New("state must be attention, running, patrols, noted or archived")
+
+// ValidAdminChatState reports whether state is one AdminListChats accepts
+// ("" lists every state).
+func ValidAdminChatState(state string) bool {
+	switch state {
+	case "", AdminChatStateAttention, AdminChatStateRunning, AdminChatStatePatrols, AdminChatStateNoted, AdminChatStateArchived:
+		return true
+	}
+	return false
+}
+
 // AdminChatFilter narrows AdminListChats.
 type AdminChatFilter struct {
 	// OwnerEmail matches the owner exactly (case-insensitive).
 	OwnerEmail string
-	// Search matches the title or id (case-insensitive substring).
+	// Search matches the title, the owner's email or the id
+	// (case-insensitive substring).
 	Search string
+	// State keeps only chats in one state (the AdminChatState* values): those
+	// needing attention, running a turn, with an active patrol, with a pinned
+	// note, or archived. "" lists every state.
+	State string
 	// ActiveWithinDays keeps chats updated in the last N days (0 = any).
 	ActiveWithinDays int
 	// IncludeArchived also lists archived chats.
@@ -218,18 +269,43 @@ const adminChatSelect = `
 	       (SELECT count(*) FROM chat.approvals a WHERE a.conversation_id = c.id AND a.status = 'pending'),
 	       (SELECT count(*) FROM chat.chat_input_queue q WHERE q.conversation_id = c.id AND q.state = 'queued' AND q.mode <> 'direct'),
 	       EXISTS (SELECT 1 FROM chat.turns t WHERE t.conversation_id = c.id AND t.status = 'running'),
-	       EXTRACT(EPOCH FROM c.deleted_at)::bigint
+	       EXTRACT(EPOCH FROM c.deleted_at)::bigint,
+	       COALESCE((SELECT min(a.created_at) FROM chat.approvals a WHERE a.conversation_id = c.id AND a.status = 'pending'), 0),
+	       ` + adminChatLastTurnSQL + `,
+	       (SELECT n.seen_at IS NOT NULL FROM chat.admin_notes n WHERE n.conversation_id = c.id)
 	  FROM chat.conversations c`
+
+// The SQL behind the states a listing filters and counts on. Each reads the
+// chat as "c"; the attention rule here and in scanAdminChat must agree.
+const (
+	adminChatLastTurnSQL = `COALESCE((SELECT t.status FROM chat.turns t WHERE t.conversation_id = c.id ORDER BY t.started_at DESC, t.turn_id DESC LIMIT 1), '')`
+	adminChatCardsSQL    = `EXISTS (SELECT 1 FROM chat.approvals a WHERE a.conversation_id = c.id AND a.status = 'pending')`
+	adminChatAttnSQL     = `(` + adminChatCardsSQL + ` OR ` + adminChatLastTurnSQL + ` = 'error')`
+	adminChatRunningSQL  = `EXISTS (SELECT 1 FROM chat.turns t WHERE t.conversation_id = c.id AND t.status = 'running')`
+	adminChatPatrolsSQL  = `EXISTS (SELECT 1 FROM sched.chat_schedules s WHERE s.conversation_id = c.id AND s.status = 'active' AND s.cron_expr <> '')`
+	adminChatNotedSQL    = `EXISTS (SELECT 1 FROM chat.admin_notes n WHERE n.conversation_id = c.id)`
+)
 
 func scanAdminChat(row interface{ Scan(dest ...any) error }) (AdminChat, error) {
 	var c AdminChat
 	var participants []byte
 	var deletedAt sql.NullInt64
+	var noteSeen sql.NullBool
 	err := row.Scan(&c.ID, &c.Title, &c.OwnerEmail, &c.Model, &c.ApprovalMode,
 		&c.Persona, &c.ProjectID, &c.Lockdown, &c.Archived,
 		&c.Multiplayer, &participants, &c.TeamShared,
 		&c.CreatedAt, &c.UpdatedAt,
-		&c.ActivePatrols, &c.PendingApprovals, &c.QueuedInputs, &c.TurnRunning, &deletedAt)
+		&c.ActivePatrols, &c.PendingApprovals, &c.QueuedInputs, &c.TurnRunning, &deletedAt,
+		&c.WaitingSince, &c.LastTurnStatus, &noteSeen)
+	if err == nil {
+		c.HasNote, c.NoteSeen = noteSeen.Valid, noteSeen.Valid && noteSeen.Bool
+		if c.PendingApprovals > 0 {
+			c.Attention = append(c.Attention, AdminAttentionCardsWaiting)
+		}
+		if c.LastTurnStatus == "error" {
+			c.Attention = append(c.Attention, AdminAttentionTurnFailed)
+		}
+	}
 	if err == nil && deletedAt.Valid {
 		d := deletedAt.Int64
 		purge := d + int64(AdminRecycleBinDays*24*3600)
@@ -256,15 +332,24 @@ func (s *Store) AdminListChats(ctx context.Context, f AdminChatFilter) ([]AdminC
 	if limit <= 0 || limit > 1000 {
 		limit = 100
 	}
+	if !ValidAdminChatState(f.State) {
+		return nil, ErrAdminChatState
+	}
 	rows, err := s.db.QueryContext(ctx, adminChatSelect+`
 		 WHERE (c.deleted_at IS NULL) <> $6
-		   AND ($1 OR $6 OR c.archived_at IS NULL)
+		   AND ($1 OR $6 OR $7 = 'archived' OR c.archived_at IS NULL)
 		   AND ($2 = '' OR lower(c.user_email) = lower($2))
-		   AND ($3 = '' OR c.title ILIKE $3 OR c.id LIKE $3)
+		   AND ($3 = '' OR c.title ILIKE $3 OR c.user_email ILIKE $3 OR c.id LIKE $3)
 		   AND ($4 = 0 OR c.updated_at >= $4)
+		   AND ($7 = ''
+		        OR ($7 = 'attention' AND `+adminChatAttnSQL+`)
+		        OR ($7 = 'running' AND `+adminChatRunningSQL+`)
+		        OR ($7 = 'patrols' AND `+adminChatPatrolsSQL+`)
+		        OR ($7 = 'noted' AND `+adminChatNotedSQL+`)
+		        OR ($7 = 'archived' AND c.archived_at IS NOT NULL))
 		 ORDER BY c.updated_at DESC, c.id
 		 LIMIT $5`,
-		f.IncludeArchived, strings.TrimSpace(f.OwnerEmail), search, since, limit, f.Deleted)
+		f.IncludeArchived, strings.TrimSpace(f.OwnerEmail), search, since, limit, f.Deleted, f.State)
 	if err != nil {
 		return nil, err
 	}
@@ -381,6 +466,9 @@ type AdminTranscriptOptions struct {
 	IncludeTools bool
 	// MaxTextRunes cuts each entry's text (default 4000; 0 keeps the default).
 	MaxTextRunes int
+	// BeforeID returns the entries older than this entry id (0 = the latest),
+	// so a reader pages back through a long chat.
+	BeforeID int64
 }
 
 // AdminChatTranscript returns the latest entries of a chat's history in
@@ -404,10 +492,10 @@ func (s *Store) AdminChatTranscript(ctx context.Context, convID string, o AdminT
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, created_at, role, type, content FROM (
 		   SELECT id, created_at, role, type, content FROM chat.messages
-		    WHERE conversation_id = $1 AND type = ANY($2)
+		    WHERE conversation_id = $1 AND type = ANY($2) AND ($4 = 0 OR id < $4)
 		    ORDER BY id DESC LIMIT $3) m
 		  ORDER BY id`,
-		convID, types, tail)
+		convID, types, tail, o.BeforeID)
 	if err != nil {
 		return nil, err
 	}
