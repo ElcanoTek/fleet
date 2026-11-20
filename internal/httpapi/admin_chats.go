@@ -278,7 +278,7 @@ func (s *Server) adminPurge(ctx context.Context, st adminChatStore, r store.Admi
 	s.sessionApprovals.Forget(r.ConversationID)
 	s.finishAdminRequest(ctx, st, r, store.AdminRequestDone, "deleted permanently; its files are reclaimed by the workspace sweep", "")
 	s.background.Go("httpapi.admin_purge_sweep", func() {
-		sctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Minute)
 		defer cancel()
 		if n, err := s.store.SweepOrphanWorkspaces(sctx, tools.WorkspaceDirForConversation("")); err != nil {
 			logging.From(sctx).Error("admin purge: workspace sweep failed", "err", safe.LogSafe(err.Error()))
