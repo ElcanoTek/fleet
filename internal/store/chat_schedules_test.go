@@ -841,6 +841,9 @@ func TestArchivePausesChatSchedules(t *testing.T) {
 	if notices := chatNoticesOf(t, s, plain.ID); len(notices) != 0 {
 		t.Fatalf("a chat without schedules got a notice: %v", notices)
 	}
+	if got := archivePausedNotice(1); !strings.Contains(got, "patrol or timer") {
+		t.Fatalf("single-schedule notice = %q", got)
+	}
 }
 
 func chatNoticesOf(t *testing.T, s *Store, convID string) []string {

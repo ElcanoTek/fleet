@@ -391,6 +391,7 @@
     "this action cannot be narrowed: approve or decline it whole",
     "this action cannot be stopped once it runs",
     "this action is not running: decline it instead",
+    "this chat is archived; unarchive it before running a patrol or timer",
     "this connection needs to be re-authorized",
     "this conversation has no active or paused patrol/timer schedules",
     "timed out waiting for the turn's input to be saved",

@@ -103,7 +103,7 @@ const NoticeArchivePausedSchedules = "archive_paused_schedules"
 
 func archivePausedNotice(n int) string {
 	if n == 1 {
-		return "Archiving this chat paused its patrol. Resume it from the Patrol bar after unarchiving."
+		return "Archiving this chat paused its schedule (a patrol or timer). Resume it from the Patrol bar after unarchiving."
 	}
 	return fmt.Sprintf("Archiving this chat paused its %d patrols and timers. Resume them from the Patrol bar after unarchiving.", n)
 }
@@ -136,9 +136,9 @@ func pauseConversationSchedulesTx(ctx context.Context, tx *sql.Tx, convID string
 		return 0, err
 	}
 	n, _ := res.RowsAffected()
-	if n == 0 {
-		return 0, nil
-	}
+	// Queued patrol turns are cancelled even when nothing was active: a Run
+	// now on a paused patrol, or a timer that completed after queueing its
+	// turn, leaves one behind.
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE chat_input_queue SET state = 'cancelled', updated_at = $1
 		  WHERE conversation_id = $2 AND state = 'queued' AND mode = 'patrol'`,
