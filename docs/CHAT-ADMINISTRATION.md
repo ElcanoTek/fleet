@@ -23,7 +23,10 @@ from the host). Operator usage is in
     edit does, so a fire claimed but not yet delivered is superseded.
   - **Queued runs are rewritten.** Runs already delivered into the chat's
     input queue (waiting behind a running turn) are rewritten to carry the new
-    instructions, so none of them runs the old ones.
+    instructions, so none of them runs the old ones. A run already running
+    finishes with the instructions it started with; the command says so.
+  - **Deleted chats.** A soft-deleted chat's patrols are neither listed nor
+    editable.
   - **Notice.** It writes a UI-only `patrol_updated` notice into the chat,
     saying the instructions changed and why. The model never sees it.
 - **Locking.** The edit locks the chat, then the schedule, the same order a

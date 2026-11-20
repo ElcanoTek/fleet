@@ -285,3 +285,60 @@ func TestAdminSetChatSchedulePromptRewritesQueuedRuns(t *testing.T) {
 		t.Fatalf("queued run message = %q", queued[0].Message)
 	}
 }
+
+// A run already claimed by the queue's drain (running) keeps its message; the
+// edit reports it instead of implying the old instructions can no longer run.
+func TestAdminSetChatSchedulePromptReportsRunningRun(t *testing.T) {
+	t.Parallel()
+	s, dsn := newTestStoreDSN(t)
+	ctx := context.Background()
+	const owner = "owner@client.example"
+	conv, err := s.CreateConversation(ctx, owner, "Workbench", "victoria", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sc, err := s.CreateChatSchedule(ctx, ChatScheduleInput{ConversationID: conv.ID, UserEmail: owner, Prompt: "old", CronExpr: "0 9 * * *"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fireDueChatSchedules(t, s, dsn, time.Unix(sc.NextRunAt+1, 0))
+	if row, err := s.ClaimNextQueuedInput(ctx, conv.ID, "turn-1"); err != nil || row == nil {
+		t.Fatalf("claim = %v, %v", row, err)
+	}
+	cur, _ := s.AdminGetChatSchedule(ctx, sc.ID)
+	_, after, err := s.AdminSetChatSchedulePrompt(ctx, AdminChatSchedulePromptEdit{ID: sc.ID, ExpectSHA256: cur.PromptSHA256, Prompt: "new"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !after.RunningWithOldPrompt || after.QueuedRunsUpdated != 0 {
+		t.Fatalf("after = running %t, rewritten %d", after.RunningWithOldPrompt, after.QueuedRunsUpdated)
+	}
+}
+
+// A soft-deleted chat's schedules are not listed, shown or editable.
+func TestAdminChatSchedulesHideDeletedChats(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	ctx := context.Background()
+	const owner = "owner@client.example"
+	conv, err := s.CreateConversation(ctx, owner, "Gone", "victoria", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sc, err := s.CreateChatSchedule(ctx, ChatScheduleInput{ConversationID: conv.ID, UserEmail: owner, Prompt: "p", CronExpr: "0 9 * * *"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE conversations SET deleted_at = now() WHERE id = $1`, conv.ID); err != nil {
+		t.Fatal(err)
+	}
+	if list, _ := s.AdminListChatSchedules(ctx, AdminChatScheduleFilter{}); len(list) != 0 {
+		t.Fatalf("listed %d schedules of a deleted chat", len(list))
+	}
+	if _, err := s.AdminGetChatSchedule(ctx, sc.ID); !errors.Is(err, ErrChatScheduleNotFound) {
+		t.Fatalf("get err = %v", err)
+	}
+	if _, _, err := s.AdminSetChatSchedulePrompt(ctx, AdminChatSchedulePromptEdit{ID: sc.ID, ExpectSHA256: PromptSHA256("p"), Prompt: "x"}); !errors.Is(err, ErrChatScheduleNotFound) {
+		t.Fatalf("edit err = %v", err)
+	}
+}

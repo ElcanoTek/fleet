@@ -63,6 +63,10 @@ type AdminChatSchedule struct {
 	// is how many of its runs were already waiting in the chat's queue and now
 	// carry the new instructions.
 	QueuedRunsUpdated int `json:"queued_runs_updated,omitempty"`
+	// RunningWithOldPrompt reports a run of the schedule that was already
+	// running when the edit landed: it finishes with the instructions it
+	// started with.
+	RunningWithOldPrompt bool `json:"running_with_old_prompt,omitempty"`
 }
 
 // AdminChatScheduleFilter narrows AdminListChatSchedules.
@@ -113,7 +117,7 @@ const adminChatScheduleSelect = `
 	       s.created_at, s.updated_at,
 	       COALESCE(c.title, ''), s.def_version, s.lease_owner IS NOT NULL
 	  FROM ` + chatSchedulesTable + ` s
-	  LEFT JOIN conversations c ON c.id = s.conversation_id`
+	  JOIN conversations c ON c.id = s.conversation_id AND c.deleted_at IS NULL`
 
 func scanAdminChatSchedule(row interface{ Scan(dest ...any) error }) (AdminChatSchedule, error) {
 	var a AdminChatSchedule
@@ -200,7 +204,9 @@ func resolveChatScheduleID(ctx context.Context, q interface {
 		return "", fmt.Errorf("%w: give the schedule id or at least its first %d characters", ErrInvalidChatSchedule, MinChatScheduleIDPrefix)
 	}
 	rows, err := q.QueryContext(ctx,
-		`SELECT id FROM `+chatSchedulesTable+` WHERE id = $1 OR id LIKE $2 ORDER BY (id = $1) DESC LIMIT 3`,
+		`SELECT s.id FROM `+chatSchedulesTable+` s
+		   JOIN conversations c ON c.id = s.conversation_id AND c.deleted_at IS NULL
+		  WHERE s.id = $1 OR s.id LIKE $2 ORDER BY (s.id = $1) DESC LIMIT 3`,
 		p, likePrefix(p))
 	if err != nil {
 		return "", err
@@ -280,7 +286,14 @@ func (s *Store) AdminSetChatSchedulePrompt(ctx context.Context, in AdminChatSche
 		}
 		return before, after, err
 	}
-	if err := lockInputQueueConversation(ctx, tx, convID); err != nil && !errors.Is(err, sql.ErrNoRows) {
+	// A chat deleted (soft-deleted, inside its restore window) keeps its
+	// schedules, but they are not an operator's to edit.
+	var liveID string
+	if err := tx.QueryRowContext(ctx,
+		`SELECT id FROM conversations WHERE id = $1 AND deleted_at IS NULL FOR UPDATE`, convID).Scan(&liveID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return before, after, ErrChatScheduleNotFound
+		}
 		return before, after, err
 	}
 	if _, err := tx.ExecContext(ctx, `SELECT 1 FROM `+chatSchedulesTable+` WHERE id = $1 FOR UPDATE`, id); err != nil {
@@ -321,6 +334,13 @@ func (s *Store) AdminSetChatSchedulePrompt(ctx context.Context, in AdminChatSche
 	if err != nil {
 		return before, after, err
 	}
+	var running bool
+	if err := tx.QueryRowContext(ctx,
+		`SELECT EXISTS (SELECT 1 FROM chat_input_queue
+		  WHERE conversation_id = $1 AND state = 'running' AND mode = 'patrol' AND client_input_id LIKE $2)`,
+		before.ConversationID, likePrefix(ChatPatrolInputKeyPrefix+before.ID+":")).Scan(&running); err != nil {
+		return before, after, err
+	}
 	if n := strings.TrimSpace(in.Notice); n != "" {
 		if err := s.appendNoticeTx(ctx, tx, before.ConversationID, NoticePatrolUpdated, n); err != nil {
 			return before, after, err
@@ -334,6 +354,7 @@ func (s *Store) AdminSetChatSchedulePrompt(ctx context.Context, in AdminChatSche
 		return before, after, err
 	}
 	after.QueuedRunsUpdated = rewritten
+	after.RunningWithOldPrompt = running
 	return before, after, nil
 }
 
