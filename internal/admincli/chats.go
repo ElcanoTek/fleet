@@ -465,6 +465,8 @@ func describeRequestPhase(r store.AdminRequest) string {
 	switch {
 	case r.State == store.AdminRequestPending:
 		return "waiting for the server to pick the request up…"
+	case r.State == store.AdminRequestRunning:
+		return "the server is carrying it out…"
 	case r.State == store.AdminRequestFailed:
 		return "failed: " + r.Result
 	case r.Kind == store.AdminRequestMessage && r.InputState == store.InputStateQueued:
@@ -617,11 +619,8 @@ func chatsSet(argv []string, out io.Writer) int {
 	if flagWasSet(fs, "approval-mode") {
 		change.ApprovalMode = mode
 	}
-	if *archive || *unarchive {
-		v := *archive
-		change.Archived = &v
-	}
-	if change.Title == nil && change.Model == nil && change.ApprovalMode == nil && change.Archived == nil {
+	settings := change.Title != nil || change.Model != nil || change.ApprovalMode != nil
+	if !settings && !*archive && !*unarchive {
 		return errf(1, "nothing to change: pass --title, --model, --approval-mode, --archive or --unarchive")
 	}
 	if strings.TrimSpace(*reason) == "" {
@@ -632,14 +631,39 @@ func chatsSet(argv []string, out io.Writer) int {
 		return code
 	}
 	defer closeFn()
-	after, err := st.AdminUpdateChat(context.Background(), cliAdminActor(*as), id, change, *reason)
-	if err != nil {
-		return errf(1, "set: %v", err)
+	ctx := context.Background()
+	actor := cliAdminActor(*as)
+	result := map[string]any{}
+	if settings {
+		after, err := st.AdminUpdateChat(ctx, actor, id, change, *reason)
+		if err != nil {
+			return errf(1, "set: %v", err)
+		}
+		result["chat"] = after
+		if !*asJSON {
+			fmt.Fprintf(out, "updated %q (%s): model %s, approvals %s\n", after.Title, after.ID, after.Model, after.ApprovalMode)
+		}
+	}
+	if *archive || *unarchive {
+		// Archiving also revokes a shared chat's participants, which only the
+		// running server can do: it is an admin request, carried out on the
+		// server's next pass.
+		payload := "unarchive"
+		if *archive {
+			payload = "archive"
+		}
+		req, err := st.CreateAdminRequest(ctx, store.AdminRequestInput{Actor: actor, Kind: store.AdminRequestArchive, ConversationID: id, Payload: payload, Reason: *reason})
+		if err != nil {
+			return errf(1, "%s: %v", payload, err)
+		}
+		result["request"] = req
+		if !*asJSON {
+			fmt.Fprintf(out, "admin request %s recorded (%s); the server carries it out on its next pass — follow it with: fleet chats request %s\n", req.ID, payload, req.ID)
+		}
 	}
 	if *asJSON {
-		return writeJSONOut(out, after)
+		return writeJSONOut(out, result)
 	}
-	fmt.Fprintf(out, "updated %q (%s): model %s, approvals %s, archived %t\n", after.Title, after.ID, after.Model, after.ApprovalMode, after.Archived)
 	return 0
 }
 

@@ -152,8 +152,12 @@ func TestChatsSetNoticeShowHistory(t *testing.T) {
 	if code := chatsSet([]string{"dfe4adc7", "--approval-mode", "manual", "--archive", "--reason", "client left", "--as", "ops@elcano.example"}, &out); code != 0 {
 		t.Fatalf("set code %d", code)
 	}
-	if len(f.updates) != 1 || f.updates[0].ApprovalMode == nil || *f.updates[0].ApprovalMode != "manual" || f.updates[0].Archived == nil || !*f.updates[0].Archived || f.updates[0].Title != nil {
+	if len(f.updates) != 1 || f.updates[0].ApprovalMode == nil || *f.updates[0].ApprovalMode != "manual" || f.updates[0].Title != nil {
 		t.Fatalf("update = %+v", f.updates)
+	}
+	// Archiving goes to the server as a request (it revokes participants).
+	if len(f.requests) != 1 || f.requests[0].Kind != store.AdminRequestArchive || f.requests[0].Payload != "archive" {
+		t.Fatalf("archive request = %+v", f.requests)
 	}
 	if f.actors[0].Email != "ops@elcano.example" {
 		t.Fatalf("actor = %+v (--as)", f.actors[0])

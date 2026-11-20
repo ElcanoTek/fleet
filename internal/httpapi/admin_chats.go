@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
@@ -35,6 +36,8 @@ type adminChatStore interface {
 	GetAdminRequest(ctx context.Context, id string) (store.AdminRequest, error)
 	ListPendingAdminRequests(ctx context.Context, limit int) ([]store.AdminRequest, error)
 	FinishAdminRequest(ctx context.Context, id, state, result string) (bool, error)
+	ClaimAdminRequest(ctx context.Context, id string) (bool, error)
+	FailStaleAdminRequests(ctx context.Context, olderThan time.Duration) (int, error)
 	QueueAdminMessage(ctx context.Context, requestID string) (store.InputQueueRow, bool, error)
 	AdminListChatSchedules(ctx context.Context, f store.AdminChatScheduleFilter) ([]store.AdminChatSchedule, error)
 	AdminGetChatSchedule(ctx context.Context, idOrPrefix string) (store.AdminChatSchedule, error)
@@ -45,6 +48,15 @@ type adminChatStore interface {
 func (s *Server) adminChats() (adminChatStore, bool) {
 	st, ok := s.store.(adminChatStore)
 	return st, ok
+}
+
+// unattendedTurn reports a turn nobody is at the owner's keyboard for that
+// fleet must not treat as the owner's own: a patrol run, or a message an
+// administrator sent (ADR-0115). Such a turn arms no show_ui auto-submit
+// countdown, offers no optional connectors, and reads the Autonomous note
+// without them.
+func unattendedTurn(inputKind string) bool {
+	return inputKind == agent.InputKindChatPatrol || inputKind == agent.InputKindAdminMessage
 }
 
 // adminSenderKey carries the administrator who wrote an admin message from
@@ -70,6 +82,11 @@ func adminSenderFrom(ctx context.Context) string {
 // adminRequestBatch bounds how many pending requests one pass carries out.
 const adminRequestBatch = 20
 
+// adminRequestStaleAfter is how long a claimed stop / transfer / archive may
+// stay running before the sweep settles it as interrupted (a transfer waits at
+// most transferWorkspaceWait; nothing legitimate runs this long).
+const adminRequestStaleAfter = 10 * time.Minute
+
 // ExecuteAdminRequests carries out pending admin requests. The scheduler's
 // chat pass calls it (through KickQueuedChatScheduleTurns) every tick, which
 // is how a request `fleet chats` wrote on the host reaches the running
@@ -78,6 +95,11 @@ func (s *Server) ExecuteAdminRequests(ctx context.Context) {
 	st, ok := s.adminChats()
 	if !ok || s.shuttingDown.Load() || UpdateDrainActive() {
 		return
+	}
+	if n, err := st.FailStaleAdminRequests(ctx, adminRequestStaleAfter); err != nil {
+		logging.From(ctx).Error("admin requests: settle stale failed", "err", safe.LogSafe(err.Error()))
+	} else if n > 0 {
+		logging.From(ctx).Warn("admin requests: settled interrupted requests as failed", "count", n)
 	}
 	reqs, err := st.ListPendingAdminRequests(ctx, adminRequestBatch)
 	if err != nil {
@@ -103,6 +125,28 @@ func (s *Server) executeAdminRequest(ctx context.Context, st adminChatStore, r s
 			s.maybeDrainQueue(r.ConversationID)
 			log.Info("admin requests: message queued", "input_id", row.ID)
 		}
+	case store.AdminRequestStop, store.AdminRequestTransfer, store.AdminRequestArchive:
+		// Claimed first: the browser path and the scheduler sweep can both
+		// reach a pending request, and these act exactly once.
+		ok, err := st.ClaimAdminRequest(ctx, r.ID)
+		if err != nil {
+			log.Error("admin requests: claim failed", "err", safe.LogSafe(err.Error()))
+			return
+		}
+		if !ok {
+			return
+		}
+		s.executeClaimedAdminRequest(ctx, st, r)
+	default:
+		s.finishAdminRequest(ctx, st, r, store.AdminRequestFailed, "unknown request kind", "")
+	}
+}
+
+// executeClaimedAdminRequest carries out a stop, transfer or archive this
+// process has claimed.
+func (s *Server) executeClaimedAdminRequest(ctx context.Context, st adminChatStore, r store.AdminRequest) {
+	log := logging.From(ctx).With("admin_request", r.ID, "kind", r.Kind, "conv_id", safe.LogSafe(r.ConversationID))
+	switch r.Kind {
 	case store.AdminRequestStop:
 		running := s.adminStopConversation(ctx, r.ConversationID)
 		result := "nothing was running; queued inputs cancelled"
@@ -115,7 +159,8 @@ func (s *Server) executeAdminRequest(ctx context.Context, st adminChatStore, r s
 		conv, err := s.store.GetConversationOwnerAndMultiplayer(ctx, r.ConversationID)
 		if err != nil {
 			log.Error("admin requests: transfer read failed", "err", safe.LogSafe(err.Error()))
-			return // stays pending; the next pass retries
+			s.finishAdminRequest(ctx, st, r, store.AdminRequestFailed, "could not read the chat; ask again", "")
+			return
 		}
 		if conv == nil {
 			s.finishAdminRequest(ctx, st, r, store.AdminRequestFailed, "the chat no longer exists", "")
@@ -129,8 +174,28 @@ func (s *Server) executeAdminRequest(ctx context.Context, st adminChatStore, r s
 		s.finishAdminRequest(ctx, st, r, store.AdminRequestDone,
 			fmt.Sprintf("transferred from %s to %s (%d patrols moved, %d paused)", res.FromEmail, res.ToEmail, res.PatrolsMoved, res.PatrolsPaused),
 			fmt.Sprintf("An administrator transferred this chat from %s to %s. Reason: %s", res.FromEmail, res.ToEmail, r.Reason))
-	default:
-		s.finishAdminRequest(ctx, st, r, store.AdminRequestFailed, "unknown request kind", "")
+	case store.AdminRequestArchive:
+		archive := r.Payload == "archive"
+		conv, err := s.store.GetConversationOwnerAndMultiplayer(ctx, r.ConversationID)
+		if err != nil || conv == nil {
+			s.finishAdminRequest(ctx, st, r, store.AdminRequestFailed, "the chat no longer exists", "")
+			return
+		}
+		// The owner's archive path (handleConversationArchive): archiving
+		// unshares the chat, so its participants lose their turns, queued
+		// inputs, approvals and live streams with it.
+		if err := s.store.SetArchived(ctx, conv.UserEmail, conv.ID, archive); err != nil {
+			log.Error("admin requests: archive failed", "err", safe.LogSafe(err.Error()))
+			s.finishAdminRequest(ctx, st, r, store.AdminRequestFailed, "archive failed", "")
+			return
+		}
+		what := "restored this chat from the archive"
+		if archive {
+			s.enforceMultiplayerRevocation(ctx, conv.ID, &store.Conversation{UserEmail: conv.UserEmail}, nil)
+			what = "archived this chat"
+		}
+		s.finishAdminRequest(ctx, st, r, store.AdminRequestDone, strings.TrimSuffix(what, " this chat")+" the chat",
+			fmt.Sprintf("An administrator %s. Reason: %s", what, r.Reason))
 	}
 }
 
@@ -334,12 +399,41 @@ func (s *Server) adminChatPatch(w http.ResponseWriter, r *http.Request, st admin
 	if !decodeJSONBody(w, r, &body) {
 		return
 	}
-	after, err := st.AdminUpdateChat(r.Context(), s.adminActor(r), chat.ID, store.AdminChatChange{
-		Title: body.Title, Model: body.Model, ApprovalMode: body.ApprovalMode, Archived: body.Archived,
-	}, body.Reason)
-	if err != nil {
-		adminChatError(w, err)
+	change := store.AdminChatChange{Title: body.Title, Model: body.Model, ApprovalMode: body.ApprovalMode}
+	archive := body.Archived != nil && *body.Archived != chat.Archived
+	if archive && strings.TrimSpace(body.Reason) == "" {
+		http.Error(w, "a reason is required: it is recorded and shown in the chat", http.StatusBadRequest)
 		return
+	}
+	after := chat
+	if change.Title != nil || change.Model != nil || change.ApprovalMode != nil {
+		var err error
+		if after, err = st.AdminUpdateChat(r.Context(), s.adminActor(r), chat.ID, change, body.Reason); err != nil {
+			adminChatError(w, err)
+			return
+		}
+	}
+	if archive {
+		payload := "unarchive"
+		if *body.Archived {
+			payload = "archive"
+		}
+		req, err := st.CreateAdminRequest(r.Context(), store.AdminRequestInput{
+			Actor: s.adminActor(r), Kind: store.AdminRequestArchive, ConversationID: chat.ID, Payload: payload, Reason: body.Reason,
+		})
+		if err != nil {
+			adminChatError(w, err)
+			return
+		}
+		ctx := context.WithoutCancel(r.Context())
+		s.executeAdminRequest(ctx, st, req)
+		if got, gerr := st.GetAdminRequest(ctx, req.ID); gerr == nil && got.State == store.AdminRequestFailed {
+			http.Error(w, "archive failed: "+got.Result, http.StatusConflict)
+			return
+		}
+		if fresh, gerr := st.AdminGetChat(ctx, chat.ID); gerr == nil {
+			after = fresh
+		}
 	}
 	writeJSON(w, r, map[string]any{"chat": after})
 }
@@ -362,7 +456,7 @@ func (s *Server) adminChatRequest(w http.ResponseWriter, r *http.Request, st adm
 		payload = body.ToEmail
 	case store.AdminRequestStop:
 	default:
-		http.Error(w, "kind must be message, stop or transfer", http.StatusBadRequest)
+		http.Error(w, "kind must be message, stop or transfer (archive through PATCH)", http.StatusBadRequest)
 		return
 	}
 	req, err := st.CreateAdminRequest(r.Context(), store.AdminRequestInput{

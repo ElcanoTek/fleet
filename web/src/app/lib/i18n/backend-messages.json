@@ -249,7 +249,7 @@
     "invalid user identity",
     "items is required",
     "kind and id query params required",
-    "kind must be message, stop or transfer",
+    "kind must be message, stop or transfer (archive through PATCH)",
     "labels must be non-empty",
     "limit must be a positive integer",
     "lockdown is unavailable on this server (no sandbox image configured)",

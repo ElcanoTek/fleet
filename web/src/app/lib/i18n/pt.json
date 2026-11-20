@@ -6109,8 +6109,9 @@
   "a reason is required: it is recorded and shown in the chat": "é preciso um motivo: ele é registrado e mostrado no chat",
   "change the instructions or the status, not both at once": "altere as instruções ou o status, não os dois ao mesmo tempo",
   "chat administration is not available": "a administração de chats não está disponível",
-  "kind must be message, stop or transfer": "kind deve ser message, stop ou transfer",
+  "kind must be message, stop or transfer (archive through PATCH)": "kind deve ser message, stop ou transfer (archive é feito com PATCH)",
   "nothing to change: send prompt (with expect_sha256) or status": "nada para alterar: envie prompt (com expect_sha256) ou status",
   "the patrol's instructions changed since you opened them; reload and edit again": "as instruções da patrulha mudaram desde que você as abriu; recarregue e edite de novo",
-  "A Lockdown chat keeps its model.": "Um chat em Lockdown mantém seu modelo."
+  "A Lockdown chat keeps its model.": "Um chat em Lockdown mantém seu modelo.",
+  "The server is carrying it out…": "O servidor está executando…"
 }

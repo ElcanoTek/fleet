@@ -207,3 +207,42 @@ func TestAdminPatrolRoutes(t *testing.T) {
 		t.Fatalf("actions = %+v, %v", actions, err)
 	}
 }
+
+// Archiving from the admin page goes through the owner's archive path as a
+// claimed request, and is recorded and noted.
+func TestAdminChatArchive(t *testing.T) {
+	_, st, _, h := adminChatsFixture(t)
+	ctx := context.Background()
+	conv, err := st.CreateConversation(ctx, "owner@x", "Old work", "victoria", "m1", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec := adminDo(t, h, "admin@x", http.MethodPatch, "/admin/chats/"+conv.ID, `{"archived":true}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("archive without reason = %d", rec.Code)
+	}
+	rec := adminDo(t, h, "admin@x", http.MethodPatch, "/admin/chats/"+conv.ID, `{"archived":true,"title":"Old work (done)","reason":"client finished"}`)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"archived":true`) || !strings.Contains(rec.Body.String(), "Old work (done)") {
+		t.Fatalf("archive = %d %s", rec.Code, rec.Body.String())
+	}
+	acts, _ := st.ListAdminActions(ctx, conv.ID, 10)
+	kinds := map[string]bool{}
+	for _, a := range acts {
+		kinds[a.Action] = true
+	}
+	if !kinds["update"] || !kinds["request_archive"] {
+		t.Fatalf("actions = %+v", acts)
+	}
+}
+
+func TestUnattendedTurnKinds(t *testing.T) {
+	for kind, want := range map[string]bool{
+		agent.InputKindChatPatrol:     true,
+		agent.InputKindAdminMessage:   true,
+		agent.InputKindApprovalResume: false,
+		"":                            false,
+	} {
+		if got := unattendedTurn(kind); got != want {
+			t.Errorf("unattendedTurn(%q) = %t, want %t", kind, got, want)
+		}
+	}
+}

@@ -20,8 +20,10 @@ Operator tools for looking after chats that belong to someone else
     `admin_message`.
   - Stop is the owner's Stop. Transfer is the owner's transfer: one function,
     `transferConversation`, which both paths call.
-- **Settings.** Title, model (not on a Lockdown chat), approval mode (manual or
-  auto only), and archive.
+- **Settings.** Title (manual rename path), model (not on a Lockdown chat) and
+  approval mode (manual or auto only), validated together before any is
+  written. Archive is a server request, because it revokes a shared chat's
+  participants.
 - **Notices.** UI-only notes in the chat.
 - **Accountability.** Every change takes a reason, is recorded in
   `chat.admin_actions` with its actor and surface, and is announced in the

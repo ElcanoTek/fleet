@@ -949,7 +949,9 @@ takes `--reason`, is recorded in `chat.admin_actions` as `--as` (default
   pass (`FLEET_SCHED_TICK_SECONDS`, 30 s by default). `--wait` follows it to
   the end; for a message it waits for the turn and prints the reply.
 - **set** can change the approval mode to `manual` or `auto` only. Autonomous
-  is the owner's own decision. A Lockdown chat keeps its model.
+  is the owner's own decision. A Lockdown chat keeps its model. `--archive` /
+  `--unarchive` are carried out by the server like `stop` (archiving also
+  revokes a shared chat's participants); follow them with `fleet chats request`.
 - Deleting a chat and answering someone else's approval cards are not
   administrator actions.
 

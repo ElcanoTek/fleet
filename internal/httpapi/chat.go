@@ -1575,7 +1575,7 @@ func (s *Server) prepareTurnExecutionContext(
 	turnStager := s.newTurnStager(turnCtx, conv, user, buf)
 	turnStager.inputKind = inputKind
 	var availableOptional []agent.OptionalServerInfo
-	if inputKind != agent.InputKindChatPatrol {
+	if !unattendedTurn(inputKind) {
 		availableOptional = s.availableOptionalConnectorsForUser(turnCtx, user, conv.MCPAccounts)
 		turnCtx = tools.WithEnableMCPConnectorsHandler(turnCtx, s.newEnableMCPConnectorsHandler(conv, user, buf, turnStager, availableOptional))
 	}
@@ -1612,7 +1612,7 @@ func (s *Server) appendTurnApprovalModeContext(ctx context.Context, injectedCont
 	var note string
 	switch s.effectiveOwnerApprovalMode(ctx, ownerEmail, conv) {
 	case store.ConversationApprovalAutonomous:
-		if inputKind == agent.InputKindChatPatrol {
+		if unattendedTurn(inputKind) {
 			note = "[Conversation approval mode: autonomous. Bundle-configured critical tools and self-addressed emails to the owner run without asking and record receipt cards in chat; external emails/chats/invites, recurring schedules, connector_studio probes/writes, destructive storage/permission actions, bundle-blocked tools, and git push still stage an approval card.]"
 		} else {
 			note = "[Conversation approval mode: autonomous. Bundle-configured critical tools, optional connectors, self-addressed emails to the owner, and eligible prefilled show_ui forms (after a 10s server countdown) run without asking and record receipt cards in chat; external emails/chats/invites, recurring schedules (schedule_task, manage_tasks, chat_patrol create/update), connector_studio probes/writes, destructive storage/permission actions, bundle-blocked tools, and git push still stage an approval card.]"

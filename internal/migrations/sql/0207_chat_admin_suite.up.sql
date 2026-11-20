@@ -7,7 +7,7 @@
 --    mode ('admin') and the administrator's email (sender_email), which the
 --    turn records on the user entry so every reader sees who wrote it.
 -- 2. Requests that only the running server can carry out (send a message,
---    stop a turn, transfer a chat) go through chat.admin_requests: the CLI,
+--    stop a turn, transfer or archive a chat) go through chat.admin_requests: the CLI,
 --    which talks to the database and not to the server, writes the request,
 --    and the server executes it on its next scheduler pass with the same code
 --    its own routes use (the web admin page executes it at once).
@@ -42,11 +42,11 @@ CREATE TABLE IF NOT EXISTS chat.admin_requests (
     updated_at      BIGINT NOT NULL,
     actor           TEXT NOT NULL,
     via             TEXT NOT NULL CHECK (via IN ('cli', 'web')),
-    kind            TEXT NOT NULL CHECK (kind IN ('message', 'stop', 'transfer')),
+    kind            TEXT NOT NULL CHECK (kind IN ('message', 'stop', 'transfer', 'archive')),
     conversation_id TEXT NOT NULL,
     payload         TEXT NOT NULL DEFAULT '',
     reason          TEXT NOT NULL DEFAULT '',
-    state           TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('pending', 'done', 'failed')),
+    state           TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('pending', 'running', 'done', 'failed')),
     result          TEXT NOT NULL DEFAULT '',
     input_id        TEXT NOT NULL DEFAULT ''
 );

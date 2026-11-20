@@ -34,8 +34,15 @@ const (
 	AdminRequestMessage  = "message"
 	AdminRequestStop     = "stop"
 	AdminRequestTransfer = "transfer"
+	// AdminRequestArchive archives (payload "archive") or restores
+	// (payload "unarchive") a chat through the owner's archive path, which
+	// also revokes a shared chat's participants.
+	AdminRequestArchive = "archive"
 
 	AdminRequestPending = "pending"
+	// AdminRequestRunning is a stop, transfer or archive a server process
+	// has claimed and is carrying out, so no other process carries it out too.
+	AdminRequestRunning = "running"
 	AdminRequestDone    = "done"
 	AdminRequestFailed  = "failed"
 )
@@ -459,15 +466,18 @@ type AdminChatChange struct {
 	// without a card and is the owner's own decision (it needs their
 	// acceptance), so an administrator can never turn it on.
 	ApprovalMode *string
-	Archived     *bool
 }
+
+// Archiving is not an AdminChatChange: it must also revoke a shared chat's
+// participants, which only the running server can do, so it is an
+// AdminRequestArchive.
 
 func (c AdminChatChange) empty() bool {
-	return c.Title == nil && c.Model == nil && c.ApprovalMode == nil && c.Archived == nil
+	return c.Title == nil && c.Model == nil && c.ApprovalMode == nil
 }
 
-// AdminUpdateChat applies an admin change to a chat's title, model, approval
-// mode or archive state, records it, and writes a notice into the chat. It
+// AdminUpdateChat applies an admin change to a chat's title, model or
+// approval mode, records it, and writes a notice into the chat. It
 // returns the chat as it is afterwards.
 func (s *Store) AdminUpdateChat(ctx context.Context, a AdminActor, convID string, c AdminChatChange, reason string) (AdminChat, error) {
 	if err := a.validate(); err != nil {
@@ -526,14 +536,6 @@ func (s *Store) AdminUpdateChat(ctx context.Context, a AdminActor, convID string
 		if m != cur.ApprovalMode {
 			steps = append(steps, step{"set the chat's approvals to " + m, func() error { return s.SetApprovalMode(ctx, owner, cur.ID, m) }})
 		}
-	}
-	if c.Archived != nil && *c.Archived != cur.Archived {
-		archive := *c.Archived
-		what := "restored the chat from the archive"
-		if archive {
-			what = "archived the chat"
-		}
-		steps = append(steps, step{what, func() error { return s.SetArchived(ctx, owner, cur.ID, archive) }})
 	}
 	if len(steps) == 0 {
 		return cur, nil
@@ -639,6 +641,10 @@ func (s *Store) CreateAdminRequest(ctx context.Context, in AdminRequestInput) (A
 		payload = strings.ToLower(payload)
 	case AdminRequestStop:
 		payload = ""
+	case AdminRequestArchive:
+		if payload != "archive" && payload != "unarchive" {
+			return AdminRequest{}, errors.New(`an archive request's payload is "archive" or "unarchive"`)
+		}
 	default:
 		return AdminRequest{}, fmt.Errorf("unknown admin request kind %q", in.Kind)
 	}
@@ -726,14 +732,47 @@ func (s *Store) ListPendingAdminRequests(ctx context.Context, limit int) ([]Admi
 	return out, rows.Err()
 }
 
-// FinishAdminRequest settles a pending request. It reports false when the
-// request was no longer pending (another server process settled it first).
+// ClaimAdminRequest marks a pending request running for the caller, so a stop,
+// transfer or archive is carried out by exactly one server process (the
+// browser path and the scheduler sweep may both reach it). It reports false
+// when the request was no longer pending.
+func (s *Store) ClaimAdminRequest(ctx context.Context, id string) (bool, error) {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE chat.admin_requests SET state = 'running', updated_at = $2 WHERE id = $1 AND state = 'pending'`,
+		id, time.Now().Unix())
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
+}
+
+// FailStaleAdminRequests settles requests a server process claimed and never
+// finished (it stopped part-way) as failed, rather than carrying a transfer or
+// archive out a second time blind. It returns how many it settled.
+func (s *Store) FailStaleAdminRequests(ctx context.Context, olderThan time.Duration) (int, error) {
+	now := time.Now()
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE chat.admin_requests
+		    SET state = 'failed', result = 'interrupted: the server stopped while carrying it out; check the chat and ask again if needed', updated_at = $1
+		  WHERE state = 'running' AND updated_at < $2`,
+		now.Unix(), now.Add(-olderThan).Unix())
+	if err != nil {
+		return 0, err
+	}
+	n, err := res.RowsAffected()
+	return int(n), err
+}
+
+// FinishAdminRequest settles a pending or claimed request. It reports false
+// when the request was already settled (another server process settled it
+// first).
 func (s *Store) FinishAdminRequest(ctx context.Context, id, state, result string) (bool, error) {
 	if state != AdminRequestDone && state != AdminRequestFailed {
 		return false, fmt.Errorf("invalid admin request state %q", state)
 	}
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE chat.admin_requests SET state = $2, result = $3, updated_at = $4 WHERE id = $1 AND state = 'pending'`,
+		`UPDATE chat.admin_requests SET state = $2, result = $3, updated_at = $4 WHERE id = $1 AND state IN ('pending', 'running')`,
 		id, state, pgtext.Content(result), time.Now().Unix())
 	if err != nil {
 		return false, err

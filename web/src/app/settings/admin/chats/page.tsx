@@ -388,6 +388,7 @@ function useRequestFollower(onDone: () => void) {
       const describe = (r: AdminRequest): [string, boolean] => {
         if (r.state === "failed") return [tr("Failed: {0}", [r.result ?? ""]), true];
         if (r.state === "pending") return [tr("Waiting for the server…"), false];
+        if (r.state === "running") return [tr("The server is carrying it out…"), false];
         if (r.kind !== "message") return [tr("Done: {0}", [r.result ?? ""]), true];
         if (r.input_state === "queued") return [tr("Queued in the chat (waits for any running turn)…"), false];
         if (r.input_state === "running") return [tr("The turn is running…"), false];

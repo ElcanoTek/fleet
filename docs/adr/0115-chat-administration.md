@@ -61,15 +61,21 @@ Add chat administration, with one store layer and two ways in:
     footer saying the owner did not write them.
   - Any approval card the turn stages goes to the owner. Administrators cannot
     answer someone else's cards.
-  - Like the other fleet-started kinds, an admin turn counts as unattended:
-    there is no model-upgrade suggestion, no memory auto-index and no
-    escalation classifier.
+  - Like a patrol run, an admin turn counts as unattended: there is no
+    model-upgrade suggestion, no memory auto-index, no escalation classifier,
+    no optional-connector offer, and no show_ui auto-submit countdown in an
+    Autonomous chat, because the owner is not there.
 - **Stop a chat.** This is the owner's Stop (scope all): the running turn, the
   queued inputs and the auto-submits.
 - **Transfer a chat.** This is the owner's transfer, with the same refusals and
   the same clean-up afterwards. The handler's logic now lives in
   `transferConversation`, which both paths call.
-- **Change settings.** Title, model, approval mode and archive state:
+- **Archive or restore a chat.** This is the owner's archive path, which also
+  revokes a shared chat's participants (their turns, queued inputs, approvals
+  and live streams), so it is carried out by the running server like a stop.
+- **Change settings.** Title (through the manual rename path, which also
+  renames a title the owner locked), model and approval mode. The whole change
+  is validated before any of it is written:
   - The approval mode may only be set to **manual** or **auto**. Autonomous
     runs SSP writes without a card and needs the owner's own acceptance, so an
     administrator can never turn it on.
@@ -94,17 +100,22 @@ with a UI-only notice. The CLI records the actor given with `--as` (default
 
 ### What the running server must do
 
-A message, a stop and a transfer need the running server: a turn, a running
-turn's cancellation, a transfer's clean-up. A message also needs the input
+A message, a stop, a transfer and an archive need the running server: a
+turn, a running turn's cancellation, the clean-up after a transfer or an
+archive. A message also needs the input
 queue's in-memory acceptance order (the counter Stop compares against).
 
 So the CLI, which talks to the database and not to the server, records these
-three as rows in `chat.admin_requests`. The server carries them out on its next
+four as rows in `chat.admin_requests`. The server carries them out on its next
 scheduler pass (`KickQueuedChatScheduleTurns`, every `FLEET_SCHED_TICK_SECONDS`,
 30 s by default), with the same code its own routes use:
 
 - A message is queued under the request's row lock, in the same transaction
   that marks the request done, so it is queued exactly once.
+- A stop, transfer or archive is claimed (`running`) before it is carried out,
+  so the browser path and the scheduler sweep never both act on it. A claim
+  left running for 10 minutes (the server stopped part-way) is settled as
+  failed, not carried out again blind.
 - The browser path records the same request and executes it at once.
 - `fleet chats send --wait` follows the request to the end of its turn and
   prints the reply.

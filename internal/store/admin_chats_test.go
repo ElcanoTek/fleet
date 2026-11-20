@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
 )
@@ -103,17 +104,12 @@ func TestAdminUpdateChat(t *testing.T) {
 	if _, err := s.AdminUpdateChat(ctx, cliAdmin, c.ID, AdminChatChange{Model: &bad}, "r"); err == nil {
 		t.Fatal("a model with a space must be refused")
 	}
-	yes := true
-	if got, err := s.AdminUpdateChat(ctx, cliAdmin, c.ID, AdminChatChange{Archived: &yes}, "done"); err != nil || !got.Archived {
-		t.Fatalf("archive = %+v, %v", got, err)
-	}
-
 	_, notices := chatNotices(t, s, c.ID)
-	if len(notices) != 2 || notices[0].Kind != NoticeAdminUpdated || !strings.Contains(notices[0].Text, `renamed the chat to "New title"`) || !strings.Contains(notices[0].Text, "Reason: client asked") {
+	if len(notices) != 1 || notices[0].Kind != NoticeAdminUpdated || !strings.Contains(notices[0].Text, `renamed the chat to "New title"`) || !strings.Contains(notices[0].Text, "Reason: client asked") {
 		t.Fatalf("notices = %+v", notices)
 	}
 	actions, err := s.ListAdminActions(ctx, c.ID, 10)
-	if err != nil || len(actions) != 2 || actions[1].Actor != "robbie@ops.example" || actions[1].Via != AdminViaCLI || actions[1].Reason != "client asked" {
+	if err != nil || len(actions) != 1 || actions[0].Actor != "robbie@ops.example" || actions[0].Via != AdminViaCLI || actions[0].Reason != "client asked" {
 		t.Fatalf("actions = %+v, %v", actions, err)
 	}
 
@@ -349,5 +345,42 @@ func TestAdminUpdateChat_ValidatesFirstAndRenamesLockedTitles(t *testing.T) {
 	}
 	if err := s.UpdateTitle(ctx, owner, c.ID, "auto-titler"); !errors.Is(err, ErrTitleLocked) {
 		t.Fatalf("auto-titler after an admin rename err = %v, want ErrTitleLocked", err)
+	}
+}
+
+// A stop, transfer or archive is claimed before it is carried out, so two
+// executors never both act; a claim left running is settled as interrupted.
+func TestAdminRequests_ClaimAndStale(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	ctx := context.Background()
+	c, err := s.CreateConversation(ctx, "owner@client.example", "W", "victoria", "m1", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateAdminRequest(ctx, AdminRequestInput{Actor: cliAdmin, Kind: AdminRequestArchive, ConversationID: c.ID, Payload: "delete", Reason: "r"}); err == nil {
+		t.Fatal("an archive payload other than archive/unarchive must be refused")
+	}
+	req, err := s.CreateAdminRequest(ctx, AdminRequestInput{Actor: cliAdmin, Kind: AdminRequestTransfer, ConversationID: c.ID, Payload: "New@Client.example", Reason: "r"})
+	if err != nil || req.Payload != "new@client.example" {
+		t.Fatalf("transfer request = %+v, %v", req, err)
+	}
+	if ok, err := s.ClaimAdminRequest(ctx, req.ID); err != nil || !ok {
+		t.Fatalf("first claim = %v, %v", ok, err)
+	}
+	if ok, _ := s.ClaimAdminRequest(ctx, req.ID); ok {
+		t.Fatal("a request was claimed twice")
+	}
+	if pending, _ := s.ListPendingAdminRequests(ctx, 10); len(pending) != 0 {
+		t.Fatalf("a claimed request is still pending: %+v", pending)
+	}
+	if n, err := s.FailStaleAdminRequests(ctx, time.Hour); err != nil || n != 0 {
+		t.Fatalf("fresh claim settled as stale: %d, %v", n, err)
+	}
+	if n, err := s.FailStaleAdminRequests(ctx, -time.Second); err != nil || n != 1 {
+		t.Fatalf("stale sweep = %d, %v", n, err)
+	}
+	if got, _ := s.GetAdminRequest(ctx, req.ID); got.State != AdminRequestFailed || !strings.Contains(got.Result, "interrupted") {
+		t.Fatalf("stale request = %+v", got)
 	}
 }
