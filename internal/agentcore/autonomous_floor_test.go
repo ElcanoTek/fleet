@@ -465,6 +465,7 @@ func TestGitPushFloorBareAssignment(t *testing.T) {
 		`n=$1`,
 		`d=${HOME}/x`, // already allowed before: dynamic then a slash
 		`out=$(git status --porcelain)`,
+		`ls | head -1; f=$(date)`,
 		`if f=$(ls); then echo "$f"; fi`,
 		`for x in a b; do n=$(wc -l "$x"); echo $n; done`,
 		`while line=$(head -1 f); do break; done`,
@@ -500,6 +501,11 @@ func TestGitPushFloorBareAssignment(t *testing.T) {
 		`f="$(git -C repo push)"`,
 		`f=$(ls) g=$(git push)`,
 		`if f=$(git push); then :; fi`,
+		// Stdin reaches the substitution when there is no command name.
+		`echo 'git push origin main' | f=$(sh)`,
+		`printf 'git push' | { f=$(bash); }`,
+		`f=$(sh) <<< 'git push origin main'`,
+		"f=$(sh) <<'EOF'\ngit push origin main\nEOF",
 		// A later dynamic command word still fails closed.
 		`f=$(ls); $f`,
 		`f=$(printf git); $f push origin main`,

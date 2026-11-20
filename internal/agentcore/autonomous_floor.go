@@ -1134,11 +1134,18 @@ var assignmentLeadKeywords = map[string]bool{
 //     (`f=$(ls) $f push`, `X=$(y) git push`) still takes the normal path;
 //   - assignments to variables that steer which program or config later
 //     commands use (gitSensitiveAssignName) are not let through with an
-//     unknown value.
+//     unknown value;
+//   - a segment that receives stdin (a pipe, here-doc or here-string) is
+//     left to the normal path: with no command name, bash hands a pipe's
+//     stdin to the substitution, so `echo 'git push' | f=$(sh)` runs the
+//     piped text, and the body `sh` alone looks harmless once parsed apart.
 //
 // Literal-value assignments never reach here dynamic, so their verdict is
 // unchanged.
 func segmentOnlyAssignsVariables(seg shellSegment) bool {
+	if seg.pipedStdin || seg.stdinDyn || len(seg.stdinBodies) > 0 {
+		return false
+	}
 	sawAssign := false
 	for _, tok := range seg.tokens {
 		if !sawAssign && tok.literal && assignmentLeadKeywords[tok.val] {
