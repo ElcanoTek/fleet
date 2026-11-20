@@ -84,9 +84,12 @@ test("settings render inside the unified shell with the section sub-nav", async 
   await mockShell(page, { admin: true });
   await page.goto("/settings");
 
-  // The unified chrome: rail + "Settings" topbar; no legacy pill buttons.
+  // The unified chrome: the same sidebar as every page (its pen and its top
+  // items are the way back) + a "Settings" topbar; no legacy pill buttons.
   await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible({ timeout: 15_000 });
-  await expect(page.getByTestId("nav-to-chat")).toBeVisible();
+  await expect(page.getByTestId("new-chat-button")).toBeVisible();
+  await expect(page.getByTestId("nav-to-patrols")).toBeVisible();
+  await expect(page.getByTestId("nav-to-orchestrator")).toBeVisible();
   await expect(page.getByRole("link", { name: "Back to chat" })).toHaveCount(0);
 
   const nav = page.getByRole("navigation", { name: "Settings sections" });

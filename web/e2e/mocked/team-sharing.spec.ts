@@ -159,9 +159,11 @@ test("the Share dialog holds both audiences and only offers the team inside a te
   await expect(block.getByRole("button", { name: "Copy link for your team" })).toBeVisible();
   await dialog.getByRole("button", { name: "Close share dialog" }).click();
 
-  // The row now carries the TEAM badge, distinct from the link badge and
-  // labelled with its audience.
-  await expect(rail.getByLabel("Shared with your team")).toBeVisible();
+  // The row's one status is now the TEAM mark, distinct from the link mark,
+  // and a screen reader gets its audience as the row's description.
+  const sharedRow = rail.getByRole("button", { name: "In Quant", exact: true });
+  await expect(sharedRow.getByTestId("row-status")).toHaveAttribute("data-status", "team");
+  await expect(sharedRow).toHaveAccessibleDescription(/Shared with your team/);
 });
 
 test("a teammate finds a shared chat on the project home, reads it, and branches it", async ({

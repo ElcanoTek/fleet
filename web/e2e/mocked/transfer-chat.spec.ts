@@ -105,7 +105,8 @@ test("a Team chats row offers the transfer to an admin only", async ({ page }) =
   await row.getByTestId("team-chat-options").click();
   await expect(page.getByRole("menu", { name: "Options for Client handover board" }).getByRole("menuitem")).toHaveText([
     "Pin",
-    "Add to sidebar",
+    "Move to the top",
+    "Set as start page",
     "Copy link",
     "Download chat…",
   ]);

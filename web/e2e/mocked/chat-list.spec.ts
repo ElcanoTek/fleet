@@ -159,11 +159,18 @@ test("a teammate's chat is pinned from its menu, joins Pinned, and unpins back i
   // In Pinned, still a teammate's row (whose it is stays on it), listed once.
   const pinned = page.getByTestId("pinned-section");
   await expect(pinned.getByTestId("team-shared-conv-row").filter({ hasText: "Acme renewal" })).toHaveCount(1);
-  await expect(pinned.getByTestId("team-shared-conv-row").first()).toContainText("tom");
+  // Whose it is: the owner's initial at the row's right edge, their address
+  // in the row's description (for a screen reader) and its tooltip.
+  const pinnedTeamRow = pinned.getByTestId("team-shared-conv-row").first();
+  await expect(pinnedTeamRow.getByTestId("row-owner")).toHaveText("T");
+  await expect(pinnedTeamRow).toHaveAccessibleDescription(/Shared by tom@example\.com/);
+  await expect(pinnedTeamRow).toHaveAttribute("title", /tom@example\.com/);
   await expect(page.getByTestId("unified-chat-list").getByText("Acme renewal", { exact: true })).toHaveCount(0);
   await expect(page.getByTestId("unified-chat-list").locator("[data-rail-row]")).toHaveCount(115);
-  // The heading says Pinned; the row needs no pin of its own.
-  await expect(pinned.getByTestId("team-chat-pinned-mark")).toHaveCount(0);
+  // The heading says Pinned; the row needs no pin of its own: its one status
+  // is what the chat is (shared with the team), never a pin.
+  await expect(pinnedTeamRow.getByTestId("row-status")).not.toHaveAttribute("data-status", /pin/);
+  await expect(pinnedTeamRow.locator('[data-icon="pin"], use[href$="#pin"]')).toHaveCount(0);
 
   // It survives a reload (the server keeps the pin, per person).
   await page.reload();
@@ -323,15 +330,18 @@ test("a long Pinned list scrolls under a held drag, and the drop lands where it 
   await expect(page.locator("li[data-dragging]")).toHaveCount(0);
 });
 
-test("with separate lists a pinned teammate's chat stays in Team chats, first and marked", async ({ page }) => {
+test("with separate lists a pinned teammate's chat still joins Pinned, and is listed once", async ({ page }) => {
   await boot(page, { separateLists: true, teamPinned: ["t31"] });
+  // Pinned is one section whatever the lists below it look like: the chat the
+  // person pinned for themselves is there, with their own pinned chats…
+  const pinnedRow = page.getByTestId("pinned-section").getByTestId("team-shared-conv-row");
+  await expect(pinnedRow).toHaveCount(1);
+  await expect(pinnedRow).toContainText("Acme renewal 4");
+  // …and not a second time in the Team chats list (40 teammates' chats, one
+  // of them pinned).
   const section = page.getByTestId("team-chats-section");
-  const rows = section.getByTestId("team-shared-conv-row");
-  await expect(rows).toHaveCount(40);
-  await expect(rows.first()).toContainText("Acme renewal 4");
-  await expect(rows.first().getByTestId("team-chat-pinned-mark")).toHaveCount(1);
-  await expect(section.getByTestId("team-chat-pinned-mark")).toHaveCount(1);
-  await expect(page.getByTestId("pinned-section").getByTestId("team-shared-conv-row")).toHaveCount(0);
+  await expect(section.getByTestId("team-shared-conv-row")).toHaveCount(39);
+  await expect(section.getByText("Acme renewal 4", { exact: true })).toHaveCount(0);
 });
 
 for (const scheme of ["light", "dark"] as const) {
@@ -339,7 +349,7 @@ for (const scheme of ["light", "dark"] as const) {
     await page.emulateMedia({ colorScheme: scheme });
     await boot(page, { teamPinned: ["t1"] });
     await page.getByTestId("recent-sort").click();
-    await expect(page.getByRole("menu", { name: "Sort chats" })).toBeVisible();
+    await expect(page.getByRole("menu", { name: "Chat list options" })).toBeVisible();
     const results = await new AxeBuilder({ page })
       .include('[data-testid="pinned-section"]')
       .include('[data-testid="recent-sort"]')
@@ -376,19 +386,22 @@ test.describe("on a phone", () => {
     await cdp.detach();
   }
 
-  test("the sort is the heading's size, on one row, and its menu sorts the list", async ({ page }) => {
+  test("the Chats menu is a compact button on the heading's row, and it sorts the list", async ({ page }) => {
     await boot(page);
     await openDrawer(page);
     const sort = page.getByTestId("recent-sort");
     await sort.scrollIntoViewIfNeeded();
     // It was a native select, forced to 16px on touch screens: twice the
-    // 11px heading beside it, and wide enough to wrap under it.
-    const size = await sort.evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
-    expect(size).toBeLessThanOrEqual(12);
-    const heading = sort.locator("..");
-    expect((await heading.boundingBox())!.height).toBeLessThanOrEqual(40);
+    // heading beside it, and wide enough to wrap under it. It is an icon
+    // button now: on the heading's own row, at its right edge, inside the
+    // drawer, with a full-size tap target around a small mark.
+    const heading = sort.locator("xpath=ancestor::div[1]");
+    await expect(heading).toContainText("Chats");
+    expect((await heading.boundingBox())!.height).toBeLessThanOrEqual(48);
     const box = (await sort.boundingBox())!;
+    expect(box.width).toBeLessThanOrEqual(48);
     expect(box.x + box.width).toBeLessThanOrEqual(390 * 0.85);
+    await expect(sort).toHaveAccessibleName("Chat list options. Sorted by: Recent activity");
 
     await sort.tap();
     const choice = page.getByRole("menuitemradio", { name: "Title A–Z" });
@@ -398,7 +411,7 @@ test.describe("on a phone", () => {
     expect(cb.x).toBeGreaterThanOrEqual(0);
     expect(cb.x + cb.width).toBeLessThanOrEqual(390);
     await choice.tap();
-    await expect(sort).toHaveAccessibleName("Sort chats: Title A–Z");
+    await expect(sort).toHaveAccessibleName("Chat list options. Sorted by: Title A–Z");
     const titles = await titlesIn(page, "unified-chat-list");
     expect(titles.length).toBe(116);
     expect(titles.slice(0, 3)).toEqual(["Acme renewal", "Acme renewal 2", "Acme renewal 3"]);

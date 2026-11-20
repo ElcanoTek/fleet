@@ -80,12 +80,16 @@ page that says **Something went wrong** offers **Reload** too. When your
 operator configures a support contact in the bundle (`branding.support`), the
 page header also includes that support button, which opens a dialog with the
 support message, **Copy email**, and **Send email** (`mailto:`). In the
-left rail this page is **Background tasks**, after **Chat** and **Patrols**.
+sidebar this page is **Background tasks**, under **Patrols**. The sidebar is
+the same one Chat has, with your pinned chats, your projects and your chats,
+so one click on a chat takes you back to it. **New task**, in the page
+header, opens the task form, and so does **New background task** in the
+sidebar's **+** menu, from any page.
 Patrols are the other way to put the assistant on a schedule, and the
 difference matters: a patrol is a chat that checks in on a schedule — you can
 read and reply in it — while a background task runs headless, with no chat to
 reply in, and emails its result to the recipients you give it (see the Chat
-guide's "Patrol Launchpad" section). The guides
+guide's "Patrol Launchpad" and "The Patrols page" sections). The guides
 open from the account menu, beside **Settings**.
 
 **Settings → General → Language** changes the interface and these guides to

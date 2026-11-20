@@ -50,8 +50,10 @@ test("one session crosses Chat ↔ Orchestrator via in-app links without re-logi
   await expect(page.getByTestId("orchestrator-dashboard")).toBeVisible({ timeout: 15_000 });
   expect(new URL(page.url()).pathname).toBe("/orchestrator");
 
-  // …and back to chat via the orchestrator header's "Go to Chat" link.
-  await page.getByTestId("nav-to-chat").click();
+  // …and back to chat from the same sidebar, which Background tasks keeps:
+  // its pen starts a chat (there is no "Chat" row to press any more).
+  await expect(page.getByTestId("nav-to-orchestrator")).toHaveAttribute("aria-current", "page");
+  await page.getByTestId("new-chat-button").click();
   await expect(page.getByRole("heading", { name: /what can i help with/i })).toBeVisible({
     timeout: 15_000,
   });
