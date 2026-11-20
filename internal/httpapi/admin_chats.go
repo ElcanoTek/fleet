@@ -200,6 +200,12 @@ func (s *Server) executeClaimedAdminRequest(ctx context.Context, st adminChatSto
 }
 
 func (s *Server) finishAdminRequest(ctx context.Context, st adminChatStore, r store.AdminRequest, state, result, notice string) {
+	// Settled on a fresh, bounded context: the work may have outlived the
+	// caller's (the scheduler pass gives a minute; a transfer moving a
+	// participant's attachments can take longer), and a request that was
+	// carried out must never be reported as interrupted for that.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
 	ok, err := st.FinishAdminRequest(ctx, r.ID, state, result)
 	if err != nil {
 		logging.From(ctx).Error("admin requests: settle failed", "admin_request", r.ID, "err", safe.LogSafe(err.Error()))
