@@ -28,7 +28,32 @@ type SharedFile struct {
 	UploadedBy  string `json:"uploaded_by,omitempty"`
 	CreatedAt   int64  `json:"created_at"`
 	UpdatedAt   int64  `json:"updated_at"`
+
+	// Origin is SharedFileOriginAdmin (an upload: bytes in the data dir) or
+	// SharedFileOriginChat (written by shared_file_write: text in the row).
+	// Chats may write only chat rows (migration 0205, ADR-0114).
+	Origin string `json:"origin"`
+	// UpdatedBy / UpdatedConversationID name the last writer of a chat row:
+	// an email, and the conversation id (or "task:<id>" for a scheduled
+	// run). Both are "" on an admin upload.
+	UpdatedBy             string `json:"updated_by,omitempty"`
+	UpdatedConversationID string `json:"updated_conversation_id,omitempty"`
+	// FolderIndex marks the file its folder's entry point: a folder with many
+	// files is announced to the model as one line naming this file.
+	FolderIndex bool `json:"folder_index,omitempty"`
+	// HasPrevious reports a displaced version one undo can restore.
+	HasPrevious bool `json:"has_previous,omitempty"`
 }
+
+// Shared-file origins (chat.shared_files.origin).
+const (
+	SharedFileOriginAdmin = "admin"
+	SharedFileOriginChat  = "chat"
+)
+
+// IsChatWritten reports whether a row was written by a chat (its text lives in
+// the database, and chats may change it).
+func (f SharedFile) IsChatWritten() bool { return f.Origin == SharedFileOriginChat }
 
 // ErrSharedFileNotFound reports an id no row carries.
 var ErrSharedFileNotFound = errors.New("shared file not found")
@@ -47,13 +72,12 @@ var ErrSharedFileExists = errors.New("a shared file with that name already exist
 // flaps with map iteration order. Rejecting the second writer is the only place
 // the conflict can still be reported to a human.
 //
-// Honest limit: unlike the (folder, name) collision, this one has NO database
-// constraint behind it — "name must not equal any folder" is not expressible as
-// a unique index — so the guard is check-then-write. The mutation handlers hold
-// sharedFilesMu, which closes the window inside one process, but that mutex is
-// process-local: two replicas racing the same pair (the split control-plane
-// deployment) can still land it, and the reconciler still cannot converge if
-// they do. Closing that properly needs a trigger or an advisory lock.
+// Unlike the (folder, name) collision, this one has no constraint behind it —
+// "name must not equal any folder" is not expressible as a unique index — so the
+// guard is check-then-write, made race-free by the namespace lock: every write
+// that can claim a path (upload, rename, chat create) takes
+// lockSharedFilesNamespace inside its transaction before checking, so two
+// writers — chats, admins, or replicas — can never both pass the check.
 var ErrSharedFileNameIsFolder = errors.New("that path is already claimed: a file and a folder in the shared library cannot share a name")
 
 // sharedPathNamespaceConflict matches a row whose existence would make the
@@ -73,12 +97,82 @@ const sharedPathNamespaceConflict = `
 		OR ($3 <> '' AND folder = '' AND name = $3)
 	)`
 
-const sharedFileColumns = `id, name, folder, description, size_bytes, content_type, sha256, uploaded_by, created_at, updated_at`
+// sharedFilesNamespaceLockKey is the transaction-scoped advisory lock every
+// path-claiming shared-file write holds while it checks and claims its path
+// (ADR-0114). An arbitrary constant: "shfl" in ASCII.
+const sharedFilesNamespaceLockKey int64 = 0x7368666c
+
+// lockSharedFilesNamespace serializes path-claiming writes across processes and
+// replicas; released when tx ends.
+func lockSharedFilesNamespace(ctx context.Context, tx *sql.Tx) error {
+	_, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, sharedFilesNamespaceLockKey)
+	return err
+}
+
+// WithSharedFilesNamespaceLock runs fn while a transaction holds the namespace
+// lock, so no path can be claimed (and so no new file created and staged)
+// until fn returns. The reconciler reads the manifest and reconciles the staged
+// tree inside it, so a file another replica creates meanwhile is either in its
+// snapshot or created after it — never removed as a stray (ADR-0114).
+func (s *Store) WithSharedFilesNamespaceLock(ctx context.Context, fn func() error) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := lockSharedFilesNamespace(ctx, tx); err != nil {
+		return err
+	}
+	if err := fn(); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// SharedFilePathOwnerLocked calls fn with the row that owns (folder, name)
+// right now — nil when none does — while a transaction holds the namespace
+// lock, so no other writer can claim the path until fn returns. Callers use it
+// to unstage a path a rename or delete freed WITHOUT deleting a copy another
+// replica just staged for a new owner of that path (ADR-0114).
+func (s *Store) SharedFilePathOwnerLocked(ctx context.Context, folder, name string, fn func(owner *SharedFile) error) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := lockSharedFilesNamespace(ctx, tx); err != nil {
+		return err
+	}
+	row := tx.QueryRowContext(ctx,
+		`SELECT `+sharedFileSelect+` FROM shared_files WHERE folder = $1 AND name = $2`, folder, name)
+	f, err := scanSharedFile(row)
+	var owner *SharedFile
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+	case err != nil:
+		return err
+	default:
+		owner = &f
+	}
+	if err := fn(owner); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+const sharedFileColumns = `id, name, folder, description, size_bytes, content_type, sha256, uploaded_by, created_at, updated_at, origin, updated_by, updated_conversation_id, folder_index`
+
+// sharedFileSelect is the read projection: the stored columns plus whether a
+// previous version exists. It never selects content itself — listing the
+// library (every turn's prompt block) must not drag every chat file's text
+// out of the database.
+const sharedFileSelect = sharedFileColumns + `, previous_content IS NOT NULL`
 
 func scanSharedFile(row interface{ Scan(...any) error }) (SharedFile, error) {
 	var f SharedFile
 	err := row.Scan(&f.ID, &f.Name, &f.Folder, &f.Description, &f.SizeBytes,
-		&f.ContentType, &f.SHA256, &f.UploadedBy, &f.CreatedAt, &f.UpdatedAt)
+		&f.ContentType, &f.SHA256, &f.UploadedBy, &f.CreatedAt, &f.UpdatedAt,
+		&f.Origin, &f.UpdatedBy, &f.UpdatedConversationID, &f.FolderIndex, &f.HasPrevious)
 	return f, err
 }
 
@@ -86,11 +180,23 @@ func scanSharedFile(row interface{ Scan(...any) error }) (SharedFile, error) {
 // token minted at the API layer) and the already-validated name/folder.
 func (s *Store) CreateSharedFile(ctx context.Context, f SharedFile) (SharedFile, error) {
 	now := time.Now().Unix()
-	row := s.db.QueryRowContext(ctx, `
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return SharedFile{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	// The namespace guard below is only race-free while every path-claiming
+	// write holds the namespace lock (lockSharedFilesNamespace).
+	if err := lockSharedFilesNamespace(ctx, tx); err != nil {
+		return SharedFile{}, err
+	}
+	// An upload is always an admin row; chat rows are created only by
+	// WriteChatSharedFile, which also stores their text.
+	row := tx.QueryRowContext(ctx, `
 		INSERT INTO shared_files (`+sharedFileColumns+`)
-		SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+		SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'admin', '', '', FALSE
 		WHERE NOT EXISTS (`+sharedPathNamespaceConflict+`)
-		RETURNING `+sharedFileColumns,
+		RETURNING `+sharedFileSelect,
 		f.ID, f.Name, f.Folder, f.Description, f.SizeBytes,
 		f.ContentType, f.SHA256, f.UploadedBy, now, now)
 	out, err := scanSharedFile(row)
@@ -103,7 +209,16 @@ func (s *Store) CreateSharedFile(ctx context.Context, f SharedFile) (SharedFile,
 	if errors.Is(err, sql.ErrNoRows) {
 		return SharedFile{}, ErrSharedFileNameIsFolder
 	}
-	return out, err
+	if err != nil {
+		return SharedFile{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		if pgUniqueViolation(err) {
+			return SharedFile{}, ErrSharedFileExists
+		}
+		return SharedFile{}, err
+	}
+	return out, nil
 }
 
 // SharedFilePathAvailable reports whether a NEW row at (folder, name) could be
@@ -137,7 +252,7 @@ func (s *Store) SharedFilePathAvailable(ctx context.Context, folder, name string
 // listing is stable for both the admin UI and the per-turn prompt block.
 func (s *Store) ListSharedFiles(ctx context.Context) ([]SharedFile, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT `+sharedFileColumns+` FROM shared_files ORDER BY folder, name`)
+		`SELECT `+sharedFileSelect+` FROM shared_files ORDER BY folder, name`)
 	if err != nil {
 		return nil, err
 	}
@@ -156,7 +271,7 @@ func (s *Store) ListSharedFiles(ctx context.Context) ([]SharedFile, error) {
 // GetSharedFile returns one row by id.
 func (s *Store) GetSharedFile(ctx context.Context, id string) (SharedFile, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT `+sharedFileColumns+` FROM shared_files WHERE id = $1`, id)
+		`SELECT `+sharedFileSelect+` FROM shared_files WHERE id = $1`, id)
 	f, err := scanSharedFile(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return SharedFile{}, ErrSharedFileNotFound
@@ -169,11 +284,19 @@ func (s *Store) GetSharedFile(ctx context.Context, id string) (SharedFile, error
 // already validated name and folder; the unique constraint still backstops a
 // racing rename into an occupied path.
 func (s *Store) UpdateSharedFileMeta(ctx context.Context, id, name, folder, description string) (SharedFile, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return SharedFile{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := lockSharedFilesNamespace(ctx, tx); err != nil {
+		return SharedFile{}, err
+	}
 	// The namespace guard runs first and separately: UPDATE ... WHERE NOT EXISTS
 	// would make "conflicting" and "no such id" the same empty result, and the
 	// two are different HTTP statuses (409 vs 404).
 	var conflict int
-	err := s.db.QueryRowContext(ctx,
+	err = tx.QueryRowContext(ctx,
 		`SELECT EXISTS (`+sharedPathNamespaceConflict+`)::int`, id, name, folder).Scan(&conflict)
 	if err != nil {
 		return SharedFile{}, err
@@ -181,11 +304,11 @@ func (s *Store) UpdateSharedFileMeta(ctx context.Context, id, name, folder, desc
 	if conflict == 1 {
 		return SharedFile{}, ErrSharedFileNameIsFolder
 	}
-	row := s.db.QueryRowContext(ctx, `
+	row := tx.QueryRowContext(ctx, `
 		UPDATE shared_files
 		SET name = $2, folder = $3, description = $4, updated_at = $5
 		WHERE id = $1
-		RETURNING `+sharedFileColumns,
+		RETURNING `+sharedFileSelect,
 		id, name, folder, description, time.Now().Unix())
 	f, err := scanSharedFile(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -194,14 +317,23 @@ func (s *Store) UpdateSharedFileMeta(ctx context.Context, id, name, folder, desc
 	if pgUniqueViolation(err) {
 		return SharedFile{}, ErrSharedFileExists
 	}
-	return f, err
+	if err != nil {
+		return SharedFile{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		if pgUniqueViolation(err) {
+			return SharedFile{}, ErrSharedFileExists
+		}
+		return SharedFile{}, err
+	}
+	return f, nil
 }
 
 // DeleteSharedFile removes one row and returns it, so the caller can unstage
 // the file it described without a prior read.
 func (s *Store) DeleteSharedFile(ctx context.Context, id string) (SharedFile, error) {
 	row := s.db.QueryRowContext(ctx,
-		`DELETE FROM shared_files WHERE id = $1 RETURNING `+sharedFileColumns, id)
+		`DELETE FROM shared_files WHERE id = $1 RETURNING `+sharedFileSelect, id)
 	f, err := scanSharedFile(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return SharedFile{}, ErrSharedFileNotFound

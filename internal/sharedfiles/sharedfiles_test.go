@@ -238,7 +238,7 @@ func TestSyncConverges(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := l.Sync(manifest); err != nil {
+	if err := l.Sync(manifest, nil); err != nil {
 		t.Fatalf("Sync: %v", err)
 	}
 
@@ -256,11 +256,11 @@ func TestSyncConverges(t *testing.T) {
 	}
 
 	// A second pass over a converged tree is a no-op that still succeeds.
-	if err := l.Sync(manifest); err != nil {
+	if err := l.Sync(manifest, nil); err != nil {
 		t.Fatalf("second Sync: %v", err)
 	}
 	// Sync with an empty manifest clears the tree but keeps the root.
-	if err := l.Sync(nil); err != nil {
+	if err := l.Sync(nil, nil); err != nil {
 		t.Fatalf("empty Sync: %v", err)
 	}
 	entries, err := os.ReadDir(l.StagedRoot)
@@ -343,7 +343,7 @@ func TestSyncIsBestEffortPerRow(t *testing.T) {
 	// Row that fails earlier still, in stagedRel.
 	unsafe := store.SharedFile{ID: "idunsafe", Name: "../escape"}
 
-	err := l.Sync([]store.SharedFile{missing, unsafe, good})
+	err := l.Sync([]store.SharedFile{missing, unsafe, good}, nil)
 	if err == nil {
 		t.Fatalf("Sync must report the first failure, got nil")
 	}

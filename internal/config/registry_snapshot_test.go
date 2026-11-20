@@ -393,6 +393,7 @@ var preRegistryAllowedEnvVars = map[string]bool{
 	"FLEET_CONTEXT_HANDLES_ENABLED":           true,
 	"FLEET_CONNECTOR_RECOMMENDATIONS_ENABLED": true,
 	"FLEET_TEAM_CHATS_SHARED_BY_DEFAULT":      true,
+	"FLEET_SHARED_FILES_CHAT_WRITES_ENABLED":  true,
 
 	// ── A2A protocol server (#1279) ──
 	"FLEET_A2A_ENABLED":            true,
@@ -534,6 +535,7 @@ var preRegistryEnvKnobs = []envKnob{
 	{key: "FLEET_CONNECTOR_RECOMMENDATIONS_ENABLED", kind: kindBool},
 	{key: "FLEET_MONTHLY_SOFT_SPEND_LIMIT_USD", kind: kindFloat, min: bound(0)},
 	{key: "FLEET_TEAM_CHATS_SHARED_BY_DEFAULT", kind: kindBool},
+	{key: "FLEET_SHARED_FILES_CHAT_WRITES_ENABLED", kind: kindBool},
 	// Waives the boot requirement for the open-egress NetworkPolicy, so it is
 	// a security posture rather than a preference: registered like any other
 	// bool so a typo ("ture") is refused at the seam instead of silently

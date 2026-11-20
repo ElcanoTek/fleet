@@ -1548,6 +1548,7 @@ func (s *Server) prepareTurnExecutionContext(
 	string,
 ) {
 	turnCtx = tools.WithChatPatrolHandler(turnCtx, s.newChatPatrolHandler(conv, user, buf))
+	turnCtx = tools.WithSharedFileWriteHandler(turnCtx, s.newSharedFileWriteHandler(conv, user))
 	turnCtx = tools.WithManageTasksShowHandler(turnCtx, s.newManageTasksShowHandler(user))
 	turnCtx = tools.WithPersonaStudioHandler(turnCtx, s.newPersonaStudioHandler(user))
 	turnCtx = tools.WithConnectorStudioHandler(turnCtx, s.newConnectorStudioHandler(conv, user))

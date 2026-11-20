@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -336,18 +337,35 @@ func (s *Server) downloadSharedFile(w http.ResponseWriter, r *http.Request, id s
 		httpErrorForSharedFile(w, err)
 		return
 	}
-	lib := s.sharedFilesLibrary()
-	src, err := os.Open(filepath.Join(lib.CanonicalDir, f.ID))
-	if err != nil {
-		http.Error(w, "shared file bytes are missing on disk", http.StatusNotFound)
-		return
+	var src io.ReadSeeker
+	modTime := time.Unix(f.UpdatedAt, 0)
+	if f.IsChatWritten() {
+		// A chat-written file's text lives in the database (ADR-0114). It can
+		// change twice within one second, so it is validated by its content
+		// hash (ETag), never by the whole-second modification time.
+		content, sha, ok, err := s.store.SharedFileContent(r.Context(), f.ID)
+		if err != nil || !ok {
+			http.Error(w, "shared file content is missing", http.StatusNotFound)
+			return
+		}
+		src = strings.NewReader(content)
+		w.Header().Set("ETag", `"`+sha+`"`)
+		modTime = time.Time{}
+	} else {
+		lib := s.sharedFilesLibrary()
+		file, err := os.Open(filepath.Join(lib.CanonicalDir, f.ID))
+		if err != nil {
+			http.Error(w, "shared file bytes are missing on disk", http.StatusNotFound)
+			return
+		}
+		defer file.Close()
+		src = file
 	}
-	defer src.Close()
 	if f.ContentType != "" {
 		w.Header().Set("Content-Type", f.ContentType)
 	}
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", f.Name))
-	http.ServeContent(w, r, f.Name, time.Unix(f.UpdatedAt, 0), src)
+	http.ServeContent(w, r, f.Name, modTime, src)
 }
 
 func (s *Server) patchSharedFile(w http.ResponseWriter, r *http.Request, id string) {
@@ -389,10 +407,10 @@ func (s *Server) patchSharedFile(w http.ResponseWriter, r *http.Request, id stri
 	if updated.Name != old.Name || updated.Folder != old.Folder {
 		// Re-materialize under the new path. Failures self-heal on Sync.
 		lib := s.sharedFilesLibrary()
-		if err := lib.Unstage(old); err != nil {
+		if err := s.unstageFreedPathLocked(r.Context(), lib, old); err != nil {
 			logging.From(r.Context()).Error("shared files: unstage old path failed", "id", id, "err", err)
 		}
-		if err := lib.Stage(updated); err != nil {
+		if err := s.stageSharedFileLocked(r.Context(), lib, updated); err != nil {
 			logging.From(r.Context()).Warn("shared files: restage failed (will self-heal on the next maintenance pass)", "id", safe.LogSafe(id), "err", err)
 		}
 	}
@@ -408,7 +426,7 @@ func (s *Server) deleteSharedFile(w http.ResponseWriter, r *http.Request, id str
 		return
 	}
 	lib := s.sharedFilesLibrary()
-	if err := lib.Unstage(f); err != nil {
+	if err := s.unstageFreedPathLocked(r.Context(), lib, f); err != nil {
 		logging.From(r.Context()).Warn("shared files: unstage failed (will self-heal on the next maintenance pass)", "id", safe.LogSafe(id), "err", err)
 	}
 	if err := lib.RemoveCanonical(f.ID); err != nil {
@@ -436,13 +454,24 @@ func httpErrorForSharedFile(w http.ResponseWriter, err error) {
 // staged root exists when kubernetes pods mount its subPath) and the hourly
 // maintenance pass keeps calling it. Exported for exactly those two drivers.
 func (s *Server) SyncSharedFiles(ctx context.Context) error {
-	files, err := s.store.ListSharedFiles(ctx)
-	if err != nil {
-		return fmt.Errorf("list shared files: %w", err)
-	}
 	s.sharedFilesMu.Lock()
 	defer s.sharedFilesMu.Unlock()
-	return s.sharedFilesLibrary().Sync(files)
+	// The manifest read and the reconciliation run under the store's namespace
+	// lock: a chat on another replica cannot create (and stage) a file between
+	// this snapshot and the stray sweep, so a fresh file is never removed as a
+	// stray. Chat-written rows restage from their text in the database under
+	// the row lock, so this pass can never publish a version older than a
+	// concurrent write (ADR-0114).
+	return s.store.WithSharedFilesNamespaceLock(ctx, func() error {
+		files, err := s.store.ListSharedFiles(ctx)
+		if err != nil {
+			return fmt.Errorf("list shared files: %w", err)
+		}
+		chatStage := func(f store.SharedFile) error {
+			return s.restageChatSharedFileLocked(ctx, f.ID)
+		}
+		return s.sharedFilesLibrary().Sync(files, chatStage)
+	})
 }
 
 // appendSharedFilesBlock announces the library at the top of a turn, mirroring
@@ -458,7 +487,9 @@ func (s *Server) appendSharedFilesBlock(ctx context.Context, message string) str
 		logging.From(ctx).Error("shared files: list for prompt block failed", "err", err)
 		return message
 	}
-	block := sharedfiles.PromptBlock(files)
+	block := sharedfiles.PromptBlockWith(files, sharedfiles.PromptOptions{
+		ChatWrites: s.cfg == nil || s.cfg.LiveSharedFilesChatWritesEnabled(),
+	})
 	if block == "" {
 		return message
 	}

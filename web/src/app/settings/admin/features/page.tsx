@@ -159,6 +159,11 @@ const META: Record<string, SettingMeta> = {
     label: tr("Composer context handles"),
     description: tr("Let people type @ in the message box to point the assistant at a file or an earlier conversation."),
   },
+  shared_files_chat_writes_enabled: {
+    label: tr("Chats can save shared files"),
+    description:
+      tr("Let conversations and scheduled tasks save text files that every chat on this server can read, such as a team log of optimizations. Files an admin uploads stay read-only to chats, and admins can rename or delete chat files in Settings → Shared files. Turning this off stops new writes; files already saved stay readable."),
+  },
   team_chats_shared_by_default: {
     label: tr("Multiplayer team chats by default"),
     description:
@@ -250,6 +255,7 @@ const GROUPS: { title: string; keys: string[] }[] = [
     title: tr("Workspace features"),
     keys: [
       "team_chats_shared_by_default",
+      "shared_files_chat_writes_enabled",
       "memory_autoindex_enabled",
       "error_analysis_enabled",
       "auto_title_enabled",

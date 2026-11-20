@@ -38,6 +38,15 @@ how a deployment narrows it. Decision record:
 - **Interactive chat is unchanged**: a person sees every turn, and chat's
   approval cards are the gate there.
 
+- **`shared_file_write` writes as the task's owner**
+  ([ADR-0114](adr/0114-chat-written-shared-files.md),
+  [SHARED-FILES.md](SHARED-FILES.md#files-chats-write)). A scheduled run gets
+  the same handler as a chat turn, recorded as written from `task:<id>`. It
+  needs no network and no card: it writes only a text row in the shared
+  library, refuses admin uploads and Viewer owners, and is off everywhere when
+  `shared_files_chat_writes_enabled` is off. When the owner cannot be resolved
+  (an API-key-created task), the tool answers that it is unavailable.
+
 ## Operator action
 
 Tasks that relied on `web_fetch` without network egress need **Allow network

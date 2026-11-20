@@ -102,6 +102,13 @@ type Options struct {
 	// DB and therefore no library — documented scope, not a gap).
 	SharedFilesPrompt func(ctx context.Context) string
 
+	// SharedFileWriterFor binds the shared_file_write tool (ADR-0114) to the
+	// task's owner: writes are recorded as theirs, from "task:<id>", and are
+	// refused when the owner is unknown or read-only. cmd/fleet wires it to the
+	// chat server's handler, so a scheduled write and a chat write share one
+	// path (and one staging lock). nil = the tool reports itself unavailable.
+	SharedFileWriterFor func(ownerEmail, origin string) tools.SharedFileWriteHandler
+
 	// OpenTaskMCPScope creates one broker-owned MCP client for a scheduled run.
 	// Nil preserves the in-process compatibility binder.
 	OpenTaskMCPScope TaskMCPScopeOpener
@@ -180,6 +187,8 @@ type Runner struct {
 	// nil = capability off.
 	userSkills       func(ctx context.Context, email string) ([]UserSkillDoc, error)
 	skillProposerFor func(ownerEmail string) agentcore.SkillProposer
+	// sharedFileWriterFor binds shared_file_write to the task owner (Options).
+	sharedFileWriterFor func(ownerEmail, origin string) tools.SharedFileWriteHandler
 
 	// sharedFilesPrompt announces the shared file library in a run's system
 	// prompt (#1301). nil = no announcement.
@@ -225,6 +234,7 @@ func New(opts Options) *Runner {
 		hostedConnections:    opts.HostedConnections,
 		userSkills:           opts.UserSkills,
 		skillProposerFor:     opts.SkillProposerFor,
+		sharedFileWriterFor:  opts.SharedFileWriterFor,
 		sharedFilesPrompt:    opts.SharedFilesPrompt,
 		openTaskMCPScope:     opts.OpenTaskMCPScope,
 		mcpServerInventory:   opts.MCPServerInventory,
@@ -970,6 +980,13 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 	// an unresolvable owner just runs without the capability, never fails the
 	// run.
 	ownerSkillEmail := r.resolveOwnerEmail(ctx, task)
+
+	// shared_file_write (ADR-0114) writes as the task owner, from this task.
+	// An unresolvable owner leaves the handler unset: the tool then answers
+	// that it is unavailable, rather than writing under no name.
+	if r.sharedFileWriterFor != nil && ownerSkillEmail != "" {
+		ctx = tools.WithSharedFileWriteHandler(ctx, r.sharedFileWriterFor(ownerSkillEmail, "task:"+task.ID.String()))
+	}
 
 	// Per-task persona override (#221): a task may name a personas/<name>.yaml to
 	// swap in specialized domain expertise; empty uses the runner's global persona.

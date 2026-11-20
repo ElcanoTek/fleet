@@ -138,9 +138,14 @@ host-brokered credentials/network that by invariant never enter the sandbox:
   is resolved inside that directory and opened with no link followed at any
   component.
 - **Host datastore / control state**: `task_tracker`, `notes`, `memory`,
-  `publish_artifact`, `enable_mcp_connectors`, and `connector_studio`
-  (`search_catalog`, `connect_mcp`, `create_custom_connector`) write governed
-  database/control records, not arbitrary model-selected host files.
+  `publish_artifact`, `enable_mcp_connectors`, `shared_file_write`, and
+  `connector_studio` (`search_catalog`, `connect_mcp`,
+  `create_custom_connector`) write governed database/control records, not
+  arbitrary model-selected host files.
+  `shared_file_write` ([ADR-0114](0114-chat-written-shared-files.md)) writes a
+  text row in `chat.shared_files` (row-locked) and then restages that row's
+  read-only `shared/` copy from the database; its optional `from_path` input is
+  read through the sandbox's `RunFileOp` seam, never by a host open.
   `connector_studio` is scoped to the authenticated interactive chat user,
   seals API keys and Playwright credentials/storage state via `secretbox` in
   `remote_mcp_servers.api_key_enc`, enforces fixed URL origins on

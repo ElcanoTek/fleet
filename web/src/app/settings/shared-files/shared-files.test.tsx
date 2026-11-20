@@ -29,6 +29,9 @@ type SharedFile = {
   description: string;
   size_bytes: number;
   uploaded_by?: string;
+  origin?: string;
+  updated_by?: string;
+  folder_index?: boolean;
   created_at: number;
   updated_at: number;
 };
@@ -176,6 +179,31 @@ describe("SharedFilesPage", () => {
     expect(JSON.parse(String(patch?.[1]?.body))).toEqual({ name: "renamed.pdf" });
     // The editor closes once the save lands.
     await waitFor(() => expect(screen.queryByTestId("edit-name-f-report")).toBeNull());
+  });
+
+  it("marks a file a chat wrote, with its last writer and index mark", async () => {
+    adminState = "member";
+    const LOG: SharedFile = {
+      id: "f-log",
+      name: "OptLog_Reklaim_Portfolio.csv",
+      folder: "optimizations",
+      description: "Reklaim optimization log",
+      size_bytes: 2048,
+      uploaded_by: "trader@client.com",
+      origin: "chat",
+      updated_by: "analyst@client.com",
+      folder_index: true,
+      created_at: 1_755_000_000,
+      updated_at: 1_755_000_000,
+    };
+    vi.stubGlobal("fetch", mockFetch({ ...LIBRARY, files: [REPORT, LOG] }));
+    render(<SharedFilesPage />);
+    expect(await screen.findByText("OptLog_Reklaim_Portfolio.csv")).toBeInTheDocument();
+    expect(screen.getByText(/· written by chats/)).toBeInTheDocument();
+    expect(screen.getByText(/last by analyst@client.com/)).toBeInTheDocument();
+    expect(screen.getByText(/folder index/)).toBeInTheDocument();
+    // The chat file is not attributed as an upload; the admin file still is.
+    expect(screen.getAllByText(/uploaded by/)).toHaveLength(1);
   });
 
   it("renders the capped usage meter", async () => {

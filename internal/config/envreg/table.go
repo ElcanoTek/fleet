@@ -245,6 +245,8 @@ var table = []Entry{
 		Description: "Deleting a conversation hides it instead of removing it."},
 	{Name: "FLEET_TEAM_CHATS_SHARED_BY_DEFAULT", Group: GroupData, Scope: ScopeServer, Type: TypeBool, Default: "false", Knob: loader,
 		Description: "New chats are shared with the creator's team by default. Also an admin setting."},
+	{Name: "FLEET_SHARED_FILES_CHAT_WRITES_ENABLED", Group: GroupData, Scope: ScopeServer, Type: TypeBool, Default: "true", Knob: loader,
+		Description: "Chats and scheduled tasks may write text files into the shared file library (shared_file_write). Also an admin setting."},
 	{Name: "FLEET_CONTEXT_HANDLES_ENABLED", Group: GroupData, Scope: ScopeServer, Type: TypeBool, Default: "false", Knob: loader,
 		Description: "Composer context handles. Also an admin setting."},
 	{Name: "CHAT_RATE_PER_MIN", Group: GroupData, Scope: ScopeServer, Type: TypeInt, Default: "40", Knob: loader,

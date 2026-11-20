@@ -32,6 +32,8 @@ func sharedFilesFixture(t *testing.T) (*Server, http.Handler) {
 	srv := serverFixture(t)
 	srv.cfg.DataDir = t.TempDir()
 	srv.cfg.WorkspaceRoot = t.TempDir()
+	// config.Load defaults chat writes on; a hand-built test config is zero.
+	srv.cfg.SetSharedFilesChatWritesEnabled(true)
 	// The admin gate reads the role membershipMiddleware enriches the request
 	// with, and the allow-all isMember seam skips that enrichment — so this
 	// suite seeds real users and takes the real membership path.

@@ -33,6 +33,7 @@ func TestLiveOverrideSettersRoundTrip(t *testing.T) {
 	cfg.SetConnectorRecommendationsEnabled(true)
 	cfg.SetContextHandlesEnabled(true)
 	cfg.SetTeamChatsSharedByDefault(true)
+	cfg.SetSharedFilesChatWritesEnabled(false)
 	cfg.SetApprovalTimeoutSeconds(7200)
 	if got := cfg.LiveApprovalTimeoutSeconds(); got != 7200 {
 		t.Errorf("approval_timeout: got %d want 7200", got)
@@ -49,6 +50,7 @@ func TestLiveOverrideSettersRoundTrip(t *testing.T) {
 		{"connector_recs", cfg.LiveConnectorRecommendationsEnabled(), true},
 		{"context_handles", cfg.LiveContextHandlesEnabled(), true},
 		{"team_chats_shared_by_default", cfg.LiveTeamChatsSharedByDefault(), true},
+		{"shared_files_chat_writes_enabled", cfg.LiveSharedFilesChatWritesEnabled(), false},
 	}
 	for _, c := range checks {
 		if c.got != c.want {

@@ -60,6 +60,7 @@ func workspaceSettingsDefaults(cfg *config.Config) map[string]string {
 		"context_handles_enabled":           strconv.FormatBool(cfg.ContextHandlesEnabled),
 		"team_chats_shared_by_default":      strconv.FormatBool(cfg.TeamChatsSharedByDefault),
 		"shared_files_max_total_mb":         strconv.Itoa(cfg.SharedFilesMaxTotalMB),
+		"shared_files_chat_writes_enabled":  strconv.FormatBool(cfg.SharedFilesChatWritesEnabled),
 		"monthly_soft_spend_limit_usd":      strconv.FormatFloat(cfg.MonthlySoftSpendLimitUSD, 'f', -1, 64),
 	}
 }
@@ -115,6 +116,7 @@ func buildWorkspaceSettings(cfg *config.Config, st settings.Store) (*settings.Se
 		"context_handles_enabled":           applyBoolSetting(cfg.SetContextHandlesEnabled),
 		"team_chats_shared_by_default":      applyBoolSetting(cfg.SetTeamChatsSharedByDefault),
 		"shared_files_max_total_mb":         applyIntSetting(cfg.SetSharedFilesMaxTotalMB),
+		"shared_files_chat_writes_enabled":  applyBoolSetting(cfg.SetSharedFilesChatWritesEnabled),
 		"monthly_soft_spend_limit_usd":      applyFloatSetting(cfg.SetMonthlySoftSpendLimitUSD),
 	}
 	svc, err := settings.NewService(st, defaults, hooks)
