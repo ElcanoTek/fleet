@@ -463,6 +463,27 @@ func TestClaimApprovalResume_TimeoutOfResumeStagedCardSkipsResume(t *testing.T) 
 	}
 }
 
+// The connector card is inserted armed in one statement, so it carries the
+// staged-by-resume fact from that insert.
+func TestStageEnableMCPConnectorsApproval_RecordsStagedByResume(t *testing.T) {
+	t.Parallel()
+
+	s := newTestStore(t)
+	ctx := context.Background()
+	conv := resumeConv(t, s)
+	a, _, err := s.StageEnableMCPConnectorsApproval(ctx, resumeUser, conv.ID, "enable_mcp_connectors", "call_1", `{}`, 0, true, nil)
+	if err != nil {
+		t.Fatalf("StageEnableMCPConnectorsApproval: %v", err)
+	}
+	if ok, err := s.ClaimApproval(ctx, resumeUser, a.ID, "rejected", "Approval timed out — auto-denied."); err != nil || !ok {
+		t.Fatalf("ClaimApproval = %t, %v", ok, err)
+	}
+	res := claimResume(t, s, conv.ID)
+	if res.Input != nil || res.Skipped != ApprovalResumeSkipTimedOut {
+		t.Fatalf("timed-out connector card staged by a resume turn = %+v, want Skipped=%q and nil Input", res, ApprovalResumeSkipTimedOut)
+	}
+}
+
 // The restart rule: a due resume that never started (armed settled card, or
 // a queued resume row) is dropped with one note per conversation; a pending
 // armed card stays armed; nothing is re-run and a second boot notes nothing.
