@@ -109,7 +109,7 @@ func TestNeedsSetupForPrompt_RunningIsTheBaseNameCatalog(t *testing.T) {
 	m.alwaysOnServerMetadata = []AlwaysOnServerInfo{{Name: "jira_prod"}}
 	m.optionalServerMetadata = []OptionalServerInfo{{Name: "opt_mcp"}}
 	got := m.needsSetupForPrompt("victoria", nil)
-	names := []string{}
+	names := make([]string, 0, len(got))
 	for _, c := range got {
 		names = append(names, c.Name)
 	}
