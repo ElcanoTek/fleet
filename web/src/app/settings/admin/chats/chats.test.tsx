@@ -141,8 +141,9 @@ describe("AdminChatsPage", () => {
     expect(diff.textContent).toContain("+ - Append to the shared team log.");
     const save = screen.getByRole("button", { name: "Save instructions" }) as HTMLButtonElement;
     expect(save.disabled).toBe(true);
+    // Message, settings, patrol, delete: the patrol's reason is the third.
     const reasons = screen.getAllByLabelText("Reason (recorded and shown in the chat)");
-    fireEvent.change(reasons[reasons.length - 1], { target: { value: "log moved" } });
+    fireEvent.change(reasons[2], { target: { value: "log moved" } });
     fireEvent.click(save);
     await waitFor(() => expect(calls.some((c) => c.method === "PATCH")).toBe(true));
     const patch = calls.find((c) => c.method === "PATCH");
@@ -172,5 +173,25 @@ describe("chat settings", () => {
     await waitFor(() => expect(calls.some((c) => c.method === "PATCH" && c.url === `/api/admin/chats/${CHAT.id}`)).toBe(true));
     const patch = calls.find((c) => c.method === "PATCH");
     expect(patch?.body).toEqual({ reason: "client asked", model: "provider/other-model" });
+  });
+});
+
+describe("delete", () => {
+  it("moves a chat to the recycle bin, and only purges after the title is typed", async () => {
+    await openChat();
+    fireEvent.change(screen.getByTestId("admin-delete-reason"), { target: { value: "forked by mistake" } });
+    fireEvent.click(screen.getByRole("button", { name: "Move to recycle bin" }));
+    await waitFor(() => expect(calls.some((c) => c.url.endsWith("/requests"))).toBe(true));
+    expect(calls.find((c) => c.url.endsWith("/requests"))?.body).toEqual({ kind: "delete", reason: "forked by mistake" });
+
+    const purge = screen.getByRole("button", { name: "Delete permanently" }) as HTMLButtonElement;
+    expect(purge.disabled).toBe(true);
+    fireEvent.change(screen.getByTestId("admin-delete-confirm"), { target: { value: "wrong" } });
+    expect(purge.disabled).toBe(true);
+    fireEvent.change(screen.getByTestId("admin-delete-confirm"), { target: { value: CHAT.title } });
+    expect(purge.disabled).toBe(false);
+    fireEvent.click(purge);
+    await waitFor(() => expect(calls.filter((c) => c.url.endsWith("/requests")).length).toBe(2));
+    expect(calls.filter((c) => c.url.endsWith("/requests"))[1].body).toEqual({ kind: "purge", reason: "forked by mistake", confirm: CHAT.title });
   });
 });

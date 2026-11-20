@@ -465,7 +465,9 @@ aparece na conversa como **Mensagem de um administrador** com o e-mail dessa
 pessoa, nunca como palavras suas, e uma nota curta no chat diz o que foi
 alterado e por quê. A resposta é executada com as suas conexões e
 pergunta sempre a você antes de qualquer ação que exija aprovação, mesmo que o
-chat aprove automaticamente.
+chat aprove automaticamente. Um administrador também pode arquivar ou excluir
+um chat; um chat excluído fica 30 dias em uma lixeira, então peça para
+restaurá-lo se foi um engano.
 
 ### Conversas longas
 

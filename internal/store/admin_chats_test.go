@@ -142,7 +142,7 @@ func TestAdminRequests_MessageQueuesAsOwnerWithSender(t *testing.T) {
 	if _, err := s.CreateAdminRequest(ctx, AdminRequestInput{Actor: cliAdmin, Kind: AdminRequestMessage, ConversationID: c.ID, Payload: " ", Reason: "r"}); err == nil {
 		t.Fatal("an empty message must be refused")
 	}
-	if _, err := s.CreateAdminRequest(ctx, AdminRequestInput{Actor: cliAdmin, Kind: "delete", ConversationID: c.ID, Reason: "r"}); err == nil {
+	if _, err := s.CreateAdminRequest(ctx, AdminRequestInput{Actor: cliAdmin, Kind: "explode", ConversationID: c.ID, Reason: "r"}); err == nil {
 		t.Fatal("an unknown kind must be refused")
 	}
 
@@ -401,5 +401,67 @@ func TestAdminRequests_ClaimAndStale(t *testing.T) {
 	}
 	if got, _ := s.GetAdminRequest(ctx, req.ID); got.State != AdminRequestFailed || !strings.Contains(got.Result, "interrupted") {
 		t.Fatalf("stale request = %+v", got)
+	}
+}
+
+func TestAdminRecycleBin(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	ctx := context.Background()
+	owner := "owner@client.example"
+	c, err := s.CreateConversation(ctx, owner, "Kartik's fork", "victoria", "m1", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateChatSchedule(ctx, ChatScheduleInput{ConversationID: c.ID, UserEmail: owner, Prompt: "p", CronExpr: "0 9 * * *"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateAdminRequest(ctx, AdminRequestInput{Actor: cliAdmin, Kind: AdminRequestRestore, ConversationID: c.ID, Reason: "r"}); !errors.Is(err, ErrAdminChatNotAllowed) {
+		t.Fatalf("restore of a live chat err = %v", err)
+	}
+	paused, err := s.AdminMoveChatToBin(ctx, c.ID)
+	if err != nil || paused != 1 {
+		t.Fatalf("to bin = %d, %v", paused, err)
+	}
+	if _, err := s.AdminGetChat(ctx, c.ID); !errors.Is(err, ErrConversationNotFound) {
+		t.Fatalf("a binned chat is still live: %v", err)
+	}
+	binned, err := s.AdminGetChatAny(ctx, c.ID[:8])
+	if err != nil || binned.DeletedAt == nil || binned.PurgesAt == nil || *binned.PurgesAt-*binned.DeletedAt != int64(AdminRecycleBinDays*24*3600) {
+		t.Fatalf("binned = %+v, %v", binned, err)
+	}
+	if live, _ := s.AdminListChats(ctx, AdminChatFilter{}); len(live) != 0 {
+		t.Fatalf("live list shows the binned chat: %+v", live)
+	}
+	if bin, _ := s.AdminListChats(ctx, AdminChatFilter{Deleted: true}); len(bin) != 1 || bin[0].ID != c.ID {
+		t.Fatalf("bin = %+v", bin)
+	}
+	if _, err := s.CreateAdminRequest(ctx, AdminRequestInput{Actor: cliAdmin, Kind: AdminRequestDelete, ConversationID: c.ID, Reason: "r"}); !errors.Is(err, ErrConversationNotFound) {
+		t.Fatalf("delete of a binned chat err = %v", err)
+	}
+	if _, err := s.CreateAdminRequest(ctx, AdminRequestInput{Actor: cliAdmin, Kind: AdminRequestRestore, ConversationID: c.ID, Reason: "r"}); err != nil {
+		t.Fatalf("restore request: %v", err)
+	}
+	if err := s.AdminRestoreChat(ctx, c.ID); err != nil {
+		t.Fatal(err)
+	}
+	back, err := s.AdminGetChat(ctx, c.ID)
+	if err != nil || back.ActivePatrols != 0 {
+		t.Fatalf("restored = %+v, %v (patrols stay paused)", back, err)
+	}
+	if err := s.AdminRestoreChat(ctx, c.ID); !errors.Is(err, ErrAdminChatNotAllowed) {
+		t.Fatalf("second restore err = %v", err)
+	}
+	if err := s.AdminAppendNotice(ctx, cliAdmin, c.ID, "kept for the record"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AdminPurgeChat(ctx, c.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AdminGetChatAny(ctx, c.ID); !errors.Is(err, ErrConversationNotFound) {
+		t.Fatalf("purged chat still found: %v", err)
+	}
+	if acts, _ := s.ListAdminActions(ctx, c.ID, 10); len(acts) == 0 {
+		t.Fatal("the record of admin actions must outlive a purged chat")
 	}
 }

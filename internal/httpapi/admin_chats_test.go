@@ -145,7 +145,7 @@ func TestAdminChatRoutes(t *testing.T) {
 	if rec := adminDo(t, h, "admin@x", http.MethodGet, "/admin/chat-requests/"+reqResp.Request.ID, ""); rec.Code != http.StatusOK {
 		t.Fatalf("request status = %d", rec.Code)
 	}
-	if rec := adminDo(t, h, "admin@x", http.MethodPost, "/admin/chats/"+conv.ID+"/requests", `{"kind":"delete","reason":"r"}`); rec.Code != http.StatusBadRequest {
+	if rec := adminDo(t, h, "admin@x", http.MethodPost, "/admin/chats/"+conv.ID+"/requests", `{"kind":"explode","reason":"r"}`); rec.Code != http.StatusBadRequest {
 		t.Fatalf("unknown kind = %d", rec.Code)
 	}
 
@@ -287,5 +287,44 @@ func TestAdminMessageTurnIsManual(t *testing.T) {
 	a.liveApprovalMode = func(context.Context) string { return store.ConversationApprovalAutonomous }
 	if a.effectiveApprovalMode() != store.ConversationApprovalManual {
 		t.Fatal("the live approval mode overrode Manual on an admin-message turn")
+func TestAdminChatDeleteRestorePurge(t *testing.T) {
+	_, st, _, h := adminChatsFixture(t)
+	ctx := context.Background()
+	conv, err := st.CreateConversation(ctx, "owner@x", "Kartik fork", "victoria", "m1", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	post := func(body string) *httptest.ResponseRecorder {
+		return adminDo(t, h, "admin@x", http.MethodPost, "/admin/chats/"+conv.ID+"/requests", body)
+	}
+	if rec := post(`{"kind":"delete","reason":"forked by mistake"}`); rec.Code != http.StatusAccepted || !strings.Contains(rec.Body.String(), `"state":"done"`) {
+		t.Fatalf("delete = %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := adminDo(t, h, "admin@x", http.MethodGet, "/admin/chats", ""); strings.Contains(rec.Body.String(), conv.ID) {
+		t.Fatal("a deleted chat is still listed")
+	}
+	if rec := adminDo(t, h, "admin@x", http.MethodGet, "/admin/chats?deleted=1", ""); !strings.Contains(rec.Body.String(), conv.ID) || !strings.Contains(rec.Body.String(), "purges_at") {
+		t.Fatalf("recycle bin = %s", rec.Body.String())
+	}
+	if rec := post(`{"kind":"restore","reason":"wrong chat"}`); rec.Code != http.StatusAccepted {
+		t.Fatalf("restore = %d %s", rec.Code, rec.Body.String())
+	}
+	if _, err := st.AdminGetChat(ctx, conv.ID); err != nil {
+		t.Fatalf("restored chat: %v", err)
+	}
+	if rec := post(`{"kind":"purge","reason":"disk full"}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("purge without confirmation = %d", rec.Code)
+	}
+	if rec := post(`{"kind":"purge","reason":"disk full","confirm":"wrong title"}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("purge with the wrong title = %d", rec.Code)
+	}
+	if rec := post(`{"kind":"purge","reason":"disk full","confirm":"Kartik fork"}`); rec.Code != http.StatusAccepted || !strings.Contains(rec.Body.String(), "deleted permanently") {
+		t.Fatalf("purge = %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := adminDo(t, h, "admin@x", http.MethodGet, "/admin/chats/"+conv.ID, ""); rec.Code != http.StatusNotFound {
+		t.Fatalf("purged chat GET = %d", rec.Code)
+	}
+	if rec := adminDo(t, h, "member@x", http.MethodPost, "/admin/chats/"+conv.ID+"/requests", `{"kind":"delete","reason":"x"}`); rec.Code != http.StatusForbidden {
+		t.Fatalf("member delete = %d", rec.Code)
 	}
 }

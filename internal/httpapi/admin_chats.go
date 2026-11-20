@@ -14,6 +14,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
+	"github.com/ElcanoTek/fleet/internal/tools"
 )
 
 // Chat administration (ADR-0115): the admin-only /admin/chats routes behind
@@ -28,6 +29,10 @@ import (
 type adminChatStore interface {
 	AdminListChats(ctx context.Context, f store.AdminChatFilter) ([]store.AdminChat, error)
 	AdminGetChat(ctx context.Context, idOrPrefix string) (store.AdminChat, error)
+	AdminGetChatAny(ctx context.Context, idOrPrefix string) (store.AdminChat, error)
+	AdminMoveChatToBin(ctx context.Context, convID string) (int, error)
+	AdminRestoreChat(ctx context.Context, convID string) error
+	AdminPurgeChat(ctx context.Context, convID string) error
 	AdminChatTranscript(ctx context.Context, convID string, o store.AdminTranscriptOptions) ([]store.AdminTranscriptEntry, error)
 	AdminAppendNotice(ctx context.Context, a store.AdminActor, convID, text string) error
 	AdminUpdateChat(ctx context.Context, a store.AdminActor, convID string, c store.AdminChatChange, reason string) (store.AdminChat, error)
@@ -136,7 +141,8 @@ func (s *Server) executeAdminRequest(ctx context.Context, st adminChatStore, r s
 			s.maybeDrainQueue(r.ConversationID)
 			log.Info("admin requests: message queued", "input_id", row.ID)
 		}
-	case store.AdminRequestStop, store.AdminRequestTransfer, store.AdminRequestArchive:
+	case store.AdminRequestStop, store.AdminRequestTransfer, store.AdminRequestArchive,
+		store.AdminRequestDelete, store.AdminRequestRestore, store.AdminRequestPurge:
 		// Claimed first: the browser path and the scheduler sweep can both
 		// reach a pending request, and these act exactly once.
 		ok, err := st.ClaimAdminRequest(ctx, r.ID)
@@ -212,7 +218,83 @@ func (s *Server) executeClaimedAdminRequest(ctx context.Context, st adminChatSto
 		}
 		s.finishAdminRequest(ctx, st, r, store.AdminRequestDone, strings.TrimSuffix(what, " this chat")+" the chat",
 			fmt.Sprintf("An administrator %s. Reason: %s", what, r.Reason))
+	case store.AdminRequestDelete:
+		s.adminDeleteToBin(ctx, st, r)
+	case store.AdminRequestRestore:
+		if err := st.AdminRestoreChat(ctx, r.ConversationID); err != nil {
+			s.finishAdminRequest(ctx, st, r, store.AdminRequestFailed, err.Error(), "")
+			return
+		}
+		s.finishAdminRequest(ctx, st, r, store.AdminRequestDone, "restored from the recycle bin; its patrols stay paused",
+			fmt.Sprintf("An administrator restored this chat from the recycle bin. Its patrols are paused until someone resumes them. Reason: %s", r.Reason))
+	case store.AdminRequestPurge:
+		s.adminPurge(ctx, st, r)
 	}
+}
+
+// adminDeleteToBin is an administrator's delete: stop the chat's work, note
+// it in the chat (seen if it is restored), then move it to the recycle bin
+// (patrols paused, tombstoned) and revoke everyone who could reach it — the
+// owner's delete path (handleConversationDelete), except that the
+// participants' private attachments are kept until the chat is purged, so a
+// restore gives everything back.
+func (s *Server) adminDeleteToBin(ctx context.Context, st adminChatStore, r store.AdminRequest) {
+	s.adminStopConversation(ctx, r.ConversationID)
+	actor := store.AdminActor{Email: r.Actor, Via: r.Via}
+	_ = st.AdminAppendNotice(ctx, actor, r.ConversationID,
+		fmt.Sprintf("An administrator moved this chat to the recycle bin; it is deleted for good after %d days unless restored. Reason: %s", store.AdminRecycleBinDays, r.Reason))
+	paused, err := st.AdminMoveChatToBin(ctx, r.ConversationID)
+	if err != nil {
+		s.finishAdminRequest(ctx, st, r, store.AdminRequestFailed, "delete failed: "+err.Error(), "")
+		return
+	}
+	s.revokeDeletedConversation(ctx, r.ConversationID, false)
+	s.finishAdminRequest(ctx, st, r, store.AdminRequestDone,
+		fmt.Sprintf("moved to the recycle bin (%d patrol(s) paused); deleted for good after %d days unless restored", paused, store.AdminRecycleBinDays), "")
+}
+
+// adminPurge deletes a chat permanently at once — the emergency path for a
+// full disk. The chat's workspace is reclaimed by the orphan sweep, started
+// right away.
+func (s *Server) adminPurge(ctx context.Context, st adminChatStore, r store.AdminRequest) {
+	s.adminStopConversation(ctx, r.ConversationID)
+	s.revokeDeletedConversation(ctx, r.ConversationID, true)
+	if err := st.AdminPurgeChat(ctx, r.ConversationID); err != nil {
+		s.finishAdminRequest(ctx, st, r, store.AdminRequestFailed, "permanent delete failed: "+err.Error(), "")
+		return
+	}
+	s.finishAdminRequest(ctx, st, r, store.AdminRequestDone, "deleted permanently; its files are reclaimed by the workspace sweep", "")
+	s.background.Go("httpapi.admin_purge_sweep", func() {
+		sctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		if n, err := s.store.SweepOrphanWorkspaces(sctx, tools.WorkspaceDirForConversation("")); err != nil {
+			logging.From(sctx).Error("admin purge: workspace sweep failed", "err", safe.LogSafe(err.Error()))
+		} else if n > 0 {
+			logging.From(sctx).Info("admin purge: reclaimed workspaces", "count", n)
+		}
+	})
+}
+
+// revokeDeletedConversation is the clean-up half of the owner's delete
+// (handleConversationDelete): everyone who could reach the chat loses its
+// turns, approvals and live streams, and its sandbox and session approvals
+// are released. dropStash also removes the participants' private
+// attachments, which a permanent delete does and a recycle-bin delete keeps.
+func (s *Server) revokeDeletedConversation(ctx context.Context, convID string, dropStash bool) {
+	owner := ""
+	if conv, err := s.store.GetConversationOwnerAndMultiplayer(ctx, convID); err == nil && conv != nil {
+		owner = conv.UserEmail
+	} else if c, ok := s.adminChats(); ok {
+		if binned, aerr := c.AdminGetChatAny(ctx, convID); aerr == nil {
+			owner = binned.OwnerEmail
+		}
+	}
+	s.enforceMultiplayerRevocation(ctx, convID, &store.Conversation{UserEmail: owner}, nil)
+	if dropStash {
+		s.removeConversationPrivateStash(convID)
+	}
+	s.releasePersistentSandbox(convID)
+	s.sessionApprovals.Forget(convID)
 }
 
 func (s *Server) finishAdminRequest(ctx context.Context, st adminChatStore, r store.AdminRequest, state, result, notice string) {
@@ -295,10 +377,11 @@ func (s *Server) handleAdminChats(w http.ResponseWriter, r *http.Request) {
 	}
 	q := r.URL.Query()
 	days, _ := strconv.Atoi(q.Get("active_days"))
+	deleted := q.Get("deleted") == "1" || q.Get("deleted") == "true"
 	limit, _ := strconv.Atoi(q.Get("limit"))
 	chats, err := st.AdminListChats(r.Context(), store.AdminChatFilter{
 		OwnerEmail: q.Get("owner"), Search: q.Get("q"), ActiveWithinDays: days,
-		IncludeArchived: q.Get("archived") == "1" || q.Get("archived") == "true", Limit: limit,
+		IncludeArchived: q.Get("archived") == "1" || q.Get("archived") == "true", Deleted: deleted, Limit: limit,
 	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -330,7 +413,9 @@ func (s *Server) handleAdminChatItem(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	chat, err := st.AdminGetChat(r.Context(), parts[0])
+	// Any chat, including one in the recycle bin: it can be read, restored or
+	// purged there; everything that changes a live chat refuses it.
+	chat, err := st.AdminGetChatAny(r.Context(), parts[0])
 	if err != nil {
 		adminChatError(w, err)
 		return
@@ -465,6 +550,9 @@ func (s *Server) adminChatRequest(w http.ResponseWriter, r *http.Request, st adm
 		Message string `json:"message"`
 		ToEmail string `json:"to_email"`
 		Reason  string `json:"reason"`
+		// Confirm must repeat the chat's title (or id) for a permanent
+		// delete, so it is never one stray click.
+		Confirm string `json:"confirm"`
 	}
 	if !decodeJSONBody(w, r, &body) {
 		return
@@ -475,9 +563,14 @@ func (s *Server) adminChatRequest(w http.ResponseWriter, r *http.Request, st adm
 		payload = body.Message
 	case store.AdminRequestTransfer:
 		payload = body.ToEmail
-	case store.AdminRequestStop:
+	case store.AdminRequestStop, store.AdminRequestDelete, store.AdminRequestRestore:
+	case store.AdminRequestPurge:
+		if c := strings.TrimSpace(body.Confirm); c == "" || (c != strings.TrimSpace(chat.Title) && c != chat.ID) {
+			http.Error(w, "type the chat's title to confirm a permanent delete", http.StatusBadRequest)
+			return
+		}
 	default:
-		http.Error(w, "kind must be message, stop or transfer (archive through PATCH)", http.StatusBadRequest)
+		http.Error(w, "kind must be message, stop, transfer, delete, restore or purge (archive through PATCH)", http.StatusBadRequest)
 		return
 	}
 	req, err := st.CreateAdminRequest(r.Context(), store.AdminRequestInput{

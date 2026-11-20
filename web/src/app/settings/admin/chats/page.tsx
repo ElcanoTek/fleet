@@ -39,6 +39,9 @@ export type AdminChat = {
   pending_approvals: number;
   queued_inputs: number;
   turn_running: boolean;
+  /** Set on a chat in the recycle bin: when it was deleted, and purged. */
+  deleted_at?: number;
+  purges_at?: number;
 };
 
 export type AdminPatrol = {
@@ -175,6 +178,7 @@ export default function AdminChatsPage() {
   const [owner, setOwner] = useState("");
   const [days, setDays] = useState("30");
   const [archived, setArchived] = useState(false);
+  const [bin, setBin] = useState(false);
   const [chats, setChats] = useState<AdminChat[] | null>(null);
   const [listError, setListError] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
@@ -189,6 +193,7 @@ export default function AdminChatsPage() {
     if (owner.trim()) params.set("owner", owner.trim());
     if (days !== "0") params.set("active_days", days);
     if (archived) params.set("archived", "1");
+    if (bin) params.set("deleted", "1");
     params.set("limit", "200");
     try {
       const data = await getGatedJson<{ chats: AdminChat[] }>(`/api/admin/chats?${params.toString()}`, { label: tr("Chats") });
@@ -199,7 +204,7 @@ export default function AdminChatsPage() {
     } catch (err) {
       setListError(errorMessage(err, tr("Couldn’t load chats.")));
     }
-  }, [query, owner, days, archived]);
+  }, [query, owner, days, archived, bin]);
 
   useEffect(() => {
     if (admin !== "admin") return;
@@ -235,6 +240,10 @@ export default function AdminChatsPage() {
             {tr("Include archived")}
           </label>
         </div>
+        <label className="mb-3 flex items-center gap-2 text-[0.8rem] text-[var(--color-text-secondary)]">
+          <input type="checkbox" checked={bin} onChange={(e) => setBin(e.target.checked)} data-testid="admin-chats-bin" />
+          {tr("Show the recycle bin (deleted chats, restorable for 30 days)")}
+        </label>
         {listError ? <NoticeBanner tone="danger">{listError}</NoticeBanner> : null}
         {chats === null ? (
           listError ? null : <p className="text-sm text-[var(--color-text-muted)]">{tr("Loading chats…")}</p>
@@ -259,6 +268,9 @@ export default function AdminChatsPage() {
                     {c.pending_approvals > 0 ? <ConnBadge variant="warn">{tr("{0} card(s) waiting", [c.pending_approvals])}</ConnBadge> : null}
                     {c.archived ? <ConnBadge>{tr("archived")}</ConnBadge> : null}
                     {c.lockdown ? <ConnBadge variant="overridden">{tr("Lockdown")}</ConnBadge> : null}
+                    {c.purges_at ? (
+                      <ConnBadge variant="warn">{tr("deleted · gone {0}", [new Date(c.purges_at * 1000).toLocaleDateString()])}</ConnBadge>
+                    ) : null}
                   </span>
                 </button>
                 {selected === c.id ? <ChatAdminPanel chatId={c.id} onChanged={() => void load()} /> : null}
@@ -327,11 +339,16 @@ function ChatAdminPanel({ chatId, onChanged }: { chatId: string; onChanged: () =
       <p className="m-0 text-[0.78rem] text-[var(--color-text-muted)] [overflow-wrap:anywhere]">
         {tr("{0} · owner {1} · model {2} · approvals {3} · {4} queued", [c.id, c.owner_email, c.model || "—", c.approval_mode, c.queued_inputs])}
       </p>
-      <MessagePanel chat={c} onDone={changed} />
-      <ChatSettingsPanel chat={c} onDone={changed} />
-      {detail.patrols.map((p) => (
-        <PatrolPanel key={p.id} patrol={p} onDone={changed} />
-      ))}
+      {c.deleted_at ? null : (
+        <>
+          <MessagePanel chat={c} onDone={changed} />
+          <ChatSettingsPanel chat={c} onDone={changed} />
+          {detail.patrols.map((p) => (
+            <PatrolPanel key={p.id} patrol={p} onDone={changed} />
+          ))}
+        </>
+      )}
+      <DeletePanel chat={c} onDone={changed} />
       <ConnPanel>
         <ConnPanelHead title={tr("Transcript")}>
           <label className="flex items-center gap-2 text-[0.75rem] text-[var(--color-text-secondary)]">
@@ -682,6 +699,82 @@ function PatrolPanel({ patrol, onDone }: { patrol: AdminPatrol; onDone: () => vo
         </div>
       ) : null}
       {status ? <div className="mt-2"><Status tone={status.error ? "error" : "ok"} text={status.text} /></div> : null}
+    </ConnPanel>
+  );
+}
+
+// DeletePanel: the safe path first (archive lives in the settings panel; a
+// delete goes to the recycle bin and can be restored), the emergency path
+// last (a permanent delete, confirmed by typing the chat's title).
+function DeletePanel({ chat, onDone }: { chat: AdminChat; onDone: () => void }) {
+  const [reason, setReason] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [busy, setBusy] = useState(false);
+  const { status, failed, follow, setStatus, setFailed } = useRequestFollower(onDone);
+  const binned = Boolean(chat.deleted_at);
+  const submit = async (kind: "delete" | "restore" | "purge") => {
+    setBusy(true);
+    setStatus(null);
+    try {
+      const body = await sendJSON<{ request: AdminRequest }>(`/api/admin/chats/${encodeURIComponent(chat.id)}/requests`, "POST", {
+        kind,
+        reason,
+        confirm: kind === "purge" ? confirm : undefined,
+      });
+      if (body) follow(body.request);
+    } catch (err) {
+      setStatus(errorMessage(err, tr("The change failed")));
+      setFailed(true);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const titleMatches = confirm.trim() !== "" && (confirm.trim() === chat.title.trim() || confirm.trim() === chat.id);
+  return (
+    <ConnPanel>
+      <ConnPanelHead title={binned ? tr("In the recycle bin") : tr("Delete")}>
+        {binned && chat.purges_at ? (
+          <ConnBadge variant="warn">{tr("deleted for good on {0}", [new Date(chat.purges_at * 1000).toLocaleDateString()])}</ConnBadge>
+        ) : null}
+      </ConnPanelHead>
+      <ConnPanelSub>
+        {binned
+          ? tr("Restore brings the chat back for its owner; its patrols stay paused until someone resumes them. Delete permanently removes it and its files now.")
+          : tr("Prefer archiving. Delete moves the chat to the recycle bin: it disappears and stops, and is deleted for good after 30 days unless restored. Delete permanently is for emergencies, such as a full disk, and cannot be undone.")}
+      </ConnPanelSub>
+      <Field label={tr("Reason (recorded and shown in the chat)")}>
+        <input className={SETTINGS_INPUT} value={reason} onChange={(e) => setReason(e.target.value)} data-testid="admin-delete-reason" />
+      </Field>
+      <div className="mt-2 flex flex-wrap items-end gap-2">
+        {binned ? (
+          <button type="button" className={btnClass({ variant: "primary", sm: true })} disabled={busy || !reason.trim()} onClick={() => void submit("restore")}>
+            {tr("Restore")}
+          </button>
+        ) : (
+          <button type="button" className={btnClass({ sm: true, reveal: true, danger: true })} disabled={busy || !reason.trim()} onClick={() => void submit("delete")}>
+            {tr("Move to recycle bin")}
+          </button>
+        )}
+        <input
+          className={cn(SETTINGS_INPUT, "max-w-[18rem]")}
+          placeholder={tr("Type the chat’s title to delete permanently")}
+          aria-label={tr("Type the chat’s title to delete permanently")}
+          value={confirm}
+          onChange={(e) => setConfirm(e.target.value)}
+          data-testid="admin-delete-confirm"
+        />
+        <button
+          type="button"
+          className={btnClass({ sm: true, armed: titleMatches })}
+          disabled={busy || !reason.trim() || !titleMatches}
+          onClick={() => void submit("purge")}
+        >
+          {tr("Delete permanently")}
+        </button>
+      </div>
+      <div className="mt-2">
+        <Status tone={failed ? "error" : "ok"} text={status} />
+      </div>
     </ConnPanel>
   );
 }
