@@ -6143,5 +6143,7 @@
   "Resize sidebar": "Redimensionar barra lateral",
   "Drag to resize the sidebar": "Arrastra para redimensionar la barra lateral",
   "patrol not found": "No se encontró la patrulla",
-  "Open chat: {0}": "Abrir chat: {0}"
+  "Open chat: {0}": "Abrir chat: {0}",
+  "Hide this project's chats": "Ocultar los chats de este proyecto",
+  "Show this project's chats": "Mostrar los chats de este proyecto"
 }

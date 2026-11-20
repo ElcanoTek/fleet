@@ -2225,11 +2225,14 @@ export function ConversationSidebar({
       : renderOwnRow(c, { icon });
 
   // ── A project's row, and its chats under it ───────────────────────────────
-  // The NAME opens the project's home and expands it; the icon at its left
-  // only folds (it turns into a chevron on hover and focus). Two buttons, so
-  // each does one thing and says so. The whole group (row + expanded chats)
-  // is the drop zone for a dragged chat, not just the row: dropping onto an
-  // expanded project's list is the natural gesture.
+  // Three targets, each doing one thing and saying so: the NAME opens the
+  // project's page (and leaves the fold as it is); the chevron at its left
+  // folds and unfolds the project's chats here in the sidebar; the dots open
+  // its menu. The chevron takes the icon's place on hover and keyboard focus,
+  // and is always shown on a touch screen, where there is no hover to reveal
+  // it. The whole group (row + expanded chats) is the drop zone for a dragged
+  // chat, not just the row: dropping onto an expanded project's list is the
+  // natural gesture.
   const expandProject = (id: string) => setExpandedProjects((s) => (s.has(id) ? s : new Set(s).add(id)));
   const renderProject = ({ project, chats }: { project: Project; chats: ConversationSummary[] }) => {
     const expanded = expandedProjects.has(project.id);
@@ -2324,7 +2327,8 @@ export function ConversationSidebar({
               type="button"
               aria-expanded={expanded}
               aria-label={tr("Project {0} ({1} chats)", [project.name, chats.length])}
-              title={expanded ? tr("Collapse") : tr("Expand")}
+              title={expanded ? tr("Hide this project's chats") : tr("Show this project's chats")}
+              data-testid="project-fold"
               className="hit-area-touch group/fold relative ml-1 inline-flex size-7 shrink-0 items-center justify-center rounded-md transition hover:bg-[var(--rail-hover)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
               onClick={() =>
                 setExpandedProjects((s) => {
@@ -2337,12 +2341,12 @@ export function ConversationSidebar({
             >
               <Icon
                 name="briefcase"
-                className={`${railIconClass(active)} transition group-hover:opacity-0 group-focus-visible/fold:opacity-0 any-pointer-coarse:group-hover:opacity-80`}
+                className={`${railIconClass(active)} transition group-hover:opacity-0 group-focus-visible/fold:opacity-0 any-pointer-coarse:hidden`}
               />
               <Icon
                 name="chevron-right"
                 className={[
-                  "absolute size-3.5 text-[var(--color-text-secondary)] opacity-0 transition group-hover:opacity-100 group-focus-visible/fold:opacity-100 any-pointer-coarse:hidden",
+                  "absolute size-3.5 text-[var(--color-text-secondary)] opacity-0 transition group-hover:opacity-100 group-focus-visible/fold:opacity-100 any-pointer-coarse:static any-pointer-coarse:size-4 any-pointer-coarse:opacity-100",
                   expanded ? "rotate-90" : "",
                 ].join(" ")}
               />
@@ -2360,10 +2364,7 @@ export function ConversationSidebar({
                   ? "font-medium text-[var(--color-text-primary)]"
                   : "text-[var(--color-text-secondary)] group-hover:text-[var(--color-text-primary)]",
               ].join(" ")}
-              onClick={() => {
-                expandProject(project.id);
-                openHome();
-              }}
+              onClick={openHome}
             >
               <span className="min-w-0 flex-1 truncate">{project.name}</span>
               {teamShared && showStatus ? (

@@ -243,20 +243,54 @@ describe("ConversationSidebar — a project's empty state is viewer-aware", () =
 });
 
 describe("ConversationSidebar — project rows (decision #23)", () => {
-  it("opens the project's home AND expands it when the name is clicked", () => {
+  // Three targets on a project's row, each doing one thing: the name opens
+  // the project's page, the chevron folds its chats, the dots open its menu.
+  it("the name opens the project's page and leaves the fold as it is", () => {
     const onOpenProjectHome = vi.fn();
     renderSidebar({ onOpenProjectHome, teamSharedChatCounts: {} });
     const chevron = screen.getByRole("button", { name: "Project Scratch (0 chats)" });
     expect(chevron).toHaveAttribute("aria-expanded", "false");
 
     fireEvent.click(screen.getByRole("button", { name: "Open project Scratch" }));
+    expect(onOpenProjectHome).toHaveBeenCalledTimes(1);
     expect(onOpenProjectHome).toHaveBeenCalledWith("p-mine");
+    // Folded stays folded…
+    expect(chevron).toHaveAttribute("aria-expanded", "false");
+
+    // …and unfolded stays unfolded.
+    fireEvent.click(chevron);
     expect(chevron).toHaveAttribute("aria-expanded", "true");
     expect(emptyLine("p-mine")).toBe("No chats yet · New chat here");
-
-    // Clicking the name again keeps it open — opening never folds.
     fireEvent.click(screen.getByRole("button", { name: "Open project Scratch" }));
     expect(chevron).toHaveAttribute("aria-expanded", "true");
+    expect(onOpenProjectHome).toHaveBeenCalledTimes(2);
+  });
+
+  it("the dots open the menu, and neither open the page nor fold the project", async () => {
+    const onOpenProjectHome = vi.fn();
+    renderSidebar({ onOpenProjectHome });
+    const chevron = screen.getByRole("button", { name: "Project Scratch (0 chats)" });
+    fireEvent.click(screen.getByRole("button", { name: "Project options for Scratch" }));
+    expect(await screen.findByRole("menu", { name: "Options for project Scratch" })).toBeInTheDocument();
+    expect(onOpenProjectHome).not.toHaveBeenCalled();
+    expect(chevron).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("the three targets are three separate controls, the chevron shown always on a touch screen", () => {
+    renderSidebar({});
+    const chevron = screen.getByRole("button", { name: "Project Scratch (0 chats)" });
+    expect(chevron).toHaveAttribute("data-testid", "project-fold");
+    const name = screen.getByRole("button", { name: "Open project Scratch" });
+    const dots = screen.getByRole("button", { name: "Project options for Scratch" });
+    expect(new Set([chevron, name, dots]).size).toBe(3);
+    for (const el of [chevron, name, dots]) {
+      for (const other of [chevron, name, dots]) if (el !== other) expect(el.contains(other)).toBe(false);
+    }
+    expect(chevron).toHaveAttribute("title", "Show this project's chats");
+    // No hover on a touch screen: the chevron is drawn in place of the icon.
+    const [icon, arrow] = Array.from(chevron.querySelectorAll("svg"));
+    expect(icon.getAttribute("class")).toContain("any-pointer-coarse:hidden");
+    expect(arrow.getAttribute("class")).toContain("any-pointer-coarse:opacity-100");
   });
 
   it("only folds and unfolds from the chevron — it never opens the home", () => {

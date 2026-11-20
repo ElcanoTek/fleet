@@ -103,8 +103,12 @@ the redesign needed.
   and a project as `project:<id>` ([CHAT-ORDER.md](CHAT-ORDER.md)). A pinned
   project is listed here and not again under Projects.
 - **Projects** lists the first eight, then **All N projects** opens the rest
-  in place; the open project is never behind that fold. A project's chats
-  fold under it.
+  in place; the open project is never behind that fold. A project's row has
+  three targets, each doing one thing: the name opens the project's page (and
+  leaves the fold as it is), the chevron at its left shows or hides the
+  project's chats in the sidebar, and the dots open its menu. The chevron
+  takes the icon's place on hover and keyboard focus, and is always shown on
+  a touch screen.
 - **Chats** is the person's own unpinned, unfiled chats and, by default, the
   teammates' chats shared with them, in one list. Chips above it narrow it
   to **All**, **Mine**, **Shared** or **Patrols**, and each chip appears only
