@@ -386,8 +386,9 @@ func bashCommandRunsGitPushDepth(cmd string, depth int) bool {
 		}
 	}
 	writesPushText := anySegmentWritesPushText(segments)
+	assignOnlyOK := depth == 0 && !anySegmentMaySetVarAttributes(segments)
 	for _, seg := range segments {
-		if segmentIsGitPush(seg, writesPushText, depth) {
+		if segmentIsGitPush(seg, writesPushText, assignOnlyOK, depth) {
 			return true
 		}
 	}
@@ -1065,8 +1066,8 @@ var gitFlagsTakingArg = map[string]bool{
 	"--config-env": true,
 }
 
-func segmentIsGitPush(seg shellSegment, writesPushText bool, depth int) bool {
-	if segmentOnlyAssignsVariables(seg) {
+func segmentIsGitPush(seg shellSegment, writesPushText, assignOnlyOK bool, depth int) bool {
+	if assignOnlyOK && segmentOnlyAssignsVariables(seg) {
 		return false
 	}
 	res := skipShellWrappers(seg, writesPushText, depth)
@@ -1138,7 +1139,17 @@ var assignmentLeadKeywords = map[string]bool{
 //   - a segment that receives stdin (a pipe, here-doc or here-string) is
 //     left to the normal path: with no command name, bash hands a pipe's
 //     stdin to the substitution, so `echo 'git push' | f=$(sh)` runs the
-//     piped text, and the body `sh` alone looks harmless once parsed apart.
+//     piped text, and the body `sh` alone looks harmless once parsed apart;
+//   - the value must not be evaluated as arithmetic. Assigning to a variable
+//     with the integer attribute evaluates the value, and an array subscript
+//     there runs commands (`x='a[$(git push)]'; OPTIND=$x`). Bash's own
+//     integer and behaviour variables are refused by name
+//     (gitSensitiveAssignName), and a user attribute (`declare -i`/`-n`,
+//     `typeset`, `local`) can only come from the same `bash -c` script, so
+//     the caller only allows this at depth 0 when no word in the script can
+//     set one (anySegmentMaySetVarAttributes). Deeper scripts (eval strings,
+//     substitution bodies, `sh -c`) cannot see their parent's attributes and
+//     keep failing closed.
 //
 // Literal-value assignments never reach here dynamic, so their verdict is
 // unchanged.
@@ -1159,26 +1170,90 @@ func segmentOnlyAssignsVariables(seg shellSegment) bool {
 	return sawAssign
 }
 
+// attributeSettingCommands are the words that can give a variable the
+// integer or nameref attribute in the current shell (`declare -i f`,
+// `local -n r`), or run text the gate cannot see that might (`eval`,
+// `source`, `.`, an `alias` for one of them).
+var attributeSettingCommands = map[string]bool{
+	"declare": true,
+	"typeset": true,
+	"local":   true,
+	"eval":    true,
+	"source":  true,
+	".":       true,
+	"alias":   true,
+}
+
+// anySegmentMaySetVarAttributes reports whether any word of the script, in
+// any position, names an attributeSettingCommands entry. Matching every word
+// rather than the command word keeps wrappers (`builtin declare`,
+// `command typeset`) and function bodies covered.
+func anySegmentMaySetVarAttributes(segments []shellSegment) bool {
+	for _, seg := range segments {
+		for _, tok := range seg.tokens {
+			if attributeSettingCommands[executableBaseName(tok.val)] {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // gitSensitiveVarNames are variables whose value changes which program a
 // later command resolves to, which git config it reads, or what the shell
-// runs on its own (BASH_ENV, PS4 under xtrace, PROMPT_COMMAND).
+// runs on its own (BASH_ENV, PS4 under xtrace, PROMPT_COMMAND, EXECIGNORE),
+// plus bash's own variables that carry the integer attribute or evaluate
+// their value (OPTIND, RANDOM, HISTCMD, ...; every BASH* name is covered by
+// prefix in gitSensitiveAssignName).
 var gitSensitiveVarNames = map[string]bool{
 	"PATH":            true,
 	"HOME":            true,
 	"XDG_CONFIG_HOME": true,
 	"PREFIX":          true,
-	"BASH_ENV":        true,
 	"ENV":             true,
+	"PS0":             true,
+	"PS1":             true,
+	"PS2":             true,
+	"PS3":             true,
 	"PS4":             true,
 	"PROMPT_COMMAND":  true,
 	"IFS":             true,
 	"SHELLOPTS":       true,
-	"BASHOPTS":        true,
 	"CDPATH":          true,
+	"EXECIGNORE":      true,
+	"GLOBIGNORE":      true,
+	"GLOBSORT":        true,
+	"POSIXLY_CORRECT": true,
+	"TIMEFORMAT":      true,
 	"LD_PRELOAD":      true,
 	"LD_LIBRARY_PATH": true,
 	"LD_AUDIT":        true,
 	"SSH_ASKPASS":     true,
+	"OPTIND":          true,
+	"OPTERR":          true,
+	"OPTARG":          true,
+	"RANDOM":          true,
+	"SRANDOM":         true,
+	"SECONDS":         true,
+	"LINENO":          true,
+	"HISTCMD":         true,
+	"HISTSIZE":        true,
+	"HISTFILESIZE":    true,
+	"EPOCHSECONDS":    true,
+	"EPOCHREALTIME":   true,
+	"COLUMNS":         true,
+	"LINES":           true,
+	"TMOUT":           true,
+	"MAILCHECK":       true,
+	"FUNCNEST":        true,
+	"SHLVL":           true,
+	"PPID":            true,
+	"UID":             true,
+	"EUID":            true,
+	"GROUPS":          true,
+	"FUNCNAME":        true,
+	"DIRSTACK":        true,
+	"PIPESTATUS":      true,
 }
 
 // gitSensitiveAssignName matches names exactly: the bash tool runs
@@ -1187,7 +1262,7 @@ var gitSensitiveVarNames = map[string]bool{
 // plain shell variable.
 func gitSensitiveAssignName(tok string) bool {
 	name, _, _ := strings.Cut(tok, "=")
-	return strings.HasPrefix(name, "GIT_") || gitSensitiveVarNames[name]
+	return strings.HasPrefix(name, "GIT_") || strings.HasPrefix(name, "BASH") || gitSensitiveVarNames[name]
 }
 
 func nonGitCommandEmbedsGitPush(args []shellToken, depth int) bool {

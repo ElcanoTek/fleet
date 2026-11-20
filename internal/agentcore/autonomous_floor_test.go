@@ -466,6 +466,8 @@ func TestGitPushFloorBareAssignment(t *testing.T) {
 		`d=${HOME}/x`, // already allowed before: dynamic then a slash
 		`out=$(git status --porcelain)`,
 		`ls | head -1; f=$(date)`,
+		`export f=$(ls)`, // a command word, already allowed before
+		`OUT=$(ls); LATEST=$(ls -t | head -1)`,
 		`if f=$(ls); then echo "$f"; fi`,
 		`for x in a b; do n=$(wc -l "$x"); echo $n; done`,
 		`while line=$(head -1 f); do break; done`,
@@ -506,6 +508,27 @@ func TestGitPushFloorBareAssignment(t *testing.T) {
 		`printf 'git push' | { f=$(bash); }`,
 		`f=$(sh) <<< 'git push origin main'`,
 		"f=$(sh) <<'EOF'\ngit push origin main\nEOF",
+		// Integer-attribute targets evaluate the value as arithmetic, whose
+		// array subscripts run commands hidden in a variable.
+		`x='a[$(git push)]'; OPTIND=$x`,
+		`OPTIND=$(printf 'a[$(git push)]')`,
+		`RANDOM=$x`,
+		`HISTCMD=$x`,
+		`BASH_COMPAT=$x`,
+		`BASH_XTRACEFD=$x`,
+		`declare -i f; x='a[$(git push)]'; f=$x`,
+		`typeset -i f; f=$x`,
+		`fn() { local -i f; f=$x; }; fn`,
+		`declare -n r='a[$(git push)]'; r=$(date)`,
+		`builtin declare -i f; f=$x`,
+		`"decl""are" -i f; f=$x`,
+		`eval 'declare -i f'; f=$x`,
+		`. ./attrs.sh; f=$x`,
+		`source ./attrs.sh; f=$(date)`,
+		// Below the top level the parent's attributes are unknown.
+		`declare -i f; eval 'f=$x'`,
+		`bash -c 'f=$(ls)'`,
+		`echo $(f=$(ls))`,
 		// A later dynamic command word still fails closed.
 		`f=$(ls); $f`,
 		`f=$(printf git); $f push origin main`,
@@ -527,6 +550,8 @@ func TestGitPushFloorBareAssignment(t *testing.T) {
 		`HOME=$(mktemp -d)`,
 		`XDG_CONFIG_HOME=$(pwd)`,
 		`BASH_ENV=$(pwd)`,
+		`BASHOPTS=$(cat f)`,
+		`EXECIGNORE=$(cat f)`,
 		`PS4=$(cat f)`,
 		`IFS=$(printf ' ')`,
 		`LD_PRELOAD=$(cat f)`,
