@@ -331,8 +331,11 @@ func patrolSetPrompt(argv []string, stdin io.Reader, out, errW io.Writer) int {
 	if res.Notice != "" {
 		fmt.Fprintf(out, "notice written to the chat: %s\n", res.Notice)
 	}
-	if cur.FireInFlight {
-		fmt.Fprintln(out, "a run was in flight: it is superseded and the next run uses the new prompt")
+	if cur.FireInFlight && !after.RunningWithOldPrompt && after.QueuedRunsUpdated == 0 {
+		// Claimed by the scheduler but not yet in the chat's queue: the
+		// def_version bump supersedes it. A delivered fire is reported below
+		// as queued (rewritten) or running (keeps the old prompt).
+		fmt.Fprintln(out, "a run the scheduler had claimed but not yet started is superseded; the next run uses the new prompt")
 	}
 	if after.RunningWithOldPrompt {
 		fmt.Fprintln(out, "note: a run of this patrol is running right now; it finishes with the old prompt (stop it in the chat if it must not)")
