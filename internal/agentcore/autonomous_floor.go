@@ -386,8 +386,8 @@ func bashCommandRunsGitPushDepth(cmd string, depth int) bool {
 		}
 	}
 	writesPushText := anySegmentWritesPushText(segments)
-	assignOnlyOK := depth == 0 && !anySegmentMaySetVarAttributes(segments) &&
-		!(anySegmentReceivesStdin(segments) && (grouped || anySegmentIsCompound(segments)))
+	stdinMayReachAssign := anySegmentReceivesStdin(segments) && (grouped || anySegmentIsCompound(segments))
+	assignOnlyOK := depth == 0 && !stdinMayReachAssign && !anySegmentMaySetVarAttributes(segments)
 	for _, seg := range segments {
 		if segmentIsGitPush(seg, writesPushText, assignOnlyOK, depth) {
 			return true
