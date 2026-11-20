@@ -331,6 +331,39 @@ func validateAndComputeNextCron(cronExpr, tz string, now time.Time) (string, str
 	return cleanSpec, normTZ, next1.Unix(), nil
 }
 
+// PreviewChatScheduleCron validates a recurring patrol's cadence exactly as
+// an edit does (validateAndComputeNextCron: the cron parser, the timezone and
+// MinChatPatrolCronInterval) and returns its canonical form and its next n
+// firings after now, as Unix seconds. The administrator's schedule edit shows
+// these before it is applied.
+func PreviewChatScheduleCron(cronExpr, tz string, now time.Time, n int) (spec, zone string, runs []int64, err error) {
+	spec, zone, first, err := validateAndComputeNextCron(cronExpr, tz, now)
+	if err != nil {
+		return "", "", nil, err
+	}
+	runs = []int64{first}
+	if n <= 1 {
+		return spec, zone, runs, nil
+	}
+	sched, err := cron.ParseStandard(spec)
+	if err != nil {
+		return "", "", nil, fmt.Errorf("%w: invalid cron expression %q: %s", ErrInvalidChatSchedule, spec, err.Error())
+	}
+	_, loc, err := normalizeTimezone(zone)
+	if err != nil {
+		return "", "", nil, err
+	}
+	at := time.Unix(first, 0).In(loc)
+	for len(runs) < n {
+		at = sched.Next(at)
+		if at.IsZero() {
+			break
+		}
+		runs = append(runs, at.Unix())
+	}
+	return spec, zone, runs, nil
+}
+
 // CreateChatSchedule creates a recurring patrol or one-shot timer on a
 // conversation owned by in.UserEmail. When in.CronExpr is set and
 // !in.AllowMultiple, an existing active or paused recurring patrol on the same
@@ -650,7 +683,6 @@ func (s *Store) ListUserPatrols(ctx context.Context, userEmail string, limit, of
 // edit) to an existing schedule owned by userEmail in convID.
 func (s *Store) UpdateChatSchedule(ctx context.Context, userEmail, convID, scheduleID string, patch ChatSchedulePatch) (*ChatSchedule, error) {
 	now := time.Now()
-	nowUnix := now.Unix()
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -679,17 +711,37 @@ func (s *Store) UpdateChatSchedule(ctx context.Context, userEmail, convID, sched
 		return nil, fmt.Errorf("%w: cannot modify a %s schedule", ErrInvalidChatSchedule, cur.Status)
 	}
 
+	updated, err := updateLockedChatScheduleTx(ctx, tx, cur, patch, now)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return &updated, nil
+}
+
+// updateLockedChatScheduleTx applies patch to cur, a live schedule row the
+// caller has already locked FOR UPDATE inside tx, and writes it: the one
+// write path of a schedule edit, shared by the owner (UpdateChatSchedule) and
+// an administrator (AdminSetChatScheduleCron), so both validate the same way
+// (applyChatSchedulePatch), bump def_version the same way (a definition edit
+// supersedes a fire claimed under the old definition), recompute the next run
+// the same way, and revoke a fire in flight on a pause or cancel.
+func updateLockedChatScheduleTx(ctx context.Context, tx *sql.Tx, cur ChatSchedule, patch ChatSchedulePatch, now time.Time) (ChatSchedule, error) {
+	nowUnix := now.Unix()
 	wasActive := cur.Status == ChatScheduleStatusActive
 	if err := applyChatSchedulePatch(&cur, patch, now); err != nil {
-		return nil, err
+		return ChatSchedule{}, err
 	}
 	if !wasActive && cur.Status == ChatScheduleStatusActive {
 		// Resuming: an archived chat's schedules stay off (SetArchived paused
 		// them so a filed-away chat stops spending).
-		if archived, err := conversationArchivedTx(ctx, tx, convID); err != nil {
-			return nil, err
+		if archived, err := conversationArchivedTx(ctx, tx, cur.ConversationID); err != nil {
+			return ChatSchedule{}, err
 		} else if archived {
-			return nil, errScheduleInArchivedChat
+			return ChatSchedule{}, errScheduleInArchivedChat
 		}
 	}
 
@@ -706,7 +758,7 @@ func (s *Store) UpdateChatSchedule(ctx context.Context, userEmail, convID, sched
 		cur.MaxRuns, nowUnix, cur.ID, patch.editsDefinition(),
 	))
 	if err != nil {
-		return nil, err
+		return ChatSchedule{}, err
 	}
 
 	if updated.Status == ChatScheduleStatusCancelled || updated.Status == ChatScheduleStatusPaused {
@@ -720,23 +772,20 @@ func (s *Store) UpdateChatSchedule(ctx context.Context, userEmail, convID, sched
 			    SET lease_owner = NULL, lease_expires_at = NULL, fire_id = NULL,
 			        fire_trigger = NULL, fire_run_number = NULL, fire_failures = 0
 			  WHERE id = $1 AND lease_owner IS NOT NULL`, cur.ID); err != nil {
-			return nil, err
+			return ChatSchedule{}, err
 		}
 		if _, err := tx.ExecContext(ctx,
 			`UPDATE chat_input_queue
 			    SET state = 'cancelled', updated_at = $1
 			  WHERE conversation_id = $2 AND state = 'queued' AND mode = 'patrol'
 			    AND client_input_id LIKE $3`,
-			nowUnix, convID, ChatPatrolInputKeyPrefix+scheduleID+":%",
+			nowUnix, cur.ConversationID, ChatPatrolInputKeyPrefix+cur.ID+":%",
 		); err != nil {
-			return nil, err
+			return ChatSchedule{}, err
 		}
 	}
 
-	if err := tx.Commit(); err != nil {
-		return nil, err
-	}
-	return &updated, nil
+	return updated, nil
 }
 
 // editsDefinition reports whether the patch edits the schedule's definition
@@ -812,18 +861,26 @@ func applyChatSchedulePatch(cur *ChatSchedule, patch ChatSchedulePatch, now time
 			return fmt.Errorf("%w: unsupported status %q", ErrInvalidChatSchedule, st)
 		}
 	}
-	if recomputeNext && cur.Status == ChatScheduleStatusActive {
-		if cur.CronExpr != "" {
-			cleanSpec, normTZ, nextAt, err := validateAndComputeNextCron(cur.CronExpr, cur.Timezone, now)
-			if err != nil {
-				return err
-			}
-			cur.CronExpr = cleanSpec
-			cur.Timezone = normTZ
-			cur.NextRunAt = nextAt
-		} else if cur.DurationSeconds > 0 {
-			cur.NextRunAt = now.Unix() + int64(cur.DurationSeconds)
+	if !recomputeNext {
+		return nil
+	}
+	// A new cadence or timezone on a recurring schedule is validated (and
+	// stored in its canonical form) whether the schedule is running or
+	// paused: a paused patrol given a cron that cannot run would otherwise
+	// be refused only when someone tries to resume it. Only a running
+	// schedule's next run moves now; a resume computes a paused one's.
+	if cur.CronExpr != "" && cur.Status != ChatScheduleStatusCancelled {
+		cleanSpec, normTZ, nextAt, err := validateAndComputeNextCron(cur.CronExpr, cur.Timezone, now)
+		if err != nil {
+			return err
 		}
+		cur.CronExpr = cleanSpec
+		cur.Timezone = normTZ
+		if cur.Status == ChatScheduleStatusActive {
+			cur.NextRunAt = nextAt
+		}
+	} else if cur.DurationSeconds > 0 && cur.Status == ChatScheduleStatusActive {
+		cur.NextRunAt = now.Unix() + int64(cur.DurationSeconds)
 	}
 	return nil
 }

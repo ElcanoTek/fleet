@@ -36,6 +36,7 @@ type adminChatStore interface {
 	AdminChatTranscript(ctx context.Context, convID string, o store.AdminTranscriptOptions) ([]store.AdminTranscriptEntry, error)
 	AdminAppendNotice(ctx context.Context, a store.AdminActor, convID, text string) error
 	AdminUpdateChat(ctx context.Context, a store.AdminActor, convID string, c store.AdminChatChange, reason string) (store.AdminChat, error)
+	AdminSetChatScheduleCron(ctx context.Context, a store.AdminActor, in store.AdminChatScheduleCronEdit) (store.AdminChatScheduleCronResult, error)
 	ListAdminActions(ctx context.Context, convID string, limit int) ([]store.AdminAction, error)
 	CreateAdminRequest(ctx context.Context, in store.AdminRequestInput) (store.AdminRequest, error)
 	GetAdminRequest(ctx context.Context, id string) (store.AdminRequest, error)
@@ -340,11 +341,14 @@ func (s *Server) adminActor(r *http.Request) store.AdminActor {
 // can show.
 func adminChatError(w http.ResponseWriter, err error) {
 	var stale *store.ChatSchedulePromptChangedError
+	var staleDef *store.ChatScheduleDefinitionChangedError
 	switch {
 	case errors.Is(err, store.ErrConversationNotFound), errors.Is(err, store.ErrChatScheduleNotFound):
 		http.Error(w, "not found", http.StatusNotFound)
 	case errors.As(err, &stale):
 		http.Error(w, "the patrol's instructions changed since you opened them; reload and edit again", http.StatusConflict)
+	case errors.As(err, &staleDef):
+		http.Error(w, "the patrol changed since you opened it; reload and edit again", http.StatusConflict)
 	case errors.Is(err, store.ErrAdminReasonRequired):
 		http.Error(w, "a reason is required: it is recorded and shown in the chat", http.StatusBadRequest)
 	case errors.Is(err, store.ErrAdminChatNotAllowed), errors.Is(err, store.ErrInvalidChatSchedule),
@@ -593,8 +597,10 @@ func (s *Server) adminChatRequest(w http.ResponseWriter, r *http.Request, st adm
 }
 
 // handleAdminPatrolItem serves PATCH /admin/patrols/{id}: an administrator
-// edits a patrol's instructions (compare-and-swap on the prompt's sha256) or
-// pauses / resumes it.
+// edits a patrol's instructions (compare-and-swap on the prompt's sha256),
+// changes its schedule (cron and/or timezone, compare-and-swap on its
+// def_version; dry_run previews the next runs and changes nothing), or
+// pauses / resumes it. One change per request.
 func (s *Server) handleAdminPatrolItem(w http.ResponseWriter, r *http.Request) {
 	st, ok := s.adminChats()
 	if !ok {
@@ -620,21 +626,58 @@ func (s *Server) handleAdminPatrolItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Prompt       *string `json:"prompt"`
-		ExpectSHA256 string  `json:"expect_sha256"`
-		Title        *string `json:"title"`
-		Status       *string `json:"status"`
-		Reason       string  `json:"reason"`
+		Prompt           *string `json:"prompt"`
+		ExpectSHA256     string  `json:"expect_sha256"`
+		Title            *string `json:"title"`
+		Status           *string `json:"status"`
+		Cron             *string `json:"cron"`
+		Timezone         *string `json:"timezone"`
+		ExpectDefVersion *int64  `json:"expect_def_version"`
+		DryRun           bool    `json:"dry_run"`
+		Reason           string  `json:"reason"`
 	}
 	if !decodeJSONBody(w, r, &body) {
 		return
 	}
 	actor := s.adminActor(r)
 	var out store.AdminChatSchedule
-	switch {
-	case body.Prompt != nil && body.Status != nil:
-		http.Error(w, "change the instructions or the status, not both at once", http.StatusBadRequest)
+	schedule := body.Cron != nil || body.Timezone != nil
+	changes := 0
+	for _, set := range []bool{body.Prompt != nil, body.Status != nil, schedule} {
+		if set {
+			changes++
+		}
+	}
+	if body.DryRun && !schedule {
+		http.Error(w, "dry_run previews a schedule change: send cron and/or timezone", http.StatusBadRequest)
 		return
+	}
+	var nextRuns []int64
+	switch {
+	case changes > 1:
+		http.Error(w, "change the instructions, the schedule or the status, one at a time", http.StatusBadRequest)
+		return
+	case schedule:
+		in := store.AdminChatScheduleCronEdit{ID: id, ExpectDefVersion: body.ExpectDefVersion, Reason: body.Reason, DryRun: body.DryRun}
+		if body.Cron != nil {
+			in.CronExpr = *body.Cron
+		}
+		if body.Timezone != nil {
+			in.Timezone = *body.Timezone
+		}
+		res, err := st.AdminSetChatScheduleCron(r.Context(), actor, in)
+		if err != nil {
+			adminChatError(w, err)
+			return
+		}
+		if res.DryRun {
+			writeJSON(w, r, map[string]any{"patrol": res.Before, "preview": res.After, "changed": res.Changed, "next_runs": res.NextRuns})
+			return
+		}
+		if res.Changed && res.After.Status == store.ChatScheduleStatusActive {
+			s.armShortScheduleTimer(res.After.NextRunAt)
+		}
+		out, nextRuns = res.After, res.NextRuns
 	case body.Prompt != nil:
 		why := strings.Join(strings.Fields(body.Reason), " ")
 		if why == "" {
@@ -671,11 +714,15 @@ func (s *Server) handleAdminPatrolItem(w http.ResponseWriter, r *http.Request) {
 		}
 		out = after
 	default:
-		http.Error(w, "nothing to change: send prompt (with expect_sha256) or status", http.StatusBadRequest)
+		http.Error(w, "nothing to change: send prompt (with expect_sha256), cron and/or timezone (with expect_def_version), or status", http.StatusBadRequest)
 		return
 	}
 	if conv, cerr := s.store.Get(r.Context(), out.UserEmail, out.ConversationID); cerr == nil && conv != nil {
 		s.emitPatrolUpdate(r.Context(), out.UserEmail, out.ConversationID, nil, conv.AutoApprove, conv.EffectiveApprovalMode())
+	}
+	if nextRuns != nil {
+		writeJSON(w, r, map[string]any{"patrol": out, "next_runs": nextRuns})
+		return
 	}
 	writeJSON(w, r, map[string]any{"patrol": out})
 }

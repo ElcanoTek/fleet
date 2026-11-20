@@ -8,13 +8,54 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
 type fakePatrolStore struct {
-	sched store.AdminChatSchedule
-	edits []store.AdminChatSchedulePromptEdit
+	sched     store.AdminChatSchedule
+	edits     []store.AdminChatSchedulePromptEdit
+	schedEdit []store.AdminChatScheduleCronEdit
+}
+
+// AdminSetChatScheduleCron mimics the store: compare-and-swap on
+// def_version, the real cron validation and preview, and a write only when
+// it is not a dry run.
+func (f *fakePatrolStore) AdminSetChatScheduleCron(_ context.Context, _ store.AdminActor, in store.AdminChatScheduleCronEdit) (store.AdminChatScheduleCronResult, error) {
+	res := store.AdminChatScheduleCronResult{Before: f.sched, After: f.sched, DryRun: in.DryRun}
+	if !strings.HasPrefix(f.sched.ID, in.ID) {
+		return res, store.ErrChatScheduleNotFound
+	}
+	if in.ExpectDefVersion == nil || *in.ExpectDefVersion != f.sched.DefVersion {
+		return res, &store.ChatScheduleDefinitionChangedError{Current: f.sched.DefVersion}
+	}
+	cronExpr, tz := f.sched.CronExpr, f.sched.Timezone
+	if in.CronExpr != "" {
+		cronExpr = in.CronExpr
+	}
+	if in.Timezone != "" {
+		tz = in.Timezone
+	}
+	spec, zone, runs, err := store.PreviewChatScheduleCron(cronExpr, tz, time.Now(), store.AdminCronPreviewRuns)
+	if err != nil {
+		return res, err
+	}
+	res.NextRuns = runs
+	res.After.CronExpr, res.After.Timezone = spec, zone
+	res.Changed = spec != f.sched.CronExpr || zone != f.sched.Timezone
+	if !res.Changed || in.DryRun {
+		if !res.Changed {
+			res.After = f.sched
+		}
+		return res, nil
+	}
+	f.schedEdit = append(f.schedEdit, in)
+	res.After.DefVersion++
+	res.After.NextRunAt = runs[0]
+	res.Notice = "An administrator changed the schedule. Reason: " + in.Reason
+	f.sched = res.After
+	return res, nil
 }
 
 func (f *fakePatrolStore) AdminListChatSchedules(context.Context, store.AdminChatScheduleFilter) ([]store.AdminChatSchedule, error) {
@@ -201,5 +242,91 @@ func TestLineDiff(t *testing.T) {
 	}
 	if lineDiff("x", "x", 3) != "(no line changes)\n" {
 		t.Fatal("identical inputs should report no changes")
+	}
+}
+
+func TestPatrolSetSchedule_Applies(t *testing.T) {
+	f := withFakePatrolStore(t)
+	var out, errW bytes.Buffer
+	code := patrolSetSchedule([]string{"5ee926c2", "--cron", "30 6 * * *", "--expect-def-version", "4",
+		"--reason", "the team works\nweekends too", "--yes", "--as", "ops@elcano"}, strings.NewReader(""), &out, &errW)
+	if code != 0 {
+		t.Fatalf("code %d: %s %s", code, out.String(), errW.String())
+	}
+	if len(f.schedEdit) != 1 {
+		t.Fatalf("edits = %+v", f.schedEdit)
+	}
+	e := f.schedEdit[0]
+	if e.ID != "5ee926c2" || e.CronExpr != "30 6 * * *" || e.Timezone != "" || *e.ExpectDefVersion != 4 || e.Reason != "the team works weekends too" || e.DryRun {
+		t.Fatalf("edit = %+v", e)
+	}
+	s := out.String()
+	for _, want := range []string{"schedule: 30 6 * * 1-5 America/New_York -> 30 6 * * * America/New_York", "next runs:", " 06:30 E", "def_version 4 -> 5", "notice written to the chat"} {
+		if !strings.Contains(s, want) {
+			t.Fatalf("output missing %q:\n%s", want, s)
+		}
+	}
+	if f.sched.CronExpr != "30 6 * * *" || f.sched.Prompt != oldPatrolPrompt || f.sched.Status != "active" {
+		t.Fatalf("patrol = %+v", f.sched)
+	}
+}
+
+func TestPatrolSetSchedule_DryRunJSONAndNoChange(t *testing.T) {
+	f := withFakePatrolStore(t)
+	var out bytes.Buffer
+	if code := patrolSetSchedule([]string{"5ee926c2", "--timezone", "Europe/London", "--expect-def-version", "4", "--reason", "r", "--dry-run", "--json"},
+		strings.NewReader(""), &out, &bytes.Buffer{}); code != 0 {
+		t.Fatalf("dry-run code %d: %s", code, out.String())
+	}
+	var res patrolSetScheduleResult
+	if err := json.Unmarshal(out.Bytes(), &res); err != nil {
+		t.Fatalf("json: %v\n%s", err, out.String())
+	}
+	if !res.DryRun || !res.Changed || res.NewCron != "30 6 * * 1-5" || res.NewTimezone != "Europe/London" || len(res.NextRuns) != store.AdminCronPreviewRuns || res.NewDefVersion != 0 {
+		t.Fatalf("dry-run result = %+v", res)
+	}
+	for _, r := range res.NextRuns {
+		if !strings.Contains(r, " 06:30 ") {
+			t.Fatalf("next run %q, want 06:30 London", r)
+		}
+	}
+	out.Reset()
+	if code := patrolSetSchedule([]string{"5ee926c2", "--cron", "30 6 * * 1-5", "--expect-def-version", "4", "--reason", "r", "--yes"},
+		strings.NewReader(""), &out, &bytes.Buffer{}); code != 0 || !strings.Contains(out.String(), "no change") {
+		t.Fatalf("no-change code %d: %s", code, out.String())
+	}
+	if len(f.schedEdit) != 0 {
+		t.Fatalf("dry-run or no-op wrote: %+v", f.schedEdit)
+	}
+}
+
+func TestPatrolSetSchedule_Refusals(t *testing.T) {
+	f := withFakePatrolStore(t)
+	run := func(args ...string) int {
+		var out, errW bytes.Buffer
+		return patrolSetSchedule(args, strings.NewReader("y\n"), &out, &errW)
+	}
+	cases := []struct {
+		name string
+		args []string
+	}{
+		{"no cron or timezone", []string{"5ee926c2", "--expect-def-version", "4", "--reason", "r", "--yes"}},
+		{"no def_version", []string{"5ee926c2", "--cron", "0 7 * * *", "--reason", "r", "--yes"}},
+		{"no reason", []string{"5ee926c2", "--cron", "0 7 * * *", "--expect-def-version", "4", "--yes"}},
+		{"stale def_version", []string{"5ee926c2", "--cron", "0 7 * * *", "--expect-def-version", "3", "--reason", "r", "--yes"}},
+		{"invalid cron", []string{"5ee926c2", "--cron", "0 7 * *", "--expect-def-version", "4", "--reason", "r", "--yes"}},
+		{"too frequent", []string{"5ee926c2", "--cron", "* * * * *", "--expect-def-version", "4", "--reason", "r", "--yes"}},
+		{"invalid timezone", []string{"5ee926c2", "--timezone", "Nowhere/Land", "--expect-def-version", "4", "--reason", "r", "--yes"}},
+		{"no id", []string{"--cron", "0 7 * * *", "--expect-def-version", "4", "--reason", "r", "--yes"}},
+		// Not a terminal and no --yes: refuse rather than read "y" from a pipe.
+		{"no confirmation", []string{"5ee926c2", "--cron", "0 7 * * *", "--expect-def-version", "4", "--reason", "r"}},
+	}
+	for _, tc := range cases {
+		if code := run(tc.args...); code == 0 {
+			t.Errorf("%s: code 0, want a refusal", tc.name)
+		}
+	}
+	if len(f.schedEdit) != 0 {
+		t.Fatalf("a refused run wrote: %+v", f.schedEdit)
 	}
 }

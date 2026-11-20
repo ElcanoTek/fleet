@@ -998,6 +998,43 @@ fleet patrol pause|resume <schedule_id> --reason "..."
 Tell the patrol's owner as well: the notice says the instructions changed, not
 what they now say.
 
+### Changing a patrol's schedule
+
+```
+fleet patrol show <schedule_id>                                   # note schedule and def_version
+fleet patrol set-schedule <schedule_id> --cron "30 6 * * *" \
+    --expect-def-version <def_version from show> --reason "why it changed" --dry-run
+fleet patrol set-schedule <schedule_id> --cron "30 6 * * *" [--timezone America/New_York] \
+    --expect-def-version <def_version from show> --reason "why it changed" --yes
+```
+
+The same is **Change schedule** on a patrol in **Settings → Admin → Chats**.
+`set-schedule`:
+
+- takes `--cron`, `--timezone` (an IANA name), or both; the one you leave out
+  stays as it is;
+- validates exactly as the owner's own edit does: a 5-field cron (or
+  `@daily`-style descriptor), a known timezone, at least 5 minutes between
+  runs;
+- prints the old and new schedule and the next five runs in the patrol's
+  timezone; `--dry-run` stops there;
+- refuses when the patrol changed after you read it (its `def_version` moved:
+  the owner or another administrator edited its prompt, title or schedule) —
+  read it again and rebuild the edit;
+- changes only the cron and timezone: the owner, prompt, title and status stay
+  as they are. A paused patrol stays paused and runs on the new schedule once
+  resumed;
+- bumps `def_version` like the owner's own edit, so a run the scheduler had
+  already claimed under the old schedule is superseded, and recomputes the
+  next run;
+- writes a notice into the chat (`An administrator changed the schedule of the
+  patrol "…" from "30 6 * * 1-5" (America/New_York) to "30 6 * * *"
+  (America/New_York). Reason: …`) and records `patrol_schedule` in
+  `fleet chats actions`;
+- refuses a one-shot timer, and a cancelled or completed patrol.
+
+The running server picks the new next run up on its next scheduler pass.
+
 ## Where the sandbox build fits
 
 The execution sandbox is a **per-client bundle artifact**: each bundle ships its

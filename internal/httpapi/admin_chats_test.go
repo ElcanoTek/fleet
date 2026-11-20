@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -206,6 +207,86 @@ func TestAdminPatrolRoutes(t *testing.T) {
 
 	actions, err := st.ListAdminActions(ctx, conv.ID, 10)
 	if err != nil || len(actions) != 2 || actions[0].Action != "patrol_pause" || actions[1].Action != "patrol_prompt" || actions[1].Actor != "admin@x" {
+		t.Fatalf("actions = %+v, %v", actions, err)
+	}
+}
+
+// An administrator changes a patrol's schedule: a dry run previews the next
+// runs and changes nothing; the change is compare-and-swap on def_version,
+// takes a reason, is recorded and noted; members are refused.
+func TestAdminPatrolScheduleRoute(t *testing.T) {
+	_, st, _, h := adminChatsFixture(t)
+	ctx := context.Background()
+	conv, err := st.CreateConversation(ctx, "owner@x", "Workbench", "victoria", "m1", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sc, err := st.CreateChatSchedule(ctx, store.ChatScheduleInput{ConversationID: conv.ID, UserEmail: "owner@x", Title: "Sweep", Prompt: "Scan.", CronExpr: "30 6 * * 1-5", Timezone: "America/New_York"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cur, err := st.AdminGetChatSchedule(ctx, sc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := "/admin/patrols/" + sc.ID
+	v := strconv.FormatInt(cur.DefVersion, 10)
+	everyDay := `{"cron":"30 6 * * *","expect_def_version":` + v + `,"reason":"weekends too"}`
+
+	if rec := adminDo(t, h, "member@x", http.MethodPatch, path, everyDay); rec.Code != http.StatusForbidden {
+		t.Fatalf("member schedule edit = %d", rec.Code)
+	}
+	for _, c := range []struct {
+		name, body string
+		code       int
+	}{
+		{"stale def_version", `{"cron":"30 6 * * *","expect_def_version":` + strconv.FormatInt(cur.DefVersion+1, 10) + `,"reason":"r"}`, http.StatusConflict},
+		{"no def_version", `{"cron":"30 6 * * *","reason":"r"}`, http.StatusBadRequest},
+		{"no reason", `{"cron":"30 6 * * *","expect_def_version":` + v + `}`, http.StatusBadRequest},
+		{"invalid cron", `{"cron":"30 6 * *","expect_def_version":` + v + `,"reason":"r"}`, http.StatusBadRequest},
+		{"invalid timezone", `{"timezone":"Nowhere/Land","expect_def_version":` + v + `,"reason":"r"}`, http.StatusBadRequest},
+		{"too frequent", `{"cron":"* * * * *","expect_def_version":` + v + `,"reason":"r"}`, http.StatusBadRequest},
+		{"schedule and prompt at once", `{"cron":"30 6 * * *","prompt":"x","expect_sha256":"` + cur.PromptSHA256 + `","expect_def_version":` + v + `,"reason":"r"}`, http.StatusBadRequest},
+		{"schedule and status at once", `{"cron":"30 6 * * *","status":"paused","expect_def_version":` + v + `,"reason":"r"}`, http.StatusBadRequest},
+		{"dry run without a schedule", `{"status":"paused","dry_run":true,"reason":"r"}`, http.StatusBadRequest},
+	} {
+		if rec := adminDo(t, h, "admin@x", http.MethodPatch, path, c.body); rec.Code != c.code {
+			t.Fatalf("%s = %d %s, want %d", c.name, rec.Code, rec.Body.String(), c.code)
+		}
+	}
+
+	// A dry run: no reason needed, the next runs in the patrol's zone, nothing changed.
+	rec := adminDo(t, h, "admin@x", http.MethodPatch, path, `{"cron":"30 6 * * *","expect_def_version":`+v+`,"dry_run":true}`)
+	var dry struct {
+		Patrol   store.AdminChatSchedule `json:"patrol"`
+		Preview  store.AdminChatSchedule `json:"preview"`
+		Changed  bool                    `json:"changed"`
+		NextRuns []int64                 `json:"next_runs"`
+	}
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &dry) != nil || !dry.Changed || dry.Patrol.CronExpr != "30 6 * * 1-5" ||
+		dry.Preview.CronExpr != "30 6 * * *" || len(dry.NextRuns) != store.AdminCronPreviewRuns {
+		t.Fatalf("dry run = %d %s", rec.Code, rec.Body.String())
+	}
+	if got, _ := st.AdminGetChatSchedule(ctx, sc.ID); got.CronExpr != sc.CronExpr || got.DefVersion != cur.DefVersion {
+		t.Fatalf("a dry run changed the patrol: %+v", got)
+	}
+
+	rec = adminDo(t, h, "admin@x", http.MethodPatch, path, everyDay)
+	var done struct {
+		Patrol   store.AdminChatSchedule `json:"patrol"`
+		NextRuns []int64                 `json:"next_runs"`
+	}
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &done) != nil || done.Patrol.CronExpr != "30 6 * * *" ||
+		done.Patrol.DefVersion != cur.DefVersion+1 || done.Patrol.Prompt != sc.Prompt || done.Patrol.Status != store.ChatScheduleStatusActive ||
+		len(done.NextRuns) == 0 || done.NextRuns[0] != done.Patrol.NextRunAt {
+		t.Fatalf("schedule edit = %d %s", rec.Code, rec.Body.String())
+	}
+	// Sent again, the old def_version is stale.
+	if rec := adminDo(t, h, "admin@x", http.MethodPatch, path, everyDay); rec.Code != http.StatusConflict {
+		t.Fatalf("replayed schedule edit = %d %s", rec.Code, rec.Body.String())
+	}
+	actions, err := st.ListAdminActions(ctx, conv.ID, 10)
+	if err != nil || len(actions) != 1 || actions[0].Action != "patrol_schedule" || actions[0].Actor != "admin@x" || actions[0].Via != store.AdminViaWeb || actions[0].Reason != "weekends too" {
 		t.Fatalf("actions = %+v, %v", actions, err)
 	}
 }

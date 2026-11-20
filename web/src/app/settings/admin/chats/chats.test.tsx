@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import AdminChatsPage, { lineDiff, type AdminChat, type AdminPatrol } from "./page";
+import AdminChatsPage, { formatRunTime, lineDiff, type AdminChat, type AdminPatrol } from "./page";
 import { jsonResponse } from "@/test/fetch";
 
 // Settings → Admin → Chats (ADR-0115): list every chat, open one, send it a
-// message (followed to the turn's end), and edit a patrol's instructions with
-// the sha256 the page read (compare-and-swap).
+// message (followed to the turn's end), edit a patrol's instructions with
+// the sha256 the page read (compare-and-swap), and change its schedule with
+// the def_version the page read, after a server-checked preview.
 
 vi.mock("@/app/lib/navigation", () => ({
   useRouter: () => ({ replace: vi.fn() }),
@@ -48,6 +49,7 @@ const PATROL: AdminPatrol = {
   next_run_at: NOW + 3600,
   user_email: "owner@client.example",
   fire_in_flight: false,
+  def_version: 4,
 };
 
 type Call = { url: string; method: string; body?: unknown };
@@ -85,6 +87,20 @@ beforeEach(() => {
         return jsonResponse({ chat: CHAT });
       }
       if (url.startsWith("/api/admin/patrols/") && method === "PATCH") {
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        if (typeof body.cron === "string" && body.cron.split(" ").length !== 5) {
+          return new Response("invalid chat schedule: invalid cron expression", { status: 400 });
+        }
+        if (body.dry_run) {
+          const cron = body.cron as string;
+          return jsonResponse({
+            patrol: PATROL,
+            preview: { ...PATROL, cron, timezone: body.timezone },
+            changed: cron !== PATROL.cron || body.timezone !== PATROL.timezone,
+            // Sat 2026-11-21 and Sun 2026-11-22, 06:30 in New York (EST).
+            next_runs: [1795779000, 1795865400],
+          });
+        }
         return jsonResponse({ patrol: { ...PATROL } });
       }
       return new Response("not found", { status: 404 });
@@ -149,6 +165,44 @@ describe("AdminChatsPage", () => {
     const patch = calls.find((c) => c.method === "PATCH");
     expect(patch?.url).toBe(`/api/admin/patrols/${PATROL.id}`);
     expect(patch?.body).toEqual({ prompt: "13. LOGGING\n- Append to the shared team log.", expect_sha256: "abc123", reason: "log moved" });
+  });
+});
+
+describe("patrol schedule", () => {
+  it("previews the next runs in the patrol's timezone and saves with the def_version it read", async () => {
+    await openChat();
+    fireEvent.click(screen.getByRole("button", { name: "Change schedule" }));
+    const cron = screen.getByTestId("admin-patrol-cron") as HTMLInputElement;
+    expect(cron.value).toBe("30 6 * * 1-5");
+    expect((screen.getByTestId("admin-patrol-timezone") as HTMLSelectElement).value).toBe("America/New_York");
+    // The current schedule previews as no change.
+    expect(await screen.findByText("No changes yet. Next runs:")).toBeTruthy();
+    const save = screen.getByRole("button", { name: "Save schedule" }) as HTMLButtonElement;
+    expect(save.disabled).toBe(true);
+
+    // An invalid cron is refused by the server's check, and cannot be saved.
+    fireEvent.change(cron, { target: { value: "30 6 * *" } });
+    expect(await screen.findByText(/invalid cron expression/)).toBeTruthy();
+    expect(save.disabled).toBe(true);
+
+    fireEvent.change(cron, { target: { value: "30 6 * * *" } });
+    const preview = await screen.findByTestId("admin-patrol-schedule-preview");
+    await waitFor(() => expect(preview.textContent).toContain("Daily 06:30"));
+    expect(preview.textContent).toContain(formatRunTime(1795779000, "America/New_York"));
+    expect(formatRunTime(1795779000, "America/New_York")).toMatch(/06:30/);
+    const dry = calls.filter((c) => c.method === "PATCH" && (c.body as { dry_run?: boolean }).dry_run);
+    expect(dry.at(-1)?.body).toEqual({ cron: "30 6 * * *", timezone: "America/New_York", expect_def_version: 4, dry_run: true });
+
+    expect(save.disabled).toBe(true); // no reason yet
+    const reasons = screen.getAllByLabelText("Reason (recorded and shown in the chat)");
+    fireEvent.change(reasons[2], { target: { value: "the team works weekends" } });
+    expect(save.disabled).toBe(false);
+    fireEvent.click(save);
+    await waitFor(() => expect(calls.some((c) => c.method === "PATCH" && !(c.body as { dry_run?: boolean }).dry_run)).toBe(true));
+    const patch = calls.find((c) => c.method === "PATCH" && !(c.body as { dry_run?: boolean }).dry_run);
+    expect(patch?.url).toBe(`/api/admin/patrols/${PATROL.id}`);
+    expect(patch?.body).toEqual({ cron: "30 6 * * *", timezone: "America/New_York", expect_def_version: 4, reason: "the team works weekends" });
+    expect(await screen.findByText("Schedule changed and noted in the chat.")).toBeTruthy();
   });
 });
 

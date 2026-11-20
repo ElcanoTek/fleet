@@ -465,9 +465,12 @@ en la conversación como **Mensaje de un administrador** con su correo, nunca
 como palabras tuyas, y una nota breve en el chat dice qué se cambió y por qué.
 La respuesta se ejecuta con tus conexiones y siempre te pregunta antes de
 cualquier acción que requiera aprobación, aunque el chat apruebe
-automáticamente. Un administrador también puede archivar o eliminar un chat;
-un chat eliminado se queda 30 días en una papelera, así que pídele que lo
-restaure si fue un error.
+automáticamente. Un administrador también puede cambiar las instrucciones o el
+horario de una de tus patrullas (con qué frecuencia y a qué hora se ejecuta),
+o pausarla o reanudarla; cada cambio deja el mismo tipo de nota en el chat.
+Un administrador también puede archivar o eliminar un chat; un chat eliminado
+se queda 30 días en una papelera, así que pídele que lo restaure si fue un
+error.
 
 ### Conversaciones largas
 

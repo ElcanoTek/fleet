@@ -23,6 +23,8 @@ import (
 //	fleet patrol show <schedule_id> [--json | --prompt-only]
 //	fleet patrol set-prompt <schedule_id> --file <path|-> --expect-sha256 <hex> --reason <text>
 //	                        [--title <text>] [--notify=false] [--backup-dir DIR] [--dry-run] [--yes] [--json]
+//	fleet patrol set-schedule <schedule_id> [--cron EXPR] [--timezone TZ] --expect-def-version N --reason <text>
+//	                          [--dry-run] [--yes] [--json] [--as WHO]
 //
 // The Patrol bar only lets a patrol's owner edit it. An operator who has to
 // change a client's patrol (a prompt that still names a retired tool, a log
@@ -32,10 +34,15 @@ import (
 // an edit built from a prompt that has since changed (compare-and-swap on the
 // prompt's sha256), keeps the old prompt in a backup file that set-prompt can
 // restore, bumps def_version like the owner's own edit, and writes a notice in
-// the chat saying the instructions were changed and why.
+// the chat saying the instructions were changed and why. set-schedule is the
+// same for the patrol's cadence and timezone: it previews the next runs,
+// refuses an edit chosen against a patrol that has since changed
+// (compare-and-swap on def_version), and goes through the owner's own edit
+// path, so the cron is validated and the next run computed exactly as when
+// the owner changes it in the Patrol bar.
 func cmdPatrol(argv []string) int {
 	if len(argv) == 0 {
-		return errf(1, "usage: fleet patrol list|show|set-prompt|pause|resume (fleet patrol <verb> --help)")
+		return errf(1, "usage: fleet patrol list|show|set-prompt|set-schedule|pause|resume (fleet patrol <verb> --help)")
 	}
 	switch argv[0] {
 	case "list", "ls":
@@ -44,6 +51,8 @@ func cmdPatrol(argv []string) int {
 		return patrolShow(argv[1:], os.Stdout)
 	case "set-prompt":
 		return patrolSetPrompt(argv[1:], os.Stdin, os.Stdout, os.Stderr)
+	case "set-schedule":
+		return patrolSetSchedule(argv[1:], os.Stdin, os.Stdout, os.Stderr)
 	case "pause":
 		return patrolSetStatus(store.ChatScheduleStatusPaused, argv[1:], os.Stdout)
 	case "resume":
@@ -62,11 +71,16 @@ const patrolUsage = `fleet patrol — operator access to chat patrols
   fleet patrol show <schedule_id> [--json | --prompt-only]
   fleet patrol set-prompt <schedule_id> --file <path|-> --expect-sha256 <hex> --reason <text>
                           [--title <text>] [--notify=false] [--backup-dir DIR] [--dry-run] [--yes] [--json] [--as WHO]
+  fleet patrol set-schedule <schedule_id> [--cron EXPR] [--timezone TZ] --expect-def-version N --reason <text>
+                            [--dry-run] [--yes] [--json] [--as WHO]
   fleet patrol pause|resume <schedule_id> --reason <text> [--as WHO]
 
 A schedule id may be shortened to its first 8+ characters. set-prompt prints the
 diff, refuses when the prompt changed since --expect-sha256 was read (from show),
 saves the old prompt to --backup-dir, and writes a notice into the chat.
+set-schedule prints the old and new schedule and the next runs in the patrol's
+timezone, refuses when the patrol changed since --expect-def-version was read
+(from show), and writes a notice into the chat.
 `
 
 type patrolAdminStore interface {
@@ -74,6 +88,7 @@ type patrolAdminStore interface {
 	AdminGetChatSchedule(ctx context.Context, idOrPrefix string) (store.AdminChatSchedule, error)
 	AdminSetChatSchedulePrompt(ctx context.Context, in store.AdminChatSchedulePromptEdit) (before, after store.AdminChatSchedule, err error)
 	AdminSetChatScheduleStatus(ctx context.Context, a store.AdminActor, idOrPrefix, status, reason string) (store.AdminChatSchedule, error)
+	AdminSetChatScheduleCron(ctx context.Context, a store.AdminActor, in store.AdminChatScheduleCronEdit) (store.AdminChatScheduleCronResult, error)
 }
 
 // openPatrolStore is swapped by tests.
@@ -308,7 +323,7 @@ func patrolSetPrompt(argv []string, stdin io.Reader, out, errW io.Writer) int {
 		return 0
 	}
 	if !*yes {
-		if code := confirmPatrolEdit(stdin, errW, cur); code != 0 {
+		if code := confirmPatrolEdit(stdin, errW, fmt.Sprintf("Change the prompt of %q in %q (owner %s)?", cur.Title, cur.ConversationTitle, cur.UserEmail)); code != 0 {
 			return code
 		}
 	}
@@ -354,12 +369,12 @@ func patrolSetPrompt(argv []string, stdin io.Reader, out, errW io.Writer) int {
 	return 0
 }
 
-func confirmPatrolEdit(stdin io.Reader, errW io.Writer, cur store.AdminChatSchedule) int {
+func confirmPatrolEdit(stdin io.Reader, errW io.Writer, question string) int {
 	f, ok := stdin.(*os.File)
 	if !ok || !isTerminal(f) {
 		return errf(1, "refusing to change a patrol without confirmation: pass --yes (or --dry-run to preview)")
 	}
-	fmt.Fprintf(errW, "Change the prompt of %q in %q (owner %s)? [y/N]: ", cur.Title, cur.ConversationTitle, cur.UserEmail)
+	fmt.Fprintf(errW, "%s [y/N]: ", question)
 	line, _ := bufio.NewReader(stdin).ReadString('\n')
 	if ans := strings.ToLower(strings.TrimSpace(line)); ans != "y" && ans != "yes" {
 		fmt.Fprintln(errW, "aborted")
@@ -564,4 +579,152 @@ func patrolSetStatus(status string, argv []string, out io.Writer) int {
 	}
 	fmt.Fprintf(out, "patrol %s (%q in %q) is now %s; next run %s UTC\n", shortScheduleID(after.ID), after.Title, after.ConversationTitle, after.Status, patrolNextRun(after))
 	return 0
+}
+
+type patrolSetScheduleResult struct {
+	ID            string   `json:"id"`
+	ChatID        string   `json:"conversation_id"`
+	Changed       bool     `json:"changed"`
+	DryRun        bool     `json:"dry_run"`
+	Status        string   `json:"status"`
+	OldCron       string   `json:"old_cron"`
+	OldTimezone   string   `json:"old_timezone"`
+	NewCron       string   `json:"new_cron"`
+	NewTimezone   string   `json:"new_timezone"`
+	OldDefVersion int64    `json:"old_def_version"`
+	NewDefVersion int64    `json:"new_def_version,omitempty"`
+	NextRuns      []string `json:"next_runs"`
+	Notice        string   `json:"notice,omitempty"`
+}
+
+// patrolSetSchedule implements `fleet patrol set-schedule`: an administrator
+// changes a recurring patrol's cron and/or timezone. The store's dry run
+// (every check, nothing written) is the preview; the same call without it
+// applies the change.
+func patrolSetSchedule(argv []string, stdin io.Reader, out, errW io.Writer) int {
+	lead, argv := splitLeadingID(argv)
+	fs := flag.NewFlagSet("patrol set-schedule", flag.ContinueOnError)
+	dbURL := fs.String("database-url", "", "chat Postgres DSN")
+	cronExpr := fs.String("cron", "", `the new 5-field cron expression, e.g. "30 6 * * *" (default: keep the current one)`)
+	tz := fs.String("timezone", "", "the new IANA timezone the cron is read in, e.g. America/New_York (default: keep the current one)")
+	expect := fs.Int64("expect-def-version", -1, "def_version of the patrol the edit was chosen against, from `fleet patrol show` (required)")
+	reason := fs.String("reason", "", "why the schedule changed; recorded and shown in the chat's notice (required)")
+	dryRun := fs.Bool("dry-run", false, "print the new schedule and its next runs and change nothing")
+	yes := fs.Bool("yes", false, "apply without the confirmation prompt")
+	asJSON := fs.Bool("json", false, "JSON output")
+	as := fs.String("as", "", "record the change as this administrator (default <unix user>@<host>)")
+	if err := fs.Parse(argv); err != nil {
+		return 1
+	}
+	id, err := patrolIDArg(fs, lead)
+	if err != nil {
+		return errf(1, "%v", err)
+	}
+	if strings.TrimSpace(*cronExpr) == "" && strings.TrimSpace(*tz) == "" {
+		return errf(1, "give --cron, --timezone, or both")
+	}
+	if *expect < 0 {
+		return errf(1, "--expect-def-version is required: copy def_version from `fleet patrol show %s`", id)
+	}
+	reasonText := oneLine(*reason)
+	if reasonText == "" {
+		return errf(1, "--reason is required: say why the schedule changed (it is shown in the chat)")
+	}
+
+	st, closeFn, code := openPatrolStore(*dbURL)
+	if st == nil {
+		return code
+	}
+	defer closeFn()
+	ctx := context.Background()
+	actor := cliAdminActor(*as)
+	want := *expect
+	in := store.AdminChatScheduleCronEdit{ID: id, CronExpr: *cronExpr, Timezone: *tz, ExpectDefVersion: &want, Reason: reasonText, DryRun: true}
+	preview, err := st.AdminSetChatScheduleCron(ctx, actor, in)
+	if err != nil {
+		return errf(1, "patrol %s: %v", id, err)
+	}
+	cur := preview.Before
+	res := patrolSetScheduleResult{
+		ID: cur.ID, ChatID: cur.ConversationID, Changed: preview.Changed, DryRun: *dryRun, Status: cur.Status,
+		OldCron: cur.CronExpr, OldTimezone: cur.Timezone, NewCron: preview.After.CronExpr, NewTimezone: preview.After.Timezone,
+		OldDefVersion: cur.DefVersion, NextRuns: patrolRunTimes(preview.NextRuns, preview.After.Timezone),
+	}
+	if !*asJSON {
+		writePatrolHeader(out, cur)
+		fmt.Fprintln(out)
+		if res.Changed {
+			fmt.Fprintf(out, "schedule: %s %s -> %s %s\n", res.OldCron, res.OldTimezone, res.NewCron, res.NewTimezone)
+		} else {
+			fmt.Fprintln(out, "no change: the new schedule is the current one")
+		}
+		writePatrolRuns(out, cur.Status, res.NextRuns)
+	}
+	if !res.Changed || *dryRun {
+		if *asJSON {
+			return writeJSONOut(out, res)
+		}
+		return 0
+	}
+	if !*yes {
+		question := fmt.Sprintf("Change the schedule of %q in %q (owner %s) to %s %s?", cur.Title, cur.ConversationTitle, cur.UserEmail, res.NewCron, res.NewTimezone)
+		if code := confirmPatrolEdit(stdin, errW, question); code != 0 {
+			return code
+		}
+	}
+	in.DryRun = false
+	done, err := st.AdminSetChatScheduleCron(ctx, actor, in)
+	if err != nil {
+		return errf(1, "update patrol %s: %v (nothing was changed)", cur.ID, err)
+	}
+	res.Changed = done.Changed
+	res.Status = done.After.Status
+	res.NewCron, res.NewTimezone = done.After.CronExpr, done.After.Timezone
+	res.NewDefVersion = done.After.DefVersion
+	res.NextRuns = patrolRunTimes(done.NextRuns, done.After.Timezone)
+	res.Notice = done.Notice
+	if *asJSON {
+		return writeJSONOut(out, res)
+	}
+	fmt.Fprintf(out, "\nupdated patrol %s: schedule %s %s -> %s %s, def_version %d -> %d\n",
+		done.After.ID, res.OldCron, res.OldTimezone, res.NewCron, res.NewTimezone, cur.DefVersion, done.After.DefVersion)
+	if done.After.Status == store.ChatScheduleStatusActive {
+		fmt.Fprintf(out, "next run (UTC): %s\n", patrolNextRun(done.After))
+	} else {
+		fmt.Fprintf(out, "the patrol is %s: the new schedule applies once it is resumed\n", done.After.Status)
+	}
+	if res.Notice != "" {
+		fmt.Fprintf(out, "notice written to the chat: %s\n", res.Notice)
+	}
+	if cur.FireInFlight {
+		fmt.Fprintln(out, "a run the scheduler had claimed under the old schedule and not yet started is superseded")
+	}
+	return 0
+}
+
+// patrolRunTimes renders run times (Unix seconds) in the patrol's timezone.
+func patrolRunTimes(runs []int64, tz string) []string {
+	loc, err := time.LoadLocation(tz)
+	if err != nil {
+		loc = time.UTC
+	}
+	out := make([]string, 0, len(runs))
+	for _, r := range runs {
+		out = append(out, time.Unix(r, 0).In(loc).Format("Mon 2006-01-02 15:04 MST"))
+	}
+	return out
+}
+
+func writePatrolRuns(out io.Writer, status string, runs []string) {
+	if len(runs) == 0 {
+		return
+	}
+	head := "next runs:"
+	if status != store.ChatScheduleStatusActive {
+		head = "next runs once resumed (from now):"
+	}
+	fmt.Fprintln(out, head)
+	for _, r := range runs {
+		fmt.Fprintf(out, "  %s\n", r)
+	}
 }
