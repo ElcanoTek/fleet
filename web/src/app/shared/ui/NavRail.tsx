@@ -481,6 +481,10 @@ export function NavRail({
         aria-label={tr("Primary navigation")}
         data-density={compact ? "compact" : "comfortable"}
         data-collapsed={collapsed ? "true" : undefined}
+        // The phone drawer's state, for code that hands focus back to
+        // something in it (patrolWizard.tsx): while it slides shut it is
+        // still painted, and on screen, but it is no place for focus.
+        data-drawer-open={sidebarOpen ? "true" : undefined}
         className={[
           // <sm: the off-canvas drawer (full rail content, translate toggled).
           // --sidebar-surface is a gradient, so it must land in

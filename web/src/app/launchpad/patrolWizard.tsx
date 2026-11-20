@@ -59,6 +59,17 @@ function onScreen(el: Element): boolean {
   return r.width > 0 && r.height > 0 && r.right > 0 && r.bottom > 0 && r.left < window.innerWidth && r.top < window.innerHeight;
 }
 
+// inClosedDrawer: inside the sidebar's phone drawer once it has been closed.
+// The drawer slides shut, so for a moment a control in it is still painted
+// and on screen; focus put there is lost when the slide ends. The drawer's
+// own state says where it is going, whatever frame the slide is on. From sm
+// up the sidebar is a column that never closes.
+function inClosedDrawer(el: Element): boolean {
+  const rail = el.closest("aside.rail");
+  if (!rail || rail.getAttribute("data-drawer-open") === "true") return false;
+  return typeof window.matchMedia === "function" && window.matchMedia("(width < 40rem)").matches;
+}
+
 /** Test hook. */
 export function resetPatrolWizardForTests() {
   open = false;
@@ -107,7 +118,7 @@ export function PatrolWizardHost({ onOpen }: { onOpen?: () => void }) {
           requestAnimationFrame(() => {
             const active = document.activeElement;
             if (active && active !== back && active !== document.body) return;
-            if (back && back.isConnected && onScreen(back)) {
+            if (back && back.isConnected && onScreen(back) && !inClosedDrawer(back)) {
               back.focus();
               return;
             }

@@ -96,6 +96,62 @@ describe("the patrol wizard, opened from anywhere on the page", () => {
     vi.restoreAllMocks();
   });
 
+  it("on a phone, an opener in the drawer the wizard closed is passed over, even while the drawer is still sliding shut", async () => {
+    // Still painted and on screen for a moment (the slide), but the drawer's
+    // own state says it is closed: the focus goes to the button that reopens it.
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+      width: 10, height: 10, top: 0, left: 0, right: 10, bottom: 10,
+    } as DOMRect);
+    vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: true, addEventListener: () => {}, removeEventListener: () => {} })));
+    render(
+      <>
+        <button type="button" data-sidebar-toggle="" data-testid="toggle">
+          Open sidebar
+        </button>
+        <aside className="rail">
+          <button type="button" data-testid="opener" onClick={(e) => openPatrolWizard(e.currentTarget)}>
+            New patrol
+          </button>
+        </aside>
+        <PatrolWizardHost />
+      </>,
+    );
+    fireEvent.click(screen.getByTestId("opener"));
+    const close = await screen.findByRole("button", { name: "Close wizard" });
+    close.focus();
+    fireEvent.click(close);
+    await waitFor(() => expect(screen.getByTestId("toggle")).toHaveFocus());
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it("an opener in the sidebar keeps the focus where the sidebar never closes (a wider screen), or while the drawer is open", async () => {
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+      width: 10, height: 10, top: 0, left: 0, right: 10, bottom: 10,
+    } as DOMRect);
+    vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {} })));
+    render(
+      <>
+        <button type="button" data-sidebar-toggle="">
+          Open sidebar
+        </button>
+        <aside className="rail">
+          <button type="button" data-testid="opener" onClick={(e) => openPatrolWizard(e.currentTarget)}>
+            New patrol
+          </button>
+        </aside>
+        <PatrolWizardHost />
+      </>,
+    );
+    fireEvent.click(screen.getByTestId("opener"));
+    const close = await screen.findByRole("button", { name: "Close wizard" });
+    close.focus();
+    fireEvent.click(close);
+    await waitFor(() => expect(screen.getByTestId("opener")).toHaveFocus());
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
   it("a ?launchpad=1 link opens it once and leaves the address clean", async () => {
     window.history.replaceState(null, "", "/patrols?launchpad=1&lang=es#top");
     render(<PatrolWizardHost />);
