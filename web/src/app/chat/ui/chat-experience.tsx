@@ -130,6 +130,7 @@ import {
   fetchTeamLinkStatus,
   shareChatWithTeam,
   sharedToast,
+  teamLinkRoute,
   type BranchOrigin,
   type OutputChecklist,
   type ShareWithTeamResult,
@@ -3284,6 +3285,24 @@ export function ChatExperience({
     if (!options.adopt) void reattachToConv(conversationId);
     if (!options.adopt && followResume) {
       void followApprovalResume(conversationId, approvalResumeFollowExecutingMs);
+    }
+  };
+
+  // A teammate's chat opens in the same place whichever door the viewer used
+  // (a Team chats row, a search hit, the branch banner's link back, a team
+  // link; docs/TEAM-SHARING.md): live in the chat view when it is a
+  // Multiplayer chat they may take part in, the read-only viewer otherwise.
+  // `live` comes from the server (the row's multiplayer flag, the branch
+  // origin's source_multiplayer, the team link's status); the live load
+  // falls back to the viewer if the server refuses it — the owner turned
+  // Multiplayer off or removed this viewer since.
+  const openTeammateChat = (conversationId: string, live: boolean) => {
+    setProjectHome(null);
+    if (live) {
+      setTeamChatView(null);
+      void loadConversation(conversationId, { fallbackToTeamChatView: true });
+    } else {
+      setTeamChatView(conversationId);
     }
   };
 
@@ -7214,8 +7233,11 @@ export function ChatExperience({
 
     // Team link (?team=<conversation id>, "Copy link for <team>"): consumed
     // and stripped like ?c=, then resolved by the server, which alone knows
-    // which page this viewer may see (docs/TEAM-SHARING.md):
+    // which page this viewer may see (docs/TEAM-SHARING.md, teamLinkRoute):
     //   owner       → the boot load below opens the chat normally;
+    //   multiplayer → a Multiplayer chat this viewer takes part in: the boot
+    //                 load below opens it live, as its Team chats row does
+    //                 (read-only only if that changed since);
     //   open        → the read-only viewer (B19);
     //   not_on_team → B22, not_shared → B23 — dead ends that reveal nothing
     //                 about the chat beyond what the server sent.
@@ -7239,9 +7261,10 @@ export function ChatExperience({
         teamLinkId = id;
         teamLink = fetchTeamLinkStatus(id).catch(() => null);
         void teamLink.then((status) => {
-          if (cancelled || status?.status === "owner") return;
+          const route = teamLinkRoute(status);
+          if (cancelled || route === "boot" || route === "live") return;
           setProjectHome(null);
-          if (!status || status.status === "open") {
+          if (!status || route === "read_only") {
             setTeamLinkNotice(null);
             setTeamChatView(id);
             return;
@@ -7445,9 +7468,13 @@ export function ChatExperience({
 
         // A deep-linked conversation outranks "most recent" — that's the
         // conversation the user was just sent to open.
-        // A team link to the viewer's OWN chat opens it like ?c= does.
+        // A team link to the viewer's OWN chat opens it like ?c= does, and so
+        // does one to a Multiplayer chat they take part in — that one falling
+        // back to the read-only viewer if the owner turned Multiplayer off or
+        // removed them since the server answered.
+        const linkRoute = teamLink ? teamLinkRoute(await teamLink) : null;
         const ownerLink =
-          teamLink && (await teamLink)?.status === "owner" ? teamLinkId : null;
+          linkRoute === "boot" || linkRoute === "live" ? teamLinkId : null;
         if (cancelled) return;
         const home = await entryHome;
         if (cancelled) return;
@@ -7472,7 +7499,11 @@ export function ChatExperience({
         // Flip before awaiting so a personas fetch that resolves after this
         // point does not overwrite the loaded conversation's persona.
         willLoadConversation = true;
-        await loadConversationRef.current(target, { restore: true });
+        await loadConversationRef.current(target, {
+          restore: true,
+          fallbackToTeamChatView:
+            linkRoute === "live" && target === teamLinkId,
+        });
       } finally {
         if (!cancelled) {
           // The boot spinner is the bootstrap's only while no navigation has
@@ -7598,9 +7629,12 @@ export function ChatExperience({
       if (teamLink && teamLinkId) {
         const id = teamLinkId;
         void teamLink.then((status) => {
-          if (cancelled || status?.status !== "owner") return;
+          const route = teamLinkRoute(status);
+          if (cancelled || (route !== "boot" && route !== "live")) return;
           willLoadConversation = true;
-          void loadConversationRef.current(id, {});
+          void loadConversationRef.current(id, {
+            fallbackToTeamChatView: route === "live",
+          });
         });
       }
       // A project link followed from another page's sidebar arrives on a
@@ -7840,15 +7874,9 @@ export function ChatExperience({
           projects={projects}
           teamSharedChatCounts={teamSharedChatCounts}
           teamSharedConversations={railTeamSharedConversations}
-          onSelectTeamSharedConversation={(c) => {
-            setProjectHome(null);
-            if (c.multiplayer) {
-              setTeamChatView(null);
-              void loadConversation(c.id, { fallbackToTeamChatView: true });
-            } else {
-              setTeamChatView(c.id);
-            }
-          }}
+          onSelectTeamSharedConversation={(c) =>
+            openTeammateChat(c.id, Boolean(c.multiplayer))
+          }
           onMoveToProject={(conversationId, projectID) =>
             void moveConversationToProject(conversationId, projectID)
           }
@@ -8495,10 +8523,9 @@ export function ChatExperience({
             <div className="px-4 pt-2 sm:px-6">
               <BranchOriginBanner
                 origin={activeBranchOrigin}
-                onOpenSource={(id) => {
-                  setProjectHome(null);
-                  setTeamChatView(id);
-                }}
+                onOpenSource={(id, route) =>
+                  openTeammateChat(id, route === "live")
+                }
               />
             </div>
           ) : null}

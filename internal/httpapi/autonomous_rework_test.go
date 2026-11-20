@@ -24,7 +24,7 @@ type patrolRecordStageStore struct {
 	recordStageStore
 }
 
-func (s *patrolRecordStageStore) ArmApprovalResume(context.Context, string, string) (bool, error) {
+func (s *patrolRecordStageStore) ArmApprovalResume(context.Context, string, string, bool) (bool, error) {
 	return true, nil
 }
 

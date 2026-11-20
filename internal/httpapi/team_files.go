@@ -264,10 +264,12 @@ func (s *Server) handleTeamFile(w http.ResponseWriter, r *http.Request, user, co
 }
 
 // handleTeamLink serves GET /conversations/{id}/team-link — where a team
-// link should land this signed-in caller. Statuses: owner | open |
-// not_on_team (with the audience team only) | not_shared (with the chat's
-// project only when the caller can see that project anyway). An unknown id is
-// not_shared, so the route is no more an existence oracle than team-view.
+// link should land this signed-in caller. Statuses: owner | multiplayer (a
+// Multiplayer chat the caller may take part in: open it live) | open (the
+// read-only view) | not_on_team (with the audience team only) | not_shared
+// (with the chat's project only when the caller can see that project
+// anyway). An unknown id is not_shared, so the route is no more an existence
+// oracle than team-view.
 func (s *Server) handleTeamLink(w http.ResponseWriter, r *http.Request, user, convID string) {
 	tl, err := s.store.ResolveTeamLink(r.Context(), user, convID)
 	if err != nil {

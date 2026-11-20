@@ -417,6 +417,12 @@ func (a *approvalStager) RecordAction(toolName, toolCallID, rawInput, undoHint s
 }
 
 func (a *approvalStager) effectiveApprovalMode() string {
+	// An administrator's message (ADR-0115) always runs in Manual: Auto and
+	// Autonomous are the owner's consent to their OWN instructions, not to an
+	// administrator's, so every critical action stages a card for the owner.
+	if a.inputKind == agent.InputKindAdminMessage {
+		return store.ConversationApprovalManual
+	}
 	if a.liveApprovalMode != nil {
 		if m, ok := store.ParseConversationApprovalMode(a.liveApprovalMode(a.ctx)); ok {
 			return m
@@ -770,7 +776,9 @@ func (a *approvalStager) tryPreResolveBeforeMaterialize(toolName, rawInput strin
 				})
 				return agentcore.PreDeniedSentinel, true
 			}
-			if sessionApprovalAllowedForCall(toolName, rawInput, a.isAutonomous()) {
+			// The owner's "approve for the rest of the chat" covers their own
+			// turns, not an administrator's message (denies above still apply).
+			if a.inputKind != agent.InputKindAdminMessage && sessionApprovalAllowedForCall(toolName, rawInput, a.isAutonomous()) {
 				a.emitUserScoped("tool.auto_resolved", map[string]any{
 					"tool":    toolName,
 					"mode":    p.Mode,

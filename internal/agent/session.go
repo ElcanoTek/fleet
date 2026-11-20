@@ -108,6 +108,11 @@ type TextContent struct {
 	// standard single-owner conversations so existing rows and tests are
 	// unchanged.
 	SenderEmail string `json:"sender_email,omitempty"`
+	// AdminEmail is the administrator who wrote an InputKindAdminMessage
+	// entry (ADR-0115). It is deliberately NOT SenderEmail: the turn runs as
+	// the chat's owner, and SenderEmail drives the per-participant privacy
+	// filter, which would hide the turn's work from the owner.
+	AdminEmail string `json:"admin_email,omitempty"`
 }
 
 // InputKindApprovalResume is TextContent.Kind / TurnInput.InputKind for the
@@ -119,6 +124,13 @@ const InputKindApprovalResume = "approval_resume"
 // synthetic input of a turn fleet starts when an in-chat patrol or timer
 // schedule fires (migration 086).
 const InputKindChatPatrol = "chat_patrol"
+
+// InputKindAdminMessage is TextContent.Kind / TurnInput.InputKind for a
+// message an administrator sent into the chat with the admin tools
+// (ADR-0115). The turn runs as the chat's owner; TextContent.AdminEmail
+// names the administrator. Like the other fleet-started kinds it is an
+// unattended turn: nobody is at the owner's keyboard.
+const InputKindAdminMessage = "admin_message"
 
 // EntryTypeNotice is a UI-only history entry fleet writes to tell the reader
 // something happened that is not a turn, e.g. an automatic resume that was

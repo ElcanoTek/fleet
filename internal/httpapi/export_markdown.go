@@ -104,6 +104,12 @@ func textEntryHeading(role string, c agent.TextContent) string {
 	if c.Kind == agent.InputKindChatPatrol {
 		return "Fleet (scheduled patrol)"
 	}
+	if c.Kind == agent.InputKindAdminMessage {
+		if a := strings.TrimSpace(c.AdminEmail); a != "" {
+			return fmt.Sprintf("Administrator (%s)", a)
+		}
+		return "Administrator"
+	}
 	if role == "user" && strings.TrimSpace(c.SenderEmail) != "" {
 		return fmt.Sprintf("User (%s)", strings.TrimSpace(c.SenderEmail))
 	}

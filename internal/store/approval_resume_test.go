@@ -33,7 +33,7 @@ func stageResume(t *testing.T, s *Store, convID, tool string, arm bool) *Approva
 		t.Fatalf("CreateApproval: %v", err)
 	}
 	if arm {
-		ok, err := s.ArmApprovalResume(ctx, resumeUser, a.ID)
+		ok, err := s.ArmApprovalResume(ctx, resumeUser, a.ID, false)
 		if err != nil || !ok {
 			t.Fatalf("ArmApprovalResume = %t, %v", ok, err)
 		}
@@ -406,6 +406,81 @@ func TestClaimApprovalResume_PatrolTimeoutSkipsResume(t *testing.T) {
 	}
 	if got := resumeState(t, s, a.ID); got != ApprovalResumeSkipped {
 		t.Fatalf("resume_state = %q, want %q", got, ApprovalResumeSkipped)
+	}
+}
+
+// A card staged by a resume turn that then times out starts no further resume:
+// otherwise an unanswered chat pays for one unattended turn per expiry, each
+// staging the card again. The first timeout still resumes once.
+func TestClaimApprovalResume_TimeoutOfResumeStagedCardSkipsResume(t *testing.T) {
+	t.Parallel()
+
+	s := newTestStore(t)
+	ctx := context.Background()
+	conv := resumeConv(t, s)
+	timeOut := func(a *Approval) {
+		t.Helper()
+		if ok, err := s.ClaimApproval(ctx, resumeUser, a.ID, "rejected", "Approval timed out — auto-denied."); err != nil || !ok {
+			t.Fatalf("ClaimApproval = %t, %v", ok, err)
+		}
+	}
+
+	first := stageResume(t, s, conv.ID, "mcp_pages_update_page_config", true)
+	timeOut(first)
+	res := claimResume(t, s, conv.ID)
+	if res.Input == nil {
+		t.Fatalf("first timeout claim = %+v, want a resume input", res)
+	}
+
+	// The resume turn stages a card of its own; the stager arms it as staged
+	// by a resume turn.
+	stageByResume := func(tool string) *Approval {
+		t.Helper()
+		a := stageResume(t, s, conv.ID, tool, false)
+		if ok, err := s.ArmApprovalResume(ctx, resumeUser, a.ID, true); err != nil || !ok {
+			t.Fatalf("ArmApprovalResume = %t, %v", ok, err)
+		}
+		return a
+	}
+	second := stageByResume("mcp_pages_create_page_from_template")
+	timeOut(second)
+	res = claimResume(t, s, conv.ID)
+	if res.Input != nil || res.Skipped != ApprovalResumeSkipTimedOut {
+		t.Fatalf("chained timeout claim = %+v, want Skipped=%q and nil Input", res, ApprovalResumeSkipTimedOut)
+	}
+	if got := resumeState(t, s, second.ID); got != ApprovalResumeSkipped {
+		t.Fatalf("resume_state = %q, want %q", got, ApprovalResumeSkipped)
+	}
+
+	// A decision on a card the resume turn staged still resumes: only a
+	// timeout, which nobody saw, ends the chain.
+	third := stageByResume("mcp_pages_create_page_from_template")
+	if ok, err := s.ClaimApproval(ctx, resumeUser, third.ID, "rejected", "Declined by user."); err != nil || !ok {
+		t.Fatalf("ClaimApproval = %t, %v", ok, err)
+	}
+	if res = claimResume(t, s, conv.ID); res.Input == nil {
+		t.Fatalf("declined card staged by a resume turn = %+v, want a resume input", res)
+	}
+}
+
+// The connector card is inserted armed in one statement, so it carries the
+// staged-by-resume fact from that insert.
+func TestStageEnableMCPConnectorsApproval_RecordsStagedByResume(t *testing.T) {
+	t.Parallel()
+
+	s := newTestStore(t)
+	ctx := context.Background()
+	conv := resumeConv(t, s)
+	a, _, err := s.StageEnableMCPConnectorsApproval(ctx, resumeUser, conv.ID, "enable_mcp_connectors", "call_1", `{}`, 0, true, nil)
+	if err != nil {
+		t.Fatalf("StageEnableMCPConnectorsApproval: %v", err)
+	}
+	if ok, err := s.ClaimApproval(ctx, resumeUser, a.ID, "rejected", "Approval timed out — auto-denied."); err != nil || !ok {
+		t.Fatalf("ClaimApproval = %t, %v", ok, err)
+	}
+	res := claimResume(t, s, conv.ID)
+	if res.Input != nil || res.Skipped != ApprovalResumeSkipTimedOut {
+		t.Fatalf("timed-out connector card staged by a resume turn = %+v, want Skipped=%q and nil Input", res, ApprovalResumeSkipTimedOut)
 	}
 }
 

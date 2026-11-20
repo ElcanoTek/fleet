@@ -317,11 +317,13 @@ func claimSettledArmedApprovalsTx(ctx context.Context, tx *sql.Tx, convID, userE
 // resume_state = 'armed' in a single database transaction. If buildArgs is
 // non-nil, it receives the JSON payloads of any pending rows being superseded
 // so the caller can merge earlier pending connector requests from the same step
-// into the newly staged card's payload before inserting it.
+// into the newly staged card's payload before inserting it. stagedByResume is
+// ArmApprovalResume's: a resume turn staged the card.
 func (s *Store) StageEnableMCPConnectorsApproval(
 	ctx context.Context,
 	userEmail, convID, toolName, toolCallID, argsJSON string,
 	expiresAt int64,
+	stagedByResume bool,
 	buildArgs func(supersededArgsJSON []string) string,
 ) (*Approval, int64, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -380,10 +382,10 @@ func (s *Store) StageEnableMCPConnectorsApproval(
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO approvals (
 			id, conversation_id, user_email, tool_name, tool_call_id, args_json,
-			status, created_at, expires_at, resume_state
-		) VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7, $8, $9)`,
+			status, created_at, expires_at, resume_state, staged_by_resume
+		) VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7, $8, $9, $10)`,
 		id, convID, userEmail, toolName, toolCallID, argsJSON,
-		now, expiresArg, ApprovalResumeArmed,
+		now, expiresArg, ApprovalResumeArmed, stagedByResume,
 	); err != nil {
 		return nil, 0, err
 	}

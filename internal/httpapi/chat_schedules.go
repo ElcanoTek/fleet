@@ -54,6 +54,9 @@ func (s *Server) KickQueuedChatScheduleTurns(ctx context.Context) {
 	if s == nil || s.store == nil || s.shuttingDown.Load() || UpdateDrainActive() {
 		return
 	}
+	// Admin requests `fleet chats` recorded on the host (ADR-0115) ride the
+	// same pass: it is the running server's regular look at the database.
+	s.ExecuteAdminRequests(ctx)
 	if ql, ok := s.store.(interface {
 		ListQueuedPatrolConversations(context.Context) ([]string, error)
 	}); ok {
@@ -658,6 +661,12 @@ func (s *Server) handleScheduleRunNow(w http.ResponseWriter, r *http.Request, us
 	}
 	if s.chatSchedules == nil {
 		http.Error(w, "the scheduler is not running", http.StatusServiceUnavailable)
+		return
+	}
+	// An archived chat's schedules are off (store.SetArchived): no manual
+	// run either, until it is unarchived.
+	if conv.ArchivedAt != nil {
+		http.Error(w, "this chat is archived; unarchive it before running a patrol or timer", http.StatusBadRequest)
 		return
 	}
 	// The schedule must be the caller's, in this conversation, and live.

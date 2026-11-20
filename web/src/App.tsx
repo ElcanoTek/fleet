@@ -36,6 +36,7 @@ const AdminFeatures = lazy(() => import("@/app/settings/admin/features/page"));
 const AdminProviders = lazy(() => import("@/app/settings/admin/providers/page"));
 const AdminServer = lazy(() => import("@/app/settings/admin/server/page"));
 const AdminUsers = lazy(() => import("@/app/settings/admin/users/page"));
+const AdminChats = lazy(() => import("@/app/settings/admin/chats/page"));
 const AdminSidebar = lazy(() => import("@/app/settings/admin/sidebar/page"));
 
 const settingsPages: Record<string, () => ReactNode> = {
@@ -53,6 +54,7 @@ const settingsPages: Record<string, () => ReactNode> = {
   "/settings/admin/providers": () => <AdminProviders />,
   "/settings/admin/server": () => <AdminServer />,
   "/settings/admin/users": () => <AdminUsers />,
+  "/settings/admin/chats": () => <AdminChats />,
   "/settings/admin/sidebar": () => <AdminSidebar />,
 };
 
@@ -73,6 +75,7 @@ const SETTINGS_TITLES: Record<string, [name: string, section: string]> = {
   "/settings/admin/providers": [tr("Providers"), tr("Admin")],
   "/settings/admin/server": [tr("Server"), tr("Admin")],
   "/settings/admin/users": [tr("Users"), tr("Admin")],
+  "/settings/admin/chats": [tr("Chats"), tr("Admin")],
   "/settings/admin/sidebar": [tr("Sidebar"), tr("Admin")],
 };
 

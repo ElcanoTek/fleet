@@ -904,10 +904,16 @@ func run() error {
 				logging.From(ctx).Error("shared files: list for scheduled prompt block failed", "err", err)
 				return ""
 			}
-			return sharedfiles.PromptBlock(files)
+			return sharedfiles.PromptBlockWith(files, sharedfiles.PromptOptions{
+				ChatWrites: cfg.LiveSharedFilesChatWritesEnabled(),
+			})
 		},
-		OpenTaskMCPScope:   mcpRuntime.openTaskScope,
-		MCPServerInventory: mcpRuntime.inventory.snapshot,
+		// shared_file_write in scheduled runs (ADR-0114): the chat server's
+		// handler, bound to the task owner, so both drivers write through one
+		// path and one staging lock.
+		SharedFileWriterFor: chatSrv.SharedFileWriteHandlerFor,
+		OpenTaskMCPScope:    mcpRuntime.openTaskScope,
+		MCPServerInventory:  mcpRuntime.inventory.snapshot,
 	})
 	// Wire the cost-forecast's system-prompt resolver (#233) from the SAME runner
 	// that assembles the prompt at dispatch, so POST /tasks/estimate counts the

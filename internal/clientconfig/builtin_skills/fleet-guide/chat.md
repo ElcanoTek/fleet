@@ -933,7 +933,7 @@ Four ways data reaches a conversation. Most days you will use the first two.
 | --- | --- |
 | **Attach a file** | Click **Attach files** or drop a file onto the conversation, then ask about it in the same message. Spreadsheets, CSVs, PDFs, documents, and images all work. Files that are too large are refused when you pick them, with the limit stated, rather than failing later. An attachment belongs to the conversation it was sent in, and a note beside your message records what was added. |
 | **Connected sources** | Mailboxes, reporting APIs, and other systems your deployment has connected. The assistant reads from them when you ask, using only the connectors turned on for this conversation. Name the source in your ask; see [the next section](#5-connectors-in-a-conversation) for how connectors are switched on. |
-| **Shared file library** | Reference files an admin has published once for every conversation to read: historical data, price lists, lookup tables. They live under **Settings → Shared files**, and the assistant sees them in every chat without anyone re-attaching them. |
+| **Shared file library** | Reference files an admin has published once for every conversation to read: historical data, price lists, lookup tables. They live under **Settings → Shared files**, and the assistant sees them in every chat without anyone re-attaching them. The assistant can also save text files there that every chat on the server can read, such as a team log of optimizations: ask it to "log this to the shared optimization log", and a brand-new chat can later answer "what did we do on this deal last month?" from it. Those files are marked **written by chats**; files an admin uploaded stay read-only to chats, and an admin can turn chat writing off in **Settings → Admin → Features**. |
 | **Files the assistant makes** | Anything it produces in a conversation — a spreadsheet, a chart, an HTML report, or an image generated when the optional **Image generation** (`image_generation`) connector is on (**Google Nano Banana 2.1**, `google/gemini-nano-banana-2.1` by default) — stays in that conversation's working space. Download it from the transcript, preview HTML in place, and ask about it in later turns by name. |
 
 > **Inline handles, if enabled.** Some deployments allow typed handles in a
@@ -1498,7 +1498,7 @@ in place. Here is everything in it, in order.
 | **Share…** | Opens the share dialog: sharing with your team first, then **Share outside your team** (a public link). See [Sharing with your team](#sharing-with-your-team). |
 | **Download chat…** | Export the conversation in one of three formats: **Web page**, which opens in any browser, looks like the chat, and prints to PDF; **Text document**, for pasting into email, Word, or Docs; or **Raw data**, the complete record for developers. **Include the agent's work** adds the tool calls, results, and reasoning; it is off by default so a long chat downloads as the conversation, not its machinery. |
 | **Transfer ownership…** | Hand the chat to someone else; see **Transferring a chat** under [Sharing with your team](#sharing-with-your-team). Not offered on a sealed chat. |
-| **Archive** | Put it away without deleting it. Archived conversations never expire and can be unarchived from **Archived**, at the foot of the **Chats** list. Archiving a chat shared with your team stops sharing it (it asks first, with the number of shared files); unarchived, it comes back as **Only you**. An archived chat can't be shared with your team; unarchive it first. |
+| **Archive** | Put it away without deleting it. Archived conversations never expire and can be unarchived from **Archived**, at the foot of the **Chats** list. Archiving pauses the chat's patrols and timers, so a chat nobody is reading stops running; they stay paused when you unarchive it, until you resume them from the Patrol bar. Archiving a chat shared with your team stops sharing it (it asks first, with the number of shared files); unarchived, it comes back as **Only you**. An archived chat can't be shared with your team; unarchive it first. |
 | **Delete…** | Remove the conversation and everything it produced. There is a confirmation, and no undo. For a chat shared with your team, the confirmation says what the team loses; teammates who branched it keep their copies. |
 
 To pin, label or delete several conversations at once, choose **Select
@@ -1599,7 +1599,9 @@ It shares **read-only**: a conversation has exactly one owner, and nothing a
 teammate does changes yours. Teammates see new messages as you keep working.
 
 **The link for your team** opens only for signed-in members of your team, on the
-read-only view. Anyone else who opens it sees that the chat is shared with your
+read-only view — or, for a chat in **Multiplayer mode**, straight into the live
+chat for everyone who can take part in it, so they join it instead of
+branching it. Anyone else who opens it sees that the chat is shared with your
 team and nothing about it; a signed-out teammate is sent to sign in and then
 straight to the chat. Once a chat stops being shared, its link says so.
 
@@ -1639,7 +1641,11 @@ dialog). When Multiplayer mode is on:
 - Teammates (and anyone else added to the chat) see it in the rail, among
   their **Chats** by default, with the green dot of a Multiplayer chat, can
   open it directly in the chat view, and can send messages into the shared
-  thread.
+  thread. It opens the same live chat however they reach it: from the rail,
+  the project home, a search result, the link for your team, or the link
+  back to it on a branch they made of it. Someone you removed, or who is not
+  allowed to take part, gets the read-only view instead while the chat is
+  shared with their team.
 - Every message shows the sender's email above their bubble, and each turn runs
   under **the sender's own account** — using the sender's email, personal
   memories, skills, per-user connector accounts, and approval cards. Because a turn's tool calls, reasoning, and token/cost summary belong to the person whose credentials ran it, turning on **Show details** shows **Turn details hidden for other users' turns** on turns started by someone else. That keeps your screen clear; it is not a privacy wall. The assistant works from the whole chat, including what it fetched on a teammate's turn, and can repeat it, so turn Multiplayer mode on only with people who may see what the chat's turns bring in.
@@ -1675,6 +1681,20 @@ waits in a small queue under the composer, with **Send now** to move it to the
 front and a control to remove it. Queued messages run in order once the current
 turn finishes, each appearing on screen as its own turn, and the queue survives a
 reload or a switch to another chat.
+
+### Messages from an administrator
+
+A workspace administrator can send a message into your chat, for example to
+ask a patrol to publish a log it keeps. It appears in the transcript as
+**Message from an administrator** with their email, never as your words, and
+a short note in the chat says what was changed and why. The reply runs with
+your connections, and always asks you before anything that needs approval,
+even if the chat is set to approve automatically. An administrator can also
+change one of your patrols' instructions or its schedule (how often and at
+what time it runs), or pause or resume it; each change leaves the same kind
+of note in the chat. An administrator can also archive or delete a chat; a
+deleted chat stays in a recycle bin for 30 days, so ask them to restore it if
+it was a mistake.
 
 ### Long conversations
 

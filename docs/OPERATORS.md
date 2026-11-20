@@ -913,6 +913,128 @@ between keep theirs. The API form also refuses an owner for whom the
 database directly, so it cannot run that check. See
 [`docs/TASK-OWNERSHIP.md`](TASK-OWNERSHIP.md).
 
+## Chat administration — fleet chats and fleet patrol
+
+An administrator can look after any chat on the box, from the host or from
+**Settings → Admin → Chats** in the browser
+([ADR-0115](adr/0115-chat-administration.md)). Never use a hand-written
+`UPDATE` on chat or schedule tables instead: these commands keep the chat's
+bookkeeping right, record who did what and why, and note every change in the
+chat itself.
+
+```
+fleet chats list [--user EMAIL] [--search TEXT] [--active-days N] [--archived]
+fleet chats show <chat_id>                     # owner, model, approvals, patrols, queue, recent admin changes
+fleet chats history <chat_id> [--tail 30] [--tools]
+fleet chats send <chat_id> --message "..." --reason "..." [--wait]
+fleet chats stop <chat_id> --reason "..." [--wait]
+fleet chats transfer <chat_id> --to EMAIL --reason "..." [--wait]
+fleet chats delete <chat_id> --reason "..."                       # to the recycle bin (restorable 30 days)
+fleet chats list --deleted                                        # the recycle bin
+fleet chats restore <chat_id> --reason "..."
+fleet chats delete <chat_id> --permanent --yes --reason "..."     # emergency: gone now, files reclaimed
+fleet chats notice <chat_id> --text "..."
+fleet chats set <chat_id> [--title T] [--model SLUG] [--approval-mode manual] [--archive|--unarchive] --reason "..."
+fleet chats actions [<chat_id>]                # the record of admin changes
+fleet chats request <request_id>               # progress of a send / stop / transfer
+```
+
+A chat or patrol id may be shortened to its first 8 characters. Every change
+takes `--reason`, is recorded in `chat.admin_actions` as `--as` (default
+`<unix user>@<host>`), and is noted in the chat.
+
+- **send** runs as the chat's owner, with the owner's connectors. It always
+  runs in Manual approvals, whatever the chat is set to: anything that needs
+  approval stages a card for the owner. The chat shows it as a message from
+  the administrator, and the model is told the owner did not write it. Archived and Lockdown chats take no admin
+  messages.
+- **send, stop and transfer** are carried out by the running server: the CLI
+  records an admin request and the server executes it on its next scheduler
+  pass (`FLEET_SCHED_TICK_SECONDS`, 30 s by default). `--wait` follows it to
+  the end; for a message it waits for the turn and prints the reply.
+- **set** can turn the approval mode down to `manual` only. Auto-approve and
+  Autonomous are the owner's own decision. A Lockdown chat keeps its model. `--archive` /
+  `--unarchive` are carried out by the server like `stop` (archiving also
+  revokes a shared chat's participants); follow them with `fleet chats request`.
+- **Prefer archiving.** `delete` moves a chat to the recycle bin: it stops,
+  disappears, has its patrols paused, and is deleted for good after 30 days
+  unless restored (whatever `FLEET_CONVERSATION_SOFT_DELETE` says).
+  `delete --permanent --yes` is for emergencies such as a full disk: the chat
+  and its files go now and cannot be restored
+  ([ADR-0116](adr/0116-admin-chat-delete-recycle-bin.md)).
+- Answering someone else's approval cards is not an administrator action.
+
+### Changing a patrol's instructions
+
+```
+fleet patrol list [--user EMAIL] [--conversation ID] [--timers] [--all] [--json]
+fleet patrol show <schedule_id> --prompt-only > /tmp/patrol.txt   # edit this copy
+fleet patrol show <schedule_id>                                   # note the prompt's sha256
+fleet patrol set-prompt <schedule_id> --file /tmp/patrol.txt \
+    --expect-sha256 <sha256 from show> --reason "why it changed" --dry-run
+fleet patrol set-prompt <schedule_id> --file /tmp/patrol.txt \
+    --expect-sha256 <sha256 from show> --reason "why it changed" --yes
+fleet patrol pause|resume <schedule_id> --reason "..."
+```
+
+`set-prompt`:
+
+- prints the diff first; `--dry-run` stops there;
+- refuses when the prompt changed after you read it (the sha256 no longer
+  matches), so an owner's newer edit is never overwritten — read it again and
+  rebuild the edit;
+- saves the old prompt, byte for byte, to
+  `/var/backups/fleet/patrol-prompts/<id>-<time>-v<def_version>.txt`
+  (`--backup-dir` to change), and prints the command that restores it;
+- changes only the prompt (and the title with `--title`): the owner, status,
+  cron and next run stay as they are;
+- bumps `def_version` like the owner's own edit, so a run already claimed under
+  the old prompt is superseded and the next run uses the new one, and rewrites
+  any run already waiting in the chat's queue to carry the new prompt;
+- writes a notice into the chat (`An administrator updated the instructions of
+  the patrol "…". Reason: …`). The notice is UI-only: it never reaches the
+  model or the prompt cache. `--notify=false` skips it.
+
+Tell the patrol's owner as well: the notice says the instructions changed, not
+what they now say.
+
+### Changing a patrol's schedule
+
+```
+fleet patrol show <schedule_id>                                   # note schedule and def_version
+fleet patrol set-schedule <schedule_id> --cron "30 6 * * *" \
+    --expect-def-version <def_version from show> --reason "why it changed" --dry-run
+fleet patrol set-schedule <schedule_id> --cron "30 6 * * *" [--timezone America/New_York] \
+    --expect-def-version <def_version from show> --reason "why it changed" --yes
+```
+
+The same is **Change schedule** on a patrol in **Settings → Admin → Chats**.
+`set-schedule`:
+
+- takes `--cron`, `--timezone` (an IANA name), or both; the one you leave out
+  stays as it is;
+- validates exactly as the owner's own edit does: a 5-field cron (or
+  `@daily`-style descriptor), a known timezone, at least 5 minutes between
+  runs;
+- prints the old and new schedule and the next five runs in the patrol's
+  timezone; `--dry-run` stops there;
+- refuses when the patrol changed after you read it (its `def_version` moved:
+  the owner or another administrator edited its prompt, title or schedule) —
+  read it again and rebuild the edit;
+- changes only the cron and timezone: the owner, prompt, title and status stay
+  as they are. A paused patrol stays paused and runs on the new schedule once
+  resumed;
+- bumps `def_version` like the owner's own edit, so a run the scheduler had
+  already claimed under the old schedule is superseded, and recomputes the
+  next run;
+- writes a notice into the chat (`An administrator changed the schedule of the
+  patrol "…" from "30 6 * * 1-5" (America/New_York) to "30 6 * * *"
+  (America/New_York). Reason: …`) and records `patrol_schedule` in
+  `fleet chats actions`;
+- refuses a one-shot timer, and a cancelled or completed patrol.
+
+The running server picks the new next run up on its next scheduler pass.
+
 ## Where the sandbox build fits
 
 The execution sandbox is a **per-client bundle artifact**: each bundle ships its

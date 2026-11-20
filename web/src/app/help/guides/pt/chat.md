@@ -261,7 +261,7 @@ Há quatro formas de fornecer dados a uma conversa. Na maioria dos dias, usará 
 | --- | --- |
 | **Anexar um ficheiro** | Clique em **Anexar ficheiros** ou arraste um ficheiro para a conversa e faça perguntas sobre ele nessa mesma mensagem. São aceites folhas de cálculo, CSV, PDF, documentos e imagens. Os ficheiros demasiado grandes são recusados ao escolhê-los, indicando o limite, em vez de falharem depois. Um anexo pertence à conversa onde foi enviado; uma nota junto da mensagem regista o que foi acrescentado. |
 | **Fontes ligadas** | Caixas de correio, APIs de relatórios e outros sistemas ligados à instalação. O assistente consulta-os quando o pede, usando apenas os conectores ativos nessa conversa. Nomeie a fonte no pedido; consulte [a secção seguinte](#5-connectors-in-a-conversation) para saber como ativar os conectores. |
-| **Biblioteca de ficheiros partilhados** | Ficheiros de referência que um administrador publica uma vez para todas as conversas: dados históricos, listas de preços ou tabelas de consulta. Ficam em **Definições → Ficheiros partilhados** e o assistente vê-os em todos os chats sem ser necessário voltar a anexá-los. |
+| **Biblioteca de ficheiros partilhados** | Ficheiros de referência que um administrador publica uma vez para todas as conversas: dados históricos, listas de preços ou tabelas de consulta. Ficam em **Definições → Ficheiros partilhados** e o assistente vê-os em todos os chats sem ser necessário voltar a anexá-los. O assistente também pode guardar aí ficheiros de texto que qualquer chat do servidor pode ler, como um registo da equipa com as otimizações: peça-lhe que «registe isto no registo partilhado de otimizações», e um chat novo poderá responder mais tarde «o que fizemos neste deal no mês passado?». Esses ficheiros aparecem marcados como **escrito por chats**; os que um administrador carrega continuam só de leitura para os chats, e um administrador pode desativar a escrita a partir dos chats em **Definições → Administração → Funcionalidades**. |
 | **Ficheiros criados pelo assistente** | Tudo o que produz numa conversa (uma folha de cálculo, um gráfico, um relatório HTML ou uma imagem gerada com o conector opcional **Geração de imagens** (`image_generation`) ativo, por predefinição **Google Nano Banana 2.1**, `google/gemini-nano-banana-2.1`) permanece no espaço de trabalho dessa conversa. Descarregue-o a partir da transcrição, pré-visualize HTML aí mesmo e faça perguntas sobre ele em turnos posteriores usando o nome. |
 
 > **Referências em linha, se estiverem ativas.** Algumas instalações permitem escrever referências numa mensagem: `@url:` seguido de um endereço Web incorpora essa página no turno, e `@file:` seguido de um nome de ficheiro incorpora um ficheiro criado antes pelo assistente nessa conversa. Ambas as funções estão desativadas salvo se um operador as ativar; se uma referência não fizer nada, a função está desativada e pode anexar como sempre.
@@ -432,7 +432,7 @@ Cada conversa da barra tem um menu no botão `⋮` que aparece ao passar o curso
 | **Partilhar…** | Abre a janela de partilha: primeiro com a equipa e depois **Partilhar fora da sua equipa** (uma ligação pública). Consulte [Partilhar com a sua equipa](#sharing-with-your-team). |
 | **Descarregar chat…** | Exporte a conversa num de três formatos: **Página web**, que abre em qualquer navegador, tem o aspeto do chat e permite imprimir para PDF; **Documento de texto**, para colar em email, Word ou Docs; ou **Dados em bruto**, o registo completo para programadores. **Incluir o trabalho do agente** acrescenta chamadas de ferramentas, resultados e raciocínio; está desativado por predefinição para que um chat longo seja descarregado como conversa, sem todos os detalhes de execução. |
 | **Transferir a propriedade…** | Entrega o chat a outra pessoa; consulte **Transferir um chat** em [Partilhar com a sua equipa](#sharing-with-your-team). Não é oferecido num chat isolado. |
-| **Arquivar** | Pô-la de lado sem a eliminar. As conversas arquivadas nunca expiram e podem ser recuperadas a partir de **Arquivadas**, no fundo da lista **Chats**. Arquivar um chat partilhado com a equipa deixa de o partilhar; primeiro pede confirmação e indica quantos ficheiros são partilhados. Ao desarquivá-lo, regressa como **Apenas para si**. Um chat arquivado não pode ser partilhado com a equipa; primeiro tem de o desarquivar. |
+| **Arquivar** | Pô-la de lado sem a eliminar. As conversas arquivadas nunca expiram e podem ser recuperadas a partir de **Arquivadas**, no fundo da lista **Chats**. Arquivar põe em pausa as patrulhas e os temporizadores do chat, para que um chat que ninguém lê deixe de ser executado; continuam em pausa ao desarquivar, até os retomares. Arquivar um chat partilhado com a equipa deixa de o partilhar; primeiro pede confirmação e indica quantos ficheiros são partilhados. Ao desarquivá-lo, regressa como **Apenas para si**. Um chat arquivado não pode ser partilhado com a equipa; primeiro tem de o desarquivar. |
 | **Eliminar…** | Eliminar a conversa e tudo o que produziu. É pedida confirmação e não pode ser anulado. Se o chat estiver partilhado com a equipa, a confirmação explica o que perderá; os colegas que o ramificaram mantêm as cópias. |
 
 Para fixar, etiquetar ou eliminar várias conversas de uma vez, escolha **Selecionar chats…** no menu junto ao cabeçalho **Chats**. Assinale os chats que quiser e use a barra no fundo da barra lateral: **Fixar selecionados**, **Adicionar etiqueta**, **Eliminar selecionados** e **Sair da seleção** para terminar. Se a seleção incluir chats partilhados com a equipa, a confirmação de eliminação indica quantos são e que a equipa perderá esses chats e os ficheiros partilhados; quem os ramificou mantém as cópias.
@@ -495,6 +495,21 @@ Partilhar uma conversa com a equipa permite divulgar um bom trabalho. Um chat s�
 ### Enquanto um turno está em execução
 
 **Parar** para o turno atual; a resposta parcial fica na transcrição, marcada como **Turno interrompido.** e com **Tentar novamente** no último turno, mesmo depois de recarregar. Os turnos que a plataforma termina antecipadamente são marcados da mesma forma: por atingir o limite por turno (4 horas por predefinição), o limite de custo ou tokens, ou por um reinício do servidor, que também inclui uma nota explicativa. Escrever e enviar durante um turno não o interrompe: a mensagem espera numa fila sob o editor, com **Enviar agora** para a adiantar e um controlo para a remover. As mensagens na fila são executadas por ordem quando o turno atual termina, cada uma como o seu próprio turno visível; a fila é mantida ao recarregar ou mudar de chat.
+
+### Mensagens de um administrador
+
+Um administrador do espaço de trabalho pode enviar uma mensagem ao seu chat,
+por exemplo para pedir a uma patrulha que publique um registro que mantém. Ela
+aparece na conversa como **Mensagem de um administrador** com o e-mail dessa
+pessoa, nunca como palavras suas, e uma nota curta no chat diz o que foi
+alterado e por quê. A resposta é executada com as suas conexões e
+pergunta sempre a você antes de qualquer ação que exija aprovação, mesmo que o
+chat aprove automaticamente. Um administrador também pode alterar as
+instruções ou o horário de uma das suas patrulhas (com que frequência e a que
+horas ela é executada), ou pausá-la ou retomá-la; cada alteração deixa o mesmo
+tipo de nota no chat. Um administrador também pode arquivar ou excluir um
+chat; um chat excluído fica 30 dias em uma lixeira, então peça para
+restaurá-lo se foi um engano.
 
 ### Conversas longas
 

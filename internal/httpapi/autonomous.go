@@ -305,7 +305,7 @@ func (s *Server) newShowUIDisplayedHandler(
 			}
 		}
 
-		if inputKind == agent.InputKindChatPatrol {
+		if unattendedTurn(inputKind) {
 			return
 		}
 		if !strings.EqualFold(ownerEmail, user) {

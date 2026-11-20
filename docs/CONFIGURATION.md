@@ -152,6 +152,7 @@ client bundle's manifest names them, and fleet admits them at startup ([MCP-BUND
 | `FLEET_SEARCH_ENABLED` | bool | `true` | server | Conversation search. *Validated at boot*. |
 | `FLEET_CONVERSATION_SOFT_DELETE` | bool | `false` | server | Deleting a conversation hides it instead of removing it. *Validated at boot*. |
 | `FLEET_TEAM_CHATS_SHARED_BY_DEFAULT` | bool | `false` | server | New chats are shared with the creator's team by default. Also an admin setting. *Validated at boot*. |
+| `FLEET_SHARED_FILES_CHAT_WRITES_ENABLED` | bool | `true` | server | Chats and scheduled tasks may write text files into the shared file library (shared_file_write). Also an admin setting. *Validated at boot*. |
 | `FLEET_CONTEXT_HANDLES_ENABLED` | bool | `false` | server | Composer context handles. Also an admin setting. *Validated at boot*. |
 | `CHAT_RATE_PER_MIN` | int | `40` | server | Per-user chat message rate limit per minute. (Canonical name; not a legacy alias.) *Validated at boot*. |
 | `CHAT_RATE_PER_DAY` | int | `2000` | server | Per-user chat message rate limit per day. (Canonical name; not a legacy alias.) *Validated at boot*. |

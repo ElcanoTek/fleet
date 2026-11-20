@@ -261,7 +261,7 @@ Hay cuatro formas de aportar datos a una conversación. La mayoría de los días
 | --- | --- |
 | **Adjuntar un archivo** | Pulsa **Adjuntar archivos** o arrastra un archivo a la conversación y pregunta sobre él en ese mismo mensaje. Se admiten hojas de cálculo, CSV, PDF, documentos e imágenes. Los archivos demasiado grandes se rechazan al elegirlos, indicando el límite, en lugar de fallar después. Un adjunto pertenece a la conversación donde se envió; una nota junto al mensaje registra lo que se añadió. |
 | **Fuentes conectadas** | Buzones, API de informes y otros sistemas conectados a tu instalación. El asistente los consulta cuando se lo pides, usando solo los conectores activados para esa conversación. Nombra la fuente en tu petición; consulta [la sección siguiente](#5-connectors-in-a-conversation) para saber cómo activar los conectores. |
-| **Biblioteca de archivos compartidos** | Archivos de referencia que un administrador publica una vez para todas las conversaciones: datos históricos, listas de precios o tablas de consulta. Están en **Configuración → Archivos compartidos** y el asistente los ve en todos los chats sin necesidad de volver a adjuntarlos. |
+| **Biblioteca de archivos compartidos** | Archivos de referencia que un administrador publica una vez para todas las conversaciones: datos históricos, listas de precios o tablas de consulta. Están en **Configuración → Archivos compartidos** y el asistente los ve en todos los chats sin necesidad de volver a adjuntarlos. El asistente también puede guardar ahí archivos de texto que cualquier chat del servidor puede leer, como un registro del equipo con las optimizaciones: pídele que «lo anote en el registro compartido de optimizaciones», y un chat nuevo podrá responder más tarde «¿qué hicimos en este deal el mes pasado?». Esos archivos aparecen marcados como **escrito por chats**; los que sube un administrador siguen siendo de solo lectura para los chats, y un administrador puede desactivar la escritura desde los chats en **Configuración → Administración → Funciones**. |
 | **Archivos creados por el asistente** | Todo lo que produce en una conversación (una hoja de cálculo, un gráfico, un informe HTML o una imagen generada con el conector opcional **Generación de imágenes** (`image_generation`) activado, por defecto **Google Nano Banana 2.1**, `google/gemini-nano-banana-2.1`) permanece en el espacio de trabajo de esa conversación. Descárgalo desde la transcripción, previsualiza HTML allí mismo y pregunta por él en turnos posteriores usando su nombre. |
 
 > **Referencias en línea, si están activadas.** Algunas instalaciones permiten escribir referencias en un mensaje: `@url:` seguido de una dirección web incorpora esa página al turno, y `@file:` seguido de un nombre de archivo incorpora un archivo creado antes por el asistente en esa conversación. Ambas funciones están desactivadas salvo que un operador las active; si una referencia no hace nada, la función está desactivada y puedes adjuntar como siempre.
@@ -432,7 +432,7 @@ Cada conversación de la barra tiene un menú en el botón `⋮` que aparece al 
 | **Compartir…** | Abre el diálogo de compartir: primero con tu equipo y después **Compartir fuera de tu equipo** (un enlace público). Consulta [Compartir con tu equipo](#sharing-with-your-team). |
 | **Descargar chat…** | Exporta la conversación en uno de tres formatos: **Página web**, que se abre en cualquier navegador, se parece al chat y permite imprimir a PDF; **Documento de texto**, para pegar en correo, Word o Docs; o **Datos sin procesar**, el registro completo para desarrolladores. **Incluir el trabajo del agente** añade llamadas a herramientas, resultados y razonamiento; está desactivado por defecto para que un chat largo se descargue como conversación, sin todos sus detalles de ejecución. |
 | **Transferir la propiedad…** | Entrega el chat a otra persona; consulta **Transferir un chat** en [Compartir con tu equipo](#sharing-with-your-team). No se ofrece en un chat aislado. |
-| **Archivar** | Apartarla sin eliminarla. Las conversaciones archivadas nunca caducan y se pueden recuperar desde **Archivadas**, al pie de la lista **Chats**. Archivar un chat compartido con el equipo deja de compartirlo; primero pide confirmación e indica cuántos archivos están compartidos. Al desarchivarlo, vuelve como **Solo tú**. Un chat archivado no se puede compartir con el equipo; primero debes desarchivarlo. |
+| **Archivar** | Apartarla sin eliminarla. Las conversaciones archivadas nunca caducan y se pueden recuperar desde **Archivadas**, al pie de la lista **Chats**. Archivar pone en pausa las patrullas y los temporizadores del chat, para que un chat que nadie lee deje de ejecutarse; siguen en pausa al desarchivarlo, hasta que los reanudes. Archivar un chat compartido con el equipo deja de compartirlo; primero pide confirmación e indica cuántos archivos están compartidos. Al desarchivarlo, vuelve como **Solo tú**. Un chat archivado no se puede compartir con el equipo; primero debes desarchivarlo. |
 | **Eliminar…** | Eliminar la conversación y todo lo que produjo. Se pide confirmación y no se puede deshacer. Si el chat está compartido con el equipo, la confirmación explica qué perderá; los compañeros que lo bifurcaron conservan sus copias. |
 
 Para fijar, etiquetar o eliminar varias conversaciones a la vez, elige **Seleccionar chats…** en el menú junto a la cabecera **Chats**. Marca los chats que quieras y usa la barra al pie de la barra lateral: **Fijar seleccionados**, **Añadir etiqueta**, **Eliminar seleccionados** y **Salir de la selección** para terminar. Si la selección incluye chats compartidos con el equipo, la confirmación de eliminación indica cuántos son y que el equipo perderá esos chats y sus archivos compartidos; quienes los bifurcaron conservan sus copias.
@@ -495,6 +495,21 @@ Se comparte **en modo de solo lectura**: cada conversación tiene un único prop
 ### Mientras se ejecuta un turno
 
 **Detener** detiene el turno actual; la respuesta parcial queda en la transcripción, marcada como **Turno detenido.** y con **Reintentar** en el último turno, incluso después de recargar. Los turnos que la plataforma termina antes de tiempo se marcan igual: por alcanzar el límite por turno (4 horas por defecto), el límite de coste o tokens, o por un reinicio del servidor, que además incluye una nota explicativa. Escribir y enviar durante un turno no lo interrumpe: el mensaje espera en una cola bajo el editor, con **Enviar ahora** para adelantarlo y un control para quitarlo. Los mensajes en cola se ejecutan por orden cuando termina el turno actual, cada uno como su propio turno visible; la cola se conserva al recargar o cambiar de chat.
+
+### Mensajes de un administrador
+
+Un administrador del espacio de trabajo puede enviar un mensaje a tu chat, por
+ejemplo para pedir a una patrulla que publique un registro que lleva. Aparece
+en la conversación como **Mensaje de un administrador** con su correo, nunca
+como palabras tuyas, y una nota breve en el chat dice qué se cambió y por qué.
+La respuesta se ejecuta con tus conexiones y siempre te pregunta antes de
+cualquier acción que requiera aprobación, aunque el chat apruebe
+automáticamente. Un administrador también puede cambiar las instrucciones o el
+horario de una de tus patrullas (con qué frecuencia y a qué hora se ejecuta),
+o pausarla o reanudarla; cada cambio deja el mismo tipo de nota en el chat.
+Un administrador también puede archivar o eliminar un chat; un chat eliminado
+se queda 30 días en una papelera, así que pídele que lo restaure si fue un
+error.
 
 ### Conversaciones largas
 

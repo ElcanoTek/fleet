@@ -461,7 +461,7 @@ func TestApprovalResume_TimeoutStartsATurn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ok, err := h.s.store.ArmApprovalResume(ctx, resumeTestUser, a.ID); err != nil || !ok {
+	if ok, err := h.s.store.ArmApprovalResume(ctx, resumeTestUser, a.ID, false); err != nil || !ok {
 		t.Fatal(ok, err)
 	}
 	if n, err := h.s.SweepExpiredApprovals(ctx); err != nil || n != 1 {

@@ -228,6 +228,7 @@ type patrolRecordingEngine struct {
 	fakeEngine
 	lastInputKind   string
 	lastUserMessage string
+	lastAdminEmail  string
 	invokeTool      bool
 }
 
@@ -235,6 +236,7 @@ func (e *patrolRecordingEngine) RunTurn(ctx context.Context, in TurnInput, sink 
 	e.mu.Lock()
 	e.lastInputKind = in.InputKind
 	e.lastUserMessage = in.UserMessage
+	e.lastAdminEmail = in.AdminEmail
 	shouldCallTool := e.invokeTool
 	e.mu.Unlock()
 

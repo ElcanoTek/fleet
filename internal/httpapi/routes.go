@@ -165,6 +165,14 @@ func (s *Server) Routes() http.Handler {
 	// Admin Users tab (#237): GET list / POST create on the collection;
 	// PATCH role-team / DELETE / PUT …/password on the item. Admin-gated like
 	// the other /admin/* endpoints; role writes also drive the ops-center seam.
+	// Chat administration (ADR-0115): every user's chats and patrols, an
+	// administrator's message / stop / transfer requests, notices, settings
+	// changes, and the record of each. Admin-gated like the other /admin/*.
+	mux.Handle("/admin/chats", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminChats)))))
+	mux.Handle("/admin/chats/", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminChatItem)))))
+	mux.Handle("/admin/patrols/", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminPatrolItem)))))
+	mux.Handle("/admin/chat-requests/", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminChatRequest)))))
+	mux.Handle("/admin/chat-actions", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminChatActions)))))
 	mux.Handle("/admin/users", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminUsers)))))
 	mux.Handle("/admin/users/", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminUserItem)))))
 	// Team rename: relabels users.team_id + projects.team_id atomically.

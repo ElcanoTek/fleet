@@ -143,6 +143,12 @@ there) and [`../.agents/skills/steward/SKILL.md`](../.agents/skills/steward/SKIL
   API key, `new_lineage`, the create-time check that refuses a connector the
   owner cannot resolve, and `PUT /tasks/{id}/owner` /
   `fleet sched task set-owner`): [`docs/TASK-OWNERSHIP.md`](TASK-OWNERSHIP.md)
+- **Chat administration** (finding, reading, messaging, stopping,
+  transferring and changing any chat, and editing or pausing its patrols, from
+  `fleet chats` / `fleet patrol` or Settings → Admin → Chats; every change
+  recorded and noted in the chat): [`docs/OPERATORS.md`](OPERATORS.md#chat-administration--fleet-chats-and-fleet-patrol)
+  + design note [`docs/CHAT-ADMINISTRATION.md`](CHAT-ADMINISTRATION.md)
+  + [ADR-0115](adr/0115-chat-administration.md)
 - **Sharing work inside a project** (team-shared chats and the read-only view
   teammates branch from, "team learnings" as the user-facing name for a
   project's shared memory, the vocabulary, and why a team-shared chat can only
@@ -394,7 +400,7 @@ above fails otherwise.
 - [`SELF-WAKE.md`](SELF-WAKE.md) — Self-wake: sleep / wake_on_event
 - [`SERVER-STATS.md`](SERVER-STATS.md) — Admin server statistics
 - [`SESSION-EPOCH.md`](SESSION-EPOCH.md) — Per-user session epoch (password reset ends outstanding sessions)
-- [`SHARED-FILES.md`](SHARED-FILES.md) — Shared files: the cross-chat file library
+- [`SHARED-FILES.md`](SHARED-FILES.md) — Shared files: the cross-chat file library (admin uploads, and text files chats write with `shared_file_write`)
 - [`SKILLS.md`](SKILLS.md) — Skills (#513, phase 1)
 - [`STALE-CLIENTS.md`](STALE-CLIENTS.md) — Stale clients after a deploy: the update notice and the error pages
 - [`STRUCTURED-OUTPUT.md`](STRUCTURED-OUTPUT.md) — Structured output contracts

@@ -106,7 +106,7 @@ func (s *enableMCPTestStore) GetApproval(_ context.Context, user, id string) (*s
 	return &cp, nil
 }
 
-func (s *enableMCPTestStore) ArmApprovalResume(_ context.Context, _, id string) (bool, error) {
+func (s *enableMCPTestStore) ArmApprovalResume(_ context.Context, _, id string, _ bool) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.failArmResume {
@@ -197,7 +197,7 @@ func (s *enableMCPTestStore) AutoApproveEnableMCPConnectors(ctx context.Context,
 	return out, nil
 }
 
-func (s *enableMCPTestStore) StageEnableMCPConnectorsApproval(_ context.Context, userEmail, convID, toolName, toolCallID, argsJSON string, expiresAt int64, buildArgs func(supersededArgsJSON []string) string) (*store.Approval, int64, error) {
+func (s *enableMCPTestStore) StageEnableMCPConnectorsApproval(_ context.Context, userEmail, convID, toolName, toolCallID, argsJSON string, expiresAt int64, _ bool, buildArgs func(supersededArgsJSON []string) string) (*store.Approval, int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.failCreateAppr {

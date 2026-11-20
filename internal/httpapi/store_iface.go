@@ -60,7 +60,7 @@ type chatStore interface {
 	SetThinkingConfig(ctx context.Context, userEmail, convID string, cfg *store.ThinkingConfig) error
 	SetOptionalMCPServers(ctx context.Context, userEmail, convID string, servers []string) error
 	AutoApproveEnableMCPConnectors(ctx context.Context, req store.AutoApproveConnectorsRequest) (store.AutoApproveConnectorsResult, error)
-	StageEnableMCPConnectorsApproval(ctx context.Context, userEmail, convID, toolName, toolCallID, argsJSON string, expiresAt int64, buildArgs func(supersededArgsJSON []string) string) (*store.Approval, int64, error)
+	StageEnableMCPConnectorsApproval(ctx context.Context, userEmail, convID, toolName, toolCallID, argsJSON string, expiresAt int64, stagedByResume bool, buildArgs func(supersededArgsJSON []string) string) (*store.Approval, int64, error)
 	SetConversationMCPAccounts(ctx context.Context, userEmail, convID string, accounts map[string]string) error
 	// Per-user connector availability preferences (unified connector UX).
 	SetConnectorPref(ctx context.Context, userEmail string, p store.ConnectorPref) error
@@ -276,7 +276,7 @@ type chatStore interface {
 	// Resume after approval (docs/RESUME-AFTER-APPROVAL.md): arm a staged
 	// card of an opted-in tool, and claim the settled armed cards of a
 	// conversation into one resume queue row (or a recorded skip), atomically.
-	ArmApprovalResume(ctx context.Context, userEmail, approvalID string) (bool, error)
+	ArmApprovalResume(ctx context.Context, userEmail, approvalID string, stagedByResume bool) (bool, error)
 	ClaimApprovalResume(ctx context.Context, req store.ApprovalResumeRequest) (store.ApprovalResumeResult, error)
 	AppendApprovalResumeDroppedNotice(ctx context.Context, convID string) error
 	HasArmedApprovals(ctx context.Context, convID string) (bool, error)
@@ -419,6 +419,13 @@ type chatStore interface {
 	UpdateSharedFileMeta(ctx context.Context, id, name, folder, description string) (store.SharedFile, error)
 	DeleteSharedFile(ctx context.Context, id string) (store.SharedFile, error)
 	TotalSharedFileBytes(ctx context.Context) (int64, error)
+	// Files chats write (migration 0205, ADR-0114): the shared_file_write
+	// tool's row-locked write, and the text a chat-written row stages from.
+	WriteChatSharedFile(ctx context.Context, w store.ChatSharedFileWrite) (store.ChatSharedFileWriteResult, error)
+	SharedFileContent(ctx context.Context, id string) (content, sha string, ok bool, err error)
+	StageChatSharedFileLocked(ctx context.Context, id string, stage func(f store.SharedFile, content string) error) error
+	SharedFilePathOwnerLocked(ctx context.Context, folder, name string, fn func(owner *store.SharedFile) error) error
+	WithSharedFilesNamespaceLock(ctx context.Context, fn func() error) error
 
 	// In-chat patrols and timers: recurring cron patrols and one-shot timers
 	// bound directly to a conversation. The rows are the scheduler's

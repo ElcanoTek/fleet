@@ -650,6 +650,11 @@ func (m *Manager) buildSystemPrompt(persona string, layer *UserPersonaLayer, con
 	//    right now instead.
 	writeHostedSkipNotice(&sb, hosted.skipped)
 	m.appendAvailableOptionalConnectors(&sb, persona, enabledOptionalMCPServers, hosted, hidden)
+	// Connectors the bundle declares but whose credentials are not set on this
+	// box ("Needs setup" in the Tools picker). Without this the model only sees
+	// that the SSP has no tools and tells the user to switch it on in the Tools
+	// picker, which they cannot do (Raptive, PubMatic publisher, 2026-11-19).
+	m.appendNeedsSetupConnectors(&sb, persona, hidden)
 
 	// 5. protocol listing — skip fastio-mcp.md when fast.io is off
 	// so the agent doesn't try to read it for tools it can't call.
@@ -893,6 +898,102 @@ func (m *Manager) appendAvailableOptionalConnectors(sb *strings.Builder, persona
 		return
 	}
 	writeAvailableOptionalConnectorsSection(sb, m.availableOptionalForPrompt(persona, enabledOptIns, hosted, hidden))
+}
+
+// MaxNeedsSetupInPrompt caps the "not set up" list so a large manifest with
+// many unconfigured connectors cannot bloat the system prompt.
+const MaxNeedsSetupInPrompt = 25
+
+// needsSetupForPrompt lists the manifest connectors whose credentials are not
+// set on this box, from the same snapshot the Tools picker's "Needs setup"
+// rows read (SetConnectorMeta at boot, replaced by every MCP reload), so the
+// list follows the box with no hand-kept names. A connector that is running
+// is configured whatever the snapshot says, as in the picker. A connector
+// whose every declared tool the persona or interactive_hidden_tools hides is
+// left out. Sorted by prompt-safe name for prompt-cache byte stability.
+func (m *Manager) needsSetupForPrompt(persona string, hidden []string) []clientconfig.ConnectorMeta {
+	if m == nil {
+		return nil
+	}
+	meta := m.ConnectorMeta()
+	if len(meta) == 0 {
+		return nil
+	}
+	// A connector that is running is configured, whatever the snapshot says.
+	// "Running" is the picker's own test: the base connector names in the
+	// optional and always-on catalogs (never a parse of registered names,
+	// which carry account suffixes that can collide with other connectors).
+	running := map[string]bool{}
+	for _, srv := range m.MCPServerCatalog() {
+		running[strings.TrimSpace(srv.Name)] = true
+	}
+	for _, srv := range m.AlwaysOnMCPServerCatalog() {
+		running[strings.TrimSpace(srv.Name)] = true
+	}
+	policy := m.personaPolicy(persona)
+	out := make([]clientconfig.ConnectorMeta, 0)
+	seen := map[string]bool{}
+	for _, c := range meta {
+		name := strings.TrimSpace(c.Name)
+		if c.Configured || name == "" || running[name] {
+			continue
+		}
+		safe := agentcore.PromptSafeName(name) // case kept: connector names are case-sensitive
+		if safe == "" || seen[safe] {
+			continue
+		}
+		if len(c.Tools) > 0 {
+			visible := 0
+			for _, t := range c.Tools {
+				full := agentcore.MCPToolName(name, t) // case kept: persona patterns match the runtime name
+				if agentcore.InteractiveHiddenIn(hidden, full) || !agentcore.PersonaPermitsTool(policy, full) {
+					continue
+				}
+				visible++
+			}
+			if visible == 0 {
+				continue
+			}
+		}
+		seen[safe] = true
+		entry := c
+		entry.Name = safe
+		out = append(out, entry)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	if len(out) > MaxNeedsSetupInPrompt {
+		out = out[:MaxNeedsSetupInPrompt]
+	}
+	return out
+}
+
+func (m *Manager) appendNeedsSetupConnectors(sb *strings.Builder, persona string, hidden []string) {
+	writeNeedsSetupConnectorsSection(sb, m.needsSetupForPrompt(persona, hidden))
+}
+
+func writeNeedsSetupConnectorsSection(sb *strings.Builder, list []clientconfig.ConnectorMeta) {
+	if len(list) == 0 {
+		return
+	}
+	sb.WriteString("## Connectors not set up on this server\n\n")
+	sb.WriteString("These connectors are part of this workspace but their credentials have not been added on the server yet, so they have no tools in any chat and cannot be switched on (the Tools picker shows them as **Needs setup**):\n")
+	for _, c := range list {
+		label := trunc.Runes(trunc.OneLine(c.DisplayName), maxOptionalConnectorLabelRunes, "…")
+		desc := trunc.Runes(trunc.OneLine(c.Description), maxOptionalConnectorDescRunes, "…")
+		head := "**`" + c.Name + "`**"
+		if label != "" && !strings.EqualFold(label, c.Name) {
+			head = "**" + label + "** (`" + c.Name + "`)"
+		}
+		if desc != "" {
+			fmt.Fprintf(sb, "- %s: %s\n", head, desc)
+		} else {
+			fmt.Fprintf(sb, "- %s\n", head)
+		}
+	}
+	sb.WriteString("\nIf a request needs one of these:\n")
+	sb.WriteString("- Say plainly that it is not connected in this workspace yet and an admin has to set it up. Name it as listed above.\n")
+	sb.WriteString("- Do **NOT** tell the user to switch it on in the Tools picker or to add it under Settings → Connections, do not call `enable_mcp_connectors` for it, and do not look for a workaround through other tools, `bash` or `run_python`.\n")
+	sb.WriteString("- Do the parts of the request the connected tools can do, and say which part waits on the connector.\n\n")
 }
 
 func writeAvailableOptionalConnectorsSection(sb *strings.Builder, available []OptionalServerInfo) {

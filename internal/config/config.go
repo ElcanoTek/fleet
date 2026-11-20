@@ -332,6 +332,13 @@ type Config struct {
 	// FLEET_SHARED_FILES_MAX_TOTAL_MB, default 10240 (10 GiB); admin-overridable
 	// live via the shared_files_max_total_mb workspace setting.
 	SharedFilesMaxTotalMB int
+	// SharedFilesChatWritesEnabled lets conversations and scheduled runs write
+	// TEXT files into the shared library with the shared_file_write tool
+	// (ADR-0114, docs/SHARED-FILES.md "Files chats write"). Admin uploads stay
+	// read-only to chats either way. FLEET_SHARED_FILES_CHAT_WRITES_ENABLED,
+	// default true; admin-overridable live via the
+	// shared_files_chat_writes_enabled workspace setting.
+	SharedFilesChatWritesEnabled bool
 	// AutoArchiveAfterDays soft-archives unpinned conversations untouched for
 	// this many days (#282). 0 (the default) disables it — a conversation is
 	// then only ever archived by an explicit user action. FLEET_AUTO_ARCHIVE_AFTER_DAYS.
@@ -1388,7 +1395,10 @@ func Load(envFile string) (*Config, error) {
 
 		// Per-instance default team chat sharing — optional, default off.
 		TeamChatsSharedByDefault: lp.getenvFleetBool("TEAM_CHATS_SHARED_BY_DEFAULT", false),
-		MonthlySoftSpendLimitUSD: lp.getenvFleetFloat("MONTHLY_SOFT_SPEND_LIMIT_USD", 0),
+
+		// Files chats write into the shared library (ADR-0114) — default on.
+		SharedFilesChatWritesEnabled: lp.getenvFleetBool("SHARED_FILES_CHAT_WRITES_ENABLED", true),
+		MonthlySoftSpendLimitUSD:     lp.getenvFleetFloat("MONTHLY_SOFT_SPEND_LIMIT_USD", 0),
 
 		// A2A protocol server (#1279) — optional, default off; the routes
 		// answer 501 until enabled.

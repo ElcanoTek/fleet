@@ -50,6 +50,11 @@ type SharedFile = {
   content_type?: string;
   sha256?: string;
   uploaded_by?: string;
+  // "admin" (an upload) or "chat" (written by the shared_file_write tool —
+  // ADR-0114); chat files carry their last writer.
+  origin?: string;
+  updated_by?: string;
+  folder_index?: boolean;
   // Unix SECONDS (matches the Go rows).
   created_at: number;
   updated_at: number;
@@ -187,7 +192,9 @@ export default function SharedFilesPage() {
         <>
           {tr("A file library every conversation shares: the agent can read each file at")}{" "}
           <CodeChip>shared/&lt;name&gt;</CodeChip> {tr("(read-only) in every conversation's sandbox, and any member can download it here.")}
-          {isAdmin ? tr(" Only admins change the library.") : tr(" Admins manage the library.")}
+          {isAdmin
+            ? tr(" Admins upload and manage files here. Text files a conversation saved for every chat (a team log, for example) are marked “written by chats”; admins can rename or delete those too.")
+            : tr(" Admins manage uploads. Text files a conversation saved for every chat (a team log, for example) are marked “written by chats”.")}
         </>
       }
     >
@@ -248,7 +255,16 @@ export default function SharedFilesPage() {
                             <>
                               {formatBytes(file.size_bytes)}
                               {file.description ? <> · {file.description}</> : null}
-                              {file.uploaded_by ? <> {tr("· uploaded by")}{" "}{file.uploaded_by}</> : null}
+                              {file.origin === "chat" ? (
+                                <>
+                                  {" "}
+                                  {tr("· written by chats")}
+                                  {file.updated_by ? <> {tr("· last by")}{" "}{file.updated_by}</> : null}
+                                  {file.folder_index ? <> {tr("· folder index")}</> : null}
+                                </>
+                              ) : file.uploaded_by ? (
+                                <> {tr("· uploaded by")}{" "}{file.uploaded_by}</>
+                              ) : null}
                               {tr(" · updated ")}
                               {formatDate(file.updated_at)}
                             </>

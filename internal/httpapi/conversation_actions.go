@@ -453,6 +453,11 @@ func (s *Server) handleConversationArchive(w http.ResponseWriter, r *http.Reques
 	}
 	if req.Archived {
 		s.enforceMultiplayerRevocation(r.Context(), id, &store.Conversation{UserEmail: user}, nil)
+		// Archiving paused the chat's patrols and timers (store.SetArchived);
+		// tell its open tabs so the Patrol bar shows them paused.
+		if conv, err := s.store.Get(r.Context(), user, id); err == nil && conv != nil {
+			s.emitPatrolUpdate(r.Context(), user, id, nil, conv.AutoApprove, conv.EffectiveApprovalMode())
+		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

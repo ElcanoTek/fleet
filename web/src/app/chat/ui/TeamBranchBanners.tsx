@@ -5,8 +5,10 @@ import { t as tr } from "@/app/lib/i18n";
 //
 //   BranchOriginBanner — in the BRANCH (the teammate's own chat): where it came
 //   from, and that the shared files are now the teammate's own copies. It links
-//   back to the owner's live chat only while that chat is still shared; after
-//   that the link would open a "not shared anymore" page, so it is not offered.
+//   back to the owner's chat only while the teammate can still open it: live
+//   when it is a Multiplayer chat they take part in, read-only while it is
+//   shared with their team. After that the link would open a "not shared
+//   anymore" page, so it is not offered.
 //
 //   ViewerBranchBanner — in the OWNER's live chat, seen by a teammate who has
 //   branched it before: a way to their branch, and whether the owner has added
@@ -15,7 +17,7 @@ import { t as tr } from "@/app/lib/i18n";
 
 import { Icon } from "./Icon";
 import type { BranchOrigin, ViewerBranch } from "./teamSharing";
-import { formatDay, ownerFirstName } from "./teamSharing";
+import { branchSourceRoute, formatDay, ownerFirstName } from "./teamSharing";
 
 // The mark on a chat branched from a teammate's: Flag's `branch` icon.
 function BranchGlyph({ className }: { className?: string }) {
@@ -30,8 +32,10 @@ export function BranchOriginBanner({
   onOpenSource,
 }: {
   origin: BranchOrigin;
-  onOpenSource: (conversationId: string) => void;
+  /** live: open the chat itself (Multiplayer); read_only: the team view. */
+  onOpenSource: (conversationId: string, route: "live" | "read_only") => void;
 }) {
+  const route = branchSourceRoute(origin);
   return (
     <div
       data-testid="branch-origin-banner"
@@ -43,11 +47,11 @@ export function BranchOriginBanner({
           ? tr("Shared files came with it as your own copies.")
           : tr("No files came with it."))}
       </span>
-      {origin.source_still_shared ? (
+      {route ? (
         <button
           type="button"
           className={linkButton}
-          onClick={() => onOpenSource(origin.source_conversation_id)}
+          onClick={() => onOpenSource(origin.source_conversation_id, route)}
         >
         {rich("Open {0}’s chat", ownerFirstName(origin.source_owner_email))}
       </button>

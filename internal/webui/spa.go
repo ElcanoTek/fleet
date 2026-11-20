@@ -185,7 +185,7 @@ var pagePaths = map[string]bool{
 	"/settings": true, "/settings/admin": true, "/settings/admin/doctor": true,
 	"/settings/admin/features": true, "/settings/admin/sidebar": true,
 	"/settings/admin/providers": true, "/settings/admin/server": true,
-	"/settings/admin/users": true, "/settings/connections": true,
+	"/settings/admin/users": true, "/settings/admin/chats": true, "/settings/connections": true,
 	"/settings/shared-files": true, "/settings/skills": true, "/settings/team": true,
 	"/settings/personas": true, "/settings/memories": true, "/settings/prompts": true, "/help": true,
 }
