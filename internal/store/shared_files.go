@@ -109,6 +109,26 @@ func lockSharedFilesNamespace(ctx context.Context, tx *sql.Tx) error {
 	return err
 }
 
+// WithSharedFilesNamespaceLock runs fn while a transaction holds the namespace
+// lock, so no path can be claimed (and so no new file created and staged)
+// until fn returns. The reconciler reads the manifest and reconciles the staged
+// tree inside it, so a file another replica creates meanwhile is either in its
+// snapshot or created after it — never removed as a stray (ADR-0114).
+func (s *Store) WithSharedFilesNamespaceLock(ctx context.Context, fn func() error) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := lockSharedFilesNamespace(ctx, tx); err != nil {
+		return err
+	}
+	if err := fn(); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 // SharedFilePathOwnerLocked calls fn with the row that owns (folder, name)
 // right now — nil when none does — while a transaction holds the namespace
 // lock, so no other writer can claim the path until fn returns. Callers use it

@@ -193,8 +193,8 @@ export default function SharedFilesPage() {
           {tr("A file library every conversation shares: the agent can read each file at")}{" "}
           <CodeChip>shared/&lt;name&gt;</CodeChip> {tr("(read-only) in every conversation's sandbox, and any member can download it here.")}
           {isAdmin
-            ? tr(" Admins upload and manage files here. Conversations can also save text files they share with every chat (a team log, for example), marked “written by chats”; admins can rename or delete those too.")
-            : tr(" Admins manage uploads. Conversations can also save text files they share with every chat (a team log, for example), marked “written by chats”.")}
+            ? tr(" Admins upload and manage files here. Text files a conversation saved for every chat (a team log, for example) are marked “written by chats”; admins can rename or delete those too.")
+            : tr(" Admins manage uploads. Text files a conversation saved for every chat (a team log, for example) are marked “written by chats”.")}
         </>
       }
     >

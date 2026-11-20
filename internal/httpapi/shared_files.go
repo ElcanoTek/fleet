@@ -454,19 +454,24 @@ func httpErrorForSharedFile(w http.ResponseWriter, err error) {
 // staged root exists when kubernetes pods mount its subPath) and the hourly
 // maintenance pass keeps calling it. Exported for exactly those two drivers.
 func (s *Server) SyncSharedFiles(ctx context.Context) error {
-	files, err := s.store.ListSharedFiles(ctx)
-	if err != nil {
-		return fmt.Errorf("list shared files: %w", err)
-	}
 	s.sharedFilesMu.Lock()
 	defer s.sharedFilesMu.Unlock()
-	// Chat-written rows restage from their text in the database, read under
-	// the row lock so this pass can never publish a version older than a
-	// concurrent write on another replica (ADR-0114).
-	chatStage := func(f store.SharedFile) error {
-		return s.restageChatSharedFileLocked(ctx, f.ID)
-	}
-	return s.sharedFilesLibrary().Sync(files, chatStage)
+	// The manifest read and the reconciliation run under the store's namespace
+	// lock: a chat on another replica cannot create (and stage) a file between
+	// this snapshot and the stray sweep, so a fresh file is never removed as a
+	// stray. Chat-written rows restage from their text in the database under
+	// the row lock, so this pass can never publish a version older than a
+	// concurrent write (ADR-0114).
+	return s.store.WithSharedFilesNamespaceLock(ctx, func() error {
+		files, err := s.store.ListSharedFiles(ctx)
+		if err != nil {
+			return fmt.Errorf("list shared files: %w", err)
+		}
+		chatStage := func(f store.SharedFile) error {
+			return s.restageChatSharedFileLocked(ctx, f.ID)
+		}
+		return s.sharedFilesLibrary().Sync(files, chatStage)
+	})
 }
 
 // appendSharedFilesBlock announces the library at the top of a turn, mirroring

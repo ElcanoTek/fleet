@@ -425,6 +425,7 @@ type chatStore interface {
 	SharedFileContent(ctx context.Context, id string) (content, sha string, ok bool, err error)
 	StageChatSharedFileLocked(ctx context.Context, id string, stage func(f store.SharedFile, content string) error) error
 	SharedFilePathOwnerLocked(ctx context.Context, folder, name string, fn func(owner *store.SharedFile) error) error
+	WithSharedFilesNamespaceLock(ctx context.Context, fn func() error) error
 
 	// In-chat patrols and timers: recurring cron patrols and one-shot timers
 	// bound directly to a conversation. The rows are the scheduler's
