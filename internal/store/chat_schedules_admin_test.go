@@ -248,3 +248,40 @@ func TestAdminSetChatSchedulePromptSupersedesClaimedFire(t *testing.T) {
 		t.Fatalf("queued patrol input = %q, want the new prompt only", texts)
 	}
 }
+
+// A run already delivered into the chat's queue (waiting behind a running
+// turn) carries the prompt it was claimed with; an operator edit rewrites it
+// so it runs the new instructions, not the old ones once more.
+func TestAdminSetChatSchedulePromptRewritesQueuedRuns(t *testing.T) {
+	t.Parallel()
+	s, dsn := newTestStoreDSN(t)
+	ctx := context.Background()
+	const owner = "owner@client.example"
+	conv, err := s.CreateConversation(ctx, owner, "Workbench", "victoria", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sc, err := s.CreateChatSchedule(ctx, ChatScheduleInput{ConversationID: conv.ID, UserEmail: owner, Title: "Sweep", Prompt: "Offer a memory card.", CronExpr: "0 9 * * *"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fired := fireDueChatSchedules(t, s, dsn, time.Unix(sc.NextRunAt+1, 0))
+	if len(fired) != 1 || fired[0].delivery.Outcome != models.ChatScheduleQueued {
+		t.Fatalf("fire = %+v", fired)
+	}
+	cur, _ := s.AdminGetChatSchedule(ctx, sc.ID)
+	_, after, err := s.AdminSetChatSchedulePrompt(ctx, AdminChatSchedulePromptEdit{ID: sc.ID, ExpectSHA256: cur.PromptSHA256, Prompt: "Append to the shared team log."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.QueuedRunsUpdated != 1 {
+		t.Fatalf("queued runs updated = %d, want 1", after.QueuedRunsUpdated)
+	}
+	queued, err := s.ListQueuedInputs(ctx, "", conv.ID)
+	if err != nil || len(queued) != 1 {
+		t.Fatalf("queue = %+v, %v", queued, err)
+	}
+	if !strings.Contains(queued[0].Message, "Append to the shared team log.") || strings.Contains(queued[0].Message, "memory card") || !strings.Contains(queued[0].Message, "(run #1)") {
+		t.Fatalf("queued run message = %q", queued[0].Message)
+	}
+}

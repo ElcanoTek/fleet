@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -58,6 +59,10 @@ type AdminChatSchedule struct {
 	DefVersion        int64  `json:"def_version"`
 	FireInFlight      bool   `json:"fire_in_flight"`
 	PromptSHA256      string `json:"prompt_sha256"`
+	// QueuedRunsUpdated, on the schedule AdminSetChatSchedulePrompt returns,
+	// is how many of its runs were already waiting in the chat's queue and now
+	// carry the new instructions.
+	QueuedRunsUpdated int `json:"queued_runs_updated,omitempty"`
 }
 
 // AdminChatScheduleFilter narrows AdminListChatSchedules.
@@ -265,7 +270,19 @@ func (s *Store) AdminSetChatSchedulePrompt(ctx context.Context, in AdminChatSche
 	if err != nil {
 		return before, after, err
 	}
-	// Lock the schedule row first, then read it with its chat's title.
+	// Lock the chat, then the schedule: the order a fire's delivery takes
+	// them (DeliverChatScheduleFire), so an edit racing a firing patrol waits
+	// instead of deadlocking.
+	var convID string
+	if err := tx.QueryRowContext(ctx, `SELECT conversation_id FROM `+chatSchedulesTable+` WHERE id = $1`, id).Scan(&convID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return before, after, ErrChatScheduleNotFound
+		}
+		return before, after, err
+	}
+	if err := lockInputQueueConversation(ctx, tx, convID); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return before, after, err
+	}
 	if _, err := tx.ExecContext(ctx, `SELECT 1 FROM `+chatSchedulesTable+` WHERE id = $1 FOR UPDATE`, id); err != nil {
 		return before, after, err
 	}
@@ -300,6 +317,10 @@ func (s *Store) AdminSetChatSchedulePrompt(ctx context.Context, in AdminChatSche
 		prompt, title, time.Now().Unix(), id); err != nil {
 		return before, after, err
 	}
+	rewritten, err := rewriteQueuedPatrolRuns(ctx, tx, before, prompt, title)
+	if err != nil {
+		return before, after, err
+	}
 	if n := strings.TrimSpace(in.Notice); n != "" {
 		if err := s.appendNoticeTx(ctx, tx, before.ConversationID, NoticePatrolUpdated, n); err != nil {
 			return before, after, err
@@ -312,5 +333,59 @@ func (s *Store) AdminSetChatSchedulePrompt(ctx context.Context, in AdminChatSche
 	if err := tx.Commit(); err != nil {
 		return before, after, err
 	}
+	after.QueuedRunsUpdated = rewritten
 	return before, after, nil
+}
+
+// rewriteQueuedPatrolRuns gives the new instructions to the schedule's runs
+// that were already delivered into the chat's input queue and are still
+// waiting there. The def_version bump only supersedes a fire that has not
+// been delivered yet; a delivered run's queue row carries the prompt it was
+// claimed with, and would otherwise run the old instructions once more. The
+// rows are locked here; a drain claims with FOR UPDATE SKIP LOCKED, so it
+// cannot take one of them until this edit commits, and the update re-checks
+// that each is still queued.
+func rewriteQueuedPatrolRuns(ctx context.Context, tx *sql.Tx, sched AdminChatSchedule, prompt, title string) (int, error) {
+	prefix := ChatPatrolInputKeyPrefix + sched.ID + ":"
+	rows, err := tx.QueryContext(ctx,
+		`SELECT id, client_input_id FROM chat_input_queue
+		  WHERE conversation_id = $1 AND state = 'queued' AND mode = 'patrol' AND client_input_id LIKE $2
+		  FOR UPDATE`,
+		sched.ConversationID, likePrefix(prefix))
+	if err != nil {
+		return 0, err
+	}
+	type queued struct {
+		id  string
+		run int
+	}
+	var todo []queued
+	for rows.Next() {
+		var rowID, key string
+		if err := rows.Scan(&rowID, &key); err != nil {
+			_ = rows.Close()
+			return 0, err
+		}
+		run := 0
+		if rest := strings.TrimPrefix(key, prefix); rest != key {
+			if i := strings.IndexByte(rest, ':'); i > 0 {
+				run, _ = strconv.Atoi(rest[:i])
+			}
+		}
+		todo = append(todo, queued{id: rowID, run: run})
+	}
+	if err := rows.Close(); err != nil {
+		return 0, err
+	}
+	edited := sched.ChatSchedule
+	edited.Prompt, edited.Title = prompt, title
+	now := time.Now().Unix()
+	for _, q := range todo {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE chat_input_queue SET message = $1, updated_at = $2 WHERE id = $3 AND state = 'queued'`,
+			ChatPatrolInputText(edited, q.run), now, q.id); err != nil {
+			return 0, err
+		}
+	}
+	return len(todo), nil
 }

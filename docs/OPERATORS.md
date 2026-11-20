@@ -942,7 +942,8 @@ A schedule id may be shortened to its first 8 characters. `set-prompt`:
 - changes only the prompt (and the title with `--title`): the owner, status,
   cron and next run stay as they are;
 - bumps `def_version` like the owner's own edit, so a run already claimed under
-  the old prompt is superseded and the next run uses the new one;
+  the old prompt is superseded and the next run uses the new one, and rewrites
+  any run already waiting in the chat's queue to carry the new prompt;
 - writes a notice into the chat (`An administrator updated the instructions of
   the patrol "…". Reason: …`) so the chat's people see what changed and why.
   The notice is UI-only: it never reaches the model or the prompt cache.

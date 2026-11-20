@@ -213,6 +213,7 @@ type patrolSetPromptResult struct {
 	OldDefVersion int64  `json:"old_def_version"`
 	NewDefVersion int64  `json:"new_def_version,omitempty"`
 	BackupPath    string `json:"backup_path,omitempty"`
+	QueuedRuns    int    `json:"queued_runs_updated,omitempty"`
 	Notice        string `json:"notice,omitempty"`
 	Diff          string `json:"diff"`
 }
@@ -319,6 +320,7 @@ func patrolSetPrompt(argv []string, stdin io.Reader, out, errW io.Writer) int {
 	}
 	res.NewDefVersion = after.DefVersion
 	res.NewSHA256 = after.PromptSHA256
+	res.QueuedRuns = after.QueuedRunsUpdated
 	if *asJSON {
 		return writeJSONOut(out, res)
 	}
@@ -329,6 +331,9 @@ func patrolSetPrompt(argv []string, stdin io.Reader, out, errW io.Writer) int {
 	}
 	if cur.FireInFlight {
 		fmt.Fprintln(out, "a run was in flight: it is superseded and the next run uses the new prompt")
+	}
+	if after.QueuedRunsUpdated > 0 {
+		fmt.Fprintf(out, "%d run(s) already waiting in the chat's queue now carry the new prompt\n", after.QueuedRunsUpdated)
 	}
 	return 0
 }

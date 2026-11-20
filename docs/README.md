@@ -146,6 +146,7 @@ there) and [`../.agents/skills/steward/SKILL.md`](../.agents/skills/steward/SKIL
 - **Changing a client's chat patrol as an operator** (`fleet patrol list`,
   `show`, `set-prompt`: the diffed, compare-and-swap prompt edit with a backup
   and a notice in the chat): [`docs/OPERATORS.md`](OPERATORS.md#patrol-set-prompt--changing-a-chat-patrols-instructions)
+  + design note [`docs/CHAT-ADMINISTRATION.md`](CHAT-ADMINISTRATION.md)
 - **Sharing work inside a project** (team-shared chats and the read-only view
   teammates branch from, "team learnings" as the user-facing name for a
   project's shared memory, the vocabulary, and why a team-shared chat can only
