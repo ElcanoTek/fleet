@@ -459,8 +459,11 @@ type shellSegment struct {
 	// redirSubcmds are the substitution bodies inside redirect targets
 	// (`> "$(cmd)"`), which run even though the target is not a token.
 	redirSubcmds []string
-	stdinBodies  []string
-	stdinDyn     bool
+	// fdRedir: a redirect reaches a descriptor other than 0/1/2 or a
+	// dynamic target (see noteRedirTarget).
+	fdRedir     bool
+	stdinBodies []string
+	stdinDyn    bool
 }
 
 type pendingHeredoc struct {
@@ -605,8 +608,12 @@ func (l *shellLexer) flushSeg(nextPiped bool) {
 
 func (l *shellLexer) stepUnquoted() {
 	if !l.hasTok && l.startsIONumberRedir() {
+		start := l.pos
 		for l.pos < len(l.src) && l.src[l.pos] >= '0' && l.src[l.pos] <= '9' {
 			l.pos++
+		}
+		if fd := l.src[start:l.pos]; fd != "0" && fd != "1" && fd != "2" {
+			l.curSeg.fdRedir = true
 		}
 		l.handleRedir()
 		return
@@ -970,7 +977,7 @@ func (l *shellLexer) stepAmpersand() {
 		if l.pos < len(l.src) && l.src[l.pos] == '>' {
 			l.pos++
 		}
-		_ = l.readRedirectTarget()
+		l.noteRedirTarget(l.readRedirectTarget(), false, true)
 		return
 	}
 	l.flushSeg(false)
@@ -1017,6 +1024,9 @@ func isShellWordDelimiter(b byte) bool {
 func (l *shellLexer) handleRedir() {
 	ch := l.src[l.pos]
 	if l.pos+1 < len(l.src) && l.src[l.pos+1] == '(' {
+		// Process substitution: its body reads or writes through a file
+		// descriptor other commands can reach, like a group.
+		l.grouped = true
 		l.pos += 2
 		l.subcmds = append(l.subcmds, l.readParenBody())
 		l.markDynamic(string(ch) + "()")
@@ -1054,10 +1064,30 @@ func (l *shellLexer) handleRedir() {
 		l.curSeg.stdinDyn = true
 	}
 	l.pos++
+	dup := l.pos < len(l.src) && l.src[l.pos] == '&'
 	if l.pos < len(l.src) && (l.src[l.pos] == '>' || l.src[l.pos] == '&' || l.src[l.pos] == '|') {
 		l.pos++
 	}
-	_ = l.readRedirectTarget()
+	l.noteRedirTarget(l.readRedirectTarget(), dup, ch == '>')
+}
+
+// noteRedirTarget flags a redirect that reaches a file descriptor other
+// than stdin/stdout/stderr (`>&3`, `>/dev/fd/3`, `>/proc/self/fd/3`, a
+// socket, or an output target that is dynamic): another command, such as
+// `exec 3> >(sh)`, may be reading what this one writes.
+func (l *shellLexer) noteRedirTarget(target shellToken, dup, out bool) {
+	v := target.val
+	switch {
+	case target.dynamic && out:
+		l.curSeg.fdRedir = true
+	case dup:
+		if v != "0" && v != "1" && v != "2" && v != "-" {
+			l.curSeg.fdRedir = true
+		}
+	case strings.HasPrefix(v, "/dev/fd/") || strings.HasPrefix(v, "/proc/") ||
+		strings.HasPrefix(v, "/dev/tcp/") || strings.HasPrefix(v, "/dev/udp/"):
+		l.curSeg.fdRedir = true
+	}
 }
 
 func (l *shellLexer) readRedirectTarget() shellToken {
@@ -1256,7 +1286,7 @@ var assignmentLeadKeywords = map[string]bool{
 // Literal-value assignments never reach here dynamic, so their verdict is
 // unchanged.
 func segmentOnlyAssignsVariables(seg shellSegment) bool {
-	if seg.pipedStdin || seg.stdinDyn || len(seg.stdinBodies) > 0 || seg.opaqueRedir {
+	if seg.pipedStdin || seg.stdinDyn || len(seg.stdinBodies) > 0 || seg.opaqueRedir || seg.fdRedir {
 		// An evaluating redirect target (`> "${x@P}"`) runs hidden text.
 		return false
 	}
@@ -1319,7 +1349,7 @@ func substBodyIsInert(body string, depth int) bool {
 		}
 	}
 	for _, seg := range segments {
-		if len(seg.stdinBodies) > 0 || seg.opaqueRedir {
+		if len(seg.stdinBodies) > 0 || seg.opaqueRedir || seg.fdRedir {
 			// Here-docs and here-strings: their expansions are checked
 			// above, but nothing here needs one, so stay strict.
 			return false
@@ -1375,7 +1405,7 @@ func substBodyIsInert(body string, depth int) bool {
 var attributeSettingWords = []string{
 	"declare", "typeset", "local", "eval", "source", "alias", "trap",
 	"mapfile", "readarray", "enable", "PS4", "PROMPT_COMMAND",
-	"function", "hash", "shopt",
+	"function", "hash", "shopt", "exec", "coproc",
 }
 
 // anySegmentMaySetVarAttributes reports whether any word of the script
