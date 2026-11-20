@@ -1,6 +1,7 @@
 package agentcore
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -440,5 +441,124 @@ func TestRunPythonGitPushFloor(t *testing.T) {
 				t.Errorf("BeforeToolCall(run_python, %s) unexpectedly blocked: %q", tc.name, msg)
 			}
 		})
+	}
+}
+
+// TestGitPushFloorBareAssignment pins the 2026-11-20 false positive: a
+// scheduled report ran `f=$(ls -t ... | head -1)` and Fleet staged a
+// "git push to a remote" card, because a bare assignment with a command
+// substitution value was read as an unknown dynamic command word. A segment
+// that only assigns variables runs no command; everything that can still
+// reach git (the substitution bodies, a later dynamic command word, an env
+// prefix on a real git, assignments that steer git or the shell, opaque
+// expansions, quoted names) must stay blocked.
+func TestGitPushFloorBareAssignment(t *testing.T) {
+	repro := `ls -t .fleet/tool-output/ | head -3; f=$(ls -t .fleet/tool-output/* | head -1); echo $f; grep -o '"chess.com"\|"calculatorsoup.com"\|"comicbook.com"\|"cheezburger.com"' $f | sort | uniq -c`
+	for _, cmd := range []string{
+		repro,
+		`f=$(ls)`,
+		`f=$(ls); echo $f`,
+		`f=$(ls) ; cat "$f"`,
+		`f="$(ls -t dir/* | head -1)"`,
+		"f=`ls`",
+		`a=$(ls) b=$(date) c=x`,
+		`n=$1`,
+		`d=${HOME}/x`, // already allowed before: dynamic then a slash
+		`out=$(git status --porcelain)`,
+		`if f=$(ls); then echo "$f"; fi`,
+		`for x in a b; do n=$(wc -l "$x"); echo $n; done`,
+		`while line=$(head -1 f); do break; done`,
+		`! f=$(ls)`,
+		`{ f=$(ls); }`,
+		"f=$(ls)\necho $f",
+		"f=\\\n$(ls)",
+		`f=$( (ls) )`,
+		`git_ref=$(git rev-parse HEAD)`, // lower-case: bash names are case-sensitive; git reads GIT_*
+	} {
+		if bashCommandRunsGitPush(cmd) {
+			t.Errorf("bashCommandRunsGitPush(%q) = true, want false", cmd)
+		}
+	}
+	raw, err := json.Marshal(map[string]string{"command": repro})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if IsGitPushBash(string(raw)) {
+		t.Errorf("IsGitPushBash(repro) = true, want false")
+	}
+	if risky, reason := classifyRiskyBash(string(raw)); risky {
+		t.Errorf("classifyRiskyBash(repro) = (true, %q), want false", reason)
+	}
+	if IsAutonomousHardBlocked("bash", string(raw)) {
+		t.Errorf("repro must NOT be hard-blocked")
+	}
+
+	for _, cmd := range []string{
+		// The substitution body is still checked.
+		`f=$(git push origin main)`,
+		"f=`git push`",
+		`f="$(git -C repo push)"`,
+		`f=$(ls) g=$(git push)`,
+		`if f=$(git push); then :; fi`,
+		// A later dynamic command word still fails closed.
+		`f=$(ls); $f`,
+		`f=$(printf git); $f push origin main`,
+		`f=$(printf git); "$f" push origin main`,
+		`cmd=$(printf 'git push'); $cmd`,
+		`f=$(printf git) $f push`,
+		`f=$(ls); eval "$f"`,
+		`f=$(printf git); exec $f push`,
+		// An env prefix on a real command still detects.
+		`GIT_DIR=x git push`,
+		`GIT_DIR=$(pwd)/.git git push`,
+		`X=$(ls) git push`,
+		`X=$(ls) $f`,
+		// Assignments that steer git or the shell keep failing closed with
+		// an unknown value.
+		`GIT_SSH_COMMAND=$(cat f)`,
+		`GIT_CONFIG_COUNT=$(printf 0)`,
+		`PATH=$(pwd):$PATH`,
+		`HOME=$(mktemp -d)`,
+		`XDG_CONFIG_HOME=$(pwd)`,
+		`BASH_ENV=$(pwd)`,
+		`PS4=$(cat f)`,
+		`IFS=$(printf ' ')`,
+		`LD_PRELOAD=$(cat f)`,
+		`f=$(ls) PATH=$(pwd)`,
+		// Opaque expansions: arithmetic and ${...} can evaluate a variable's
+		// text, and array subscripts there run hidden commands.
+		`y=$((x))`,
+		`y=$((a[$(ls)]))`,
+		`y=${a[x]}`,
+		`y=${x@P}`,
+		`y=${x:i}`,
+		`y=$'\x67'`,
+		`y=$"x"`,
+		`y=<(ls)`,
+		`y=a{b,c}$(ls)`,
+		`y=*$(ls)`,
+		`f+=$(ls)`,
+		// A quoted or escaped name is a command named "f=...", not an
+		// assignment; so is a word after exec/builtin/coproc/time or a
+		// quoted keyword.
+		`"f"=$(ls)`,
+		`'f'=$(ls)`,
+		`\f=$(ls)`,
+		`f"="$(ls)`,
+		`$x=$(ls)`,
+		`$""f=$(ls)`,
+		`''f=$(ls)`,
+		`exec f=$(ls)`,
+		`builtin f=$(ls)`,
+		`coproc f=$(ls)`,
+		`time f=$(ls)`,
+		`"if" f=$(ls)`,
+		`fi f=$(ls)`,
+		`nohup f=$(ls)`,
+		`sudo f=$(ls)`,
+	} {
+		if !bashCommandRunsGitPush(cmd) {
+			t.Errorf("bashCommandRunsGitPush(%q) = false, want true", cmd)
+		}
 	}
 }
