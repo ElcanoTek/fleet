@@ -121,7 +121,7 @@ scheduler pass (`KickQueuedChatScheduleTurns`, every `FLEET_SCHED_TICK_SECONDS`,
   that marks the request done, so it is queued exactly once.
 - A stop, transfer or archive is claimed (`running`) before it is carried out,
   so the browser path and the scheduler sweep never both act on it. A claim
-  left running for 10 minutes (the server stopped part-way) is settled as
+  left running for an hour (the server stopped part-way) is settled as
   failed, not carried out again blind.
 - The browser path records the same request and executes it at once.
 - `fleet chats send --wait` follows the request to the end of its turn and

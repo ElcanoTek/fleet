@@ -93,9 +93,10 @@ func adminEmailForTurn(ctx context.Context, inputKind string) string {
 const adminRequestBatch = 20
 
 // adminRequestStaleAfter is how long a claimed stop / transfer / archive may
-// stay running before the sweep settles it as interrupted (a transfer waits at
-// most transferWorkspaceWait; nothing legitimate runs this long).
-const adminRequestStaleAfter = 10 * time.Minute
+// stay running before the sweep settles it as interrupted. Generous on
+// purpose: a transfer that moves a participant's attachments across volumes
+// can take many minutes, and settling a live one as failed would be wrong.
+const adminRequestStaleAfter = time.Hour
 
 // ExecuteAdminRequests carries out pending admin requests. The scheduler's
 // chat pass calls it (through KickQueuedChatScheduleTurns) every tick, which
