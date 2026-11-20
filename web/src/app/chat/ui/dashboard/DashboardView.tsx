@@ -183,21 +183,23 @@ export function DashboardHud({
           at 640px (the status is whole in en/es/pt at every width from
           there up; measured, not assumed). */}
       <div className="flex min-w-0 flex-1 items-center gap-3 sm:min-w-[5rem] sm:flex-[0_1000000_auto] md:min-w-[7.5rem]">
+        {/* On a phone the sidebar is a drawer and this opens it. From sm up
+            its icon strip is on screen beside the board, with its own
+            expand button, so the header keeps its mark instead. */}
         {onSidebar ? (
           <button
             type="button"
-            className="dash-icon-btn"
+            className="dash-icon-btn sm:hidden"
             aria-label={tr("Show sidebar")}
             data-testid="dashboard-sidebar-button"
             onClick={onSidebar}
           >
             <Icon name="panel-left" className="size-4" />
           </button>
-        ) : (
-          <span className="dash-hud-mark max-md:hidden" aria-hidden="true">
-            <Icon name="target" className="size-4" />
-          </span>
-        )}
+        ) : null}
+        <span className="dash-hud-mark max-md:hidden" aria-hidden="true">
+          <Icon name="target" className="size-4" />
+        </span>
         <div className="min-w-0">
           <p className="dash-overline">{tr("Dashboard")}</p>
           <h1 className="truncate text-[0.95rem] font-semibold text-[var(--color-text-primary)]" title={title}>{title}</h1>

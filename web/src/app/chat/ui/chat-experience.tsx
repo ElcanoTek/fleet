@@ -143,7 +143,7 @@ import { ExpiringChatBanner } from "./ExpiringChatBanner";
 import { expiresInDays, retentionPolicy, useNowSeconds } from "./chatRetention";
 import { WithheldFilesContext } from "./LockedFiles";
 import { DownloadChatDialog, type DownloadOptions } from "./DownloadChatDialog";
-import { useRailCollapse, keepFocusForDrawerShortcut } from "@/app/shared/ui/NavRail";
+import { useRailCollapse, keepFocusForDrawerShortcut, type RailCollapse } from "@/app/shared/ui/NavRail";
 import { isInteractiveTarget } from "@/app/shared/ui/interactiveTarget";
 import { loadWorkspaceModelCatalog } from "@/app/shared/lib/workspaceModels";
 import {
@@ -4183,7 +4183,23 @@ export function ChatExperience({
     setSidebarOpen,
   });
 
-  // The sidebar slid in over a dashboard (docs/SIDEBAR.md) is a modal
+  // In dashboard view the sidebar stays beside the board as its icon strip
+  // (docs/SIDEBAR.md), so there is always a way back to a chat; opening it
+  // slides the whole sidebar in over the board. Neither touches the person's
+  // own collapsed/expanded choice, which is for the chat view: here "expand"
+  // and "collapse" open and close the slide-over, and it has no edge to drag.
+  const dashboardCollapse = useMemo<RailCollapse>(
+    () => ({
+      ...railCollapse,
+      collapsed: !sidebarOpen,
+      isNarrow: false,
+      setCollapsed: (next: boolean) => setSidebarOpen(!next),
+      setWidth: undefined,
+    }),
+    [railCollapse, sidebarOpen, setSidebarOpen],
+  );
+
+  // The sidebar slid in over a dashboard is a modal
   // drawer: focus moves into it, Tab stays inside it, Escape closes it (and
   // only it — captured before dashboard view's own Escape, which would leave
   // the view), and closing hands focus back to what opened it.
@@ -4241,9 +4257,19 @@ export function ChatExperience({
       // Hand focus back when it was in the drawer (or fell to <body> as the
       // drawer hid); a choice that left the view took it somewhere else.
       const now = document.activeElement;
-      if (opener?.isConnected && (now === document.body || (railEl?.contains(now) ?? false))) {
+      if (now !== document.body && !(railEl?.contains(now) ?? false)) return;
+      if (opener?.isConnected) {
         opener.focus();
+        return;
       }
+      // Opened from the icon strip: its expand button is drawn again only
+      // once the sidebar has gone back to being the strip.
+      requestAnimationFrame(() => {
+        const at = document.activeElement;
+        if (at === document.body || (railEl?.contains(at) ?? false)) {
+          railEl?.querySelector<HTMLElement>('[data-testid="rail-expand"]')?.focus();
+        }
+      });
     };
   }, [dashboardRailOpen, setSidebarOpen]);
 
@@ -7703,14 +7729,13 @@ export function ChatExperience({
           continuously through the collapse transition. */}
       <div
         className={[
-          "grid h-[100dvh] grid-cols-[minmax(0,1fr)]",
-          dashboardActive ? "" : "sm:grid-cols-[auto_minmax(0,1fr)]",
+          "grid h-[100dvh] grid-cols-[minmax(0,1fr)] sm:grid-cols-[auto_minmax(0,1fr)]",
         ].join(" ")}
       >
-        {/* Dashboard view takes the whole screen: the rail stays mounted
-            (its search, scroll and drafts survive) but is not drawn. */}
-        {/* …except when the dashboard header's sidebar button slides it in
-            over the board (docs/SIDEBAR.md), with a scrim to dismiss it. It
+        {/* Dashboard view keeps the sidebar beside the board as its icon
+            strip (on a phone it is the drawer, as everywhere). Opened — the
+            strip's own expand button, or the header's on a phone — it slides
+            in over the board (docs/SIDEBAR.md), with a scrim to dismiss it. It
             takes the rail overlay's own layers (scrim z-[380], panel z-[390],
             as NavRail.tsx), below the menus the rail opens (z-[400]/z-[410],
             Menu.tsx) and its dialogs (DialogShell layer="rail", z-[420]):
@@ -7724,19 +7749,18 @@ export function ChatExperience({
             onClick={() => setSidebarOpen(false)}
           />
         ) : null}
+        {/* The slid-in sidebar leaves the page's flow: this holds the strip's
+            column so the board does not move under it. */}
+        {dashboardActive && sidebarOpen ? (
+          <div aria-hidden="true" className="hidden w-[3.75rem] shrink-0 sm:block" />
+        ) : null}
         <div
           ref={dashboardRailRef}
           data-dashboard-rail-wrapper=""
-          className={
-            dashboardActive
-              ? sidebarOpen
-                ? "fixed inset-y-0 left-0 z-[390] flex"
-                : "hidden"
-              : "contents"
-          }
+          className={dashboardActive && sidebarOpen ? "fixed inset-y-0 left-0 z-[390] flex" : "contents"}
         >
         <ConversationSidebar
-          collapse={railCollapse}
+          collapse={dashboardActive ? dashboardCollapse : railCollapse}
           sidebarOpen={sidebarOpen}
           setSidebarOpen={setSidebarOpen}
           branding={branding}
