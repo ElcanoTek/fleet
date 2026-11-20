@@ -1496,7 +1496,9 @@ It shares **read-only**: a conversation has exactly one owner, and nothing a
 teammate does changes yours. Teammates see new messages as you keep working.
 
 **The link for your team** opens only for signed-in members of your team, on the
-read-only view. Anyone else who opens it sees that the chat is shared with your
+read-only view — or, for a chat in **Multiplayer mode**, straight into the live
+chat for everyone who can take part in it, so they join it instead of
+branching it. Anyone else who opens it sees that the chat is shared with your
 team and nothing about it; a signed-out teammate is sent to sign in and then
 straight to the chat. Once a chat stops being shared, its link says so.
 
@@ -1535,7 +1537,11 @@ dialog). When Multiplayer mode is on:
 
 - Teammates (and anyone else added to the chat) see it under **Team chats** in
   the rail with a **Live** badge, can open it directly in the chat view, and can
-  send messages into the shared thread.
+  send messages into the shared thread. It opens the same live chat however
+  they reach it: from the rail, the project home, a search result, the link
+  for your team, or the link back to it on a branch they made of it.
+  Someone you removed, or who is not allowed to take part, gets the read-only
+  view instead while the chat is shared with their team.
 - Every message shows the sender's email above their bubble, and each turn runs
   under **the sender's own account** — using the sender's email, personal
   memories, skills, per-user connector accounts, and approval cards. Because a turn's tool calls, reasoning, and token/cost summary belong to the person whose credentials ran it, turning on **Show details** shows **Turn details hidden for other users' turns** on turns started by someone else. That keeps your screen clear; it is not a privacy wall. The assistant works from the whole chat, including what it fetched on a teammate's turn, and can repeat it, so turn Multiplayer mode on only with people who may see what the chat's turns bring in.

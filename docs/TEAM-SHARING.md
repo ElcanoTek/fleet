@@ -75,6 +75,29 @@ theirs from the first byte, filed into the same project, private until they
 share it, and unaffected if the original is later unshared or deleted. The
 owner's chat is never modified: conversations keep exactly one owner.
 
+**A Multiplayer chat opens live, from every door.** A chat in
+[Multiplayer mode](MULTIPLAYER-CHAT.md) is team-shared too, but a teammate who
+may take part in it (the rule `GetMultiplayerConversation` applies: not
+excluded, an enabled non-viewer account, on the stamped team or added by
+name, chat not archived or in Lockdown) gets the live chat — composer and all
+— not the read-only view. Branching it instead would split one working chat
+in two (two task lists, two logs). Every way of reaching a teammate's chat
+agrees, and each takes the answer from the server rather than guessing:
+
+| Door | Live when |
+| --- | --- |
+| Team chats row, a pinned teammate chat, a search hit in a shared chat | the row's `multiplayer` flag (a hit with no row tries live) |
+| A teammate's chat set as Home | always tries live first |
+| Project home's **Shared by your team** | the row's `multiplayer` flag, reconciled with the Team chats list |
+| The team link (`/chat?team=<id>`) | `team-link` answers `multiplayer` |
+| A branch's **Open …'s chat** link (B20 banner) | `branch_origin.source_multiplayer` |
+
+A live open that the server refuses (the owner turned Multiplayer off, or
+removed this person, after the flag was read) falls back to the read-only view
+when the chat is still shared with their team, so no door is stranded by a
+stale flag. Someone the rule refuses never learns more than before: the
+read-only view, or the team link's dead ends.
+
 **What team sharing exposes is the transcript and the chat's outputs.** Tool
 calls, tool results and reasoning are filtered out server-side (the same filter
 the public snapshot applies). Files go with the share since ADR-0079 — but only
@@ -185,7 +208,7 @@ than re-pointing them.
 | `POST /conversations/{id}/outputs/share` | owner | share or unshare one output: `{path, shared}` |
 | `GET /conversations/{id}/team-view` | a teammate (or the owner) | the read-only transcript, plus `project_id` / `project_name`, `files` (every output; an unshared one is a name only) and `viewer_branch` |
 | `GET /conversations/{id}/team-files/<path>` | a teammate (or the owner) | one shared output's bytes — see the gate below |
-| `GET /conversations/{id}/team-link` | any signed-in user | where a team link lands them: `owner` / `open` / `not_on_team` / `not_shared` |
+| `GET /conversations/{id}/team-link` | any signed-in user | where a team link lands them: `owner` / `multiplayer` / `open` / `not_on_team` / `not_shared` |
 | `POST /conversations/{id}/branch` | anyone who can *read* the parent | fork into a chat you own; a teammate's branch also copies the shared files and answers with `branch_origin` |
 | `GET /projects/{id}/team-conversations` | members | the project home's Team section; each row carries the caller's `viewer_branch` |
 | `GET /projects/{id}/files` | members | Sources, grouped by chat (see below) |
@@ -403,7 +426,11 @@ The origin — source, owner,
 the title as the brancher saw it, time, copied and withheld files — is stored
 in `conversation_branch_origins` and served as `branch_origin` on the branch
 response and on `GET /conversations/{id}`, with `source_still_shared` so the
-banner links back only while the original is still readable. On the branch's
+banner links back only while the original is still readable, and
+`source_multiplayer` (computed per read, like `source_still_shared`) so the link
+opens the original live while the brancher may take part in it as a
+Multiplayer chat — and is offered then even if it is not team-shared with
+them. On the branch's
 **first turn** the agent is told which files it has and that any other file the
 transcript mentions did not come with it; without that it reads a link to a
 withheld file and confidently tries to open it. "First turn" is read from
@@ -462,8 +489,14 @@ the focused chat still is not listed, the panel simply shows the listing,
 with nothing opened or highlighted.
 
 **The team link.** `/chat?team=<id>` lands a signed-in teammate on the
-read-only view. `GET /conversations/{id}/team-link` tells the client where to
-go: `owner` (open it normally), `open`, `not_on_team` (the chat IS currently
+read-only view, or in the live chat when it is a Multiplayer chat they may take
+part in. `GET /conversations/{id}/team-link` tells the client where to
+go: `owner` (open it normally), `multiplayer` (open it live, as the Team chats
+row does; checked before the team-share statuses, so a participant added by
+name from another team, or anyone on a teamless owner's Multiplayer chat,
+joins instead of reaching a dead end; it says nothing a participant cannot
+already read through `GET /conversations/{id}`), `open` (the read-only view),
+`not_on_team` (the chat IS currently
 shared; carries the audience `team_id` and nothing about the chat — no title,
 no project), or `not_shared` (anything else: unknown id, private, archived,
 deleted, unshared; carries the chat's project only when the caller can see that

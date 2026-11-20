@@ -135,6 +135,14 @@ Operators can enable **Multiplayer team chats by default** via
 - `GET /conversations?scope=shared`: lists conversations shared with the caller
   via Multiplayer mode or team visibility, powering the **Team chats** sidebar
   section (with a **Live** badge on multiplayer threads).
+- **Every door opens it live.** A participant reaches the live chat — never the
+  read-only team view and its Branch action — from a Team chats row, the
+  project home, a search hit, a team link (`GET /conversations/{id}/team-link`
+  answers `multiplayer`) and a branch's link back to its source
+  (`branch_origin.source_multiplayer`). Each takes the answer from the server
+  (`GetMultiplayerConversation`), and a live load the server refuses falls back
+  to the read-only view when the chat is still team-shared. See
+  [TEAM-SHARING.md](TEAM-SHARING.md#team-shared-chats).
 - `GET /conversations/{id}/multiplayer` & `POST /conversations/{id}/multiplayer`:
   returns the multiplayer state + team roster (`roster`, `participants`,
   `excluded`), and lets the conversation owner toggle `multiplayer` or add/remove

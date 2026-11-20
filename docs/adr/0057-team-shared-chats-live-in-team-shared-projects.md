@@ -4,7 +4,12 @@
   file-sharing alternative are superseded by
   [ADR-0079](0079-a-team-share-carries-the-chats-outputs.md); the stamped
   audience is a team ID as well as a label since
-  [ADR-0093](0093-team-shares-name-their-audience-by-team-id.md)
+  [ADR-0093](0093-team-shares-name-their-audience-by-team-id.md); §5 and the
+  rejected "write access" alternative are qualified by Multiplayer mode
+  ([MULTIPLAYER-CHAT.md](../MULTIPLAYER-CHAT.md)): a teammate who may take part
+  in a Multiplayer chat opens it live from every door, the team link included,
+  and the read-only view with Branch is for everyone else
+  ([TEAM-SHARING.md](../TEAM-SHARING.md#team-shared-chats))
 - **Date:** 2026-09-03
 - **Deciders:** fleet maintainers
 

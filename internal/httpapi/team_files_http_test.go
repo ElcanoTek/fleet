@@ -365,6 +365,57 @@ func TestTeamLinkEndpoint(t *testing.T) {
 	}
 }
 
+// A team link to a Multiplayer chat answers "multiplayer" to a teammate who
+// may take part — the web then opens it live, as the Team chats row does —
+// and the branch a teammate makes of it says its link back opens live too.
+// Neither answer carries anything about the chat itself.
+func TestTeamLinkEndpointMultiplayer(t *testing.T) {
+	f := newFilesFixture(t)
+	if _, err := f.st.SetConversationMultiplayer(f.ctx, "alice@x.com", f.chat.ID, true, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	type link struct {
+		Status  string `json:"status"`
+		TeamID  string `json:"team_id"`
+		Project *struct {
+			ID string `json:"id"`
+		} `json:"project"`
+	}
+	for who, want := range map[string]string{"alice@x.com": "owner", "bob@x.com": "multiplayer", "zoe@x.com": "not_on_team"} {
+		w := convSub(t, f.srv, "GET", who, f.chat.ID, "team-link", "")
+		got := decode[link](t, w)
+		if w.Code != 200 || got.Status != want {
+			t.Errorf("%s: %d %+v, want %s", who, w.Code, got, want)
+		}
+		if who == "bob@x.com" && (got.TeamID != "" || got.Project != nil || strings.Contains(w.Body.String(), "Spread")) {
+			t.Errorf("multiplayer answer carries more than the status: %s", w.Body.String())
+		}
+	}
+
+	msgs, _ := f.st.LoadHistory(f.ctx, f.chat.ID)
+	body, _ := json.Marshal(map[string]any{"branch_point_message_id": msgs[len(msgs)-1].ID})
+	w := convSub(t, f.srv, "POST", "bob@x.com", f.chat.ID, "branch", string(body))
+	if w.Code != 201 {
+		t.Fatalf("branch: %d %s", w.Code, w.Body.String())
+	}
+	br := decode[store.Conversation](t, w)
+	if br.BranchOrigin == nil || !br.BranchOrigin.SourceMultiplayer {
+		t.Fatalf("branch response origin = %+v, want source_multiplayer", br.BranchOrigin)
+	}
+	// Excluded since: the link answers the read-only view and the branch's
+	// origin stops offering the live chat.
+	if _, err := f.st.SetConversationMultiplayer(f.ctx, "alice@x.com", f.chat.ID, true, nil, []string{"bob@x.com"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := decode[link](t, convSub(t, f.srv, "GET", "bob@x.com", f.chat.ID, "team-link", "")); got.Status != "open" {
+		t.Errorf("excluded: %+v, want open", got)
+	}
+	o, err := f.st.GetBranchOrigin(f.ctx, "bob@x.com", br.ID)
+	if err != nil || o == nil || o.SourceMultiplayer || !o.SourceStillShared {
+		t.Errorf("excluded origin = %+v, %v", o, err)
+	}
+}
+
 // A teammate's branch carries the SHARED outputs as its own copies at the
 // same paths; withheld ones are named, not copied; the origin is reported on
 // the branch response and the conversation read; the agent is told once.
