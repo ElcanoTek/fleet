@@ -2,7 +2,9 @@ package httpapi
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -977,5 +979,67 @@ func TestStagedNarrowable_HoldsTheWorstCaseEscapedList(t *testing.T) {
 	}
 	if frozenApprovalArgs(padded)["complete"] != false {
 		t.Fatal("arguments past approvalArgsMaxDecodeBytes are not reviewable in full")
+	}
+}
+
+// An approved call whose person approved a describer's card tells the server
+// which card that was (`_meta["fleet/approval_card"]`: its title and the sha256
+// of the canonical card the client rendered), so the server can bind the call
+// to what the person saw. A row with no card, or a stored card the client
+// would not render, approved the generic card: no entry.
+func TestHandleApproval_TellsTheServerWhichCardWasApproved(t *testing.T) {
+	narrowPolicy(t)
+	card := `{"title":"Create 3 Index Exchange deals for Acme","items":[{"label":"a"},{"label":"b"},{"label":"c"}]}`
+	_, canonical, err := parseApprovalCard([]byte(card))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(canonical)
+	for _, tc := range []struct {
+		name     string
+		cardJSON string
+		want     map[string]any
+	}{
+		{"described card", card, map[string]any{approvalCardRequestMetaKey: map[string]any{
+			"title": "Create 3 Index Exchange deals for Acme", "sha256": hex.EncodeToString(sum[:]),
+		}}},
+		{"generic card", "", nil},
+		{"stored card no longer valid", `{"title":"t","items":[],"extra":1}`, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			row := narrowApprovalRow()
+			row.CardJSON = tc.cardJSON
+			st := &narrowStore{approval: row}
+			child := &narrowChild{}
+			s := narrowServer(t, st, child)
+			rec := postNarrowApproval(t, s, `{"approved":true,"scope":"once"}`)
+			if rec.Code != 200 {
+				t.Fatalf("POST = %d %s", rec.Code, rec.Body.String())
+			}
+			if !reflect.DeepEqual(child.meta, tc.want) {
+				t.Fatalf("_meta = %#v, want %#v", child.meta, tc.want)
+			}
+		})
+	}
+}
+
+// A narrowed approval of a described card carries both entries.
+func TestHandleApproval_NarrowedCardCarriesBothEntries(t *testing.T) {
+	narrowPolicy(t)
+	row := narrowApprovalRow()
+	row.CardJSON = `{"title":"Create 3 Index Exchange deals for Acme","items":[{"key":"a","label":"a"},{"key":"b","label":"b"},{"key":"c","label":"c"}]}`
+	st := &narrowStore{approval: row}
+	child := &narrowChild{}
+	s := narrowServer(t, st, child)
+	rec := postNarrowApproval(t, s, `{"approved":true,"scope":"once","approved_values":["a"],"narrowed_arg":"deal_ids"}`)
+	if rec.Code != 200 {
+		t.Fatalf("POST = %d %s", rec.Code, rec.Body.String())
+	}
+	if _, ok := child.meta[narrowedRequestMetaKey]; !ok {
+		t.Fatalf("_meta = %#v, want the narrowing entry", child.meta)
+	}
+	got, _ := child.meta[approvalCardRequestMetaKey].(map[string]any)
+	if got["title"] != "Create 3 Index Exchange deals for Acme" {
+		t.Fatalf("_meta = %#v, want the card entry", child.meta)
 	}
 }

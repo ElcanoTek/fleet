@@ -19,6 +19,8 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -417,6 +419,35 @@ func approvalCardPayload(a *store.Approval) json.RawMessage {
 		return nil
 	}
 	return canonical
+}
+
+// approvalCardRequestMetaKey is the `_meta` entry fleet adds to an approved
+// call whose person approved a describer's card (docs/APPROVAL-CARD-DESCRIBERS.md):
+// {"title": <the card's title>, "sha256": <hex sha256 of the canonical card>}.
+// Absent when the person approved the generic arguments card (no describer,
+// the describer failed or timed out, or the stored card is no longer valid).
+const approvalCardRequestMetaKey = mcp.RequestMetaPrefix + "approval_card"
+
+// approvalCardRequestMeta is the `_meta` entry telling the server which card
+// the person approved: exactly the card the client renders for the row
+// (approvalCardPayload), so a card the client would not show (re-validation
+// or redaction failed) is reported as no card. The server can then bind the
+// call to what the person saw, not to an argument the agent wrote. Nil when
+// the row has no card.
+func approvalCardRequestMeta(a *store.Approval) map[string]any {
+	canonical := approvalCardPayload(a)
+	if canonical == nil {
+		return nil
+	}
+	var card ApprovalCard
+	if err := json.Unmarshal(canonical, &card); err != nil {
+		return nil
+	}
+	sum := sha256.Sum256(canonical)
+	return map[string]any{approvalCardRequestMetaKey: map[string]any{
+		"title":  card.Title,
+		"sha256": hex.EncodeToString(sum[:]),
+	}}
 }
 
 // withApprovalCard adds the row's card to a client payload when it has one.

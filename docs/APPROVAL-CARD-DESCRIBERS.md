@@ -168,6 +168,19 @@ off-schema card on the wire.
   `resolved_approvals` row, and to the one-card approval GET. A row without a
   card carries no `card` key, so every existing consumer reads the same bytes
   as before for it.
+- **Back to the server:** when the person approves a call whose row has a card
+  the client renders (`approvalCardPayload`: stored, re-validated and not
+  redacted), `runStagedTool` adds
+  `_meta["fleet/approval_card"] = {"title": <card title>, "sha256": <hex
+  sha256 of the canonical card>}` to the `tools/call`
+  (`approvalCardRequestMeta`), beside `fleet/narrowed` when the approval was
+  narrowed. No entry means the person approved the generic arguments card (no
+  describer, it failed or timed out, or the stored card no longer renders).
+  The server can then bind the call to the card the person saw rather than to
+  an argument the agent wrote: elcano-config's `execute_plan` runs a call whose
+  agent-written `summary` is stale only behind its own verified card (whose
+  title is never its "couldn't be checked" title), and refuses it otherwise.
+  A server that does not read the entry is unaffected.
 - **The chat-stream contract** recordings carry no approval turns yet (see
   [TESTING-STRATEGY.md](TESTING-STRATEGY.md), "Not covered yet"), so the frame
   is pinned by the Go stager test and the hand-written mocked Playwright
