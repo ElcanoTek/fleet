@@ -2,10 +2,13 @@ package store
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/config"
 	scheddb "github.com/ElcanoTek/fleet/internal/sched/db"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
@@ -767,4 +770,95 @@ func TestChatScheduleBusyForPatrolInFlightIsNotReportedAsApproval(t *testing.T) 
 	if err != nil || len(list) != 1 || list[0].Skipped != nil {
 		t.Fatalf("ListChatSchedules = %+v, %v; want no skipped-for-approval note", list, err)
 	}
+}
+
+// Archiving a chat pauses its patrols and timers (nobody reads an archived
+// chat, so they would only spend), cancels their queued runs, and says so in
+// the chat; they stay paused on unarchive and cannot be started while archived.
+func TestArchivePausesChatSchedules(t *testing.T) {
+	t.Parallel()
+	s, dsn := newTestStoreDSN(t)
+	ctx := context.Background()
+	const owner = "archiver@elcanotek.com"
+	conv, err := s.CreateConversation(ctx, owner, "Old patrol", "victoria", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	patrol, err := s.CreateChatSchedule(ctx, ChatScheduleInput{ConversationID: conv.ID, UserEmail: owner, Prompt: "check", CronExpr: "0 9 * * *"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateChatSchedule(ctx, ChatScheduleInput{ConversationID: conv.ID, UserEmail: owner, Prompt: "yearly", CronExpr: "0 9 1 7 *", AllowMultiple: true}); err != nil {
+		t.Fatal(err)
+	}
+	// One run already waiting in the queue.
+	if fired := fireDueChatSchedules(t, s, dsn, time.Unix(patrol.NextRunAt+1, 0)); len(fired) != 1 {
+		t.Fatalf("fired = %+v", fired)
+	}
+	if err := s.SetArchived(ctx, owner, conv.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	list, err := s.ListChatSchedules(ctx, owner, conv.ID, false)
+	if err != nil || len(list) != 2 {
+		t.Fatalf("schedules = %+v, %v", list, err)
+	}
+	for _, sc := range list {
+		if sc.Status != ChatScheduleStatusPaused {
+			t.Fatalf("schedule %s is %s after archive, want paused", sc.ID, sc.Status)
+		}
+	}
+	if queued, _ := s.ListQueuedInputs(ctx, "", conv.ID); len(queued) != 0 {
+		t.Fatalf("queued patrol runs survived the archive: %+v", queued)
+	}
+	if due := fireDueChatSchedules(t, s, dsn, time.Unix(patrol.NextRunAt+86400*2, 0)); len(due) != 0 {
+		t.Fatalf("an archived chat's patrol fired: %+v", due)
+	}
+	if notices := chatNoticesOf(t, s, conv.ID); len(notices) != 1 || !strings.Contains(notices[0], "paused its 2 patrols and timers") {
+		t.Fatalf("notices = %v", notices)
+	}
+	active := ChatScheduleStatusActive
+	if _, err := s.UpdateChatSchedule(ctx, owner, conv.ID, patrol.ID, ChatSchedulePatch{Status: &active}); !errors.Is(err, ErrInvalidChatSchedule) {
+		t.Fatalf("resume in an archived chat err = %v", err)
+	}
+	if _, err := s.CreateChatSchedule(ctx, ChatScheduleInput{ConversationID: conv.ID, UserEmail: owner, Prompt: "new", CronExpr: "0 10 * * *", AllowMultiple: true}); !errors.Is(err, ErrInvalidChatSchedule) {
+		t.Fatalf("create in an archived chat err = %v", err)
+	}
+	// Unarchive: still paused, and now resumable.
+	if err := s.SetArchived(ctx, owner, conv.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	if list, _ := s.ListChatSchedules(ctx, owner, conv.ID, false); list[0].Status != ChatScheduleStatusPaused || list[1].Status != ChatScheduleStatusPaused {
+		t.Fatalf("unarchive resumed schedules: %+v", list)
+	}
+	if got, err := s.UpdateChatSchedule(ctx, owner, conv.ID, patrol.ID, ChatSchedulePatch{Status: &active}); err != nil || got.Status != ChatScheduleStatusActive {
+		t.Fatalf("resume after unarchive = %+v, %v", got, err)
+	}
+	// Archiving a chat with nothing active writes no notice.
+	plain, _ := s.CreateConversation(ctx, owner, "Plain", "victoria", "", false)
+	if err := s.SetArchived(ctx, owner, plain.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if notices := chatNoticesOf(t, s, plain.ID); len(notices) != 0 {
+		t.Fatalf("a chat without schedules got a notice: %v", notices)
+	}
+}
+
+func chatNoticesOf(t *testing.T, s *Store, convID string) []string {
+	t.Helper()
+	hist, err := s.LoadHistory(context.Background(), convID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	for _, e := range hist {
+		if e.Type != agent.EntryTypeNotice {
+			continue
+		}
+		var n agent.NoticeContent
+		if err := json.Unmarshal(e.Content, &n); err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, n.Text)
+	}
+	return out
 }

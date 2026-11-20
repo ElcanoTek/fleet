@@ -1265,6 +1265,10 @@ func (s *Store) SetPinned(ctx context.Context, userEmail, convID string, pinned 
 // archived refusal), unarchive never reopens team access. The owner's
 // per-file exclusions are untouched, so sharing again restores their earlier
 // file choices.
+//
+// Archiving also PAUSES every active patrol and timer in the chat, in the same
+// transaction: nobody reads an archived chat, so its schedules would only
+// spend. Unarchiving leaves them paused.
 func (s *Store) SetArchived(ctx context.Context, userEmail, convID string, archived bool) error {
 	now := time.Now().Unix()
 	var archivedAt any // NULL when unarchiving
@@ -1272,7 +1276,12 @@ func (s *Store) SetArchived(ctx context.Context, userEmail, convID string, archi
 	if archived {
 		archivedAt = now
 	}
-	res, err := s.db.ExecContext(ctx,
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	res, err := tx.ExecContext(ctx,
 		`UPDATE conversations SET archived_at = $1, pinned = $2, updated_at = $3,
 			`+unshareConversationSet+`
 		 WHERE id = $4 AND user_email = $5 AND deleted_at IS NULL`,
@@ -1285,7 +1294,21 @@ func (s *Store) SetArchived(ctx context.Context, userEmail, convID string, archi
 	if n == 0 {
 		return ErrConversationNotFound
 	}
-	return nil
+	if archived {
+		// A filed-away chat must not keep spending: its patrols and timers
+		// are paused with it (pauseConversationSchedulesTx). They stay paused
+		// on unarchive; whoever brings the chat back resumes what they want.
+		paused, err := pauseConversationSchedulesTx(ctx, tx, convID, now)
+		if err != nil {
+			return err
+		}
+		if paused > 0 {
+			if err := s.appendNoticeTx(ctx, tx, convID, NoticeArchivePausedSchedules, archivePausedNotice(paused)); err != nil {
+				return err
+			}
+		}
+	}
+	return tx.Commit()
 }
 
 // nullableSeconds converts a scanned nullable INTEGER column into the *int the
