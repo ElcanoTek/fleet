@@ -251,10 +251,11 @@ func (s *Server) runStagedTool(ctx context.Context, approval *store.Approval) (t
 		// other arguments against what the person reviewed.
 		callCtx = mcp.WithRequestMeta(callCtx, narrowingRequestMeta(narrowing))
 	}
-	if meta := approvalCardRequestMeta(approval); meta != nil {
-		// Tell the server which describer card the person approved, so it can
-		// bind the call to that card rather than to an argument the agent
-		// wrote (a summary, say). No entry: the generic card was approved.
+	if meta := approvalCardRequestMeta(ctx, approval); meta != nil {
+		// Tell the server which describer card the person approved (the web
+		// card attested it rendered it), so it can bind the call to that card
+		// rather than to an argument the agent wrote (a summary, say). No
+		// entry: another card, or a surface that does not render it.
 		callCtx = mcp.WithRequestMeta(callCtx, meta)
 	}
 	// Workspace-file references (ADR-0066/0088) are read now, as the agent

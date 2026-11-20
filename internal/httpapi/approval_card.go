@@ -422,31 +422,58 @@ func approvalCardPayload(a *store.Approval) json.RawMessage {
 }
 
 // approvalCardRequestMetaKey is the `_meta` entry fleet adds to an approved
-// call whose person approved a describer's card (docs/APPROVAL-CARD-DESCRIBERS.md):
+// call when the person approved a describer's card (docs/APPROVAL-CARD-DESCRIBERS.md):
 // {"title": <the card's title>, "sha256": <hex sha256 of the canonical card>}.
-// Absent when the person approved the generic arguments card (no describer,
-// the describer failed or timed out, or the stored card is no longer valid).
+// Absent when the person approved anything else: the generic arguments card
+// (no describer, the describer failed or timed out, or the stored card no
+// longer renders), or a surface that does not render the card (the terminal,
+// an email tool's preview card, a grouped approval).
 const approvalCardRequestMetaKey = mcp.RequestMetaPrefix + "approval_card"
 
-// approvalCardRequestMeta is the `_meta` entry telling the server which card
-// the person approved: exactly the card the client renders for the row
-// (approvalCardPayload), so a card the client would not show (re-validation
-// or redaction failed) is reported as no card. The server can then bind the
-// call to what the person saw, not to an argument the agent wrote. Nil when
-// the row has no card.
-func approvalCardRequestMeta(a *store.Approval) map[string]any {
+// approvalCardDigest is the hex sha256 of the canonical card a client renders
+// for the row (approvalCardPayload), or "" when it renders none. The web card
+// echoes it back on Approve (approvalRequest.CardSHA256) to attest that it
+// showed that card.
+func approvalCardDigest(a *store.Approval) string {
 	canonical := approvalCardPayload(a)
 	if canonical == nil {
+		return ""
+	}
+	sum := sha256.Sum256(canonical)
+	return hex.EncodeToString(sum[:])
+}
+
+type approvedCardDigestKey struct{}
+
+// withApprovedCardDigest carries the card digest the approving client echoed
+// (approvalRequest.CardSHA256) to the staged call's run.
+func withApprovedCardDigest(ctx context.Context, digest string) context.Context {
+	if digest == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, approvedCardDigestKey{}, digest)
+}
+
+// approvalCardRequestMeta is the `_meta` entry telling the server which card
+// the person approved, or nil. It is attached only when the approving client
+// attested that it rendered the row's card, by echoing the digest fleet sent
+// with it, and the echo equals the digest of the card the row holds now.
+// Every other surface echoes nothing, so its approval reports no card. The
+// server can then bind the call to what the person saw, not to an argument
+// the agent wrote.
+func approvalCardRequestMeta(ctx context.Context, a *store.Approval) map[string]any {
+	echoed, _ := ctx.Value(approvedCardDigestKey{}).(string)
+	digest := approvalCardDigest(a)
+	if echoed == "" || digest == "" || echoed != digest {
 		return nil
 	}
 	var card ApprovalCard
-	if err := json.Unmarshal(canonical, &card); err != nil {
+	if err := json.Unmarshal(approvalCardPayload(a), &card); err != nil {
 		return nil
 	}
-	sum := sha256.Sum256(canonical)
 	return map[string]any{approvalCardRequestMetaKey: map[string]any{
 		"title":  card.Title,
-		"sha256": hex.EncodeToString(sum[:]),
+		"sha256": digest,
 	}}
 }
 
@@ -454,6 +481,9 @@ func approvalCardRequestMeta(a *store.Approval) map[string]any {
 func withApprovalCard(payload map[string]any, a *store.Approval) map[string]any {
 	if card := approvalCardPayload(a); card != nil {
 		payload["card"] = card
+		// The web card echoes it on Approve (approvalCardRequestMeta).
+		sum := sha256.Sum256(card)
+		payload["card_sha256"] = hex.EncodeToString(sum[:])
 	}
 	return payload
 }

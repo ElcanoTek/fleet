@@ -168,19 +168,23 @@ off-schema card on the wire.
   `resolved_approvals` row, and to the one-card approval GET. A row without a
   card carries no `card` key, so every existing consumer reads the same bytes
   as before for it.
-- **Back to the server:** when the person approves a call whose row has a card
-  the client renders (`approvalCardPayload`: stored, re-validated and not
-  redacted), `runStagedTool` adds
-  `_meta["fleet/approval_card"] = {"title": <card title>, "sha256": <hex
-  sha256 of the canonical card>}` to the `tools/call`
-  (`approvalCardRequestMeta`), beside `fleet/narrowed` when the approval was
-  narrowed. No entry means the person approved the generic arguments card (no
-  describer, it failed or timed out, or the stored card no longer renders).
-  The server can then bind the call to the card the person saw rather than to
-  an argument the agent wrote: elcano-config's `execute_plan` runs a call whose
-  agent-written `summary` is stale only behind its own verified card (whose
-  title is never its "couldn't be checked" title), and refuses it otherwise.
-  A server that does not read the entry is unaffected.
+- **Back to the server:** every payload that carries `card` also carries
+  `card_sha256`, the hex sha256 of that canonical card (`withApprovalCard`).
+  The web's generic action card, the one surface that renders `card`, echoes
+  it in the approve POST (`card_sha256`). When the echo equals the digest of
+  the card the row holds, `runStagedTool` adds
+  `_meta["fleet/approval_card"] = {"title": <card title>, "sha256": <digest>}`
+  to the `tools/call` (`approvalCardRequestMeta`), beside `fleet/narrowed`
+  when the approval was narrowed. No entry means fleet cannot say the person
+  approved the describer's card: the generic arguments card (no describer, it
+  failed or timed out, or the stored card no longer renders), or a surface
+  that does not render the card (the terminal, an email tool's preview, a
+  grouped approval). The server can then bind the call to the card the person
+  saw rather than to an argument the agent wrote: elcano-config's
+  `execute_plan` runs a call whose agent-written `summary` is stale only behind
+  its own verified card (whose title is never its "couldn't be checked"
+  title), and refuses it otherwise. A server that does not read the entry is
+  unaffected.
 - **The chat-stream contract** recordings carry no approval turns yet (see
   [TESTING-STRATEGY.md](TESTING-STRATEGY.md), "Not covered yet"), so the frame
   is pinned by the Go stager test and the hand-written mocked Playwright

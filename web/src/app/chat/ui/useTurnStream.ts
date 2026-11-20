@@ -16,6 +16,7 @@ import {
   clearRetryNotice,
   historyToMessages,
   parseApprovalCardData,
+  parseApprovalCardSha256,
   parseApprovalNarrowable,
   parseApprovalResultCardData,
   parsePythonStream,
@@ -2695,6 +2696,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         no_session_approval?: boolean;
         resume_after_approval?: boolean;
         card?: unknown;
+        card_sha256?: unknown;
         group_id?: string;
         progress_updates?: boolean;
         narrowable?: unknown;
@@ -2722,6 +2724,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
             noSessionApproval: p.no_session_approval === true || undefined,
             resumeAfterApproval: p.resume_after_approval === true || undefined,
             card: parseApprovalCardData(p.card),
+            cardSha256: parseApprovalCardSha256(p.card_sha256),
             groupId: p.group_id || undefined,
             progressUpdates: p.progress_updates === true || undefined,
             narrowable: parseApprovalNarrowable(p.narrowable),

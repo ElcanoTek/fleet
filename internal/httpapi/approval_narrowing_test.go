@@ -982,11 +982,13 @@ func TestStagedNarrowable_HoldsTheWorstCaseEscapedList(t *testing.T) {
 	}
 }
 
-// An approved call whose person approved a describer's card tells the server
-// which card that was (`_meta["fleet/approval_card"]`: its title and the sha256
-// of the canonical card the client rendered), so the server can bind the call
-// to what the person saw. A row with no card, or a stored card the client
-// would not render, approved the generic card: no entry.
+// An approved call whose person approved a describer's card on a surface that
+// rendered it tells the server which card that was
+// (`_meta["fleet/approval_card"]`: its title and the sha256 of the canonical
+// card). The web card attests it by echoing the `card_sha256` fleet sent with
+// the card. No echo (the terminal, an email preview, a grouped approval), an
+// echo of another card, a row with no card, or a stored card the client would
+// not render: no entry.
 func TestHandleApproval_TellsTheServerWhichCardWasApproved(t *testing.T) {
 	narrowPolicy(t)
 	card := `{"title":"Create 3 Index Exchange deals for Acme","items":[{"label":"a"},{"label":"b"},{"label":"c"}]}`
@@ -995,16 +997,21 @@ func TestHandleApproval_TellsTheServerWhichCardWasApproved(t *testing.T) {
 		t.Fatal(err)
 	}
 	sum := sha256.Sum256(canonical)
+	digest := hex.EncodeToString(sum[:])
+	described := map[string]any{approvalCardRequestMetaKey: map[string]any{
+		"title": "Create 3 Index Exchange deals for Acme", "sha256": digest,
+	}}
 	for _, tc := range []struct {
 		name     string
 		cardJSON string
+		body     string
 		want     map[string]any
 	}{
-		{"described card", card, map[string]any{approvalCardRequestMetaKey: map[string]any{
-			"title": "Create 3 Index Exchange deals for Acme", "sha256": hex.EncodeToString(sum[:]),
-		}}},
-		{"generic card", "", nil},
-		{"stored card no longer valid", `{"title":"t","items":[],"extra":1}`, nil},
+		{"web card attested", card, `{"approved":true,"scope":"once","card_sha256":"` + digest + `"}`, described},
+		{"no echo (terminal, email, group)", card, `{"approved":true,"scope":"once"}`, nil},
+		{"echo of another card", card, `{"approved":true,"scope":"once","card_sha256":"` + strings.Repeat("0", 64) + `"}`, nil},
+		{"generic card", "", `{"approved":true,"scope":"once","card_sha256":"` + digest + `"}`, nil},
+		{"stored card no longer valid", `{"title":"t","items":[],"extra":1}`, `{"approved":true,"scope":"once","card_sha256":"` + digest + `"}`, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			row := narrowApprovalRow()
@@ -1012,7 +1019,7 @@ func TestHandleApproval_TellsTheServerWhichCardWasApproved(t *testing.T) {
 			st := &narrowStore{approval: row}
 			child := &narrowChild{}
 			s := narrowServer(t, st, child)
-			rec := postNarrowApproval(t, s, `{"approved":true,"scope":"once"}`)
+			rec := postNarrowApproval(t, s, tc.body)
 			if rec.Code != 200 {
 				t.Fatalf("POST = %d %s", rec.Code, rec.Body.String())
 			}
@@ -1023,15 +1030,16 @@ func TestHandleApproval_TellsTheServerWhichCardWasApproved(t *testing.T) {
 	}
 }
 
-// A narrowed approval of a described card carries both entries.
+// A narrowed approval of an attested card carries both entries.
 func TestHandleApproval_NarrowedCardCarriesBothEntries(t *testing.T) {
 	narrowPolicy(t)
 	row := narrowApprovalRow()
 	row.CardJSON = `{"title":"Create 3 Index Exchange deals for Acme","items":[{"key":"a","label":"a"},{"key":"b","label":"b"},{"key":"c","label":"c"}]}`
+	digest := approvalCardDigest(&row)
 	st := &narrowStore{approval: row}
 	child := &narrowChild{}
 	s := narrowServer(t, st, child)
-	rec := postNarrowApproval(t, s, `{"approved":true,"scope":"once","approved_values":["a"],"narrowed_arg":"deal_ids"}`)
+	rec := postNarrowApproval(t, s, `{"approved":true,"scope":"once","approved_values":["a"],"narrowed_arg":"deal_ids","card_sha256":"`+digest+`"}`)
 	if rec.Code != 200 {
 		t.Fatalf("POST = %d %s", rec.Code, rec.Body.String())
 	}
@@ -1039,7 +1047,22 @@ func TestHandleApproval_NarrowedCardCarriesBothEntries(t *testing.T) {
 		t.Fatalf("_meta = %#v, want the narrowing entry", child.meta)
 	}
 	got, _ := child.meta[approvalCardRequestMetaKey].(map[string]any)
-	if got["title"] != "Create 3 Index Exchange deals for Acme" {
+	if got["title"] != "Create 3 Index Exchange deals for Acme" || got["sha256"] != digest {
 		t.Fatalf("_meta = %#v, want the card entry", child.meta)
+	}
+}
+
+// Every client payload that carries a card carries its digest, which is what
+// the web card echoes.
+func TestWithApprovalCard_CarriesTheDigestTheClientEchoes(t *testing.T) {
+	row := narrowApprovalRow()
+	row.CardJSON = `{"title":"t","items":[{"label":"a"}]}`
+	payload := withApprovalCard(map[string]any{}, &row)
+	if payload["card_sha256"] != approvalCardDigest(&row) || approvalCardDigest(&row) == "" {
+		t.Fatalf("payload = %#v", payload)
+	}
+	row.CardJSON = ""
+	if payload := withApprovalCard(map[string]any{}, &row); len(payload) != 0 {
+		t.Fatalf("no card, payload = %#v", payload)
 	}
 }
