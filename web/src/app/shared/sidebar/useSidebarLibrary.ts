@@ -131,48 +131,46 @@ export function useSidebarLibrary(userEmail: string, onError: (message: string) 
   }, []);
 
   const mine = userEmail.trim().toLowerCase();
-  const load = useCallback(async () => {
-    const at = gen.current;
-    const [own, archived, shared, projects, orders, config] = await Promise.all([
-      readJSON<{ conversations?: ConversationSummary[] }>("/api/conversations"),
-      readJSON<{ conversations?: ConversationSummary[] }>("/api/conversations?archived=true"),
-      readJSON<{ conversations?: ConversationSummary[] }>("/api/conversations?scope=shared"),
-      readJSON<{ projects?: Project[] }>("/api/projects"),
-      readJSON<{ orders?: Record<string, string[]> }>("/api/conversations/order"),
-      readJSON<ServerConfigPayload>("/api/server-config"),
-    ]);
-    setLoading(false);
-    if (projects) setProjectsLoaded(true);
-    if (shared) setTeamSharedLoaded(true);
-    if (archived) setArchivedLoaded(true);
-    // A change made while the lists were on their way wins, and what was
-    // read is dropped. The lists are still owed: read again now, or as soon
-    // as the change's own request is back (settle), so a first load that a
-    // quick pin or rename overtook never leaves the sidebar without its
-    // projects, shared chats and orders.
-    if (at !== gen.current) {
+  const load = useCallback(async (): Promise<void> => {
+    for (;;) {
+      const at = gen.current;
+      const [own, archived, shared, projects, orders, config] = await Promise.all([
+        readJSON<{ conversations?: ConversationSummary[] }>("/api/conversations"),
+        readJSON<{ conversations?: ConversationSummary[] }>("/api/conversations?archived=true"),
+        readJSON<{ conversations?: ConversationSummary[] }>("/api/conversations?scope=shared"),
+        readJSON<{ projects?: Project[] }>("/api/projects"),
+        readJSON<{ orders?: Record<string, string[]> }>("/api/conversations/order"),
+        readJSON<ServerConfigPayload>("/api/server-config"),
+      ]);
+      setLoading(false);
+      if (projects) setProjectsLoaded(true);
+      if (shared) setTeamSharedLoaded(true);
+      if (archived) setArchivedLoaded(true);
+      if (at === gen.current) {
+        setLibrary((cur) => ({
+          // A list that could not be read keeps what was there.
+          conversations: own ? (own.conversations ?? []) : cur.conversations,
+          archivedConversations: archived ? (archived.conversations ?? []) : cur.archivedConversations,
+          teamSharedConversations: shared
+            ? (shared.conversations ?? []).filter((c) => !mine || (c.user_email ?? "").trim().toLowerCase() !== mine)
+            : cur.teamSharedConversations,
+          projects: projects ? (projects.projects ?? []) : cur.projects,
+          chatOrders: orders?.orders && typeof orders.orders === "object" ? orders.orders : cur.chatOrders,
+          serverConfig: config ? sidebarServerConfig(config) : cur.serverConfig,
+        }));
+        return;
+      }
+      // A change made while the lists were on their way wins, and what was
+      // read is dropped. The lists are still owed: read again now, or as
+      // soon as the change's own request is back (settle), so a first load
+      // that a quick pin or rename overtook never leaves the sidebar without
+      // its projects, shared chats and orders.
       if (inFlight.current > 0) {
         rereadWanted.current = true;
         return;
       }
-      return loadRef.current();
     }
-    setLibrary((cur) => ({
-      // A list that could not be read keeps what was there.
-      conversations: own ? (own.conversations ?? []) : cur.conversations,
-      archivedConversations: archived ? (archived.conversations ?? []) : cur.archivedConversations,
-      teamSharedConversations: shared
-        ? (shared.conversations ?? []).filter((c) => !mine || (c.user_email ?? "").trim().toLowerCase() !== mine)
-        : cur.teamSharedConversations,
-      projects: projects ? (projects.projects ?? []) : cur.projects,
-      chatOrders: orders?.orders && typeof orders.orders === "object" ? orders.orders : cur.chatOrders,
-      serverConfig: config ? sidebarServerConfig(config) : cur.serverConfig,
-    }));
   }, [mine, setLibrary]);
-  const loadRef = useRef(load);
-  useEffect(() => {
-    loadRef.current = load;
-  }, [load]);
 
   // A change's request is back: say so if it failed, and read the lists
   // again when it failed or when a read was dropped while it was out.
