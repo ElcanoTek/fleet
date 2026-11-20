@@ -6114,5 +6114,6 @@
   "the patrol's instructions changed since you opened them; reload and edit again": "as instruções da patrulha mudaram desde que você as abriu; recarregue e edite de novo",
   "A Lockdown chat keeps its model.": "Um chat em Lockdown mantém seu modelo.",
   "The server is carrying it out…": "O servidor está executando…",
-  "Auto-approve (owner’s choice)": "Aprovação automática (escolha do proprietário)"
+  "Auto-approve (owner’s choice)": "Aprovação automática (escolha do proprietário)",
+  "this chat is archived; unarchive it before running a patrol or timer": "este chat está arquivado; desarquive-o antes de executar uma patrulha ou um temporizador"
 }

@@ -663,6 +663,12 @@ func (s *Server) handleScheduleRunNow(w http.ResponseWriter, r *http.Request, us
 		http.Error(w, "the scheduler is not running", http.StatusServiceUnavailable)
 		return
 	}
+	// An archived chat's schedules are off (store.SetArchived): no manual
+	// run either, until it is unarchived.
+	if conv.ArchivedAt != nil {
+		http.Error(w, "this chat is archived; unarchive it before running a patrol or timer", http.StatusBadRequest)
+		return
+	}
 	// The schedule must be the caller's, in this conversation, and live.
 	current, err := s.store.ListChatSchedules(r.Context(), user, conv.ID, true)
 	if err != nil {

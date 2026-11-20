@@ -97,6 +97,57 @@ var (
 	MaxChatTimerDurationSeconds = 30 * 24 * 3600
 )
 
+// NoticeArchivePausedSchedules is the UI-only notice written into a chat whose
+// patrols were paused because it was archived.
+const NoticeArchivePausedSchedules = "archive_paused_schedules"
+
+func archivePausedNotice(n int) string {
+	if n == 1 {
+		return "Archiving this chat paused its schedule (a patrol or timer). Resume it from the Patrol bar after unarchiving."
+	}
+	return fmt.Sprintf("Archiving this chat paused its %d patrols and timers. Resume them from the Patrol bar after unarchiving.", n)
+}
+
+// errScheduleInArchivedChat refuses starting a schedule in an archived chat.
+var errScheduleInArchivedChat = fmt.Errorf("%w: this chat is archived; unarchive it before starting a patrol or timer", ErrInvalidChatSchedule)
+
+// conversationArchivedTx reports whether the chat is archived.
+func conversationArchivedTx(ctx context.Context, tx *sql.Tx, convID string) (bool, error) {
+	var archived bool
+	err := tx.QueryRowContext(ctx, `SELECT archived_at IS NOT NULL FROM conversations WHERE id = $1`, convID).Scan(&archived)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return archived, err
+}
+
+// pauseConversationSchedulesTx pauses every active schedule in a chat, whoever
+// owns it, with the same effects as an owner's pause (UpdateChatSchedule): a
+// fire in flight is revoked and the schedules' queued turns are cancelled. The
+// caller holds the conversation's row lock. It returns how many it paused.
+func pauseConversationSchedulesTx(ctx context.Context, tx *sql.Tx, convID string, nowUnix int64) (int, error) {
+	res, err := tx.ExecContext(ctx,
+		`UPDATE `+chatSchedulesTable+`
+		    SET status = 'paused', updated_at = $2,
+		        lease_owner = NULL, lease_expires_at = NULL, fire_id = NULL,
+		        fire_trigger = NULL, fire_run_number = NULL, fire_failures = 0
+		  WHERE conversation_id = $1 AND status = 'active'`, convID, nowUnix)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	// Queued patrol turns are cancelled even when nothing was active: a Run
+	// now on a paused patrol, or a timer that completed after queueing its
+	// turn, leaves one behind.
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE chat_input_queue SET state = 'cancelled', updated_at = $1
+		  WHERE conversation_id = $2 AND state = 'queued' AND mode = 'patrol'`,
+		nowUnix, convID); err != nil {
+		return 0, err
+	}
+	return int(n), nil
+}
+
 // Sentinel errors returned by chat schedule store operations.
 var (
 	ErrChatScheduleNotFound = errors.New("chat schedule not found")
@@ -341,6 +392,11 @@ func (s *Store) CreateChatSchedule(ctx context.Context, in ChatScheduleInput) (*
 
 	if _, err := s.lockAndVerifyOwnedOrMultiplayerTx(ctx, tx, in.UserEmail, in.ConversationID); err != nil {
 		return nil, err
+	}
+	if archived, err := conversationArchivedTx(ctx, tx, in.ConversationID); err != nil {
+		return nil, err
+	} else if archived {
+		return nil, errScheduleInArchivedChat
 	}
 
 	// If creating a recurring patrol and AllowMultiple is false, update the
@@ -623,8 +679,18 @@ func (s *Store) UpdateChatSchedule(ctx context.Context, userEmail, convID, sched
 		return nil, fmt.Errorf("%w: cannot modify a %s schedule", ErrInvalidChatSchedule, cur.Status)
 	}
 
+	wasActive := cur.Status == ChatScheduleStatusActive
 	if err := applyChatSchedulePatch(&cur, patch, now); err != nil {
 		return nil, err
+	}
+	if !wasActive && cur.Status == ChatScheduleStatusActive {
+		// Resuming: an archived chat's schedules stay off (SetArchived paused
+		// them so a filed-away chat stops spending).
+		if archived, err := conversationArchivedTx(ctx, tx, convID); err != nil {
+			return nil, err
+		} else if archived {
+			return nil, errScheduleInArchivedChat
+		}
 	}
 
 	updated, err := scanChatSchedule(tx.QueryRowContext(ctx,
