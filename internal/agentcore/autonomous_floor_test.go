@@ -531,6 +531,15 @@ func TestGitPushFloorBareAssignment(t *testing.T) {
 		`f=$(if true; then sh x; fi)`,
 		`f=$( (sh x) )`,
 		`f=$(PATH=/tmp/x ls)`,
+		// Opaque expansions in an inert command's words or redirects.
+		`x='$(git push)'; f=$(echo ${x@P})`,
+		`x='a[$(git push)]'; f=$(echo $((x)))`,
+		`f=$(echo "${x:-y}")`,
+		`x='a[$(git push)]'; f=$(echo $[x])`,
+		`x='a[$(git push)]'; y=$[x]`,
+		`f=$(ls ${a[x]})`,
+		`f=$(ls > ${x@P})`,
+		`f=$(cat < ${x@P})`,
 		// Here-doc bodies expand substitutions before the command reads them.
 		"f=$(cat <<EOF\n$($(printf '\\x67it') $(printf '\\x70ush'))\nEOF\n)",
 		"f=$(cat <<EOF\n`sh x`\nEOF\n)",

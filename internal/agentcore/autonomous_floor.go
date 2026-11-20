@@ -441,12 +441,19 @@ type shellToken struct {
 	// subcmds are the bodies of the command and process substitutions
 	// inside this word (also listed in the script's own subcmds).
 	subcmds []string
+	// evaluates: the word has a `${...}` or `$((...))` expansion, which can
+	// evaluate a variable's text (`${x@P}` prompt expansion, arithmetic
+	// whose array subscripts run commands); see markEvalDynamic.
+	evaluates bool
 }
 
 type shellSegment struct {
 	tokens      []shellToken
 	pipedStdin  bool
 	hasOutRedir bool
+	// opaqueRedir: a redirect target had a `${...}` or `$((...))`
+	// expansion (`> ${x@P}`); the target word itself is not kept in tokens.
+	opaqueRedir bool
 	stdinBodies []string
 	stdinDyn    bool
 }
@@ -476,6 +483,7 @@ type shellLexer struct {
 	tokPlainLen  int
 	tokPlainStop bool
 	tokOpaqueDyn bool
+	tokEvalDyn   bool
 	tokSubFrom   int
 	subcmds      []string
 	heredocs     []pendingHeredoc
@@ -523,6 +531,13 @@ func (l *shellLexer) markDynamic(placeholder string) {
 	l.markStringDynamic(placeholder)
 }
 
+// markEvalDynamic records a `${...}` or `$((...))` expansion: opaque, and
+// able to evaluate a variable's text as a prompt string or arithmetic.
+func (l *shellLexer) markEvalDynamic(placeholder string) {
+	l.tokEvalDyn = true
+	l.markDynamic(placeholder)
+}
+
 // markStringDynamic records a command substitution (`$(...)` or backticks,
 // whose bodies are collected in subcmds and checked on their own) or a
 // simple `$param`: unknown text, but the expansion itself only yields a string.
@@ -549,6 +564,7 @@ func (l *shellLexer) flushTok() {
 		literal:           !l.tokDyn && l.tokPlainLen == len(val),
 		valueOnlyAssign:   eq > 0 && eq < l.tokPlainLen && !l.tokOpaqueDyn && isEnvAssignmentToken(val),
 		subcmds:           append([]string(nil), l.subcmds[l.tokSubFrom:]...),
+		evaluates:         l.tokEvalDyn,
 	})
 	l.tokSubFrom = len(l.subcmds)
 	l.tok.Reset()
@@ -558,6 +574,7 @@ func (l *shellLexer) flushTok() {
 	l.tokPlainLen = 0
 	l.tokPlainStop = false
 	l.tokOpaqueDyn = false
+	l.tokEvalDyn = false
 }
 
 func (l *shellLexer) flushSeg(nextPiped bool) {
@@ -735,14 +752,14 @@ func (l *shellLexer) readDollarInWord(inDouble bool) {
 		l.pos += 2
 		l.subcmds = append(l.subcmds, l.readParenBody())
 		if arith {
-			l.markDynamic("$()")
+			l.markEvalDynamic("$()")
 		} else {
 			l.markStringDynamic("$()")
 		}
 	case next == '{':
 		l.pos += 2
 		l.readBraceBody()
-		l.markDynamic("${}")
+		l.markEvalDynamic("${}")
 	case !inDouble && next == '\'':
 		l.pos += 2
 		l.skipANSICBody()
@@ -751,6 +768,11 @@ func (l *shellLexer) readDollarInWord(inDouble bool) {
 		l.pos++
 		l.markDynamic("")
 		l.readDoubleQuoted()
+	case next == '[':
+		// `$[...]` is bash's old arithmetic expansion: it evaluates like
+		// `$((...))`. The bracket text that follows is lexed as usual.
+		l.pos++
+		l.markEvalDynamic("$")
 	case isShellParamStart(next):
 		l.pos += 2
 		if isASCIILetterOrUnderscore(next) {
@@ -1041,6 +1063,11 @@ func (l *shellLexer) readRedirectTarget() shellToken {
 	if len(l.curSeg.tokens) > 0 {
 		out = l.curSeg.tokens[0]
 	}
+	for _, tok := range l.curSeg.tokens {
+		if tok.evaluates {
+			savedSeg.opaqueRedir = true
+		}
+	}
 	l.curSeg = savedSeg
 	return out
 }
@@ -1273,10 +1300,18 @@ func substBodyIsInert(body string, depth int) bool {
 		}
 	}
 	for _, seg := range segments {
-		if len(seg.stdinBodies) > 0 {
+		if len(seg.stdinBodies) > 0 || seg.opaqueRedir {
 			// Here-docs and here-strings: their expansions are checked
 			// above, but nothing here needs one, so stay strict.
 			return false
+		}
+		for _, tok := range seg.tokens {
+			// `echo ${x@P}` runs prompt expansion and `echo $((x))`
+			// evaluates x's text as arithmetic, whose subscripts run
+			// commands. Globs (`ls dir/*`) only list file names.
+			if tok.evaluates {
+				return false
+			}
 		}
 		i := 0
 		for i < len(seg.tokens) && seg.tokens[i].literal && isEnvAssignmentToken(seg.tokens[i].val) && !gitSensitiveAssignName(seg.tokens[i].val) {
