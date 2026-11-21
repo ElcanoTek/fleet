@@ -216,6 +216,11 @@ function parseCardLink(it: Record<string, unknown>): { link?: string; linkLabel?
 // parseApprovalCardData accepts exactly the server's card schema and returns
 // undefined for anything else, so the card falls back to the generic layout.
 // Every string stays text; a link survives only as an absolute https URL.
+// parseApprovalCardSha256 accepts only the 64-hex digest fleet sends beside a card.
+export function parseApprovalCardSha256(value: unknown): string | undefined {
+  return typeof value === "string" && /^[0-9a-f]{64}$/.test(value) ? value : undefined;
+}
+
 export function parseApprovalCardData(value: unknown): ApprovalCardData | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const v = value as Record<string, unknown>;
@@ -489,6 +494,12 @@ export type Approval = {
   /** The describer's readable card, when the bundle declares one for the tool. */
   card?: ApprovalCardData;
   /**
+   * The sha256 fleet sent with `card`. The generic action card, which renders
+   * `card`, echoes it on Approve to attest which card the person approved
+   * (docs/APPROVAL-CARD-DESCRIBERS.md, "Back to the server").
+   */
+  cardSha256?: string;
+  /**
    * The outcome card the call's own result carried, on a settled success of
    * a tool in agent_policy.critical_tool_result_cards
    * (docs/APPROVAL-RESULT-CARDS.md). Absent for every other card.
@@ -686,6 +697,7 @@ export function hydrateResolvedApproval(p: {
   tool_call_id?: string;
   recorded?: boolean;
   card?: unknown;
+  card_sha256?: unknown;
   result_card?: unknown;
   resume_after_approval?: boolean;
   group_id?: string;
@@ -707,6 +719,7 @@ export function hydrateResolvedApproval(p: {
     progress: executing ? parseApprovalProgress(p.progress) : undefined,
     resumeAfterApproval: p.resume_after_approval === true || undefined,
     card: parseApprovalCardData(p.card),
+    cardSha256: parseApprovalCardSha256(p.card_sha256),
     resultCard: executing ? undefined : resultCardFromOutcome(p),
     id: p.approval_id,
     tool: p.tool,

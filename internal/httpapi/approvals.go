@@ -1523,6 +1523,11 @@ type approvalRequest struct {
 	// (`narrowable.arg`), required with ApprovedValues: the narrowing is
 	// refused unless it is still the argument the tool narrows.
 	NarrowedArg string `json:"narrowed_arg,omitempty"`
+	// CardSHA256 is the `card_sha256` fleet sent with the row's describer
+	// card, echoed by a client that rendered that card (the web's generic
+	// action card). It attests which card the person approved; the call then
+	// tells its server (approvalCardRequestMeta). Absent: no card is attested.
+	CardSHA256 string `json:"card_sha256,omitempty"`
 }
 
 // sanitizeTaskTagSlice normalizes common agent separator characters (':' and
@@ -2046,7 +2051,7 @@ func (s *Server) runClaimedApprovalAction(execCtx context.Context, user, convID 
 		// manage_tasks is the same shape for tasks that already exist (#1152).
 		return s.runStagedManageTasks(execCtx, approval)
 	default:
-		return s.runStagedTool(execCtx, approval)
+		return s.runStagedTool(withApprovedCardDigest(execCtx, strings.TrimSpace(req.CardSHA256)), approval)
 	}
 }
 

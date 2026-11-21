@@ -5,6 +5,7 @@ import { ApprovalGroupCard } from "./ApprovalGroupCard";
 import {
   hydrateResolvedApproval,
   parseApprovalCardData,
+  parseApprovalCardSha256,
   parseApprovalNarrowable,
   parseApprovalNarrowed,
   type Approval,
@@ -257,5 +258,78 @@ describe("a narrowed approval without a readable card", () => {
       />,
     );
     expect(screen.getByTestId("approval-narrowed-summary")).toHaveTextContent("Approved 1 of 3 · 2 left out");
+  });
+});
+
+describe("card attestation inside a grouped card", () => {
+  const groupId = "11111111-2222-3333-4444-555555555555";
+  const digest = "b".repeat(64);
+
+  it("echoes the digest of each approved card it rendered, and none for a declined or card-less one", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(okResponse({ results: [] }));
+    vi.stubGlobal("fetch", fetchMock);
+    const members: Approval[] = [
+      pending({ id: "ap-ix", groupId, cardSha256: digest }),
+      {
+        id: "ap-mg",
+        tool: "mcp_magnite_execute_plan",
+        status: "pending",
+        summary: { tool: "mcp_magnite_execute_plan", args: [{ key: "deal_ids", value: '["m1","m2"]' }] },
+        groupId,
+        cardSha256: "c".repeat(64), // no card rendered for it: never echoed
+        expiresAt: Math.floor(Date.now() / 1000) + 600,
+      },
+    ];
+    render(<ApprovalGroupCard groupId={groupId} approvals={members} conversationId="conv_1" onResolved={vi.fn()} onOneAtATime={vi.fn()} />);
+    fireEvent.click(screen.getByTestId("approval-group-approve"));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
+      approve: ["ap-ix", "ap-mg"],
+      decline: [],
+      card_sha256: { "ap-ix": digest },
+    });
+  });
+});
+
+// docs/APPROVAL-CARD-DESCRIBERS.md, "Back to the server": the generic action
+// card renders the describer's card, so on Approve it echoes the digest fleet
+// sent with it; fleet then tells the server which card the person approved.
+describe("approved card attestation", () => {
+  const digest = "a".repeat(64);
+
+  it("parses only a 64-hex digest", () => {
+    expect(parseApprovalCardSha256(digest)).toBe(digest);
+    for (const bad of [undefined, null, 7, "", "A".repeat(64), "a".repeat(63), `${digest}0`]) {
+      expect(parseApprovalCardSha256(bad)).toBeUndefined();
+    }
+  });
+
+  it("echoes the rendered card's digest on Approve, never on decline", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(okResponse({ status: "approved", is_err: false, result_text: "ok" }));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ApprovalCard approval={pending({ cardSha256: digest })} conversationId="conv_1" onResolved={vi.fn()} />);
+    fireEvent.click(screen.getByTestId("approval-approve"));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({ approved: true, scope: "once", card_sha256: digest });
+    cleanup();
+
+    fetchMock.mockClear();
+    fetchMock.mockResolvedValue(okResponse({ status: "rejected" }));
+    render(<ApprovalCard approval={pending({ cardSha256: digest })} conversationId="conv_1" onResolved={vi.fn()} />);
+    for (const check of screen.getAllByTestId("approval-card-row-check")) fireEvent.click(check);
+    fireEvent.click(screen.getByTestId("approval-approve"));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({ approved: false, scope: "once" });
+  });
+
+  it("sends no digest when no readable card was rendered", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(okResponse({ status: "approved", is_err: false, result_text: "ok" }));
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <ApprovalCard approval={pending({ card: undefined, narrowable: undefined, cardSha256: digest })} conversationId="conv_1" onResolved={vi.fn()} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Approve & run" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({ approved: true, scope: "once" });
   });
 });

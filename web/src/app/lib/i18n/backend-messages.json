@@ -160,6 +160,7 @@
     "could not read request body",
     "could not read your chat order",
     "could not read your memories to draft with; try again",
+    "could not record that",
     "could not record the delivery",
     "could not record the stop",
     "could not save your chat order",
@@ -183,6 +184,7 @@
     "endpoint and keys (auth, p256dh) are required",
     "endpoint is required",
     "event is required",
+    "expect_version must be a number",
     "expected a list",
     "expected a list of strings",
     "expected an object",
@@ -385,6 +387,7 @@
     "the message could not be recorded against its turn; send it again",
     "the patrol changed since you opened it; reload and edit again",
     "the patrol's instructions changed since you opened them; reload and edit again",
+    "the pinned note changed since you opened it; reload and edit again",
     "the schedule changed while it was being run; try again",
     "the scheduler is not running",
     "the server is not taking new turns right now; the run starts when it does",
@@ -907,6 +910,12 @@
       "fields": [
         "%d",
         "%d"
+      ]
+    },
+    {
+      "message": "card_sha256 names approval {0}, which is not approved",
+      "fields": [
+        "%s"
       ]
     },
     {

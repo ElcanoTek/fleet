@@ -71,6 +71,7 @@ import {
   hydrateResolvedApproval,
   isNoticeOnlyMessage,
   parseApprovalCardData,
+  parseApprovalCardSha256,
   parseApprovalNarrowable,
   resolveApprovalMode,
   type Approval,
@@ -141,6 +142,11 @@ import { TeamChatViewer } from "./TeamChatViewer";
 import { TeamLinkNotice, type TeamLinkNoticeState } from "./TeamLinkNotice";
 import { BranchOriginBanner } from "./TeamBranchBanners";
 import { ExpiringChatBanner } from "./ExpiringChatBanner";
+import { AdminNoteBanner, type AdminNoteState } from "./AdminNoteBanner";
+import { useVisibleInterval } from "@/app/shared/hooks/useVisibleInterval";
+
+// How often an open chat re-reads the note an administrator may have pinned.
+const ADMIN_NOTE_POLL_MS = 60_000;
 import { expiresInDays, retentionPolicy, useNowSeconds } from "./chatRetention";
 import { WithheldFilesContext } from "./LockedFiles";
 import { DownloadChatDialog, type DownloadOptions } from "./DownloadChatDialog";
@@ -1446,6 +1452,11 @@ export function ChatExperience({
   const [isLoadingMcpServers, setIsLoadingMcpServers] = useState(false);
   const [schedulesByConv, setSchedulesByConv] = useState<
     Map<string, ChatSchedule[]>
+  >(() => new Map());
+  // The note an administrator pinned to each chat this page has read
+  // (ADR-0117); absent when the chat has none.
+  const [adminNoteByConv, setAdminNoteByConv] = useState<
+    Map<string, AdminNoteState>
   >(() => new Map());
   // For the rail's patrol and temporary marks: what each chat's schedules,
   // where this page has read them, amount to.
@@ -2924,6 +2935,7 @@ export function ChatExperience({
           no_session_approval?: boolean;
           resume_after_approval?: boolean;
           card?: unknown;
+          card_sha256?: unknown;
           group_id?: string;
           progress_updates?: boolean;
           narrowable?: unknown;
@@ -2959,6 +2971,7 @@ export function ChatExperience({
           supersedes_content?: string;
         }>;
         schedules?: ChatSchedule[] | null;
+        admin_note?: AdminNoteState | null;
         ui_autosubmits?: UIAutoSubmitState[] | null;
         autonomous_accepted?: boolean;
       };
@@ -3107,6 +3120,14 @@ export function ChatExperience({
         nextSchedules.set(data.conversation.id, data.schedules ?? []);
         return nextSchedules;
       });
+      setAdminNoteByConv((prev) => {
+        const note = data.admin_note ?? null;
+        if (!note && !prev.has(data.conversation.id)) return prev;
+        const next = new Map(prev);
+        if (note) next.set(data.conversation.id, note);
+        else next.delete(data.conversation.id);
+        return next;
+      });
       const receivedAtMs = Date.now();
       setUiAutoSubmitsByConv((prev) => {
         const nextAuto = new Map(prev);
@@ -3171,6 +3192,7 @@ export function ChatExperience({
             noSessionApproval: p.no_session_approval === true || undefined,
             resumeAfterApproval: p.resume_after_approval === true || undefined,
             card: parseApprovalCardData(p.card),
+            cardSha256: parseApprovalCardSha256(p.card_sha256),
             groupId: p.group_id || undefined,
             progressUpdates: p.progress_updates === true || undefined,
             narrowable: parseApprovalNarrowable(p.narrowable),
@@ -6204,6 +6226,68 @@ export function ChatExperience({
     followApprovalResume,
   } = useTurnStream(turnStreamDeps);
 
+  const activeAdminNote =
+    activeConversationId && !isPendingKey(activeConversationId)
+      ? (adminNoteByConv.get(activeConversationId) ?? null)
+      : null;
+  // "Got it" on the pinned note: tell the server which text was read, and
+  // show the note as it then stands (an administrator may have replaced it).
+  const acknowledgeAdminNote = useCallback(
+    async (convId: string, version: number): Promise<boolean> => {
+      const url = conversationApiUrl(convId, "/admin-note");
+      if (!url) return false;
+      try {
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ version }),
+        });
+        if (!res.ok) return false;
+        const body = (await res.json()) as { admin_note?: AdminNoteState | null };
+        setAdminNoteByConv((prev) => {
+          const next = new Map(prev);
+          if (body.admin_note) next.set(convId, body.admin_note);
+          else next.delete(convId);
+          return next;
+        });
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    [],
+  );
+
+  // A chat that is open and idle loads nothing, so a note pinned, replaced or
+  // removed meanwhile would not appear until the next turn or a reload. The
+  // note is one small read: do it every minute while the tab is visible, and
+  // when the tab comes back into view.
+  const refreshAdminNote = useCallback(() => {
+    const convId = activeConversationId;
+    if (!convId || isPendingKey(convId)) return;
+    const url = conversationApiUrl(convId, "/admin-note");
+    if (!url) return;
+    fetch(url, { cache: "no-store" })
+      .then(async (res) => {
+        if (!res.ok) return;
+        const body = (await res.json()) as { admin_note?: AdminNoteState | null };
+        setAdminNoteByConv((prev) => {
+          const note = body.admin_note ?? null;
+          const had = prev.get(convId);
+          if (!note && !had) return prev;
+          if (note && had && note.version === had.version && note.seen_at === had.seen_at) return prev;
+          const next = new Map(prev);
+          if (note) next.set(convId, note);
+          else next.delete(convId);
+          return next;
+        });
+      })
+      .catch(() => {
+        // Display data: a failed re-read leaves the banner as it was.
+      });
+  }, [activeConversationId]);
+  useVisibleInterval(refreshAdminNote, ADMIN_NOTE_POLL_MS);
+
   const activeSchedules = useMemo(() => {
     const id = activeConversationId;
     if (!id || isPendingKey(id)) return [];
@@ -8502,6 +8586,18 @@ export function ChatExperience({
                   hideShareButton
                 />
               ) : null}
+            </div>
+          ) : null}
+
+          {/* A note an administrator pinned to this chat (ADR-0117). It is not
+              in the history, so the assistant never reads it. */}
+          {activeAdminNote && activeConversationId && !fullPageOverlay && !dashboardActive ? (
+            <div className="px-4 pt-2 sm:px-6">
+              <AdminNoteBanner
+                key={`${activeConversationId}:${activeAdminNote.version}`}
+                note={activeAdminNote}
+                onAcknowledge={() => acknowledgeAdminNote(activeConversationId, activeAdminNote.version)}
+              />
             </div>
           ) : null}
 

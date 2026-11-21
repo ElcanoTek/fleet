@@ -13,10 +13,17 @@
 # CI and `make test` / `make test-race` / `make test-cover` all call this
 # script, so the flags cannot drift between them.
 #
+# --only=ERE / --skip=ERE keep or drop the packages whose import path matches
+# (CI splits its -race lane this way; the two halves are complements, pinned
+# by scripts/go_test_script_test.go). --list prints the packages a run would
+# test and exits. It is still one go test run.
+#
 # Usage:
 #   scripts/go-test.sh
 #   scripts/go-test.sh --race
 #   scripts/go-test.sh --coverprofile=coverage.out --count=1
+#   scripts/go-test.sh --race --only='/internal/agentcore$'
+#   scripts/go-test.sh --list --skip='/scripts$'
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -26,9 +33,12 @@ TAGS=(-tags fleet_host_executor)
 RACE=()
 COUNT=()
 COVER=()
+ONLY=""
+SKIP=""
+LIST=0
 
 usage() {
-  sed -n '2,19p' "$0" | sed 's/^# \?//'
+  sed -n '2,26p' "$0" | sed 's/^# \?//'
 }
 
 # Connection budget (see where it is applied, below): each test process holds
@@ -61,6 +71,9 @@ while [[ $# -gt 0 ]]; do
     --race) RACE=(-race); shift ;;
     --count=*) COUNT=(-count="${1#*=}"); shift ;;
     --coverprofile=*) COVER=(-coverprofile="${1#*=}" -covermode=atomic); shift ;;
+    --only=*) ONLY="${1#*=}"; shift ;;
+    --skip=*) SKIP="${1#*=}"; shift ;;
+    --list) LIST=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *)
       echo "unknown argument: $1" >&2
@@ -84,6 +97,26 @@ mapfile -t ALL < "$list_file"
 if (( ${#ALL[@]} == 0 )); then
   echo "go list returned no packages" >&2
   exit 2
+fi
+
+# --only / --skip: a selection that matches nothing is a mistake in the
+# pattern, not a green run over no tests.
+if [[ -n "$ONLY" || -n "$SKIP" ]]; then
+  SELECTED=()
+  for pkg in "${ALL[@]}"; do
+    if [[ -n "$ONLY" ]] && ! [[ "$pkg" =~ $ONLY ]]; then continue; fi
+    if [[ -n "$SKIP" ]] && [[ "$pkg" =~ $SKIP ]]; then continue; fi
+    SELECTED+=("$pkg")
+  done
+  if (( ${#SELECTED[@]} == 0 )); then
+    echo "no package matches --only='${ONLY}' --skip='${SKIP}'" >&2
+    exit 2
+  fi
+  ALL=("${SELECTED[@]}")
+fi
+if (( LIST )); then
+  printf '%s\n' "${ALL[@]}"
+  exit 0
 fi
 
 if [[ -z "${FLEET_TEST_DATABASE_URL:-}" ]]; then

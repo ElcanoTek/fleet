@@ -62,6 +62,11 @@ type approvalGroupRequest struct {
 	// as narrowable (the single-card POST's narrowed_arg). Required for every
 	// id in Narrow, and only for those.
 	NarrowArgs approvalGroupNarrowArgs `json:"narrow_args,omitempty"`
+	// CardSHA256 maps an approved card's id to the `card_sha256` fleet sent
+	// with its describer card, echoed because the group rendered that card
+	// (the single-card POST's card_sha256, approvalCardRequestMeta). Every id
+	// must be in Approve; a card absent from it attests no card.
+	CardSHA256 approvalGroupCardDigests `json:"card_sha256,omitempty"`
 }
 
 // maxApprovalGroupNarrowedValues bounds the approved values one group
@@ -232,7 +237,7 @@ func (s *Server) handleApprovalGroup(w http.ResponseWriter, r *http.Request, con
 				if d.approve {
 					res.Decision = "approve"
 				}
-				out := s.decideApproval(ctx, r.Context().Done(), user, convID, d.id, approvalRequest{Approved: d.approve, Scope: "once", ApprovedValues: groupApprovedValues(req.Narrow, d.id), NarrowedArg: req.NarrowArgs[d.id]})
+				out := s.decideApproval(ctx, r.Context().Done(), user, convID, d.id, groupDecisionRequest(req, d.id, d.approve))
 				switch {
 				case out.suggest != nil:
 					out.release()
@@ -276,6 +281,18 @@ func (s *Server) handleApprovalGroup(w http.ResponseWriter, r *http.Request, con
 // checkGroupNarrowing checks a group decision's `narrow` map before any card
 // is loaded: every narrowed card is approved, none is narrowed to nothing,
 // and the values stay within maxApprovalGroupNarrowedValues.
+// groupDecisionRequest is the single-card decision a group decision makes for
+// one card: scope once, its narrowing, and the card digest it echoed.
+func groupDecisionRequest(req approvalGroupRequest, id string, approve bool) approvalRequest {
+	out := approvalRequest{Approved: approve, Scope: "once"}
+	if approve {
+		out.ApprovedValues = groupApprovedValues(req.Narrow, id)
+		out.NarrowedArg = req.NarrowArgs[id]
+		out.CardSHA256 = req.CardSHA256[id]
+	}
+	return out
+}
+
 func checkGroupNarrowing(req approvalGroupRequest) error {
 	approving := make(map[string]bool, len(req.Approve))
 	for _, id := range req.Approve {
@@ -297,6 +314,11 @@ func checkGroupNarrowing(req approvalGroupRequest) error {
 	for id := range req.NarrowArgs {
 		if _, ok := req.Narrow[id]; !ok {
 			return fmt.Errorf("narrow_args names approval %s, which is not narrowed", quoteClientValue(id))
+		}
+	}
+	for id := range req.CardSHA256 {
+		if !approving[id] {
+			return fmt.Errorf("card_sha256 names approval %s, which is not approved", quoteClientValue(id))
 		}
 	}
 	if total > maxApprovalGroupNarrowedValues {

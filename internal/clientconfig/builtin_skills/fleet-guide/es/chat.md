@@ -511,6 +511,18 @@ Un administrador también puede archivar o eliminar un chat; un chat eliminado
 se queda 30 días en una papelera, así que pídele que lo restaure si fue un
 error.
 
+Un administrador también puede **fijar una nota** en tu chat. Aparece sobre la
+conversación, con el título **Nota de un administrador** y su correo, hasta
+que la quite. Pulsa **Entendido** para indicarle que la has leído; la nota se
+pliega entonces en una línea que vuelve a abrirse al hacer clic. En un chat
+colaborativo todas las personas del chat ven la nota, y el primer
+**Entendido** vale para el chat. La nota no forma parte de la conversación: el
+asistente nunca la lee, así que escribir una respuesta en el cuadro de mensaje
+no llegará al administrador.
+
+Para ayudarte, un administrador puede leer tu chat. No puede escribir como tú
+ni responder tus tarjetas de aprobación; eso sigue siendo tuyo.
+
 ### Conversaciones largas
 
 A medida que crece una conversación, **Resumir mensajes anteriores** en **Más opciones** (`•••`) muestra lo lleno que está el chat como porcentaje de la ventana de contexto del modelo. Con **Mostrar detalles** activo, una línea de totales sobre el editor muestra el mismo porcentaje junto al coste acumulado de la conversación. Cuando la conversación se llena, un aviso lo indica y el asistente empieza a tardar más y a costar más por turno. **Resumir mensajes anteriores**, en **Más opciones** o en el aviso, sustituye los turnos antiguos por un resumen breve para que la conversación vuelva a caber cómodamente; la transcripción conserva su historial y solo se reduce la vista de trabajo del asistente. Si la conversación cambia mientras se escribe el resumen, por ejemplo por una respuesta desde otra pestaña o un reintento, no se guarda y el chat indica *«La conversación cambió mientras se resumía, por lo que no se guardó el resumen. Vuelve a resumirla».* Vuelve a resumir para incluir su estado actual. No necesitas vigilarlo: por defecto, cuando una petición alcanza cerca del 90 % del límite del modelo, la plataforma resume por sí sola la parte más antigua de esa vista, entre turnos o en medio de uno largo que sigue obteniendo datos; una nota en la respuesta lo indica. Si un modelo sigue rechazando una petición por ser demasiado larga, la plataforma resume y reintenta sola en lugar de dar el turno por fallido. Si el tema cambia por completo, empezar otra conversación es más barato y claro que compactar la anterior.

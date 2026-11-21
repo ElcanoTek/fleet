@@ -49,7 +49,7 @@ test has to meet to be able to fail are in
 | Python lint | `python` | `ruff check` **and** `ruff format --check` over the 13 Python files | `make lint-python` |
 | Go test | `go` | Unit + integration suites + coverage profile (needs Postgres) | `make test` |
 | Go coverage | `go` | Coverage profile summarised in the log + job summary (advisory, no threshold) | `make test-cover` |
-| Go test -race | `go-race` | Race detector on the same suites (sibling job, overlaps `go`) | `make test-race` |
+| Go test -race | `go-race` (two runners) | Race detector on the same suites, minus `./scripts` (sibling job, overlaps `go`; `internal/agentcore` on one runner, the rest on the other) | `make test-race` |
 | govulncheck | `go` | Dependency CVEs reachable from fleet | `make govulncheck` |
 | Grype (image) | `grype-scan` | CVEs in the sandbox container image (fail on a fixable CRITICAL or HIGH **Fedora RPM**) | see below |
 | CodeQL | `codeql` (called workflow) | `security-extended` taint analysis over go / python / javascript-typescript / actions; fails on an unwaived **High-band** finding | not wrapped (see [`CODEQL.md`](CODEQL.md)) |
@@ -438,6 +438,18 @@ connections is enough for one run); the same flags make it faster.
    runner. Locally `make ci-go` runs them one after the other; running both at
    once against one server is safe too (every test has its own database).
 
+   In CI the lane is **two runners**. One package sets its floor:
+   `internal/agentcore` takes about 290 s under `-race`, more than a third of
+   what the whole tree took in one run. It has a runner to itself
+   (`scripts/go-test.sh --race --only='/internal/agentcore$'`) and the rest
+   of the tree shares the other (`--skip='/internal/agentcore$|/scripts$'`), so
+   the lane ends when agentcore does. `./scripts` is left out of the race lane
+   on purpose: its tests run shell scripts and read repo files, there is no
+   fleet goroutine in them for the detector to watch, and the `go` job runs
+   all of them on every PR. `TestRaceLaneHalvesCoverTheTree` fails if any other
+   package is in neither half, or in both. `make test-race` still runs the
+   whole tree, `./scripts` included.
+
    ```sh
    scripts/go-test.sh --race --count=1   # or: make test-race
    ```
@@ -560,6 +572,13 @@ orchestrator, OpenRouter, or Podman: it is fully deterministic on a bare
 runner. It runs the `mocked` Playwright project (`web/e2e/mocked`);
 `playwright.config.ts` builds the bundle and the harness first unless
 `E2E_SKIP_BUILD=1` (CI builds them in their own step).
+
+In CI the job is **three runners**, each running a third of the specs
+(`npx playwright test --shard=N/3`). The suite is serial by design (one worker
+against one gateway), and on one runner it had grown to 7 minutes of test time.
+Every spec still runs on every PR; a failing shard fails the job and uploads
+its own report (`playwright-report-N`). Locally, `make ci-e2e-mocked` runs the
+whole suite in one go.
 
 ```sh
 cd web

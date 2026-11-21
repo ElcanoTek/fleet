@@ -2,7 +2,9 @@ package httpapi
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -398,6 +400,7 @@ func TestApprovalGroup_Narrowing(t *testing.T) {
 		`{"approve":["ap-pm","ap-mg"],"narrow":{"ap-pm":["q"]},"narrow_args":{"ap-pm":"deal_ids"}}`,                                            // not a staged value
 		`{"approve":["ap-pm","ap-mg"],"narrow":{"ap-pm":[]},"narrow_args":{"ap-pm":"deal_ids"}}`,                                               // empty
 		`{"approve":["ap-pm"],"narrow":{"ap-pm":null}}`,                                                                                        // null
+		`{"approve":["ap-pm"],"decline":["ap-mg"],"card_sha256":{"ap-mg":"` + strings.Repeat("a", 64) + `"}}`,                                  // a card digest for a declined card
 		`{"approve":["ap-pm"],"narrow":{"ap-pm":[` + strings.TrimSuffix(strings.Repeat(`"x",`, maxApprovalGroupNarrowedValues+1), ",") + `]}}`, // over the group's value budget
 	} {
 		st := &narrowGroupStore{groupStore: newGroupStore(rows()...), narrowed: map[string]string{}}
@@ -977,5 +980,113 @@ func TestStagedNarrowable_HoldsTheWorstCaseEscapedList(t *testing.T) {
 	}
 	if frozenApprovalArgs(padded)["complete"] != false {
 		t.Fatal("arguments past approvalArgsMaxDecodeBytes are not reviewable in full")
+	}
+}
+
+// An approved call whose person approved a describer's card on a surface that
+// rendered it tells the server which card that was
+// (`_meta["fleet/approval_card"]`: its title and the sha256 of the canonical
+// card). The web card attests it by echoing the `card_sha256` fleet sent with
+// the card. No echo (the terminal, an email preview), an
+// echo of another card, a row with no card, or a stored card the client would
+// not render: no entry.
+func TestHandleApproval_TellsTheServerWhichCardWasApproved(t *testing.T) {
+	narrowPolicy(t)
+	card := `{"title":"Create 3 Index Exchange deals for Acme","items":[{"label":"a"},{"label":"b"},{"label":"c"}]}`
+	_, canonical, err := parseApprovalCard([]byte(card))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(canonical)
+	digest := hex.EncodeToString(sum[:])
+	described := map[string]any{approvalCardRequestMetaKey: map[string]any{
+		"title": "Create 3 Index Exchange deals for Acme", "sha256": digest,
+	}}
+	for _, tc := range []struct {
+		name     string
+		cardJSON string
+		body     string
+		want     map[string]any
+	}{
+		{"web card attested", card, `{"approved":true,"scope":"once","card_sha256":"` + digest + `"}`, described},
+		{"no echo (terminal, email, group)", card, `{"approved":true,"scope":"once"}`, nil},
+		{"echo of another card", card, `{"approved":true,"scope":"once","card_sha256":"` + strings.Repeat("0", 64) + `"}`, nil},
+		{"generic card", "", `{"approved":true,"scope":"once","card_sha256":"` + digest + `"}`, nil},
+		{"stored card no longer valid", `{"title":"t","items":[],"extra":1}`, `{"approved":true,"scope":"once","card_sha256":"` + digest + `"}`, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			row := narrowApprovalRow()
+			row.CardJSON = tc.cardJSON
+			st := &narrowStore{approval: row}
+			child := &narrowChild{}
+			s := narrowServer(t, st, child)
+			rec := postNarrowApproval(t, s, tc.body)
+			if rec.Code != 200 {
+				t.Fatalf("POST = %d %s", rec.Code, rec.Body.String())
+			}
+			if !reflect.DeepEqual(child.meta, tc.want) {
+				t.Fatalf("_meta = %#v, want %#v", child.meta, tc.want)
+			}
+		})
+	}
+}
+
+// A narrowed approval of an attested card carries both entries.
+func TestHandleApproval_NarrowedCardCarriesBothEntries(t *testing.T) {
+	narrowPolicy(t)
+	row := narrowApprovalRow()
+	row.CardJSON = `{"title":"Create 3 Index Exchange deals for Acme","items":[{"key":"a","label":"a"},{"key":"b","label":"b"},{"key":"c","label":"c"}]}`
+	digest := approvalCardDigest(&row)
+	st := &narrowStore{approval: row}
+	child := &narrowChild{}
+	s := narrowServer(t, st, child)
+	rec := postNarrowApproval(t, s, `{"approved":true,"scope":"once","approved_values":["a"],"narrowed_arg":"deal_ids","card_sha256":"`+digest+`"}`)
+	if rec.Code != 200 {
+		t.Fatalf("POST = %d %s", rec.Code, rec.Body.String())
+	}
+	if _, ok := child.meta[narrowedRequestMetaKey]; !ok {
+		t.Fatalf("_meta = %#v, want the narrowing entry", child.meta)
+	}
+	got, _ := child.meta[approvalCardRequestMetaKey].(map[string]any)
+	if got["title"] != "Create 3 Index Exchange deals for Acme" || got["sha256"] != digest {
+		t.Fatalf("_meta = %#v, want the card entry", child.meta)
+	}
+}
+
+// Every client payload that carries a card carries its digest, which is what
+// the web card echoes.
+func TestWithApprovalCard_CarriesTheDigestTheClientEchoes(t *testing.T) {
+	row := narrowApprovalRow()
+	row.CardJSON = `{"title":"t","items":[{"label":"a"}]}`
+	payload := withApprovalCard(map[string]any{}, &row)
+	if payload["card_sha256"] != approvalCardDigest(&row) || approvalCardDigest(&row) == "" {
+		t.Fatalf("payload = %#v", payload)
+	}
+	row.CardJSON = ""
+	if payload := withApprovalCard(map[string]any{}, &row); len(payload) != 0 {
+		t.Fatalf("no card, payload = %#v", payload)
+	}
+}
+
+// A group decision passes each approved card's echoed digest to that card's
+// own decision, as the single-card POST does; a declined card carries none.
+func TestGroupDecisionRequest_CarriesTheEchoedCardDigest(t *testing.T) {
+	var req approvalGroupRequest
+	body := `{"approve":["ap-pm","ap-mg"],"decline":["ap-ix"],"narrow":{"ap-pm":["x"]},"narrow_args":{"ap-pm":"deal_ids"},"card_sha256":{"ap-pm":"d1","ap-mg":"d2"}}`
+	if err := json.Unmarshal([]byte(body), &req); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkGroupNarrowing(req); err != nil {
+		t.Fatal(err)
+	}
+	pm := groupDecisionRequest(req, "ap-pm", true)
+	if pm.CardSHA256 != "d1" || pm.NarrowedArg != "deal_ids" || !pm.ApprovedValues.present || pm.Scope != "once" {
+		t.Fatalf("ap-pm = %+v", pm)
+	}
+	if mg := groupDecisionRequest(req, "ap-mg", true); mg.CardSHA256 != "d2" || mg.ApprovedValues.present {
+		t.Fatalf("ap-mg = %+v", mg)
+	}
+	if ix := groupDecisionRequest(req, "ap-ix", false); ix.CardSHA256 != "" || ix.Approved {
+		t.Fatalf("ap-ix = %+v", ix)
 	}
 }

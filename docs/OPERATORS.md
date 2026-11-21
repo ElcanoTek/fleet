@@ -923,9 +923,14 @@ bookkeeping right, record who did what and why, and note every change in the
 chat itself.
 
 ```
-fleet chats list [--user EMAIL] [--search TEXT] [--active-days N] [--archived]
-fleet chats show <chat_id>                     # owner, model, approvals, patrols, queue, recent admin changes
-fleet chats history <chat_id> [--tail 30] [--tools]
+fleet chats list [--user EMAIL] [--search TEXT] [--state attention|running|patrols|noted|archived] [--active-days N] [--archived]
+fleet chats list --attention                   # only chats that need attention (= --state attention)
+fleet chats people [--user EMAIL] [--search TEXT] [--active-days N] [--archived]   # who needs help
+fleet chats show <chat_id>                     # owner, model, approvals, attention, pinned note, waiting cards, patrols, queue, recent admin changes
+fleet chats history <chat_id> [--tail 30] [--before ID] [--tools]
+fleet chats note <chat_id>                     # show the note pinned to the chat
+fleet chats note <chat_id> --text "..."        # pin or replace it (--file PATH|- reads it from a file or stdin)
+fleet chats note <chat_id> --clear             # remove it
 fleet chats send <chat_id> --message "..." --reason "..." [--wait]
 fleet chats stop <chat_id> --reason "..." [--wait]
 fleet chats transfer <chat_id> --to EMAIL --reason "..." [--wait]
@@ -941,7 +946,35 @@ fleet chats request <request_id>               # progress of a send / stop / tra
 
 A chat or patrol id may be shortened to its first 8 characters. Every change
 takes `--reason`, is recorded in `chat.admin_actions` as `--as` (default
-`<unix user>@<host>`), and is noted in the chat.
+`<unix user>@<host>`), and is noted in the chat. `notice` and `note` take no
+`--reason` (their text is the record), and a pinned note is shown above the
+conversation rather than written into it. Every `fleet chats` subcommand
+above takes `--json`.
+
+- **Who needs help.** `fleet chats people` counts each owner's chats (needing
+  attention, approval cards waiting, running, with active patrols, with a
+  note) and lists the people with chats needing attention first, then prints
+  the totals, including archived chats and the recycle bin.
+  `fleet chats list --attention` lists the chats themselves; add
+  `--user EMAIL` for one person's. A chat **needs attention** in exactly two
+  cases: an approval card is waiting, or the chat's latest turn ended in an
+  error. A failed turn counts until the chat's next turn, or until its record is swept (`FLEET_TURN_EVENT_RETENTION_DAYS`, 14 days by default). The STATE column shows which
+  (`attention:cards_waiting`, `attention:turn_failed`,
+  `attention:cards_waiting+turn_failed`), and `show` lists the waiting cards:
+  tool, for whom, since when, and when they expire. `--search` matches the
+  title, the owner's email or the id.
+- **note** pins a note to a chat. The chat's owner and its Multiplayer
+  participants see it above the conversation. It is never part of the chat's
+  history, so the model never reads it. A chat carries one note, at most 2000
+  characters: `--text` or `--file` replaces the one already there and marks it
+  unread again. "Seen" (`note:seen` in the listing; who and when in `note` and
+  `show`) records the first person in the chat who pressed **Got it**, not
+  everyone who read it. `notice`, by contrast, writes a UI-only line into the
+  conversation itself (the model does not see that either).
+- **history** prints the latest `--tail` entries. When the page is full it
+  ends with the command for the page before it
+  (`fleet chats history <chat_id> --before <entry id>`); entry ids are in
+  `--json`.
 
 - **send** runs as the chat's owner, with the owner's connectors. It always
   runs in Manual approvals, whatever the chat is set to: anything that needs

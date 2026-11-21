@@ -598,10 +598,13 @@ func writeConversationMutationError(w http.ResponseWriter, err error) {
 // switch matched to its action. Entries reference only functions (method
 // expressions or literals), so initialization is file-order-independent.
 var conversationSubroutes = map[conversationSubroute]conversationSubrouteHandler{
-	{sub: "", method: http.MethodGet}:                   withOwnedOrMultiplayerConversation("not found", (*Server).handleConversationGet),
-	{sub: "", method: http.MethodDelete}:                (*Server).handleConversationDelete,
-	{sub: "truncate", method: http.MethodPost}:          (*Server).handleConversationTruncate,
-	{sub: "pin", method: http.MethodPost}:               (*Server).handleConversationPin,
+	{sub: "", method: http.MethodGet}:          withOwnedOrMultiplayerConversation("not found", (*Server).handleConversationGet),
+	{sub: "", method: http.MethodDelete}:       (*Server).handleConversationDelete,
+	{sub: "truncate", method: http.MethodPost}: (*Server).handleConversationTruncate,
+	{sub: "pin", method: http.MethodPost}:      (*Server).handleConversationPin,
+	// "Got it" on the note an administrator pinned to the chat (ADR-0117).
+	{sub: "admin-note", method: http.MethodPost}:        withOwnedOrMultiplayerConversation("not found", (*Server).handleConversationAdminNoteAck),
+	{sub: "admin-note", method: http.MethodGet}:         withOwnedOrMultiplayerConversation("not found", (*Server).handleConversationAdminNoteGet),
 	{sub: "archive", method: http.MethodPost}:           (*Server).handleConversationArchive,
 	{sub: "project", method: http.MethodPost}:           (*Server).handleConversationRefile,
 	{sub: "rename", method: http.MethodPost}:            (*Server).handleConversationRename,

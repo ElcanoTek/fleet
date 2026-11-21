@@ -1,10 +1,49 @@
 # Chat administration
 
 Operator tools for looking after chats that belong to someone else
-([ADR-0115](adr/0115-chat-administration.md)). Operator usage is in
+([ADR-0115](adr/0115-chat-administration.md); who needs help, the read-only
+view and pinned notes are [ADR-0117](adr/0117-helping-a-chats-people.md)). Operator usage is in
 [`OPERATORS.md`](OPERATORS.md#chat-administration--fleet-chats-and-fleet-patrol).
 
 ## What shipped
+
+### Helping a chat's people ([ADR-0117](adr/0117-helping-a-chats-people.md))
+
+- **Who needs help.** Settings → Admin → Chats opens on four counts (need
+  attention, running now, with patrols, pinned notes) that filter the page,
+  and on the chats grouped by the person who owns them, people with chats
+  needing attention first. A flat list, archived chats and the recycle bin are
+  one click away. `fleet chats people` and `fleet chats list --attention` /
+  `--state` are the same from a terminal.
+- **Needs attention** means exactly: an approval card is waiting in the chat,
+  or its latest turn ended in an error.
+- **One chat, as its owner sees it.** A chat opens on its own
+  (`?chat=<id>`): what it is waiting on (each waiting card's tool, for whom,
+  how long, when it is denied unanswered), then the conversation rendered as
+  the chat renders it (bubbles, formatted replies, patrol runs, administrator
+  messages, notices), read-only, with tool calls on request and earlier
+  messages paged in. Files and images are named, not fetched. It refreshes
+  every 8 seconds while visible. Tabs hold the patrols, the settings (title,
+  model, approvals, hand over, archive, delete) and the record of admin
+  changes.
+- **Step in.** One panel under the conversation, saying for each choice who
+  sees it and whether the assistant reads it: pin a note, message the
+  assistant, add a notice.
+- **Pinned note.** One per chat, at most 2000 characters, set with the page or
+  `fleet chats note`. The chat's owner and Multiplayer participants see it
+  above the conversation as *Note from an administrator · email*. It is stored
+  in `chat.admin_notes`, outside the chat's history, so the model never reads
+  it. *Got it* records the first person who acknowledged it and folds the
+  banner to one line; replacing the text makes it unread again. An open chat
+  picks up a new, replaced or removed note within about a minute. In the
+  browser, replacing a note is a compare-and-swap on the version the edit
+  started from, so two administrators cannot silently overwrite each other
+  (409, and the draft is kept). Recorded as
+  `note_set` / `note_replace` / `note_clear`. It takes no reason and writes no
+  notice: the note itself is what the chat's people are shown.
+- **Phones.** The page and the banner are laid out for a 390px screen; the
+  browser spec (`web/e2e/mocked/admin-chats.spec.ts`) runs at desktop and phone
+  widths and fails on sideways scrolling or an axe violation.
 
 ### Chats: `fleet chats` and Settings → Admin → Chats
 
@@ -25,7 +64,7 @@ Operator tools for looking after chats that belong to someone else
   approval mode (down to manual only), validated together before any is
   written. Archive is a server request, because it revokes a shared chat's
   participants.
-- **Notices.** UI-only notes in the chat.
+- **Notices.** UI-only lines in the conversation.
 - **Accountability.** Every change takes a reason, is recorded in
   `chat.admin_actions` with its actor and surface, and is announced in the
   chat.
@@ -124,4 +163,15 @@ Operator tools for looking after chats that belong to someone else
   old unused chats in bulk.
 - An open chat tab does not refresh live when an administrator posts a notice
   or changes a setting; the change shows on the next load or turn.
-- No bulk actions (the same message or patrol edit across many chats).
+- No bulk actions (the same message, note or patrol edit across many chats).
+- "Seen" on a pinned note is one mark per note, not one per person: in a
+  Multiplayer chat it says someone read it, not that everyone did.
+- A chat whose latest turn failed stays in "needs attention" until its next
+  turn, or until that turn's record is swept (`FLEET_TURN_EVENT_RETENTION_DAYS`,
+  14 days by default); there is no dismiss.
+- Not built on purpose: an administrator opening someone's chat in the chat
+  view and typing as them (ADR-0117).
+- The administrator's view of a conversation does not draw approval cards or
+  generated-UI cards as the chat does; it lists the waiting cards above the
+  conversation instead: the 50 that have waited longest, with the number
+  still waiting beyond them when there are more.
