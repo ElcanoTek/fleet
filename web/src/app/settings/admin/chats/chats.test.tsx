@@ -121,14 +121,14 @@ beforeEach(() => {
       if (url.startsWith("/api/admin/chats?")) return jsonResponse({ chats: [CHAT] });
       if (url.endsWith("/note") && method === "PUT") {
         // As the server does: a write made from another version is refused.
-        const sent = JSON.parse(String(init?.body)) as { expect_updated_at?: number };
-        if (sent.expect_updated_at !== undefined && sent.expect_updated_at !== (note?.updated_at ?? 0)) {
+        const sent = JSON.parse(String(init?.body)) as { expect_version?: number };
+        if (sent.expect_version !== undefined && sent.expect_version !== (note?.version ?? 0)) {
           return new Response("the pinned note changed since you opened it; reload and edit again", { status: 409 });
         }
-        note = { text: (JSON.parse(String(init?.body)) as { text: string }).text, author: "admin@x", via: "web", created_at: NOW, updated_at: NOW };
+        note = { text: (JSON.parse(String(init?.body)) as { text: string }).text, author: "admin@x", via: "web", created_at: NOW, updated_at: NOW, version: (note?.version ?? 40) + 1 };
         return jsonResponse({ note });
       }
-      if (url.includes("/note?expect_updated_at=") && method === "DELETE") {
+      if (url.includes("/note?expect_version=") && method === "DELETE") {
         note = null;
         return jsonResponse(null, 204);
       }
@@ -284,7 +284,7 @@ describe("a chat", () => {
     expect(put?.url).toBe(`/api/admin/chats/${CHAT.id}/note`);
     // Sent with the version it was written against (none pinned), so a note
     // another administrator pinned meanwhile is not silently replaced.
-    expect(put?.body).toEqual({ text: "Approve the card under the last reply.", expect_updated_at: 0 });
+    expect(put?.body).toEqual({ text: "Approve the card under the last reply.", expect_version: 0 });
     const card = await screen.findByTestId("admin-pinned-note");
     expect(card.textContent).toContain("Approve the card under the last reply.");
     expect(screen.getByTestId("admin-note-unseen")).toBeTruthy();
@@ -294,20 +294,20 @@ describe("a chat", () => {
     expect(calls.some((c) => c.method === "DELETE")).toBe(false); // armed, not fired
     fireEvent.click(unpin);
     // The unpin names the note it is removing, so a replacement is not what goes.
-    await waitFor(() => expect(calls.some((c) => c.method === "DELETE" && c.url.endsWith(`/note?expect_updated_at=${NOW}`))).toBe(true));
+    await waitFor(() => expect(calls.some((c) => c.method === "DELETE" && c.url.endsWith("/note?expect_version=41"))).toBe(true));
     await waitFor(() => expect(screen.queryByTestId("admin-pinned-note")).toBeNull());
   });
 
   it("keeps a draft when another administrator changes the note, warns, and saves against the version it started from", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    note = { text: "First.", author: "admin@x", via: "web", created_at: NOW - 600, updated_at: NOW - 600 };
+    note = { text: "First.", author: "admin@x", via: "web", created_at: NOW - 600, updated_at: NOW - 600, version: 3 };
     await openChat();
     const box = (await screen.findByTestId("admin-note-text")) as HTMLTextAreaElement;
     expect(box.value).toBe("First.");
     fireEvent.change(box, { target: { value: "First, with my addition." } });
 
     // Someone else replaces the note; the view's own refresh brings it in.
-    note = { text: "Theirs.", author: "other@x", via: "cli", created_at: NOW - 600, updated_at: NOW - 5 };
+    note = { text: "Theirs.", author: "other@x", via: "cli", created_at: NOW - 600, updated_at: NOW - 5, version: 4 };
     await vi.advanceTimersByTimeAsync(9000);
     expect(await screen.findByTestId("admin-note-stale")).toBeTruthy();
     expect(box.value).toBe("First, with my addition."); // the draft is kept
@@ -315,7 +315,7 @@ describe("a chat", () => {
     // Saving sends the version the draft was made from; the server refuses it.
     fireEvent.click(screen.getByTestId("admin-note-pin"));
     await waitFor(() => expect(calls.some((c) => c.method === "PUT")).toBe(true));
-    expect(calls.find((c) => c.method === "PUT")?.body).toEqual({ text: "First, with my addition.", expect_updated_at: NOW - 600 });
+    expect(calls.find((c) => c.method === "PUT")?.body).toEqual({ text: "First, with my addition.", expect_version: 3 });
     expect(await screen.findByText(/the pinned note changed since you opened it/)).toBeTruthy();
     expect(box.value).toBe("First, with my addition.");
 
@@ -330,14 +330,14 @@ describe("a chat", () => {
     await openChat();
     const box = (await screen.findByTestId("admin-note-text")) as HTMLTextAreaElement;
     expect(box.value).toBe("");
-    note = { text: "Pinned from the CLI.", author: "ops@x", via: "cli", created_at: NOW, updated_at: NOW };
+    note = { text: "Pinned from the CLI.", author: "ops@x", via: "cli", created_at: NOW, updated_at: NOW, version: 9 };
     await vi.advanceTimersByTimeAsync(9000);
     await waitFor(() => expect(box.value).toBe("Pinned from the CLI."));
     expect(screen.queryByTestId("admin-note-stale")).toBeNull();
   });
 
   it("shows who acknowledged the note", async () => {
-    note = { text: "Welcome.", author: "admin@x", via: "web", created_at: NOW - 600, updated_at: NOW - 600, seen_at: NOW - 60, seen_by: "owner@client.example" };
+    note = { text: "Welcome.", author: "admin@x", via: "web", created_at: NOW - 600, updated_at: NOW - 600, version: 2, seen_at: NOW - 60, seen_by: "owner@client.example" };
     await openChat();
     expect((await screen.findByTestId("admin-note-seen")).textContent).toContain("Seen by owner@client.example");
   });

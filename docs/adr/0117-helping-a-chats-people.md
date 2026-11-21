@@ -99,20 +99,22 @@ An administrator can pin **one note** to a chat.
   not read it and that a reply typed in the chat will not reach the
   administrator.
 - **Acknowledging it.** *Got it* (`POST /conversations/{id}/admin-note`, with
-  the `updated_at` of the text that was read) records the first person who
+  the `version` of the text that was read) records the first person who
   pressed it, and when. The banner then folds to one line; it stays pinned
   until an administrator removes it. Replacing the text clears the mark, and an
   acknowledgement of text that has since been replaced marks nothing.
 - **Setting and removing it.** `PUT` / `DELETE /admin/chats/{id}/note`,
-  `fleet chats note`. A `PUT` may carry `expect_updated_at` (the version of
-  the note the edit was made from; 0 for "none pinned"): if the note has
-  changed since, it answers 409 and nothing is written. The browser always
-  sends it, so two administrators editing one note cannot silently replace
-  each other's text; the CLI pins unconditionally. `DELETE` takes
-  `?expect_updated_at=` the same way, so an unpin confirmed against a note
-  that has just been replaced removes nothing. A note's `updated_at` is never
-  reused within a chat, including by a note pinned in the same second as the
-  one before it was removed. At most 2000 characters. Allowed on an archived or
+  `fleet chats note`. Each text of a note has a `version`, taken from a
+  sequence (`chat.admin_note_version_seq`), so it is never reused: not by the
+  text that replaces it, and not by a note pinned after it was removed. It is
+  deliberately not a timestamp (`updated_at` is in seconds, and two texts can
+  be written in one). A `PUT` may carry `expect_version` (the version the
+  edit was made from; 0 for "none pinned"): if the note has changed since, it
+  answers 409 and nothing is written. The browser always sends it, so two
+  administrators editing one note cannot silently replace each other's text;
+  the CLI pins unconditionally. `DELETE` takes `?expect_version=` the same
+  way, so an unpin confirmed against a note that has just been replaced
+  removes nothing. At most 2000 characters. Allowed on an archived or
   Lockdown chat (nothing runs); refused on a chat in the recycle bin.
 - **Accountability.** Recorded in `chat.admin_actions` as `note_set`,
   `note_replace` or `note_clear`, with the text. It takes **no reason** and

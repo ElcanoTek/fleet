@@ -75,7 +75,7 @@ for (const size of [
       await expectNoViolations(page);
       expect(mock.calls.find((c) => c.method === "PUT")?.body).toEqual({
         text: "Approve the card under the last reply to send the report.",
-        expect_updated_at: 0,
+        expect_version: 0,
       });
 
       // A message to the assistant says who sees it and that it is read.
@@ -106,6 +106,7 @@ for (const size of [
         text: "Approve the card under the last reply to send the report.",
         author: ADMIN,
         updated_at: NOW - 600,
+        version: 12,
         ...(seen ? { seen_at: NOW, seen_by: DANA } : {}),
       });
       await page.route("**/api/conversations/conv-report/admin-note", (r: Route) => {
@@ -145,7 +146,7 @@ for (const size of [
       // Acknowledged: one line, still pinned, and the server was told which
       // text was read.
       await expect(banner).toHaveAttribute("aria-expanded", "false");
-      expect(acked).toEqual({ updated_at: NOW - 600 });
+      expect(acked).toEqual({ version: 12 });
       await banner.click();
       await expect(page.getByRole("note", { name: "Note from an administrator" })).toBeVisible();
     });

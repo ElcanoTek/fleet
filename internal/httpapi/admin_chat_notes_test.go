@@ -112,13 +112,13 @@ func TestAdminNote_ShownToTheChatAndAcknowledged(t *testing.T) {
 	}
 
 	// A draft made from an earlier version of the note is refused.
-	stale := `{"text":"Stale draft.","expect_updated_at":` + jsonInt(note.UpdatedAt-1) + `}`
+	stale := `{"text":"Stale draft.","expect_version":` + jsonInt(note.Version-1) + `}`
 	if rec := adminDo(t, h, "admin@x", http.MethodPut, "/admin/chats/"+conv.ID+"/note", stale); rec.Code != http.StatusConflict {
 		t.Fatalf("stale replace = %d %s", rec.Code, rec.Body.String())
 	}
 
 	// Someone who cannot open the chat cannot acknowledge its note.
-	ack := `{"updated_at":` + jsonInt(note.UpdatedAt) + `}`
+	ack := `{"version":` + jsonInt(note.Version) + `}`
 	if rec := adminDo(t, h, "member@x", http.MethodPost, "/conversations/"+conv.ID+"/admin-note", ack); rec.Code != http.StatusNotFound {
 		t.Fatalf("stranger ack = %d %s", rec.Code, rec.Body.String())
 	}
@@ -147,7 +147,7 @@ func TestAdminNote_ListedCountedAndRemoved(t *testing.T) {
 	}
 	notePath := "/admin/chats/" + conv.ID + "/note"
 	note := pinNote(t, h, conv.ID, "Welcome.")
-	if _, err := st.AckAdminNote(ctx, conv.ID, "owner@x", note.UpdatedAt); err != nil {
+	if _, err := st.AckAdminNote(ctx, conv.ID, "owner@x", note.Version); err != nil {
 		t.Fatal(err)
 	}
 
@@ -170,7 +170,7 @@ func TestAdminNote_ListedCountedAndRemoved(t *testing.T) {
 	}
 
 	// An unpin confirmed against an earlier version removes nothing.
-	if rec := adminDo(t, h, "admin@x", http.MethodDelete, notePath+"?expect_updated_at="+jsonInt(note.UpdatedAt-1), ""); rec.Code != http.StatusConflict {
+	if rec := adminDo(t, h, "admin@x", http.MethodDelete, notePath+"?expect_version="+jsonInt(note.Version-1), ""); rec.Code != http.StatusConflict {
 		t.Fatalf("stale unpin = %d %s", rec.Code, rec.Body.String())
 	}
 	// Removing it takes it away from the owner's chat.

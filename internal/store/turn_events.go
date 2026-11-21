@@ -44,16 +44,19 @@ const (
 // by postChat once the buffer is registered — BEFORE any events are
 // emitted, so the FK from turn_events → turns always resolves.
 //
-// turn_index is assigned as the count of pre-existing turns for the
-// conversation (0-based ordinal). Turns in a conversation are created
-// serially — there is one governed agent loop per conversation, so no two
-// turns of the same conversation create concurrently — which keeps the
-// ordinal gap-free without a separate lock.
+// turn_index is one above the highest index the conversation still has (0 for
+// its first turn). It is NOT the count of its turns: SweepTurnEvents deletes
+// old ones, and counting what is left would hand a new turn an index below a
+// retained one (indexes 95-99 kept, the next turn numbered 5), so "the turn
+// with the highest index" would stop being the latest. Turns in a
+// conversation are created serially — there is one governed agent loop per
+// conversation, so no two turns of the same conversation create concurrently
+// — which keeps the ordinal increasing without a separate lock.
 func (s *Store) CreateTurn(ctx context.Context, turnID, convID string, startedAt int64) error {
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO turns (turn_id, conversation_id, started_at, status, turn_index)
 		 VALUES ($1, $2, $3, $4,
-		         (SELECT COUNT(*) FROM turns WHERE conversation_id = $2))`,
+		         (SELECT COALESCE(MAX(turn_index) + 1, 0) FROM turns WHERE conversation_id = $2))`,
 		turnID, convID, startedAt, string(TurnStatusRunning),
 	)
 	return err

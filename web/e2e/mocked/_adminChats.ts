@@ -200,7 +200,7 @@ export async function mockAdminChats(page: Page): Promise<AdminChatsMock> {
       return r.fulfill({ json: { entries: id === STUCK_ID ? entries : [] } });
     }
     if (sub === "note" && req.method() === "PUT") {
-      note = { text: String(body?.text ?? ""), author: ADMIN, via: "web", created_at: NOW, updated_at: Math.floor(Date.now() / 1000) };
+      note = { text: String(body?.text ?? ""), author: ADMIN, via: "web", created_at: NOW, updated_at: Math.floor(Date.now() / 1000), version: nextId++ };
       if (target) Object.assign(target, { has_note: true, note_seen: false });
       actions.unshift({ id: nextId++, created_at: Math.floor(Date.now() / 1000), actor: ADMIN, via: "web", action: "note_set", detail: note.text });
       return r.fulfill({ json: { note } });

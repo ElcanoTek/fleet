@@ -39,10 +39,14 @@ type AdminNote struct {
 	Author string `json:"author"`
 	Via    string `json:"via"`
 	// CreatedAt is when a note was first pinned to the chat; UpdatedAt when
-	// this text was written. A reader acknowledges the text it was shown by
-	// sending UpdatedAt back.
+	// this text was written.
 	CreatedAt int64 `json:"created_at"`
 	UpdatedAt int64 `json:"updated_at"`
+	// Version names this text. A reader acknowledges the text it was shown,
+	// and an administrator replaces or removes the note they read, by sending
+	// it back. No two texts ever share one, in this chat or any other, and it
+	// is never reused after a note is removed (it comes from a sequence).
+	Version int64 `json:"version"`
 	// SeenAt and SeenBy record the first person in the chat who pressed
 	// "Got it" on this text.
 	SeenAt *int64 `json:"seen_at,omitempty"`
@@ -52,7 +56,7 @@ type AdminNote struct {
 func scanAdminNote(row interface{ Scan(dest ...any) error }) (*AdminNote, error) {
 	var n AdminNote
 	var seenAt sql.NullInt64
-	err := row.Scan(&n.Text, &n.Author, &n.Via, &n.CreatedAt, &n.UpdatedAt, &seenAt, &n.SeenBy)
+	err := row.Scan(&n.Text, &n.Author, &n.Via, &n.CreatedAt, &n.UpdatedAt, &n.Version, &seenAt, &n.SeenBy)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -65,7 +69,7 @@ func scanAdminNote(row interface{ Scan(dest ...any) error }) (*AdminNote, error)
 	return &n, nil
 }
 
-const adminNoteSelect = `SELECT body, author, via, created_at, updated_at, seen_at, seen_by FROM chat.admin_notes WHERE conversation_id = $1`
+const adminNoteSelect = `SELECT body, author, via, created_at, updated_at, version, seen_at, seen_by FROM chat.admin_notes WHERE conversation_id = $1`
 
 // GetAdminNote returns the note pinned to a chat, or nil when there is none.
 //
@@ -79,6 +83,15 @@ func (s *Store) GetAdminNote(ctx context.Context, convID string) (*AdminNote, er
 	return scanAdminNote(s.db.QueryRowContext(ctx, adminNoteSelect, convID))
 }
 
+// adminNoteIs reports whether the chat's note is the one a caller read:
+// expect is its Version, or 0 for "no note was pinned".
+func adminNoteIs(cur *AdminNote, expect int64) bool {
+	if cur == nil {
+		return expect == 0
+	}
+	return cur.Version == expect
+}
+
 // AdminSetNote pins a note to a chat, replacing any note already there, and
 // records it. New text is unread: the previous note's "seen" mark is cleared.
 // Setting the text a chat already carries changes nothing.
@@ -87,7 +100,7 @@ func (s *Store) AdminSetNote(ctx context.Context, a AdminActor, convID, text str
 }
 
 // AdminSetNoteIfUnchanged is AdminSetNote as a compare-and-swap. expect names
-// the note the caller read: its UpdatedAt, or 0 for "no note was pinned". If
+// the note the caller read: its Version, or 0 for "no note was pinned". If
 // the chat's note is not that one, nothing is written and ErrAdminNoteChanged
 // is returned, so one administrator's edit cannot silently replace another's.
 // A nil expect pins unconditionally.
@@ -114,55 +127,29 @@ func (s *Store) AdminSetNoteIfUnchanged(ctx context.Context, a AdminActor, convI
 	if err != nil {
 		return AdminNote{}, err
 	}
-	if expect != nil {
-		var have int64
-		if cur != nil {
-			have = cur.UpdatedAt
-		}
-		if have != *expect {
-			return AdminNote{}, ErrAdminNoteChanged
-		}
+	if expect != nil && !adminNoteIs(cur, *expect) {
+		return AdminNote{}, ErrAdminNoteChanged
 	}
 	if cur != nil && cur.Text == t {
 		return *cur, nil
 	}
-	// UpdatedAt names the text a reader acknowledges and an administrator
-	// edits against, so no two texts of one chat may ever share it: not the
-	// text this replaces, and not a note that was removed earlier in the same
-	// second either. A removal is recorded at no earlier than the version it
-	// removed (AdminClearNoteIfUnchanged), and that record outlives the note,
-	// so the newest note record bounds every version this chat has used.
-	now := time.Now().Unix()
-	if cur != nil && now <= cur.UpdatedAt {
-		now = cur.UpdatedAt + 1
-	}
-	var lastChange sql.NullInt64
-	if err := tx.QueryRowContext(ctx,
-		`SELECT max(created_at) FROM chat.admin_actions
-		  WHERE conversation_id = $1 AND action IN ('note_set', 'note_replace', 'note_clear')`,
-		convID).Scan(&lastChange); err != nil {
-		return AdminNote{}, err
-	}
-	if lastChange.Valid && now <= lastChange.Int64 {
-		now = lastChange.Int64 + 1
-	}
+	// Every text takes a new version from the sequence, on a first pin and on
+	// a replacement alike.
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO chat.admin_notes (conversation_id, body, author, via, created_at, updated_at)
 		 VALUES ($1, $2, $3, $4, $5, $5)
 		 ON CONFLICT (conversation_id) DO UPDATE
 		   SET body = EXCLUDED.body, author = EXCLUDED.author, via = EXCLUDED.via,
-		       updated_at = EXCLUDED.updated_at, seen_at = NULL, seen_by = ''`,
-		convID, t, a.Email, a.Via, now); err != nil {
+		       updated_at = EXCLUDED.updated_at, seen_at = NULL, seen_by = '',
+		       version = nextval('chat.admin_note_version_seq')`,
+		convID, t, a.Email, a.Via, time.Now().Unix()); err != nil {
 		return AdminNote{}, err
 	}
 	action := "note_set"
 	if cur != nil {
 		action = "note_replace"
 	}
-	// Recorded at the version just generated, not the clock: a version can run
-	// ahead of the clock (above), and the record is listed newest first, so a
-	// pin must not sort before the removal it followed.
-	if err := recordAdminActionAt(ctx, tx, now, a, action, convID, "", "", t); err != nil {
+	if err := recordAdminAction(ctx, tx, a, action, convID, "", "", t); err != nil {
 		return AdminNote{}, err
 	}
 	out, err := scanAdminNote(tx.QueryRowContext(ctx, adminNoteSelect, convID))
@@ -183,8 +170,8 @@ func (s *Store) AdminClearNote(ctx context.Context, a AdminActor, convID string)
 
 // AdminClearNoteIfUnchanged is AdminClearNote as a compare-and-swap: with a
 // non-nil expect, the note is removed only if it is still the one the caller
-// read (its UpdatedAt). Otherwise nothing is removed and ErrAdminNoteChanged
-// is returned, so confirming "unpin" on a note another administrator has just
+// read (its Version). Otherwise nothing is removed and ErrAdminNoteChanged is
+// returned, so confirming "unpin" on a note another administrator has just
 // replaced does not delete the replacement.
 func (s *Store) AdminClearNoteIfUnchanged(ctx context.Context, a AdminActor, convID string, expect *int64) (bool, error) {
 	if err := a.validate(); err != nil {
@@ -203,48 +190,35 @@ func (s *Store) AdminClearNoteIfUnchanged(ctx context.Context, a AdminActor, con
 		if err != nil {
 			return false, err
 		}
-		var have int64
-		if cur != nil {
-			have = cur.UpdatedAt
-		}
-		if have != *expect {
+		if !adminNoteIs(cur, *expect) {
 			return false, ErrAdminNoteChanged
 		}
 	}
 	var body string
-	var removed int64
-	err = tx.QueryRowContext(ctx, `DELETE FROM chat.admin_notes WHERE conversation_id = $1 RETURNING body, updated_at`, convID).Scan(&body, &removed)
+	err = tx.QueryRowContext(ctx, `DELETE FROM chat.admin_notes WHERE conversation_id = $1 RETURNING body`, convID).Scan(&body)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
-	// Recorded at no earlier than the removed note's version, which can run a
-	// second ahead of the clock (a replacement made in the same second as the
-	// text before it). The next note takes a version above this record, so it
-	// can never reuse the removed one.
-	at := time.Now().Unix()
-	if removed > at {
-		at = removed
-	}
-	if err := recordAdminActionAt(ctx, tx, at, a, "note_clear", convID, "", "", body); err != nil {
+	if err := recordAdminAction(ctx, tx, a, "note_clear", convID, "", "", body); err != nil {
 		return false, err
 	}
 	return true, tx.Commit()
 }
 
 // AckAdminNote records that userEmail has read the note pinned to a chat.
-// updatedAt names the text they were shown (AdminNote.UpdatedAt): a note
-// replaced since then stays unread. Only the first acknowledgement is kept.
-// It returns the note as it stands (nil when the chat has none).
+// version names the text they were shown (AdminNote.Version): a note replaced
+// since then stays unread. Only the first acknowledgement is kept. It returns
+// the note as it stands (nil when the chat has none).
 //
 // The caller has already checked that userEmail may open the chat.
-func (s *Store) AckAdminNote(ctx context.Context, convID, userEmail string, updatedAt int64) (*AdminNote, error) {
+func (s *Store) AckAdminNote(ctx context.Context, convID, userEmail string, version int64) (*AdminNote, error) {
 	if _, err := s.db.ExecContext(ctx,
 		`UPDATE chat.admin_notes SET seen_at = $2, seen_by = $3
-		  WHERE conversation_id = $1 AND seen_at IS NULL AND updated_at = $4`,
-		convID, time.Now().Unix(), strings.ToLower(strings.TrimSpace(userEmail)), updatedAt); err != nil {
+		  WHERE conversation_id = $1 AND seen_at IS NULL AND version = $4`,
+		convID, time.Now().Unix(), strings.ToLower(strings.TrimSpace(userEmail)), version); err != nil {
 		return nil, err
 	}
 	return s.GetAdminNote(ctx, convID)

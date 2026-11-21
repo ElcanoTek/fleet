@@ -55,7 +55,7 @@ type adminChatStore interface {
 	GetAdminNote(ctx context.Context, convID string) (*store.AdminNote, error)
 	AdminSetNoteIfUnchanged(ctx context.Context, a store.AdminActor, convID, text string, expect *int64) (store.AdminNote, error)
 	AdminClearNoteIfUnchanged(ctx context.Context, a store.AdminActor, convID string, expect *int64) (bool, error)
-	AckAdminNote(ctx context.Context, convID, userEmail string, updatedAt int64) (*store.AdminNote, error)
+	AckAdminNote(ctx context.Context, convID, userEmail string, version int64) (*store.AdminNote, error)
 }
 
 func (s *Server) adminChats() (adminChatStore, bool) {
@@ -436,7 +436,7 @@ func (s *Server) handleAdminChatOverview(w http.ResponseWriter, r *http.Request)
 //	POST  /admin/chats/{id}/requests        send a message, stop, or transfer
 //	POST  /admin/chats/{id}/notice          a notice in the chat
 //	PUT   /admin/chats/{id}/note            pin a note to the chat (ADR-0117;
-//	                                        expect_updated_at makes it a
+//	                                        expect_version makes it a
 //	                                        compare-and-swap)
 //	DELETE /admin/chats/{id}/note           remove the pinned note
 //
@@ -504,29 +504,29 @@ func (s *Server) handleAdminChatItem(w http.ResponseWriter, r *http.Request) {
 	case sub == "note" && r.Method == http.MethodPut:
 		var body struct {
 			Text string `json:"text"`
-			// ExpectUpdatedAt names the note this edit was made from: its
-			// updated_at, or 0 for "no note was pinned". Sent, a note that has
+			// ExpectVersion names the note this edit was made from: its
+			// version, or 0 for "no note was pinned". Sent, a note that has
 			// changed since answers 409 instead of being replaced; omitted,
 			// the note is pinned unconditionally.
-			ExpectUpdatedAt *int64 `json:"expect_updated_at"`
+			ExpectVersion *int64 `json:"expect_version"`
 		}
 		if !decodeJSONBody(w, r, &body) {
 			return
 		}
-		note, err := st.AdminSetNoteIfUnchanged(r.Context(), s.adminActor(r), chat.ID, body.Text, body.ExpectUpdatedAt)
+		note, err := st.AdminSetNoteIfUnchanged(r.Context(), s.adminActor(r), chat.ID, body.Text, body.ExpectVersion)
 		if err != nil {
 			adminChatError(w, err)
 			return
 		}
 		writeJSON(w, r, map[string]any{"note": note})
 	case sub == "note" && r.Method == http.MethodDelete:
-		// ?expect_updated_at= makes the removal a compare-and-swap, like the
+		// ?expect_version= makes the removal a compare-and-swap, like the
 		// PUT's field of the same name (a DELETE carries no body).
 		var expect *int64
-		if raw := r.URL.Query().Get("expect_updated_at"); raw != "" {
+		if raw := r.URL.Query().Get("expect_version"); raw != "" {
 			v, err := strconv.ParseInt(raw, 10, 64)
 			if err != nil {
-				http.Error(w, "expect_updated_at must be a number", http.StatusBadRequest)
+				http.Error(w, "expect_version must be a number", http.StatusBadRequest)
 				return
 			}
 			expect = &v
@@ -571,7 +571,7 @@ func (s *Server) handleConversationAdminNoteGet(w http.ResponseWriter, r *http.R
 
 // handleConversationAdminNoteAck serves POST /conversations/{id}/admin-note:
 // someone in the chat pressed "Got it" on the note an administrator pinned to
-// it (ADR-0117). The body names the text they read (updated_at), so a note
+// it (ADR-0117). The body names the text they read (version), so a note
 // replaced meanwhile stays unread. It answers with the note as it stands.
 func (s *Server) handleConversationAdminNoteAck(w http.ResponseWriter, r *http.Request, user, id string, _ *store.Conversation) {
 	st, ok := s.adminChats()
@@ -580,12 +580,12 @@ func (s *Server) handleConversationAdminNoteAck(w http.ResponseWriter, r *http.R
 		return
 	}
 	var body struct {
-		UpdatedAt int64 `json:"updated_at"`
+		Version int64 `json:"version"`
 	}
 	if !decodeJSONBody(w, r, &body) {
 		return
 	}
-	note, err := st.AckAdminNote(r.Context(), id, user, body.UpdatedAt)
+	note, err := st.AckAdminNote(r.Context(), id, user, body.Version)
 	if err != nil {
 		http.Error(w, "could not record that", http.StatusInternalServerError)
 		return

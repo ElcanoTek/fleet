@@ -6192,14 +6192,14 @@ export function ChatExperience({
   // "Got it" on the pinned note: tell the server which text was read, and
   // show the note as it then stands (an administrator may have replaced it).
   const acknowledgeAdminNote = useCallback(
-    async (convId: string, updatedAt: number): Promise<boolean> => {
+    async (convId: string, version: number): Promise<boolean> => {
       const url = conversationApiUrl(convId, "/admin-note");
       if (!url) return false;
       try {
         const res = await fetch(url, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ updated_at: updatedAt }),
+          body: JSON.stringify({ version }),
         });
         if (!res.ok) return false;
         const body = (await res.json()) as { admin_note?: AdminNoteState | null };
@@ -6234,7 +6234,7 @@ export function ChatExperience({
           const note = body.admin_note ?? null;
           const had = prev.get(convId);
           if (!note && !had) return prev;
-          if (note && had && note.updated_at === had.updated_at && note.seen_at === had.seen_at) return prev;
+          if (note && had && note.version === had.version && note.seen_at === had.seen_at) return prev;
           const next = new Map(prev);
           if (note) next.set(convId, note);
           else next.delete(convId);
@@ -8451,9 +8451,9 @@ export function ChatExperience({
           {activeAdminNote && activeConversationId && !fullPageOverlay && !dashboardActive ? (
             <div className="px-4 pt-2 sm:px-6">
               <AdminNoteBanner
-                key={`${activeConversationId}:${activeAdminNote.updated_at}`}
+                key={`${activeConversationId}:${activeAdminNote.version}`}
                 note={activeAdminNote}
-                onAcknowledge={() => acknowledgeAdminNote(activeConversationId, activeAdminNote.updated_at)}
+                onAcknowledge={() => acknowledgeAdminNote(activeConversationId, activeAdminNote.version)}
               />
             </div>
           ) : null}

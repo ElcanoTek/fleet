@@ -126,17 +126,10 @@ type execer interface {
 }
 
 func recordAdminAction(ctx context.Context, db execer, a AdminActor, action, convID, schedID, reason, detail string) error {
-	return recordAdminActionAt(ctx, db, time.Now().Unix(), a, action, convID, schedID, reason, detail)
-}
-
-// recordAdminActionAt records an admin change with a given time. It exists
-// for the one record whose time is also a bound other code reads (a removed
-// note's version, AdminClearNoteIfUnchanged).
-func recordAdminActionAt(ctx context.Context, db execer, at int64, a AdminActor, action, convID, schedID, reason, detail string) error {
 	_, err := db.ExecContext(ctx,
 		`INSERT INTO chat.admin_actions (created_at, actor, via, action, conversation_id, schedule_id, reason, detail)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-		at, strings.ToLower(strings.TrimSpace(a.Email)), a.Via, action, convID, schedID,
+		time.Now().Unix(), strings.ToLower(strings.TrimSpace(a.Email)), a.Via, action, convID, schedID,
 		pgtext.Content(reason), pgtext.Content(detail))
 	return err
 }
@@ -286,11 +279,12 @@ const adminChatSelect = `
 // The SQL behind the states a listing filters and counts on. Each reads the
 // chat as "c"; the attention rule here and in scanAdminChat must agree.
 //
-// A chat's latest turn is the one with the highest turn_index: CreateTurn
-// assigns it serially per chat, so it orders two turns that started in the
-// same second, which started_at (seconds) and turn_id (random) cannot.
+// A chat's latest turn is the newest by started_at and, for two that started
+// in the same second, the one with the higher turn_index: CreateTurn assigns
+// that serially per chat (one above the highest still stored), which
+// started_at (seconds) and turn_id (random) cannot order.
 const (
-	adminChatLastTurnSQL = `COALESCE((SELECT t.status FROM chat.turns t WHERE t.conversation_id = c.id ORDER BY t.turn_index DESC, t.started_at DESC LIMIT 1), '')`
+	adminChatLastTurnSQL = `COALESCE((SELECT t.status FROM chat.turns t WHERE t.conversation_id = c.id ORDER BY t.started_at DESC, t.turn_index DESC LIMIT 1), '')`
 	adminChatCardsSQL    = `EXISTS (SELECT 1 FROM chat.approvals a WHERE a.conversation_id = c.id AND a.status = 'pending')`
 	adminChatAttnSQL     = `(` + adminChatCardsSQL + ` OR ` + adminChatLastTurnSQL + ` = 'error')`
 	adminChatRunningSQL  = `EXISTS (SELECT 1 FROM chat.turns t WHERE t.conversation_id = c.id AND t.status = 'running')`

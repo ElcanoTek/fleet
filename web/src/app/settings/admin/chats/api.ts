@@ -97,6 +97,8 @@ export type AdminNote = {
   via: string;
   created_at: number;
   updated_at: number;
+  /** Names this text: sent back to replace or remove the note that was read. */
+  version: number;
   seen_at?: number;
   seen_by?: string;
 };

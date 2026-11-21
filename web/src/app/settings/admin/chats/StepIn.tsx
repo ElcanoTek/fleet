@@ -174,17 +174,17 @@ export function StepIn({
 
 function NoteForm({ chat, note, onChanged }: { chat: AdminChat; note: AdminNote | null; onChanged: () => void }) {
   const [text, setText] = useState(note?.text ?? "");
-  // The note this draft was made from (its updated_at; 0 = none pinned). The
+  // The note this draft was made from (its version; 0 = none pinned). The
   // chat is re-read every few seconds, so `note` may be newer than the draft:
   // a save sends this version and the server refuses it if another
   // administrator has pinned, replaced or removed the note since.
-  const [base, setBase] = useState({ at: note?.updated_at ?? 0, text: note?.text ?? "" });
+  const [base, setBase] = useState({ at: note?.version ?? 0, text: note?.text ?? "" });
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<{ text: string; error: boolean } | null>(null);
   const hintId = useId();
   const trimmed = text.trim();
   const unchanged = base.at !== 0 && trimmed === base.text;
-  const current = note?.updated_at ?? 0;
+  const current = note?.version ?? 0;
   const moved = current !== base.at;
   const startOver = () => {
     setText(note?.text ?? "");
@@ -212,10 +212,10 @@ function NoteForm({ chat, note, onChanged }: { chat: AdminChat; note: AdminNote 
     e.preventDefault();
     void run(
       async () => {
-        const res = await sendJSON<{ note: AdminNote }>(chatUrl(chat.id, "/note"), "PUT", { text: trimmed, expect_updated_at: base.at });
+        const res = await sendJSON<{ note: AdminNote }>(chatUrl(chat.id, "/note"), "PUT", { text: trimmed, expect_version: base.at });
         if (res) {
           setText(res.note.text);
-          setBase({ at: res.note.updated_at, text: res.note.text });
+          setBase({ at: res.note.version, text: res.note.text });
         }
       },
       base.at !== 0 ? tr("Note updated. It shows as new in the chat.") : tr("Note pinned to the chat."),
@@ -225,7 +225,7 @@ function NoteForm({ chat, note, onChanged }: { chat: AdminChat; note: AdminNote 
     void run(async () => {
       // Against the note this form is showing, so a replacement another
       // administrator has just pinned is not what gets removed.
-      await sendJSON(`${chatUrl(chat.id, "/note")}?expect_updated_at=${base.at}`, "DELETE");
+      await sendJSON(`${chatUrl(chat.id, "/note")}?expect_version=${base.at}`, "DELETE");
       setText("");
       setBase({ at: 0, text: "" });
     }, tr("Note removed from the chat."));

@@ -17,6 +17,8 @@ export type AdminNoteState = {
   text: string;
   author: string;
   updated_at: number;
+  /** Names this text; "Got it" sends it back so a replaced note stays unread. */
+  version: number;
   seen_at?: number;
   seen_by?: string;
 };

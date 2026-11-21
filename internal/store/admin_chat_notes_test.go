@@ -54,7 +54,7 @@ func TestAdminNote_Set(t *testing.T) {
 
 	// The same text again changes nothing and records nothing.
 	same, err := s.AdminSetNote(ctx, cliAdmin, c.ID, first.Text)
-	if err != nil || same.UpdatedAt != first.UpdatedAt || same.Author != webAdmin.Email {
+	if err != nil || same.Version != first.Version || same.Author != webAdmin.Email {
 		t.Fatalf("re-set = %+v, %v", same, err)
 	}
 	if actions, _ := s.ListAdminActions(ctx, c.ID, 10); len(actions) != 1 || actions[0].Action != "note_set" {
@@ -75,12 +75,12 @@ func TestAdminNote_AckAndReplace(t *testing.T) {
 	}
 
 	// The owner reads it.
-	seen, err := s.AckAdminNote(ctx, c.ID, "Dana@client.example", first.UpdatedAt)
+	seen, err := s.AckAdminNote(ctx, c.ID, "Dana@client.example", first.Version)
 	if err != nil || seen == nil || seen.SeenAt == nil || seen.SeenBy != "dana@client.example" {
 		t.Fatalf("ack = %+v, %v", seen, err)
 	}
 	// A second acknowledgement does not replace the first.
-	again, _ := s.AckAdminNote(ctx, c.ID, "other@client.example", first.UpdatedAt)
+	again, _ := s.AckAdminNote(ctx, c.ID, "other@client.example", first.Version)
 	if again.SeenBy != "dana@client.example" {
 		t.Fatalf("second ack overwrote the first: %+v", again)
 	}
@@ -91,10 +91,10 @@ func TestAdminNote_AckAndReplace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if second.SeenAt != nil || second.SeenBy != "" || second.UpdatedAt <= first.UpdatedAt || second.CreatedAt != first.CreatedAt || second.Author != cliAdmin.Email || second.Via != AdminViaCLI {
+	if second.SeenAt != nil || second.SeenBy != "" || second.Version <= first.Version || second.CreatedAt != first.CreatedAt || second.Author != cliAdmin.Email || second.Via != AdminViaCLI {
 		t.Fatalf("replaced note = %+v (first %+v)", second, first)
 	}
-	stale, _ := s.AckAdminNote(ctx, c.ID, "dana@client.example", first.UpdatedAt)
+	stale, _ := s.AckAdminNote(ctx, c.ID, "dana@client.example", first.Version)
 	if stale == nil || stale.SeenAt != nil {
 		t.Fatalf("an acknowledgement of replaced text marked the new text: %+v", stale)
 	}
@@ -140,7 +140,7 @@ func TestAdminNote_OutsideHistoryAndClear(t *testing.T) {
 	if n, _ := s.GetAdminNote(ctx, c.ID); n != nil {
 		t.Fatalf("note after clear = %+v", n)
 	}
-	if got, _ := s.AckAdminNote(ctx, c.ID, "dana@client.example", second.UpdatedAt); got != nil {
+	if got, _ := s.AckAdminNote(ctx, c.ID, "dana@client.example", second.Version); got != nil {
 		t.Fatalf("ack of a cleared note = %+v", got)
 	}
 
@@ -476,12 +476,12 @@ func TestAdminNote_CompareAndSwap(t *testing.T) {
 	if _, err := s.AdminSetNoteIfUnchanged(ctx, cliAdmin, c.ID, "Other.", &none); !errors.Is(err, ErrAdminNoteChanged) {
 		t.Fatalf("pin over an unseen note err = %v", err)
 	}
-	second, err := s.AdminSetNoteIfUnchanged(ctx, webAdmin, c.ID, "Two.", &first.UpdatedAt)
+	second, err := s.AdminSetNoteIfUnchanged(ctx, webAdmin, c.ID, "Two.", &first.Version)
 	if err != nil || second.Text != "Two." {
 		t.Fatalf("replace at the read version = %+v, %v", second, err)
 	}
 	// A draft made from the first text is stale now.
-	if _, err := s.AdminSetNoteIfUnchanged(ctx, cliAdmin, c.ID, "Stale.", &first.UpdatedAt); !errors.Is(err, ErrAdminNoteChanged) {
+	if _, err := s.AdminSetNoteIfUnchanged(ctx, cliAdmin, c.ID, "Stale.", &first.Version); !errors.Is(err, ErrAdminNoteChanged) {
 		t.Fatalf("stale replace err = %v", err)
 	}
 	if n, _ := s.GetAdminNote(ctx, c.ID); n == nil || n.Text != "Two." || n.Author != webAdmin.Email {
@@ -489,38 +489,6 @@ func TestAdminNote_CompareAndSwap(t *testing.T) {
 	}
 	if actions, _ := s.ListAdminActions(ctx, c.ID, 10); len(actions) != 2 {
 		t.Fatalf("recorded %d changes, want 2 (refused writes record nothing)", len(actions))
-	}
-}
-
-// A note pinned in the same second as the one before it was removed gets a
-// version of its own: an acknowledgement or an edit made against the removed
-// note cannot land on the new one.
-func TestAdminNote_VersionIsUniqueAcrossClearAndRepin(t *testing.T) {
-	t.Parallel()
-	s := newTestStore(t)
-	ctx := context.Background()
-	c := noteChat(t, s)
-	first, err := s.AdminSetNote(ctx, webAdmin, c.ID, "First.")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.AdminClearNote(ctx, webAdmin, c.ID); err != nil {
-		t.Fatal(err)
-	}
-	second, err := s.AdminSetNote(ctx, webAdmin, c.ID, "Second.")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if second.UpdatedAt <= first.UpdatedAt {
-		t.Fatalf("the repinned note reuses a version: first %d, second %d", first.UpdatedAt, second.UpdatedAt)
-	}
-	// A delayed "Got it" for the removed text does not mark the new one.
-	if n, _ := s.AckAdminNote(ctx, c.ID, "dana@client.example", first.UpdatedAt); n == nil || n.SeenAt != nil {
-		t.Fatalf("an acknowledgement of the removed note marked the new one: %+v", n)
-	}
-	// Nor does an edit made against it replace the new one.
-	if _, err := s.AdminSetNoteIfUnchanged(ctx, cliAdmin, c.ID, "Stale.", &first.UpdatedAt); !errors.Is(err, ErrAdminNoteChanged) {
-		t.Fatalf("stale replace after a repin err = %v", err)
 	}
 }
 
@@ -539,13 +507,13 @@ func TestAdminNote_ClearCompareAndSwap(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ok, err := s.AdminClearNoteIfUnchanged(ctx, webAdmin, c.ID, &first.UpdatedAt); !errors.Is(err, ErrAdminNoteChanged) || ok {
+	if ok, err := s.AdminClearNoteIfUnchanged(ctx, webAdmin, c.ID, &first.Version); !errors.Is(err, ErrAdminNoteChanged) || ok {
 		t.Fatalf("stale unpin = %t, %v", ok, err)
 	}
 	if n, _ := s.GetAdminNote(ctx, c.ID); n == nil || n.Text != "Replacement." {
 		t.Fatalf("the replacement was removed: %+v", n)
 	}
-	if ok, err := s.AdminClearNoteIfUnchanged(ctx, webAdmin, c.ID, &second.UpdatedAt); err != nil || !ok {
+	if ok, err := s.AdminClearNoteIfUnchanged(ctx, webAdmin, c.ID, &second.Version); err != nil || !ok {
 		t.Fatalf("unpin at the read version = %t, %v", ok, err)
 	}
 }
@@ -573,15 +541,17 @@ func TestAdminChatTranscript_KeepsSummaryBoundaries(t *testing.T) {
 	}
 }
 
-// A note replaced, removed and pinned again within one second: the replaced
-// note's version already runs a second ahead of the clock, and the new note
-// must still get one above it.
-func TestAdminNote_VersionIsUniqueAcrossReplaceClearAndRepin(t *testing.T) {
+// A note's version is never reused: not by the text that replaces it, and not
+// by a note pinned after it was removed, however quickly. An acknowledgement
+// or an edit made against a removed note therefore cannot land on a new one,
+// and the record of the changes stays in the order they happened.
+func TestAdminNote_VersionsAreNeverReused(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
 	ctx := context.Background()
 	c := noteChat(t, s)
-	if _, err := s.AdminSetNote(ctx, webAdmin, c.ID, "First."); err != nil {
+	first, err := s.AdminSetNote(ctx, webAdmin, c.ID, "First.")
+	if err != nil {
 		t.Fatal(err)
 	}
 	replaced, err := s.AdminSetNote(ctx, webAdmin, c.ID, "Replaced.")
@@ -595,10 +565,18 @@ func TestAdminNote_VersionIsUniqueAcrossReplaceClearAndRepin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if again.UpdatedAt <= replaced.UpdatedAt {
-		t.Fatalf("the repinned note reuses the replaced note's version: replaced %d, again %d", replaced.UpdatedAt, again.UpdatedAt)
+	if first.Version <= 0 || replaced.Version <= first.Version || again.Version <= replaced.Version {
+		t.Fatalf("versions = %d, %d, %d; want strictly increasing", first.Version, replaced.Version, again.Version)
 	}
-	// The record stays in the order things happened, newest first.
+	for _, old := range []int64{first.Version, replaced.Version} {
+		if n, _ := s.AckAdminNote(ctx, c.ID, "dana@client.example", old); n == nil || n.SeenAt != nil {
+			t.Fatalf("an acknowledgement of removed version %d marked the new note: %+v", old, n)
+		}
+		if _, err := s.AdminSetNoteIfUnchanged(ctx, cliAdmin, c.ID, "Stale.", &old); !errors.Is(err, ErrAdminNoteChanged) {
+			t.Fatalf("stale replace against version %d err = %v", old, err)
+		}
+	}
+	// Timestamps are the clock's, so the newest-first record is in order.
 	actions, err := s.ListAdminActions(ctx, c.ID, 10)
 	if err != nil {
 		t.Fatal(err)
@@ -610,10 +588,54 @@ func TestAdminNote_VersionIsUniqueAcrossReplaceClearAndRepin(t *testing.T) {
 	if got := strings.Join(order, ","); got != "note_set,note_clear,note_replace,note_set" {
 		t.Fatalf("recorded order (newest first) = %s", got)
 	}
-	if n, _ := s.AckAdminNote(ctx, c.ID, "dana@client.example", replaced.UpdatedAt); n == nil || n.SeenAt != nil {
-		t.Fatalf("an acknowledgement of the removed replacement marked the new note: %+v", n)
+	// A note in another chat takes its own version.
+	other := noteChat(t, s)
+	elsewhere, err := s.AdminSetNote(ctx, webAdmin, other.ID, "Elsewhere.")
+	if err != nil || elsewhere.Version <= again.Version {
+		t.Fatalf("another chat's note = %+v, %v", elsewhere, err)
 	}
-	if _, err := s.AdminSetNoteIfUnchanged(ctx, cliAdmin, c.ID, "Stale.", &replaced.UpdatedAt); !errors.Is(err, ErrAdminNoteChanged) {
-		t.Fatalf("stale replace err = %v", err)
+}
+
+// A chat's turns keep increasing indexes after old ones are swept, so its
+// latest turn is still the one a listing reports.
+func TestAdminChats_LatestTurnAfterASweep(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	ctx := context.Background()
+	c := noteChat(t, s)
+	now := time.Now().Unix()
+	old := now - 30*24*3600
+	// Two old turns that a sweep removes, then one recent turn that stays.
+	for _, id := range []string{"swept-1", "swept-2"} {
+		if err := s.CreateTurn(ctx, id, c.ID, old); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.FinishTurn(ctx, id, TurnStatusCompleted, old, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.CreateTurn(ctx, "kept-failed", c.ID, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.FinishTurn(ctx, "kept-failed", TurnStatusError, now, false); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := s.SweepTurnEvents(ctx, 14*24*time.Hour); err != nil || n != 2 {
+		t.Fatalf("sweep removed %d turns, %v; want 2", n, err)
+	}
+	// The retry starts in the same second as the failure it follows. Counting
+	// the turns left (1) would number it below the kept turn (2).
+	if err := s.CreateTurn(ctx, "retry-ok", c.ID, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.FinishTurn(ctx, "retry-ok", TurnStatusCompleted, now, false); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.AdminGetChat(ctx, c.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.LastTurnStatus != "completed" || len(got.Attention) != 0 {
+		t.Fatalf("after a successful retry: last turn %q, attention %v", got.LastTurnStatus, got.Attention)
 	}
 }

@@ -6289,5 +6289,5 @@
   "the pinned note changed since you opened it; reload and edit again": "la nota fijada cambió desde que la abriste; recarga y vuelve a editar",
   "Earlier messages were summarized here": "Los mensajes anteriores se resumieron aquí",
   "Tool calls from every participant’s turns are shown. In the chat, each person sees only their own.": "Se muestran las llamadas a herramientas de los turnos de todos los participantes. En el chat, cada persona solo ve las suyas.",
-  "expect_updated_at must be a number": "expect_updated_at debe ser un número"
+  "expect_version must be a number": "expect_version debe ser un número"
 }

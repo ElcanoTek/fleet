@@ -8,7 +8,7 @@ import { AdminNoteBanner } from "./AdminNoteBanner";
 
 afterEach(cleanup);
 
-const NOTE = { text: "Approve the card under the last reply.", author: "alex@ops.example", updated_at: 100 };
+const NOTE = { text: "Approve the card under the last reply.", author: "alex@ops.example", updated_at: 100, version: 7 };
 
 describe("AdminNoteBanner", () => {
   it("shows an unread note in full, with who wrote it and that the assistant does not read it", () => {
