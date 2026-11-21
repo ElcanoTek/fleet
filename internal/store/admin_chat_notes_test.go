@@ -598,6 +598,18 @@ func TestAdminNote_VersionIsUniqueAcrossReplaceClearAndRepin(t *testing.T) {
 	if again.UpdatedAt <= replaced.UpdatedAt {
 		t.Fatalf("the repinned note reuses the replaced note's version: replaced %d, again %d", replaced.UpdatedAt, again.UpdatedAt)
 	}
+	// The record stays in the order things happened, newest first.
+	actions, err := s.ListAdminActions(ctx, c.ID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	order := make([]string, 0, len(actions))
+	for _, act := range actions {
+		order = append(order, act.Action)
+	}
+	if got := strings.Join(order, ","); got != "note_set,note_clear,note_replace,note_set" {
+		t.Fatalf("recorded order (newest first) = %s", got)
+	}
 	if n, _ := s.AckAdminNote(ctx, c.ID, "dana@client.example", replaced.UpdatedAt); n == nil || n.SeenAt != nil {
 		t.Fatalf("an acknowledgement of the removed replacement marked the new note: %+v", n)
 	}

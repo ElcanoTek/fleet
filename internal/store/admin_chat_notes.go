@@ -159,7 +159,10 @@ func (s *Store) AdminSetNoteIfUnchanged(ctx context.Context, a AdminActor, convI
 	if cur != nil {
 		action = "note_replace"
 	}
-	if err := recordAdminAction(ctx, tx, a, action, convID, "", "", t); err != nil {
+	// Recorded at the version just generated, not the clock: a version can run
+	// ahead of the clock (above), and the record is listed newest first, so a
+	// pin must not sort before the removal it followed.
+	if err := recordAdminActionAt(ctx, tx, now, a, action, convID, "", "", t); err != nil {
 		return AdminNote{}, err
 	}
 	out, err := scanAdminNote(tx.QueryRowContext(ctx, adminNoteSelect, convID))
