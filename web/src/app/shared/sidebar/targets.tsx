@@ -30,6 +30,8 @@ export type SidebarPins = {
   unpin: (entry: PinnedInfo) => void;
   /** Pins a chat or a project by id; false when it is not one this page can pin. */
   pin: (kind: "chat" | "project", ref: string) => boolean;
+  /** Whether `pin` would take this chat or project; the picker lists only those. Absent: every candidate is offered. */
+  canPin?: (kind: "chat" | "project", ref: string) => boolean;
 };
 
 export type SidebarTargets = {
@@ -95,6 +97,10 @@ export function isOwnPatrol(p: PatrolBrief): boolean {
 const NO_PATROLS: readonly PatrolBrief[] = [];
 let patrolList: readonly PatrolBrief[] = NO_PATROLS;
 let patrolRead: Promise<readonly PatrolBrief[] | null> | null = null;
+// Bumped by every refresh: a read that started before the latest refresh
+// (a focus read overtaken by the read after a pause, edit or removal) must
+// not publish its older list over the newer one.
+let patrolGen = 0;
 const patrolListeners = new Set<() => void>();
 
 /**
@@ -114,8 +120,9 @@ export async function fetchPatrolList(): Promise<PatrolBrief[] | null> {
 
 function readPatrols(): Promise<readonly PatrolBrief[] | null> {
   if (!patrolRead) {
+    const gen = patrolGen;
     patrolRead = fetchPatrolList().then((list) => {
-      if (list) {
+      if (list && gen === patrolGen) {
         patrolList = list;
         for (const l of patrolListeners) l();
       }
@@ -127,8 +134,21 @@ function readPatrols(): Promise<readonly PatrolBrief[] | null> {
 
 /** Reads the patrols again and tells every part of the page that shows them. */
 export function refreshPatrols(): Promise<readonly PatrolBrief[] | null> {
+  patrolGen++;
   patrolRead = null;
   return readPatrols();
+}
+
+/**
+ * patrolsChanged: a patrol was created, paused, resumed, edited or removed
+ * somewhere that keeps its own copy (Chat's Patrol bar). The shared list is
+ * read again now when something on the page shows it, and otherwise on the
+ * next read, so another page never goes on with the old one.
+ */
+export function patrolsChanged(): void {
+  patrolGen++;
+  patrolRead = null;
+  if (patrolListeners.size > 0) void readPatrols();
 }
 
 export function patrolConversationIds(): Promise<Set<string>> {
@@ -173,6 +193,7 @@ export function usePatrolIds(enabled: boolean): Set<string> {
 /** Test hook. */
 export function resetPatrolCacheForTests() {
   patrolRead = null;
+  patrolGen = 0;
   patrolList = NO_PATROLS;
 }
 

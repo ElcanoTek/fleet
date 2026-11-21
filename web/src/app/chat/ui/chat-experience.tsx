@@ -193,6 +193,7 @@ import {
 import { readChatSession, writeChatSession } from "./chatSessionStore";
 import { takeChatHandoff, type ChatHandoff } from "@/app/shared/sidebar/chatHandoff";
 import { rememberSidebarLibrary } from "@/app/shared/sidebar/useSidebarLibrary";
+import { patrolsChanged } from "@/app/shared/sidebar/targets";
 import { boardManifest } from "./dashboard/board";
 import { DashboardTranscriptContext } from "./dashboard/context";
 import { DashboardBoard, DashboardHud } from "./dashboard/DashboardView";
@@ -5768,14 +5769,19 @@ export function ChatExperience({
     (delta: number) => {
       // The person's own rows, top to bottom, exactly as the sidebar draws
       // them now: its chips, sort, date groups, folded sections and open
-      // projects all decide that, so the rows themselves are asked. Before
-      // the sidebar has drawn any, the computed order stands in.
+      // projects all decide that, so the rows themselves are asked. Only
+      // until the sidebar has drawn its lists (not mounted, or still showing
+      // its loading row) does the computed order stand in: once drawn, a
+      // sidebar with none of the person's rows (Pinned and Chats hidden or
+      // folded) has nothing to walk, and the cursor must never land on a row
+      // nobody can see.
+      const listsDrawn = document.querySelector("[data-rail-body] [data-lists-drawn]") !== null;
       const drawn = Array.from(
         document.querySelectorAll<HTMLElement>("[data-rail-body] [data-own-row][data-conversation-id]"),
       )
         .map((row) => row.dataset.conversationId ?? "")
         .filter(Boolean);
-      const order = drawn.length > 0 ? drawn : visibleOrder.map((c) => c.id);
+      const order = listsDrawn ? drawn : visibleOrder.map((c) => c.id);
       if (order.length === 0) return;
       if (!sidebarOpen) keepFocusForDrawerShortcut();
       setSidebarOpen(true);
@@ -6705,6 +6711,7 @@ export function ChatExperience({
         allow_multiple: input.allowMultiple,
       }));
       applyScheduleResponse(convId, data);
+      patrolsChanged();
       notify({
         message: data.schedule
           ? tr("Scheduled {0} ({1}).", [data.schedule.title, formatScheduleCadence(data.schedule)])
@@ -6739,6 +6746,7 @@ export function ChatExperience({
     if (!convId || isPendingKey(convId)) return false;
     try {
       applyScheduleResponse(convId, await queuePatrolCall(convId, () => call(convId)));
+      patrolsChanged();
       after?.(convId);
       return true;
     } catch (e) {

@@ -2822,6 +2822,26 @@ export function ConversationSidebar({
   // The Pinned section, for Customize: what is in it, a new order for it,
   // taking one out, and putting a chat or a project in.
   const mineEmail = userEmail.trim().toLowerCase();
+  // What Customize's Pin may pin, and what it then pins: a project the person
+  // owns, or a chat of theirs (or, where they may, a teammate's) that is not
+  // filed in a project (a project's chat lives under its project) and is not
+  // pinned already. One rule for the picker's list and for the pin itself,
+  // so the picker never offers a row the pin would refuse.
+  const pinTarget = (
+    kind: "chat" | "project",
+    ref: string,
+  ): { kind: "project" } | { kind: "chat"; chat: ConversationSummary } | null => {
+    if (readOnly) return null;
+    if (kind === "project") {
+      const project = projects.find((p) => p.id === ref);
+      if (!project || project.pinned || (project.owner_email ?? "").trim().toLowerCase() !== mineEmail) return null;
+      return { kind: "project" };
+    }
+    const own = conversations.find((c) => c.id === ref);
+    const chat = own ?? (canPinTeamChats ? teamSharedConversations.find((c) => c.id === ref) : undefined);
+    if (!chat || chat.pinned || (own && own.project_id && knownProjectIds?.has(own.project_id))) return null;
+    return { kind: "chat", chat };
+  };
   const sidebarPins: SidebarPins = {
     entries: pinned.map((e) =>
       e.kind === "chat"
@@ -2844,19 +2864,12 @@ export function ConversationSidebar({
       const chat = pinnedChats.find((c) => c.id === entry.ref);
       if (chat) void togglePin(chat);
     },
+    canPin: (kind, ref) => pinTarget(kind, ref) !== null,
     pin: (kind, ref) => {
-      if (readOnly) return false;
-      if (kind === "project") {
-        const project = projects.find((p) => p.id === ref);
-        if (!project || project.pinned || (project.owner_email ?? "").trim().toLowerCase() !== mineEmail) return false;
-        onPinProject(ref, true);
-        return true;
-      }
-      const own = conversations.find((c) => c.id === ref);
-      const chat = own ?? (canPinTeamChats ? teamSharedConversations.find((c) => c.id === ref) : undefined);
-      // A project's chat lives under its project and is never pinned.
-      if (!chat || chat.pinned || (own && own.project_id && knownProjectIds?.has(own.project_id))) return false;
-      void togglePin(chat);
+      const target = pinTarget(kind, ref);
+      if (!target) return false;
+      if (target.kind === "project") onPinProject(ref, true);
+      else void togglePin(target.chat);
       return true;
     },
   };
@@ -3338,6 +3351,9 @@ export function ConversationSidebar({
           ref={listRef}
           onKeyDown={onResultsKeyDown}
           data-testid="rail-lists"
+          // Set once the lists are drawn (not the loading row): from then on
+          // the rows on screen are the whole of what j/k may walk.
+          data-lists-drawn={isLoadingHistory ? undefined : ""}
           className={railCollapsed ? "sm:hidden" : ""}
         >
           {isLoadingHistory ? (

@@ -300,7 +300,11 @@ function PinnedSection({ pins, entries }: { pins: SidebarPins; entries: PickerEn
   const ids = pins.entries.map((e) => e.id);
   const pinnedRefs = new Set(pins.entries.map((e) => `${e.kind}:${e.ref}`));
   const candidates = (entries ?? []).filter(
-    (e) => (e.kind === "chat" || e.kind === "project") && e.detail !== tr("Archived") && !pinnedRefs.has(`${e.kind}:${e.ref}`),
+    (e) =>
+      (e.kind === "chat" || e.kind === "project") &&
+      e.detail !== tr("Archived") &&
+      !pinnedRefs.has(`${e.kind}:${e.ref}`) &&
+      (!pins.canPin || pins.canPin(e.kind, e.ref)),
   );
   const move = (index: number, delta: number) => {
     const to = index + delta;

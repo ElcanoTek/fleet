@@ -180,6 +180,17 @@ describe("Customize — Pinned", () => {
     expect(pins.pin).toHaveBeenCalledWith("project", "p2");
   });
 
+  it("offers only what the pin would take (not a project's chat, nor a teammate's project)", async () => {
+    const pins = pinsFor({
+      entries: [{ id: "c1", kind: "chat", ref: "c1", title: "Campaign Watch", canUnpin: true }],
+      canPin: (kind, ref) => !(kind === "chat" && ref === "c5"),
+    });
+    render(<Editor start={BUILTIN_LAYOUT} pins={pins} />);
+    fireEvent.click(screen.getByTestId("sidebar-pin-add"));
+    await waitFor(() => expect(screen.getAllByTestId("sidebar-pin-item").length).toBeGreaterThan(0));
+    expect(screen.getAllByTestId("sidebar-pin-item").map((i) => i.textContent)).toEqual(["Reklaim"]);
+  });
+
   it("is a person's own: the workspace default has no Pinned list, nor a page without the lists", () => {
     const view = render(<Editor start={BUILTIN_LAYOUT} pins={pinsFor()} mode="workspace" />);
     expect(screen.queryByRole("heading", { name: "Pinned" })).toBeNull();

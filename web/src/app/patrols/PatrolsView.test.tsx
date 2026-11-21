@@ -203,6 +203,27 @@ describe("the Patrols page", () => {
     expect(calls.filter((c) => c.url === "/api/patrols/pt-1")).toHaveLength(1);
   });
 
+  it("while the first read of a row's history is out, it says Loading…, never No runs yet", async () => {
+    render(<Page />);
+    await waitFor(() => expect(card("pt-1")).toBeTruthy());
+    const realFetch = globalThis.fetch;
+    let release: () => void = () => {};
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: string, init?: RequestInit) =>
+        String(input) === "/api/patrols/pt-1"
+          ? new Promise<Response>((resolve) => (release = () => void realFetch(input, init).then(resolve)))
+          : realFetch(input, init),
+      ),
+    );
+    expand("pt-1");
+    const mine = within(card("pt-1"));
+    expect(mine.getByText("Loading…")).toBeInTheDocument();
+    expect(mine.queryByText("No runs yet.")).toBeNull();
+    release();
+    await waitFor(() => expect(within(mine.getByTestId("patrol-runs")).getAllByRole("listitem")).toHaveLength(3));
+  });
+
   const modeCalls = () => calls.filter((c) => c.method === "POST" && c.url.endsWith("/auto-approve"));
 
   it("switching a running patrol's chat to Autonomous asks once more first", async () => {

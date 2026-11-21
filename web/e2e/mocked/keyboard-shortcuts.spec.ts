@@ -105,3 +105,40 @@ test('"?" typed into the composer does NOT open the overlay (no hijack while typ
   await expect(composer).toHaveValue("why? ");
   await expect(page.getByTestId("shortcuts-overlay")).toBeHidden();
 });
+
+test("j / k never put the cursor on a row the sidebar does not show", async ({ page }) => {
+  await mockChatBoot(page, {
+    conversations: [
+      { id: "conv-alpha", title: "Alpha thread" },
+      { id: "conv-bravo", title: "Bravo thread", pinned: true },
+    ],
+  });
+  // Pinned and Chats folded: none of the person's chats is drawn.
+  await page.route("**/api/sidebar", (r) =>
+    r.fulfill({
+      json: {
+        layout: { version: 1, items: [], sections: [{ id: "pinned", collapsed: true }, { id: "projects" }, { id: "chats", collapsed: true }] },
+        workspace_default: null,
+      },
+    }),
+  );
+  let opened = false;
+  page.on("request", (req) => {
+    if (/\/api\/conversations\/conv-(alpha|bravo)(\?|$)/.test(req.url())) opened = true;
+  });
+  await page.goto("/chat");
+  await page.getByRole("heading", { name: /what can i help with/i }).waitFor({ timeout: 15_000 });
+  await expect(page.getByTestId("pinned-section")).toBeVisible();
+  await expect(page.locator('[data-rail-body] [data-own-row][data-conversation-id]')).toHaveCount(0);
+
+  // The page opens the most recent chat as it boots; that is not the
+  // shortcut's doing.
+  opened = false;
+  await page.keyboard.press("j");
+  await page.keyboard.press("k");
+  await expect(page.locator('[data-focused="true"]')).toHaveCount(0);
+  // With no cursor, Enter opens nothing.
+  await page.keyboard.press("Enter");
+  await page.waitForTimeout(300);
+  expect(opened).toBe(false);
+});

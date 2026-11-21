@@ -454,7 +454,9 @@ function PatrolCard({
             )}
             <div className="grid content-start gap-2">
               <span className={LABEL_CLASS}>{tr("Recent runs")}</span>
-              {detailState === "loading" && !detail ? (
+              {/* Until the first read answers there is no history to show, so
+                  it is loading (never "No runs yet"), the first read included. */}
+              {!detail && detailState !== "failed" ? (
                 <p className="m-0 text-[0.8rem] text-[var(--color-text-muted)]">{tr("Loading…")}</p>
               ) : detailState === "failed" ? (
                 <p className="m-0 text-[0.8rem] text-[var(--color-text-muted)]">

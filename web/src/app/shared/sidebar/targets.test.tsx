@@ -4,6 +4,7 @@ import {
   fetchPatrolList,
   isOwnPatrol,
   patrolsByConversation,
+  patrolsChanged,
   refreshPatrols,
   resetPatrolCacheForTests,
   usePatrols,
@@ -67,6 +68,49 @@ describe("the patrols a sidebar row is marked from", () => {
     });
     expect(screen.getAllByTestId("names")[1]).toHaveTextContent("Second");
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("a read overtaken by a refresh never puts its older list back", async () => {
+    // The first read (say, on focus) is slow; a change's refresh starts after
+    // it and answers first. The slow one must not land on top.
+    let releaseFirst: (r: Response) => void = () => {};
+    let n = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => {
+        n++;
+        if (n === 1) return new Promise<Response>((resolve) => (releaseFirst = resolve));
+        return Promise.resolve(new Response(JSON.stringify({ patrols: [patrol({ title: "After the change" })] }), { status: 200 }));
+      }),
+    );
+    render(<Names />);
+    await act(async () => {
+      await refreshPatrols();
+    });
+    expect(screen.getByTestId("names")).toHaveTextContent("After the change");
+    await act(async () => {
+      releaseFirst(new Response(JSON.stringify({ patrols: [patrol({ title: "Before the change" })] }), { status: 200 }));
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId("names")).toHaveTextContent("After the change");
+  });
+
+  it("a change made elsewhere (Chat's Patrol bar) is read again for whoever shows the list", async () => {
+    const fetchMock = stubPatrols([[patrol({ title: "Old" })], [patrol({ title: "New" })]]);
+    render(<Names />);
+    await waitFor(() => expect(screen.getByTestId("names")).toHaveTextContent("Old"));
+    act(() => patrolsChanged());
+    await waitFor(() => expect(screen.getByTestId("names")).toHaveTextContent("New"));
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("with nothing showing the list, a change only drops it, and the next read is fresh", async () => {
+    const fetchMock = stubPatrols([[patrol({ title: "Old" })], [patrol({ title: "New" })]]);
+    expect((await refreshPatrols())?.map((p) => p.title)).toEqual(["Old"]);
+    patrolsChanged();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    render(<Names />);
+    await waitFor(() => expect(screen.getByTestId("names")).toHaveTextContent("New"));
   });
 
   it("keeps what it knew when a refresh fails", async () => {
