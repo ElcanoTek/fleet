@@ -139,6 +139,55 @@ describe("the patrols a sidebar row is marked from", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it("a list read over a minute ago is read again when a part of the page that shows it mounts", async () => {
+    const fetchMock = stubPatrols([[patrol({ title: "Then" })], [patrol({ title: "Now" })]]);
+    const first = render(<Names />);
+    await waitFor(() => expect(screen.getByTestId("names")).toHaveTextContent("Then"));
+    first.unmount();
+    // Within the minute: the answer in hand is used.
+    render(<Names />);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    cleanup();
+    const realNow = Date.now();
+    const now = vi.spyOn(Date, "now").mockReturnValue(realNow + 61_000);
+    try {
+      render(<Names />);
+      await waitFor(() => expect(screen.getByTestId("names")).toHaveTextContent("Now"));
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it("coming back to the tab reads the list again while something shows it", async () => {
+    const fetchMock = stubPatrols([[patrol({ title: "Before" })], [patrol({ title: "After" })]]);
+    render(<Names />);
+    await waitFor(() => expect(screen.getByTestId("names")).toHaveTextContent("Before"));
+    Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "visible" });
+    act(() => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await waitFor(() => expect(screen.getByTestId("names")).toHaveTextContent("After"));
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("once the soonest patrol was due, the list is read again, so a row never sits at due now", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const due = Math.floor(Date.now() / 1000) + 60;
+      const fetchMock = stubPatrols([[patrol({ title: "Due", next_run_at: due })], [patrol({ title: "Moved on", next_run_at: due + 3600 })]]);
+      render(<Names />);
+      await waitFor(() => expect(screen.getByTestId("names")).toHaveTextContent("Due"));
+      await act(async () => {
+        vi.advanceTimersByTime(60_000 + 31_000);
+      });
+      await waitFor(() => expect(screen.getByTestId("names")).toHaveTextContent("Moved on"));
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps what it knew when a refresh fails", async () => {
     stubPatrols([[patrol({ title: "First" })], "fail"]);
     render(<Names />);

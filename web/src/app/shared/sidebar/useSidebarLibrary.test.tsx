@@ -236,6 +236,39 @@ describe("useSidebarLibrary", () => {
     await waitFor(() => expect(n).toBeGreaterThan(reads));
   });
 
+  it("a read from outside waits for a change still being saved, then reads once it lands", async () => {
+    let releasePin: () => void = () => {};
+    const calls = stubApi({
+      "POST /api/conversations/own-2/pin": () => undefined,
+    });
+    const base = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      if (String(input) === "/api/conversations/own-2/pin") {
+        calls.push({ method: "POST", url: String(input), body: undefined });
+        await new Promise<void>((resolve) => (releasePin = resolve));
+        return new Response("{}", { status: 200 });
+      }
+      return base(input as string, init);
+    });
+    const { result } = renderHook(() => useSidebarLibrary("me@example.com", () => {}));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    const reads = () => calls.filter((c) => c.method === "GET" && c.url === "/api/conversations").length;
+    let pinned: Promise<unknown> = Promise.resolve();
+    act(() => {
+      pinned = result.current.togglePin(result.current.conversations[1]);
+    });
+    act(() => sidebarListsChanged());
+    // Nothing read while the pin is out: its lists would undo it on screen.
+    await new Promise((r) => setTimeout(r, 20));
+    expect(reads()).toBe(1);
+    expect(result.current.conversations.find((c) => c.id === "own-2")?.pinned).toBe(true);
+    await act(async () => {
+      releasePin();
+      await pinned;
+    });
+    await waitFor(() => expect(reads()).toBe(2));
+  });
+
   it("a first read overtaken by a quick pin is read again, so no list is left unread", async () => {
     // The last page's chats are on screen while the first read is out.
     let release: () => void = () => {};

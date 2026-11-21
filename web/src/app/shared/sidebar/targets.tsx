@@ -101,8 +101,37 @@ let patrolRead: Promise<readonly PatrolBrief[] | null> | null = null;
 // (a focus read overtaken by the read after a pause, edit or removal) must
 // not publish its older list over the newer one.
 let patrolGen = 0;
-// Whether patrolRead has answered (a cached answer) or is still on its way.
+// Whether patrolRead has answered (a cached answer) or is still on its way,
+// and when the list last answered.
 let patrolReadDone = false;
+let patrolReadAt = 0;
+// An answer older than this is read again when a part of the page that
+// shows patrols mounts (moving between pages), so a long session follows the
+// scheduler, not the list it read first.
+const PATROL_MAX_AGE_MS = 60_000;
+// After the soonest active patrol was due, the list is read again (once
+// something on the page shows it): its next check has moved, and a row must
+// not sit at "due now".
+const PATROL_DUE_SLACK_MS = 30_000;
+const PATROL_DUE_MAX_DELAY_MS = 6 * 60 * 60 * 1000;
+let dueTimer: ReturnType<typeof setTimeout> | null = null;
+
+function scheduleDueRefresh(list: readonly PatrolBrief[]) {
+  if (dueTimer !== null) clearTimeout(dueTimer);
+  dueTimer = null;
+  const due = list
+    .filter((p) => p.status === "active" && typeof p.next_run_at === "number")
+    .map((p) => p.next_run_at as number);
+  if (due.length === 0) return;
+  const delay = Math.min(
+    PATROL_DUE_MAX_DELAY_MS,
+    Math.max(PATROL_DUE_SLACK_MS, Math.min(...due) * 1000 - Date.now() + PATROL_DUE_SLACK_MS),
+  );
+  dueTimer = setTimeout(() => {
+    dueTimer = null;
+    if (patrolListeners.size > 0) patrolsChanged();
+  }, delay);
+}
 const patrolListeners = new Set<() => void>();
 
 /**
@@ -125,9 +154,13 @@ function readPatrols(): Promise<readonly PatrolBrief[] | null> {
     const gen = patrolGen;
     patrolReadDone = false;
     const read: Promise<readonly PatrolBrief[] | null> = fetchPatrolList().then((list) => {
-      if (patrolRead === read) patrolReadDone = true;
+      if (patrolRead === read) {
+        patrolReadDone = true;
+        patrolReadAt = Date.now();
+      }
       if (list && gen === patrolGen) {
         patrolList = list;
+        scheduleDueRefresh(list);
         for (const l of patrolListeners) l();
       }
       // A failed read is not kept: the next part of the page that asks
@@ -187,16 +220,36 @@ export function patrolConversationIds(): Promise<Set<string>> {
   return readPatrols().then((list) => new Set((list ?? []).map((p) => p.conversation_id ?? "").filter(Boolean)));
 }
 
+// Coming back to the tab reads the list again while something shows it: a
+// patrol may have run, or been changed in another tab.
+function onPatrolTabVisible() {
+  if (document.visibilityState === "visible" && patrolListeners.size > 0) patrolsChanged();
+}
+
 function subscribePatrols(listener: () => void): () => void {
+  if (patrolListeners.size === 0 && typeof document !== "undefined") {
+    document.addEventListener("visibilitychange", onPatrolTabVisible);
+  }
   patrolListeners.add(listener);
-  return () => patrolListeners.delete(listener);
+  return () => {
+    patrolListeners.delete(listener);
+    if (patrolListeners.size === 0 && typeof document !== "undefined") {
+      document.removeEventListener("visibilitychange", onPatrolTabVisible);
+    }
+  };
+}
+
+/** The shared read, or a new one when the answer in hand is older than maxAgeMs. */
+function readPatrolsNotOlderThan(maxAgeMs: number): Promise<readonly PatrolBrief[] | null> {
+  if (patrolRead && patrolReadDone && Date.now() - patrolReadAt > maxAgeMs) return refreshPatrols();
+  return readPatrols();
 }
 
 /** usePatrols: the caller's patrols once known (empty until then, or when `enabled` is false). */
 export function usePatrols(enabled: boolean): readonly PatrolBrief[] {
   const list = useSyncExternalStore(subscribePatrols, () => patrolList, () => NO_PATROLS);
   useEffect(() => {
-    if (enabled) void readPatrols();
+    if (enabled) void readPatrolsNotOlderThan(PATROL_MAX_AGE_MS);
   }, [enabled]);
   return enabled ? list : NO_PATROLS;
 }
@@ -224,6 +277,9 @@ export function usePatrolIds(enabled: boolean): Set<string> {
 
 /** Test hook. */
 export function resetPatrolCacheForTests() {
+  if (dueTimer !== null) clearTimeout(dueTimer);
+  dueTimer = null;
+  patrolReadAt = 0;
   patrolRead = null;
   patrolGen = 0;
   patrolReadDone = false;

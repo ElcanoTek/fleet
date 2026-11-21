@@ -228,9 +228,16 @@ export function useSidebarLibrary(userEmail: string, onError: (message: string) 
   // wizard created; the person coming back from another tab, where they may
   // have changed anything) supersedes any read already out: the generation
   // moves on, so an older answer is dropped (and read again) rather than
-  // landing over the newer one.
+  // landing over the newer one. While a change of their own is still being
+  // saved it waits for that save instead.
   useEffect(() => {
     const reread = () => {
+      // A change of the person's own still on its way would be undone on
+      // screen by lists read before it lands: read once it has (settle).
+      if (inFlight.current > 0) {
+        rereadWanted.current = true;
+        return;
+      }
       gen.current++;
       void load();
     };
