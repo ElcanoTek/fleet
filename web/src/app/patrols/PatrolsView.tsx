@@ -815,13 +815,14 @@ export function PatrolsView({
   // tab) shows when the page is looked at again.
   useEffect(() => {
     const id = window.setInterval(() => setNow(Math.floor(Date.now() / 1000)), 30_000);
-    const onFocus = () => void refreshPatrols();
+    // Through reload, so a read that now succeeds also clears a failed state.
+    const onFocus = () => void reload();
     window.addEventListener("focus", onFocus);
     return () => {
       window.clearInterval(id);
       window.removeEventListener("focus", onFocus);
     };
-  }, []);
+  }, [reload]);
   // The wizard may have launched one. Closing it already reads the patrols
   // again (PatrolWizardHost): this page shares that read rather than start
   // a second one that would drop its answer.

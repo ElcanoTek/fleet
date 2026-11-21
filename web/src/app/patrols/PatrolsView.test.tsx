@@ -258,6 +258,17 @@ describe("the Patrols page", () => {
     expect(api.deleteSchedule).toHaveBeenCalledTimes(1);
   });
 
+  it("a read that succeeds on coming back to the page clears the failed state, even with no patrols", async () => {
+    list = "fail";
+    render(<Page />);
+    expect(await screen.findByTestId("patrols-load-failed")).toBeInTheDocument();
+    list = [];
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    await waitFor(() => expect(screen.queryByTestId("patrols-load-failed")).toBeNull());
+  });
+
   it("an open row reads its history again after a skipped slot (next check moves, no run)", async () => {
     render(<Page />);
     await waitFor(() => expect(card("pt-1")).toBeTruthy());
