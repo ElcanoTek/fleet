@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -12,16 +13,23 @@ import (
 
 var webAdmin = AdminActor{Email: "alex@ops.example", Via: AdminViaWeb}
 
-// A pinned note is set, replaced and cleared; each change is recorded; and it
-// never becomes part of the chat's history, which is all the model reads.
-func TestAdminNote_SetReplaceClear(t *testing.T) {
-	t.Parallel()
-	s := newTestStore(t)
-	ctx := context.Background()
-	c, err := s.CreateConversation(ctx, "dana@client.example", "Weekly report", "victoria", "m1", false)
+// noteChat is a chat to pin notes to.
+func noteChat(t *testing.T, s *Store) *Conversation {
+	t.Helper()
+	c, err := s.CreateConversation(context.Background(), "dana@client.example", "Weekly report", "victoria", "m1", false)
 	if err != nil {
 		t.Fatal(err)
 	}
+	return c
+}
+
+// A note needs text, a bound on its length and an actor; setting the text a
+// chat already carries changes nothing.
+func TestAdminNote_Set(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	ctx := context.Background()
+	c := noteChat(t, s)
 	if n, err := s.GetAdminNote(ctx, c.ID); err != nil || n != nil {
 		t.Fatalf("a new chat has no note: %+v, %v", n, err)
 	}
@@ -48,6 +56,22 @@ func TestAdminNote_SetReplaceClear(t *testing.T) {
 	if err != nil || same.UpdatedAt != first.UpdatedAt || same.Author != webAdmin.Email {
 		t.Fatalf("re-set = %+v, %v", same, err)
 	}
+	if actions, _ := s.ListAdminActions(ctx, c.ID, 10); len(actions) != 1 || actions[0].Action != "note_set" {
+		t.Fatalf("recorded = %+v", actions)
+	}
+}
+
+// The first acknowledgement is kept; new text is unread, and an
+// acknowledgement of the text it replaced does not mark it.
+func TestAdminNote_AckAndReplace(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	ctx := context.Background()
+	c := noteChat(t, s)
+	first, err := s.AdminSetNote(ctx, webAdmin, c.ID, "I fixed the 06:30 patrol.")
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// The owner reads it.
 	seen, err := s.AckAdminNote(ctx, c.ID, "Dana@client.example", first.UpdatedAt)
@@ -72,6 +96,22 @@ func TestAdminNote_SetReplaceClear(t *testing.T) {
 	stale, _ := s.AckAdminNote(ctx, c.ID, "dana@client.example", first.UpdatedAt)
 	if stale == nil || stale.SeenAt != nil {
 		t.Fatalf("an acknowledgement of replaced text marked the new text: %+v", stale)
+	}
+}
+
+// A pinned note never becomes part of the chat's history, which is all the
+// model reads; clearing it removes it; every change is recorded.
+func TestAdminNote_OutsideHistoryAndClear(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	ctx := context.Background()
+	c := noteChat(t, s)
+	if _, err := s.AdminSetNote(ctx, webAdmin, c.ID, "I fixed the 06:30 patrol."); err != nil {
+		t.Fatal(err)
+	}
+	second, err := s.AdminSetNote(ctx, cliAdmin, c.ID, "Try the Monday run again.")
+	if err != nil {
+		t.Fatal(err)
 	}
 
 	// The note is not history: the model's context never carries it.
@@ -147,11 +187,18 @@ func TestAdminNote_DeletedChats(t *testing.T) {
 	}
 }
 
-// The listing's attention signals, its state filter, the per-owner overview
-// and the waiting cards agree with one another.
-func TestAdminChats_AttentionStatesAndOverview(t *testing.T) {
-	t.Parallel()
-	s := newTestStore(t)
+// attentionFixture is six chats in known states: one stuck behind an approval
+// card, one whose last turn failed, one fine and carrying a note (all Dana's),
+// one running with a patrol and one archived (Li's), and one in the recycle
+// bin (Sam's).
+type attentionFixture struct {
+	stuck, failed, fine *Conversation
+	card                *Approval
+	now                 int64
+}
+
+func seedAttentionChats(t *testing.T, s *Store) attentionFixture {
+	t.Helper()
 	ctx := context.Background()
 	mk := func(owner, title string) *Conversation {
 		t.Helper()
@@ -161,64 +208,57 @@ func TestAdminChats_AttentionStatesAndOverview(t *testing.T) {
 		}
 		return c
 	}
-	stuck := mk("dana@client.example", "Send the weekly report")
-	failed := mk("dana@client.example", "Budget import")
-	fine := mk("dana@client.example", "Scratch")
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	f := attentionFixture{now: time.Now().Unix()}
+	f.stuck = mk("dana@client.example", "Send the weekly report")
+	f.failed = mk("dana@client.example", "Budget import")
+	f.fine = mk("dana@client.example", "Scratch")
 	running := mk("li@client.example", "Pacing sweep")
 	archived := mk("li@client.example", "Old plan")
 	binned := mk("sam@client.example", "Mistake")
 
-	now := time.Now().Unix()
-	card, err := s.CreateApproval(ctx, stuck.ID, "dana@client.example", "send_email", "call_1", `{}`, now+3600, ApprovalSeat{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	turn := func(conv *Conversation, id string, status TurnStatus) {
-		t.Helper()
-		if err := s.CreateTurn(ctx, id, conv.ID, now); err != nil {
-			t.Fatal(err)
-		}
-		if status != TurnStatusRunning {
-			if err := s.FinishTurn(ctx, id, status, now+1, false); err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
-	turn(failed, "t-failed", TurnStatusError)
-	turn(fine, "t-fine", TurnStatusCompleted)
-	turn(running, "t-running", TurnStatusRunning)
-	if _, err := s.CreateChatSchedule(ctx, ChatScheduleInput{ConversationID: running.ID, UserEmail: "li@client.example", Prompt: "sweep", CronExpr: "30 6 * * 1-5"}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.AdminSetNote(ctx, webAdmin, fine.ID, "Welcome."); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.SetArchived(ctx, "li@client.example", archived.ID, true); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.AdminMoveChatToBin(ctx, binned.ID, "binned"); err != nil {
-		t.Fatal(err)
-	}
+	card, err := s.CreateApproval(ctx, f.stuck.ID, "dana@client.example", "send_email", "call_1", `{}`, f.now+3600, ApprovalSeat{})
+	must(err)
+	f.card = card
+	must(s.CreateTurn(ctx, "t-failed", f.failed.ID, f.now))
+	must(s.FinishTurn(ctx, "t-failed", TurnStatusError, f.now+1, false))
+	must(s.CreateTurn(ctx, "t-fine", f.fine.ID, f.now))
+	must(s.FinishTurn(ctx, "t-fine", TurnStatusCompleted, f.now+1, false))
+	must(s.CreateTurn(ctx, "t-running", running.ID, f.now))
+	_, err = s.CreateChatSchedule(ctx, ChatScheduleInput{ConversationID: running.ID, UserEmail: "li@client.example", Prompt: "sweep", CronExpr: "30 6 * * 1-5"})
+	must(err)
+	_, err = s.AdminSetNote(ctx, webAdmin, f.fine.ID, "Welcome.")
+	must(err)
+	must(s.SetArchived(ctx, "li@client.example", archived.ID, true))
+	_, err = s.AdminMoveChatToBin(ctx, binned.ID, "binned")
+	must(err)
+	return f
+}
 
-	ids := func(f AdminChatFilter) string {
+// The listing's state filter keeps exactly the chats in each state.
+func TestAdminChats_StateFilter(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedAttentionChats(t, s)
+	titles := func(f AdminChatFilter) string {
 		t.Helper()
 		chats, err := s.AdminListChats(ctx, f)
 		if err != nil {
 			t.Fatal(err)
 		}
-		titles := make([]string, 0, len(chats))
+		out := make([]string, 0, len(chats))
 		for _, c := range chats {
-			titles = append(titles, c.Title)
+			out = append(out, c.Title)
 		}
-		// Order-independent: the test's chats share one updated_at second.
-		for i := range titles {
-			for j := i + 1; j < len(titles); j++ {
-				if titles[j] < titles[i] {
-					titles[i], titles[j] = titles[j], titles[i]
-				}
-			}
-		}
-		return strings.Join(titles, "|")
+		// Order-independent: the fixture's chats share one updated_at second.
+		sort.Strings(out)
+		return strings.Join(out, "|")
 	}
 	for state, want := range map[string]string{
 		"":                      "Budget import|Pacing sweep|Scratch|Send the weekly report",
@@ -228,7 +268,7 @@ func TestAdminChats_AttentionStatesAndOverview(t *testing.T) {
 		AdminChatStateNoted:     "Scratch",
 		AdminChatStateArchived:  "Old plan",
 	} {
-		if got := ids(AdminChatFilter{State: state}); got != want {
+		if got := titles(AdminChatFilter{State: state}); got != want {
 			t.Errorf("state %q lists %q, want %q", state, got, want)
 		}
 	}
@@ -236,29 +276,42 @@ func TestAdminChats_AttentionStatesAndOverview(t *testing.T) {
 		t.Fatalf("unknown state err = %v", err)
 	}
 	// A search matches the owner's email too.
-	if got := ids(AdminChatFilter{Search: "LI@client"}); got != "Pacing sweep" {
+	if got := titles(AdminChatFilter{Search: "LI@client"}); got != "Pacing sweep" {
 		t.Errorf("search by owner lists %q", got)
 	}
+}
 
-	got, err := s.AdminGetChat(ctx, stuck.ID)
+// A chat says why it needs attention, and lists the cards it is waiting on.
+func TestAdminChats_AttentionSignals(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	ctx := context.Background()
+	f := seedAttentionChats(t, s)
+	got, err := s.AdminGetChat(ctx, f.stuck.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(got.Attention, ",") != AdminAttentionCardsWaiting || got.WaitingSince != card.CreatedAt {
-		t.Fatalf("stuck chat = attention %v, waiting since %d (card %d)", got.Attention, got.WaitingSince, card.CreatedAt)
+	if strings.Join(got.Attention, ",") != AdminAttentionCardsWaiting || got.WaitingSince != f.card.CreatedAt {
+		t.Fatalf("stuck chat = attention %v, waiting since %d (card %d)", got.Attention, got.WaitingSince, f.card.CreatedAt)
 	}
-	if f, _ := s.AdminGetChat(ctx, failed.ID); strings.Join(f.Attention, ",") != AdminAttentionTurnFailed || f.LastTurnStatus != "error" {
-		t.Fatalf("failed chat = %+v", f)
+	if c, _ := s.AdminGetChat(ctx, f.failed.ID); strings.Join(c.Attention, ",") != AdminAttentionTurnFailed || c.LastTurnStatus != "error" {
+		t.Fatalf("failed chat = %+v", c)
 	}
-	if f, _ := s.AdminGetChat(ctx, fine.ID); len(f.Attention) != 0 || !f.HasNote {
-		t.Fatalf("fine chat = %+v", f)
+	if c, _ := s.AdminGetChat(ctx, f.fine.ID); len(c.Attention) != 0 || !c.HasNote {
+		t.Fatalf("fine chat = %+v", c)
 	}
-
-	cards, err := s.AdminListPendingCards(ctx, stuck.ID)
-	if err != nil || len(cards) != 1 || cards[0].Tool != "send_email" || cards[0].ForEmail != "dana@client.example" || cards[0].ExpiresAt != now+3600 {
+	cards, err := s.AdminListPendingCards(ctx, f.stuck.ID)
+	if err != nil || len(cards) != 1 || cards[0].Tool != "send_email" || cards[0].ForEmail != "dana@client.example" || cards[0].ExpiresAt != f.now+3600 {
 		t.Fatalf("pending cards = %+v, %v", cards, err)
 	}
+}
 
+// The overview's counts agree with the listing, per owner and as a whole.
+func TestAdminChatOverview(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedAttentionChats(t, s)
 	o, err := s.AdminChatOverview(ctx, AdminChatFilter{})
 	if err != nil {
 		t.Fatal(err)
@@ -268,9 +321,14 @@ func TestAdminChats_AttentionStatesAndOverview(t *testing.T) {
 		t.Fatalf("overview = %+v archived=%d deleted=%d, want %+v 1 1", o.AdminChatCounts, o.Archived, o.Deleted, want)
 	}
 	// People needing attention first.
-	if len(o.People) != 2 || o.People[0].Email != "dana@client.example" || o.People[0].Chats != 3 || o.People[0].Attention != 2 ||
-		o.People[1].Email != "li@client.example" || o.People[1].Chats != 1 || o.People[1].Running != 1 {
+	if len(o.People) != 2 {
 		t.Fatalf("people = %+v", o.People)
+	}
+	if dana := o.People[0]; dana.Email != "dana@client.example" || dana.Chats != 3 || dana.Attention != 2 {
+		t.Fatalf("first person = %+v", dana)
+	}
+	if li := o.People[1]; li.Email != "li@client.example" || li.Chats != 1 || li.Running != 1 {
+		t.Fatalf("second person = %+v", li)
 	}
 	// Including archived chats widens the scope; one owner narrows it.
 	if all, _ := s.AdminChatOverview(ctx, AdminChatFilter{IncludeArchived: true}); all.Chats != 5 {
@@ -290,8 +348,9 @@ func TestAdminChatTranscript_PagesBack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var entries []agent.HistoryEntry
-	for _, text := range []string{"one", "two", "three", "four", "five"} {
+	words := []string{"one", "two", "three", "four", "five"}
+	entries := make([]agent.HistoryEntry, 0, len(words))
+	for _, text := range words {
 		entries = append(entries, entry(t, "user", "text", agent.TextContent{Text: text}))
 	}
 	if _, err := s.AppendHistory(ctx, c.ID, entries); err != nil {

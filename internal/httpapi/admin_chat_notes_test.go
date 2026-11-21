@@ -10,10 +10,30 @@ import (
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
-// The pinned note (ADR-0117): an administrator pins it, the chat's people are
-// shown it with the chat and acknowledge it, nobody else can reach it, and it
-// stays out of the chat's history.
-func TestAdminNoteRoutes(t *testing.T) {
+// convNotePayload is what the pinned-note tests read from GET
+// /conversations/{id}.
+type convNotePayload struct {
+	AdminNote *store.AdminNote  `json:"admin_note"`
+	History   []json.RawMessage `json:"history"`
+}
+
+// pinNote pins a note as admin@x and returns it.
+func pinNote(t *testing.T, h http.Handler, convID, text string) store.AdminNote {
+	t.Helper()
+	body, _ := json.Marshal(map[string]string{"text": text})
+	rec := adminDo(t, h, "admin@x", http.MethodPut, "/admin/chats/"+convID+"/note", string(body))
+	var set struct {
+		Note store.AdminNote `json:"note"`
+	}
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &set) != nil || set.Note.Author != "admin@x" || set.Note.Via != store.AdminViaWeb {
+		t.Fatalf("pin = %d %s", rec.Code, rec.Body.String())
+	}
+	return set.Note
+}
+
+// Only an administrator can pin, replace or remove a note or read the
+// overview; the administrator's view of the chat carries the note.
+func TestAdminNoteRoutes_AdminOnly(t *testing.T) {
 	_, st, _, h := adminChatsFixture(t)
 	ctx := context.Background()
 	conv, err := st.CreateConversation(ctx, "owner@x", "Weekly report", "victoria", "m1", false)
@@ -32,16 +52,10 @@ func TestAdminNoteRoutes(t *testing.T) {
 		t.Fatalf("empty note = %d %s", rec.Code, rec.Body.String())
 	}
 
-	rec := adminDo(t, h, "admin@x", http.MethodPut, notePath, `{"text":"I fixed the patrol. Reply here if it fails again."}`)
-	var set struct {
-		Note store.AdminNote `json:"note"`
-	}
-	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &set) != nil || set.Note.Author != "admin@x" || set.Note.Via != store.AdminViaWeb {
-		t.Fatalf("pin = %d %s", rec.Code, rec.Body.String())
-	}
+	pinNote(t, h, conv.ID, "I fixed the patrol. Reply here if it fails again.")
 
 	// The administrator's view of the chat carries the note.
-	rec = adminDo(t, h, "admin@x", http.MethodGet, "/admin/chats/"+conv.ID, "")
+	rec := adminDo(t, h, "admin@x", http.MethodGet, "/admin/chats/"+conv.ID, "")
 	var detail struct {
 		Chat         store.AdminChat          `json:"chat"`
 		Note         *store.AdminNote         `json:"note"`
@@ -50,15 +64,23 @@ func TestAdminNoteRoutes(t *testing.T) {
 	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &detail) != nil || detail.Note == nil || !detail.Chat.HasNote || detail.PendingCards == nil {
 		t.Fatalf("detail = %d %s", rec.Code, rec.Body.String())
 	}
+}
+
+// The chat's people are shown the note with the chat and acknowledge it;
+// nobody else can; and it is no part of the chat's history.
+func TestAdminNote_ShownToTheChatAndAcknowledged(t *testing.T) {
+	_, st, _, h := adminChatsFixture(t)
+	ctx := context.Background()
+	conv, err := st.CreateConversation(ctx, "owner@x", "Weekly report", "victoria", "m1", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	note := pinNote(t, h, conv.ID, "I fixed the patrol. Reply here if it fails again.")
 
 	// The owner is shown it with the chat...
-	type convPayload struct {
-		AdminNote *store.AdminNote  `json:"admin_note"`
-		History   []json.RawMessage `json:"history"`
-	}
-	rec = adminDo(t, h, "owner@x", http.MethodGet, "/conversations/"+conv.ID, "")
-	var got convPayload
-	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &got) != nil || got.AdminNote == nil || got.AdminNote.Text != set.Note.Text {
+	rec := adminDo(t, h, "owner@x", http.MethodGet, "/conversations/"+conv.ID, "")
+	var got convNotePayload
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &got) != nil || got.AdminNote == nil || got.AdminNote.Text != note.Text {
 		t.Fatalf("owner's chat = %d %s", rec.Code, rec.Body.String())
 	}
 	// ...and it is no part of the history the model's context is built from.
@@ -78,7 +100,7 @@ func TestAdminNoteRoutes(t *testing.T) {
 	}
 
 	// Someone who cannot open the chat cannot acknowledge its note.
-	ack := `{"updated_at":` + jsonInt(set.Note.UpdatedAt) + `}`
+	ack := `{"updated_at":` + jsonInt(note.UpdatedAt) + `}`
 	if rec := adminDo(t, h, "member@x", http.MethodPost, "/conversations/"+conv.ID+"/admin-note", ack); rec.Code != http.StatusNotFound {
 		t.Fatalf("stranger ack = %d %s", rec.Code, rec.Body.String())
 	}
@@ -94,9 +116,24 @@ func TestAdminNoteRoutes(t *testing.T) {
 	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &acked) != nil || acked.AdminNote == nil || acked.AdminNote.SeenAt == nil || acked.AdminNote.SeenBy != "owner@x" {
 		t.Fatalf("owner ack = %d %s", rec.Code, rec.Body.String())
 	}
+}
 
-	// The listing filters on it, and the overview counts it.
-	rec = adminDo(t, h, "admin@x", http.MethodGet, "/admin/chats?state=noted", "")
+// The listing filters on a pinned note and the overview counts it; removing
+// the note takes it away from the owner's chat; both changes are recorded.
+func TestAdminNote_ListedCountedAndRemoved(t *testing.T) {
+	_, st, _, h := adminChatsFixture(t)
+	ctx := context.Background()
+	conv, err := st.CreateConversation(ctx, "owner@x", "Weekly report", "victoria", "m1", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	notePath := "/admin/chats/" + conv.ID + "/note"
+	note := pinNote(t, h, conv.ID, "Welcome.")
+	if _, err := st.AckAdminNote(ctx, conv.ID, "owner@x", note.UpdatedAt); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := adminDo(t, h, "admin@x", http.MethodGet, "/admin/chats?state=noted", "")
 	var list struct {
 		Chats []store.AdminChat `json:"chats"`
 	}
@@ -119,7 +156,7 @@ func TestAdminNoteRoutes(t *testing.T) {
 		t.Fatalf("unpin = %d %s", rec.Code, rec.Body.String())
 	}
 	rec = adminDo(t, h, "owner@x", http.MethodGet, "/conversations/"+conv.ID, "")
-	got = convPayload{}
+	var got convNotePayload
 	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &got) != nil || got.AdminNote != nil {
 		t.Fatalf("owner's chat after unpin = %d, note %+v", rec.Code, got.AdminNote)
 	}
