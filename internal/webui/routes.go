@@ -321,6 +321,7 @@ func chatRoutes() []chatRoute {
 		{"POST /api/conversations/{id}/approvals/{approvalId}/stop", func(r *http.Request) string {
 			return conv(r) + "/approvals/" + p(r, "approvalId") + "/stop"
 		}, noBody, textJSON},
+		{"GET /api/conversations/{id}/admin-note", func(r *http.Request) string { return conv(r) + "/admin-note" }, noBody, textJSON},
 		{"POST /api/conversations/{id}/admin-note", func(r *http.Request) string { return conv(r) + "/admin-note" }, jsonBodyAlways, textJSON},
 		{"POST /api/conversations/{id}/archive", func(r *http.Request) string { return conv(r) + "/archive" }, jsonBodyIfAny, textOK},
 		{"POST /api/conversations/{id}/auto-approve", func(r *http.Request) string { return conv(r) + "/auto-approve" }, jsonBodyIfAny, textJSON},

@@ -458,3 +458,36 @@ func TestAdminChatTranscript_NamesImagesWithoutPaths(t *testing.T) {
 		t.Fatalf("the transcript carries an upload path: %s", raw)
 	}
 }
+
+// Replacing a note with the version it was read at succeeds; with a stale
+// version, or expecting none where one is pinned, it is refused and the note
+// stands.
+func TestAdminNote_CompareAndSwap(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	ctx := context.Background()
+	c := noteChat(t, s)
+	none := int64(0)
+	first, err := s.AdminSetNoteIfUnchanged(ctx, webAdmin, c.ID, "One.", &none)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A second administrator who also saw "no note" is refused.
+	if _, err := s.AdminSetNoteIfUnchanged(ctx, cliAdmin, c.ID, "Other.", &none); !errors.Is(err, ErrAdminNoteChanged) {
+		t.Fatalf("pin over an unseen note err = %v", err)
+	}
+	second, err := s.AdminSetNoteIfUnchanged(ctx, webAdmin, c.ID, "Two.", &first.UpdatedAt)
+	if err != nil || second.Text != "Two." {
+		t.Fatalf("replace at the read version = %+v, %v", second, err)
+	}
+	// A draft made from the first text is stale now.
+	if _, err := s.AdminSetNoteIfUnchanged(ctx, cliAdmin, c.ID, "Stale.", &first.UpdatedAt); !errors.Is(err, ErrAdminNoteChanged) {
+		t.Fatalf("stale replace err = %v", err)
+	}
+	if n, _ := s.GetAdminNote(ctx, c.ID); n == nil || n.Text != "Two." || n.Author != webAdmin.Email {
+		t.Fatalf("note after refused writes = %+v", n)
+	}
+	if actions, _ := s.ListAdminActions(ctx, c.ID, 10); len(actions) != 2 {
+		t.Fatalf("recorded %d changes, want 2 (refused writes record nothing)", len(actions))
+	}
+}

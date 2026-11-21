@@ -53,7 +53,7 @@ type adminChatStore interface {
 	AdminChatOverview(ctx context.Context, f store.AdminChatFilter) (store.AdminChatOverview, error)
 	AdminListPendingCards(ctx context.Context, convID string) ([]store.AdminPendingCard, error)
 	GetAdminNote(ctx context.Context, convID string) (*store.AdminNote, error)
-	AdminSetNote(ctx context.Context, a store.AdminActor, convID, text string) (store.AdminNote, error)
+	AdminSetNoteIfUnchanged(ctx context.Context, a store.AdminActor, convID, text string, expect *int64) (store.AdminNote, error)
 	AdminClearNote(ctx context.Context, a store.AdminActor, convID string) (bool, error)
 	AckAdminNote(ctx context.Context, convID, userEmail string, updatedAt int64) (*store.AdminNote, error)
 }
@@ -355,6 +355,8 @@ func adminChatError(w http.ResponseWriter, err error) {
 		http.Error(w, "the patrol's instructions changed since you opened them; reload and edit again", http.StatusConflict)
 	case errors.As(err, &staleDef):
 		http.Error(w, "the patrol changed since you opened it; reload and edit again", http.StatusConflict)
+	case errors.Is(err, store.ErrAdminNoteChanged):
+		http.Error(w, "the pinned note changed since you opened it; reload and edit again", http.StatusConflict)
 	case errors.Is(err, store.ErrAdminReasonRequired):
 		http.Error(w, "a reason is required: it is recorded and shown in the chat", http.StatusBadRequest)
 	case errors.Is(err, store.ErrAdminChatNotAllowed), errors.Is(err, store.ErrInvalidChatSchedule),
@@ -433,7 +435,9 @@ func (s *Server) handleAdminChatOverview(w http.ResponseWriter, r *http.Request)
 //	GET   /admin/chats/{id}/history         the transcript's latest entries
 //	POST  /admin/chats/{id}/requests        send a message, stop, or transfer
 //	POST  /admin/chats/{id}/notice          a notice in the chat
-//	PUT   /admin/chats/{id}/note            pin a note to the chat (ADR-0117)
+//	PUT   /admin/chats/{id}/note            pin a note to the chat (ADR-0117;
+//	                                        expect_updated_at makes it a
+//	                                        compare-and-swap)
 //	DELETE /admin/chats/{id}/note           remove the pinned note
 //
 // (An admin request's progress is GET /admin/chat-requests/{id}; the record of
@@ -500,11 +504,16 @@ func (s *Server) handleAdminChatItem(w http.ResponseWriter, r *http.Request) {
 	case sub == "note" && r.Method == http.MethodPut:
 		var body struct {
 			Text string `json:"text"`
+			// ExpectUpdatedAt names the note this edit was made from: its
+			// updated_at, or 0 for "no note was pinned". Sent, a note that has
+			// changed since answers 409 instead of being replaced; omitted,
+			// the note is pinned unconditionally.
+			ExpectUpdatedAt *int64 `json:"expect_updated_at"`
 		}
 		if !decodeJSONBody(w, r, &body) {
 			return
 		}
-		note, err := st.AdminSetNote(r.Context(), s.adminActor(r), chat.ID, body.Text)
+		note, err := st.AdminSetNoteIfUnchanged(r.Context(), s.adminActor(r), chat.ID, body.Text, body.ExpectUpdatedAt)
 		if err != nil {
 			adminChatError(w, err)
 			return
@@ -538,6 +547,15 @@ func (s *Server) adminNoteForConversation(ctx context.Context, convID string) *s
 		return nil
 	}
 	return note
+}
+
+// handleConversationAdminNoteGet serves GET /conversations/{id}/admin-note:
+// the note pinned to the chat as it stands now, or null. A chat that is open
+// and idle re-reads it with this, so a note pinned, replaced or removed while
+// its owner is looking at the chat appears without a reload; it reads one row
+// and none of the history.
+func (s *Server) handleConversationAdminNoteGet(w http.ResponseWriter, r *http.Request, _, id string, _ *store.Conversation) {
+	writeJSON(w, r, map[string]any{"admin_note": s.adminNoteForConversation(r.Context(), id)})
 }
 
 // handleConversationAdminNoteAck serves POST /conversations/{id}/admin-note:

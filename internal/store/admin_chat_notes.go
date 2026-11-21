@@ -25,6 +25,9 @@ const MaxAdminNoteRunes = 2000
 var (
 	ErrAdminNoteEmpty   = errors.New("the note's text is required")
 	ErrAdminNoteTooLong = errors.New("a pinned note is at most 2000 characters")
+	// ErrAdminNoteChanged: the note is not the one the caller read (another
+	// administrator pinned, replaced or removed it since).
+	ErrAdminNoteChanged = errors.New("the pinned note changed since you opened it; read it again before replacing it")
 )
 
 // AdminNote is the note an administrator pinned to a chat. The chat's people
@@ -80,6 +83,15 @@ func (s *Store) GetAdminNote(ctx context.Context, convID string) (*AdminNote, er
 // records it. New text is unread: the previous note's "seen" mark is cleared.
 // Setting the text a chat already carries changes nothing.
 func (s *Store) AdminSetNote(ctx context.Context, a AdminActor, convID, text string) (AdminNote, error) {
+	return s.AdminSetNoteIfUnchanged(ctx, a, convID, text, nil)
+}
+
+// AdminSetNoteIfUnchanged is AdminSetNote as a compare-and-swap. expect names
+// the note the caller read: its UpdatedAt, or 0 for "no note was pinned". If
+// the chat's note is not that one, nothing is written and ErrAdminNoteChanged
+// is returned, so one administrator's edit cannot silently replace another's.
+// A nil expect pins unconditionally.
+func (s *Store) AdminSetNoteIfUnchanged(ctx context.Context, a AdminActor, convID, text string, expect *int64) (AdminNote, error) {
 	if err := a.validate(); err != nil {
 		return AdminNote{}, err
 	}
@@ -101,6 +113,15 @@ func (s *Store) AdminSetNote(ctx context.Context, a AdminActor, convID, text str
 	cur, err := scanAdminNote(tx.QueryRowContext(ctx, adminNoteSelect, convID))
 	if err != nil {
 		return AdminNote{}, err
+	}
+	if expect != nil {
+		var have int64
+		if cur != nil {
+			have = cur.UpdatedAt
+		}
+		if have != *expect {
+			return AdminNote{}, ErrAdminNoteChanged
+		}
 	}
 	if cur != nil && cur.Text == t {
 		return *cur, nil

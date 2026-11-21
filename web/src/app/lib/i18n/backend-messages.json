@@ -385,6 +385,7 @@
     "the message could not be recorded against its turn; send it again",
     "the patrol changed since you opened it; reload and edit again",
     "the patrol's instructions changed since you opened them; reload and edit again",
+    "the pinned note changed since you opened it; reload and edit again",
     "the schedule changed while it was being run; try again",
     "the scheduler is not running",
     "the server is not taking new turns right now; the run starts when it does",

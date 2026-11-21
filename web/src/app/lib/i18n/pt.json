@@ -6283,5 +6283,8 @@
   "could not record that": "não foi possível registrar",
   "This chat no longer exists. It was deleted permanently.": "Este chat não existe mais. Ele foi excluído permanentemente.",
   "This patrol changed while you were editing. Close the editor and open it again to start from the current version; saving now will be refused.": "Esta patrulha mudou enquanto você a editava. Feche o editor e abra-o novamente para partir da versão atual; salvar agora será recusado.",
-  "… and {0} more lines not shown. The whole change is saved.": "… e mais {0} linhas não mostradas. A alteração completa é salva."
+  "… and {0} more lines not shown. The whole change is saved.": "… e mais {0} linhas não mostradas. A alteração completa é salva.",
+  "Another administrator changed this note while you were writing. Saving now will be refused.": "Outro administrador alterou esta nota enquanto você escrevia. Salvar agora será recusado.",
+  "Start from the current note": "Começar a partir da nota atual",
+  "the pinned note changed since you opened it; reload and edit again": "a nota fixada mudou desde que você a abriu; recarregue e edite novamente"
 }

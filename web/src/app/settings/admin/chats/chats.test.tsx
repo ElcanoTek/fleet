@@ -120,6 +120,11 @@ beforeEach(() => {
       if (url.startsWith("/api/admin/chat-overview")) return jsonResponse({ overview: OVERVIEW });
       if (url.startsWith("/api/admin/chats?")) return jsonResponse({ chats: [CHAT] });
       if (url.endsWith("/note") && method === "PUT") {
+        // As the server does: a write made from another version is refused.
+        const sent = JSON.parse(String(init?.body)) as { expect_updated_at?: number };
+        if (sent.expect_updated_at !== undefined && sent.expect_updated_at !== (note?.updated_at ?? 0)) {
+          return new Response("the pinned note changed since you opened it; reload and edit again", { status: 409 });
+        }
         note = { text: (JSON.parse(String(init?.body)) as { text: string }).text, author: "admin@x", via: "web", created_at: NOW, updated_at: NOW };
         return jsonResponse({ note });
       }
@@ -277,7 +282,9 @@ describe("a chat", () => {
     await waitFor(() => expect(calls.some((c) => c.method === "PUT")).toBe(true));
     const put = calls.find((c) => c.method === "PUT");
     expect(put?.url).toBe(`/api/admin/chats/${CHAT.id}/note`);
-    expect(put?.body).toEqual({ text: "Approve the card under the last reply." });
+    // Sent with the version it was written against (none pinned), so a note
+    // another administrator pinned meanwhile is not silently replaced.
+    expect(put?.body).toEqual({ text: "Approve the card under the last reply.", expect_updated_at: 0 });
     const card = await screen.findByTestId("admin-pinned-note");
     expect(card.textContent).toContain("Approve the card under the last reply.");
     expect(screen.getByTestId("admin-note-unseen")).toBeTruthy();
@@ -288,6 +295,44 @@ describe("a chat", () => {
     fireEvent.click(unpin);
     await waitFor(() => expect(calls.some((c) => c.method === "DELETE" && c.url.endsWith("/note"))).toBe(true));
     await waitFor(() => expect(screen.queryByTestId("admin-pinned-note")).toBeNull());
+  });
+
+  it("keeps a draft when another administrator changes the note, warns, and saves against the version it started from", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    note = { text: "First.", author: "admin@x", via: "web", created_at: NOW - 600, updated_at: NOW - 600 };
+    await openChat();
+    const box = (await screen.findByTestId("admin-note-text")) as HTMLTextAreaElement;
+    expect(box.value).toBe("First.");
+    fireEvent.change(box, { target: { value: "First, with my addition." } });
+
+    // Someone else replaces the note; the view's own refresh brings it in.
+    note = { text: "Theirs.", author: "other@x", via: "cli", created_at: NOW - 600, updated_at: NOW - 5 };
+    await vi.advanceTimersByTimeAsync(9000);
+    expect(await screen.findByTestId("admin-note-stale")).toBeTruthy();
+    expect(box.value).toBe("First, with my addition."); // the draft is kept
+
+    // Saving sends the version the draft was made from; the server refuses it.
+    fireEvent.click(screen.getByTestId("admin-note-pin"));
+    await waitFor(() => expect(calls.some((c) => c.method === "PUT")).toBe(true));
+    expect(calls.find((c) => c.method === "PUT")?.body).toEqual({ text: "First, with my addition.", expect_updated_at: NOW - 600 });
+    expect(await screen.findByText(/the pinned note changed since you opened it/)).toBeTruthy();
+    expect(box.value).toBe("First, with my addition.");
+
+    // Starting over takes the current note.
+    fireEvent.click(screen.getByRole("button", { name: "Start from the current note" }));
+    expect(box.value).toBe("Theirs.");
+    expect(screen.queryByTestId("admin-note-stale")).toBeNull();
+  });
+
+  it("follows the note when nothing has been typed", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    await openChat();
+    const box = (await screen.findByTestId("admin-note-text")) as HTMLTextAreaElement;
+    expect(box.value).toBe("");
+    note = { text: "Pinned from the CLI.", author: "ops@x", via: "cli", created_at: NOW, updated_at: NOW };
+    await vi.advanceTimersByTimeAsync(9000);
+    await waitFor(() => expect(box.value).toBe("Pinned from the CLI."));
+    expect(screen.queryByTestId("admin-note-stale")).toBeNull();
   });
 
   it("shows who acknowledged the note", async () => {

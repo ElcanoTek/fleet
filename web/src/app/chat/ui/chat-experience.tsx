@@ -142,6 +142,10 @@ import { TeamLinkNotice, type TeamLinkNoticeState } from "./TeamLinkNotice";
 import { BranchOriginBanner } from "./TeamBranchBanners";
 import { ExpiringChatBanner } from "./ExpiringChatBanner";
 import { AdminNoteBanner, type AdminNoteState } from "./AdminNoteBanner";
+import { useVisibleInterval } from "@/app/shared/hooks/useVisibleInterval";
+
+// How often an open chat re-reads the note an administrator may have pinned.
+const ADMIN_NOTE_POLL_MS = 60_000;
 import { expiresInDays, retentionPolicy, useNowSeconds } from "./chatRetention";
 import { WithheldFilesContext } from "./LockedFiles";
 import { DownloadChatDialog, type DownloadOptions } from "./DownloadChatDialog";
@@ -6212,6 +6216,36 @@ export function ChatExperience({
     },
     [],
   );
+
+  // A chat that is open and idle loads nothing, so a note pinned, replaced or
+  // removed meanwhile would not appear until the next turn or a reload. The
+  // note is one small read: do it every minute while the tab is visible, and
+  // when the tab comes back into view.
+  const refreshAdminNote = useCallback(() => {
+    const convId = activeConversationId;
+    if (!convId || isPendingKey(convId)) return;
+    const url = conversationApiUrl(convId, "/admin-note");
+    if (!url) return;
+    fetch(url, { cache: "no-store" })
+      .then(async (res) => {
+        if (!res.ok) return;
+        const body = (await res.json()) as { admin_note?: AdminNoteState | null };
+        setAdminNoteByConv((prev) => {
+          const note = body.admin_note ?? null;
+          const had = prev.get(convId);
+          if (!note && !had) return prev;
+          if (note && had && note.updated_at === had.updated_at && note.seen_at === had.seen_at) return prev;
+          const next = new Map(prev);
+          if (note) next.set(convId, note);
+          else next.delete(convId);
+          return next;
+        });
+      })
+      .catch(() => {
+        // Display data: a failed re-read leaves the banner as it was.
+      });
+  }, [activeConversationId]);
+  useVisibleInterval(refreshAdminNote, ADMIN_NOTE_POLL_MS);
 
   const activeSchedules = useMemo(() => {
     const id = activeConversationId;

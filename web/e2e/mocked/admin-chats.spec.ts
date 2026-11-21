@@ -73,7 +73,10 @@ for (const size of [
       await expect(page.getByTestId("admin-pinned-note")).toContainText("Approve the card under the last reply");
       await expect(page.getByTestId("admin-note-unseen")).toBeVisible();
       await expectNoViolations(page);
-      expect(mock.calls.find((c) => c.method === "PUT")?.body).toEqual({ text: "Approve the card under the last reply to send the report." });
+      expect(mock.calls.find((c) => c.method === "PUT")?.body).toEqual({
+        text: "Approve the card under the last reply to send the report.",
+        expect_updated_at: 0,
+      });
 
       // A message to the assistant says who sees it and that it is read.
       await page.getByRole("button", { name: "Message the assistant" }).click();
@@ -106,8 +109,11 @@ for (const size of [
         ...(seen ? { seen_at: NOW, seen_by: DANA } : {}),
       });
       await page.route("**/api/conversations/conv-report/admin-note", (r: Route) => {
-        acked = JSON.parse(r.request().postData() ?? "{}");
-        seen = true;
+        // GET re-reads the note; POST is "Got it".
+        if (r.request().method() === "POST") {
+          acked = JSON.parse(r.request().postData() ?? "{}");
+          seen = true;
+        }
         return r.fulfill({ json: { admin_note: note() } });
       });
       await page.route("**/api/conversations/conv-report", (r: Route) =>

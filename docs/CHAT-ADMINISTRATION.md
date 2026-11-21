@@ -34,7 +34,11 @@ view and pinned notes are [ADR-0117](adr/0117-helping-a-chats-people.md)). Opera
   above the conversation as *Note from an administrator · email*. It is stored
   in `chat.admin_notes`, outside the chat's history, so the model never reads
   it. *Got it* records the first person who acknowledged it and folds the
-  banner to one line; replacing the text makes it unread again. Recorded as
+  banner to one line; replacing the text makes it unread again. An open chat
+  picks up a new, replaced or removed note within about a minute. In the
+  browser, replacing a note is a compare-and-swap on the version the edit
+  started from, so two administrators cannot silently overwrite each other
+  (409, and the draft is kept). Recorded as
   `note_set` / `note_replace` / `note_clear`. It takes no reason and writes no
   notice: the note itself is what the chat's people are shown.
 - **Phones.** The page and the banner are laid out for a 390px screen; the

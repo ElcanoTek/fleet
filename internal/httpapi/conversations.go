@@ -604,6 +604,7 @@ var conversationSubroutes = map[conversationSubroute]conversationSubrouteHandler
 	{sub: "pin", method: http.MethodPost}:      (*Server).handleConversationPin,
 	// "Got it" on the note an administrator pinned to the chat (ADR-0117).
 	{sub: "admin-note", method: http.MethodPost}:        withOwnedOrMultiplayerConversation("not found", (*Server).handleConversationAdminNoteAck),
+	{sub: "admin-note", method: http.MethodGet}:         withOwnedOrMultiplayerConversation("not found", (*Server).handleConversationAdminNoteGet),
 	{sub: "archive", method: http.MethodPost}:           (*Server).handleConversationArchive,
 	{sub: "project", method: http.MethodPost}:           (*Server).handleConversationRefile,
 	{sub: "rename", method: http.MethodPost}:            (*Server).handleConversationRename,

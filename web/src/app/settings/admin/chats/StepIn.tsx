@@ -161,7 +161,7 @@ export function StepIn({
       </div>
       <div className="mt-3">
         {mode === "note" ? (
-          <NoteForm key={note?.updated_at ?? 0} chat={chat} note={note} onChanged={onChanged} />
+          <NoteForm chat={chat} note={note} onChanged={onChanged} />
         ) : mode === "message" ? (
           <MessageForm chat={chat} onChanged={onChanged} />
         ) : (
@@ -174,11 +174,26 @@ export function StepIn({
 
 function NoteForm({ chat, note, onChanged }: { chat: AdminChat; note: AdminNote | null; onChanged: () => void }) {
   const [text, setText] = useState(note?.text ?? "");
+  // The note this draft was made from (its updated_at; 0 = none pinned). The
+  // chat is re-read every few seconds, so `note` may be newer than the draft:
+  // a save sends this version and the server refuses it if another
+  // administrator has pinned, replaced or removed the note since.
+  const [base, setBase] = useState({ at: note?.updated_at ?? 0, text: note?.text ?? "" });
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<{ text: string; error: boolean } | null>(null);
   const hintId = useId();
   const trimmed = text.trim();
-  const unchanged = Boolean(note) && trimmed === note?.text;
+  const unchanged = base.at !== 0 && trimmed === base.text;
+  const current = note?.updated_at ?? 0;
+  const moved = current !== base.at;
+  const startOver = () => {
+    setText(note?.text ?? "");
+    setBase({ at: current, text: note?.text ?? "" });
+  };
+  // Nothing typed yet: follow the note as it changes (adjusting state while
+  // rendering, as React documents for state derived from a changed prop). A
+  // draft in progress is kept, with a warning and a way to start over.
+  if (moved && trimmed === base.text && !busy) startOver();
   const tooLong = [...trimmed].length > NOTE_MAX;
 
   const run = async (fn: () => Promise<unknown>, ok: string) => {
@@ -195,12 +210,22 @@ function NoteForm({ chat, note, onChanged }: { chat: AdminChat; note: AdminNote 
   };
   const pin = (e: FormEvent) => {
     e.preventDefault();
-    void run(() => sendJSON(chatUrl(chat.id, "/note"), "PUT", { text: trimmed }), note ? tr("Note updated. It shows as new in the chat.") : tr("Note pinned to the chat."));
+    void run(
+      async () => {
+        const res = await sendJSON<{ note: AdminNote }>(chatUrl(chat.id, "/note"), "PUT", { text: trimmed, expect_updated_at: base.at });
+        if (res) {
+          setText(res.note.text);
+          setBase({ at: res.note.updated_at, text: res.note.text });
+        }
+      },
+      base.at !== 0 ? tr("Note updated. It shows as new in the chat.") : tr("Note pinned to the chat."),
+    );
   };
   const unpin = () => {
     void run(async () => {
       await sendJSON(chatUrl(chat.id, "/note"), "DELETE");
       setText("");
+      setBase({ at: 0, text: "" });
     }, tr("Note removed from the chat."));
   };
   return (
@@ -209,6 +234,14 @@ function NoteForm({ chat, note, onChanged }: { chat: AdminChat; note: AdminNote 
         people={chat.multiplayer ? tr("Everyone in the chat sees it, pinned above the conversation") : tr("{0} sees it, pinned above the conversation", [chat.owner_email])}
         assistant="never"
       />
+      {moved ? (
+        <p role="alert" className="m-0 flex flex-wrap items-center gap-x-2 gap-y-1 text-[0.75rem] text-[var(--color-danger)]" data-testid="admin-note-stale">
+          <span className="min-w-0">{tr("Another administrator changed this note while you were writing. Saving now will be refused.")}</span>
+          <Button type="button" variant="ghost" size="xs" onClick={startOver}>
+            {tr("Start from the current note")}
+          </Button>
+        </p>
+      ) : null}
       <Field label={tr("Note")} hint={tr("{0} / {1}", [[...trimmed].length, NOTE_MAX])}>
         <textarea
           className={cn(SETTINGS_INPUT, "min-h-[5.5rem]")}
@@ -234,7 +267,7 @@ function NoteForm({ chat, note, onChanged }: { chat: AdminChat; note: AdminNote 
         {note ? <InlineConfirmButton label={tr("Unpin")} confirmLabel={tr("Confirm unpin")} onConfirm={unpin} disabled={busy} testId="admin-note-unpin" /> : null}
         <Button type="submit" size="sm" disabled={busy || !trimmed || unchanged || tooLong} aria-describedby={hintId} data-testid="admin-note-pin">
           <Icon name="pin" className="size-3.5" />
-          {note ? tr("Update note") : tr("Pin note")}
+          {base.at !== 0 ? tr("Update note") : tr("Pin note")}
         </Button>
       </FormActions>
       <Status tone={status?.error ? "error" : "ok"} text={status?.text ?? null} />

@@ -99,6 +99,24 @@ func TestAdminNote_ShownToTheChatAndAcknowledged(t *testing.T) {
 		}
 	}
 
+	// An open, idle chat re-reads the note on its own route; a stranger cannot.
+	rec = adminDo(t, h, "owner@x", http.MethodGet, "/conversations/"+conv.ID+"/admin-note", "")
+	var reread struct {
+		AdminNote *store.AdminNote `json:"admin_note"`
+	}
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &reread) != nil || reread.AdminNote == nil || reread.AdminNote.Text != note.Text {
+		t.Fatalf("owner re-read = %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := adminDo(t, h, "member@x", http.MethodGet, "/conversations/"+conv.ID+"/admin-note", ""); rec.Code != http.StatusNotFound {
+		t.Fatalf("stranger re-read = %d %s", rec.Code, rec.Body.String())
+	}
+
+	// A draft made from an earlier version of the note is refused.
+	stale := `{"text":"Stale draft.","expect_updated_at":` + jsonInt(note.UpdatedAt-1) + `}`
+	if rec := adminDo(t, h, "admin@x", http.MethodPut, "/admin/chats/"+conv.ID+"/note", stale); rec.Code != http.StatusConflict {
+		t.Fatalf("stale replace = %d %s", rec.Code, rec.Body.String())
+	}
+
 	// Someone who cannot open the chat cannot acknowledge its note.
 	ack := `{"updated_at":` + jsonInt(note.UpdatedAt) + `}`
 	if rec := adminDo(t, h, "member@x", http.MethodPost, "/conversations/"+conv.ID+"/admin-note", ack); rec.Code != http.StatusNotFound {

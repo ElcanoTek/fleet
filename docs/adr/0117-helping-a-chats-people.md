@@ -97,7 +97,11 @@ An administrator can pin **one note** to a chat.
   until an administrator removes it. Replacing the text clears the mark, and an
   acknowledgement of text that has since been replaced marks nothing.
 - **Setting and removing it.** `PUT` / `DELETE /admin/chats/{id}/note`,
-  `fleet chats note`. At most 2000 characters. Allowed on an archived or
+  `fleet chats note`. A `PUT` may carry `expect_updated_at` (the version of
+  the note the edit was made from; 0 for "none pinned"): if the note has
+  changed since, it answers 409 and nothing is written. The browser always
+  sends it, so two administrators editing one note cannot silently replace
+  each other's text; the CLI pins unconditionally. At most 2000 characters. Allowed on an archived or
   Lockdown chat (nothing runs); refused on a chat in the recycle bin.
 - **Accountability.** Recorded in `chat.admin_actions` as `note_set`,
   `note_replace` or `note_clear`, with the text. It takes **no reason** and
@@ -135,8 +139,12 @@ can find who is stuck and leave them a note without a browser.
   There is no way to dismiss it earlier; the count is of facts, not of a to-do
   list. An install with many failed chats narrows the page with "active in the
   last N days".
-- An open chat tab does not show a newly pinned note until its next load or
-  turn, as with every admin change (ADR-0115's deferral, unchanged).
+- An open chat re-reads its note every minute while its tab is visible, and
+  when the tab comes back into view (`GET /conversations/{id}/admin-note`, one
+  row, none of the history), so a note pinned, replaced or removed while its
+  owner is looking at the chat appears within about a minute. Other admin
+  changes still show on the next load or turn (ADR-0115's deferral,
+  unchanged).
 - The overview runs two aggregate queries over the chats in scope, each with
   per-chat sub-selects on indexed columns. It is read on page load and every
   30 seconds while the page is visible.
