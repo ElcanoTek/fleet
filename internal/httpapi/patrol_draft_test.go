@@ -574,3 +574,84 @@ func TestPatrols_ListsPatrolsSharedWithTheCaller(t *testing.T) {
 		t.Errorf("POST status = %d, want 405", post.Code)
 	}
 }
+
+// TestPatrols_OneSharedPatrolOpensPastTheListingCap: opening a teammate's
+// patrol checks its one chat, not the capped index, so a patrol that sorts
+// after the first patrolsIndexMax shared ones still opens; and the one-chat
+// check agrees with the shared list for every chat.
+func TestPatrols_OneSharedPatrolOpensPastTheListingCap(t *testing.T) {
+	t.Parallel()
+
+	s := serverFixture(t)
+	ctx := context.Background()
+	const me, mate = "reader@x.com", "busy-mate@x.com"
+	seedUser(t, s.concreteStore(t), me)
+	share := func() *store.Conversation {
+		t.Helper()
+		c := seedConv(t, s, mate)
+		if _, err := s.store.SetConversationMultiplayer(ctx, mate, c.ID, true, []string{me}, nil); err != nil {
+			t.Fatalf("SetConversationMultiplayer: %v", err)
+		}
+		return c
+	}
+	for i := 0; i < patrolsIndexMax; i++ {
+		// Hourly: every one of these sorts ahead of the weekly patrol below.
+		if _, err := s.store.CreateChatSchedule(ctx, store.ChatScheduleInput{
+			ConversationID: share().ID, UserEmail: mate, Title: "hourly", Prompt: "check", CronExpr: "0 * * * *", Timezone: "UTC",
+		}); err != nil {
+			t.Fatalf("CreateChatSchedule: %v", err)
+		}
+	}
+	last, err := s.store.CreateChatSchedule(ctx, store.ChatScheduleInput{
+		ConversationID: share().ID, UserEmail: mate, Title: "Weekly", Prompt: "check", CronExpr: "0 9 * * 1", Timezone: "UTC",
+	})
+	if err != nil {
+		t.Fatalf("CreateChatSchedule (weekly): %v", err)
+	}
+	listed, err := s.store.ListSharedPatrols(ctx, me, patrolsIndexMax)
+	if err != nil {
+		t.Fatalf("ListSharedPatrols: %v", err)
+	}
+	for _, p := range listed {
+		if p.ID == last.ID {
+			t.Fatal("fixture: the weekly patrol must sort past the listing's cap")
+		}
+	}
+
+	r := httptest.NewRequest(http.MethodGet, "/patrols/"+last.ID, nil)
+	r = r.WithContext(asUser(r.Context(), me))
+	w := httptest.NewRecorder()
+	s.handlePatrolByID(w, r)
+	if w.Code != http.StatusOK || strings.Contains(w.Body.String(), `"prompt"`) {
+		t.Fatalf("patrol past the cap: status = %d, body = %s; want 200 without its prompt", w.Code, w.Body.String())
+	}
+
+	// The one-chat check is the list's own rule.
+	shared, err := s.store.ListSharedAndMultiplayerConversations(ctx, me)
+	if err != nil {
+		t.Fatalf("ListSharedAndMultiplayerConversations: %v", err)
+	}
+	inList := map[string]bool{}
+	for _, c := range shared {
+		inList[c.ID] = true
+	}
+	private := seedConv(t, s, mate)
+	for _, id := range []string{last.ConversationID, private.ID, "nope", ""} {
+		got, err := s.store.IsSharedOrMultiplayerConversation(ctx, me, id)
+		if err != nil {
+			t.Fatalf("IsSharedOrMultiplayerConversation(%q): %v", id, err)
+		}
+		if got != inList[id] {
+			t.Errorf("IsSharedOrMultiplayerConversation(%q) = %v, the list says %v", id, got, inList[id])
+		}
+	}
+	// Taking the caller out of the chat closes the patrol to them.
+	if _, err := s.store.SetConversationMultiplayer(ctx, mate, last.ConversationID, false, nil, nil); err != nil {
+		t.Fatalf("SetConversationMultiplayer off: %v", err)
+	}
+	w = httptest.NewRecorder()
+	s.handlePatrolByID(w, r)
+	if w.Code != http.StatusNotFound {
+		t.Errorf("after unsharing: status = %d, want 404", w.Code)
+	}
+}

@@ -1549,6 +1549,10 @@ function newChatChord(searchShortcut: string): string {
 }
 
 // ── Main sidebar ─────────────────────────────────────────────────────────────
+const NO_STREAMING: ReadonlySet<string> = new Set();
+const NO_SELECTION: ReadonlySet<string> = new Set();
+const noop = () => {};
+
 export function ConversationSidebar({
   activeView = "chat",
   opsCount,
@@ -1572,7 +1576,7 @@ export function ConversationSidebar({
   focusedConversationId,
   renameSignal,
   loadConversation,
-  streamingConvs,
+  streamingConvs = NO_STREAMING,
   togglePin,
   chatOrders,
   onReorderChats,
@@ -1595,14 +1599,14 @@ export function ConversationSidebar({
   showArchived,
   setShowArchived,
   setConfirmBulkDelete,
-  selectMode,
-  selectedIds,
-  onToggleSelection,
+  selectMode = false,
+  selectedIds = NO_SELECTION,
+  onToggleSelection = noop,
   onEnterSelectMode,
-  onExitSelectMode,
-  onBulkDelete,
-  onBulkPin,
-  onBulkAddLabel,
+  onExitSelectMode = noop,
+  onBulkDelete = noop,
+  onBulkPin = noop,
+  onBulkAddLabel = noop,
   searchShortcut,
   newChatShortcut = true,
   onCreateProject,
@@ -1662,7 +1666,9 @@ export function ConversationSidebar({
     conversationId: string,
     options?: { preserveScroll?: boolean },
   ) => Promise<void>;
-  streamingConvs: Set<string>;
+  // The chats with a reply being written. Chat holds the live streams;
+  // another page has none to give, so its rows show no working mark.
+  streamingConvs?: ReadonlySet<string>;
   // Resolves to whether the pin stuck. The rail ignores it (a failed pin
   // reverts itself via a refresh); the "Pin it and remove" confirm does not,
   // because there the pin is what keeps the copy's promise.
@@ -1717,15 +1723,17 @@ export function ConversationSidebar({
   setConfirmBulkDelete: Dispatch<SetStateAction<boolean>>;
   // Select mode (#279): entered from the Chats menu's "Select chats…" — that
   // is the only way checkboxes appear. Bulk actions live in the compact bar
-  // above the account menu; Escape/Cancel exit.
-  selectMode: boolean;
-  selectedIds: Set<string>;
-  onToggleSelection: (id: string) => void;
+  // above the account menu; Escape/Cancel exit. Select mode is Chat's: on
+  // another page "Select chats…" hands over to Chat (onEnterSelectMode), so
+  // the rest are left out there and the sidebar is never in select mode.
+  selectMode?: boolean;
+  selectedIds?: ReadonlySet<string>;
+  onToggleSelection?: (id: string) => void;
   onEnterSelectMode: (id?: string) => void;
-  onExitSelectMode: () => void;
-  onBulkDelete: () => void;
-  onBulkPin: () => void;
-  onBulkAddLabel: (label: string) => void;
+  onExitSelectMode?: () => void;
+  onBulkDelete?: () => void;
+  onBulkPin?: () => void;
+  onBulkAddLabel?: (label: string) => void;
   // Platform-appropriate hint for the search field ("⌘K" / "Ctrl+K").
   searchShortcut: string;
   // Whether this page binds the new-chat chord (Chat does), so the + menu

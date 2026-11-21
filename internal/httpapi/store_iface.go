@@ -359,6 +359,9 @@ type chatStore interface {
 	GetMultiplayerConversation(ctx context.Context, callerEmail, convID string) (*store.Conversation, error)
 	ListMultiplayerRoster(ctx context.Context, callerEmail, convID string) ([]string, error)
 	ListSharedAndMultiplayerConversations(ctx context.Context, callerEmail string) ([]store.Conversation, error)
+	// IsSharedOrMultiplayerConversation: whether convID is in that list for
+	// the caller (the same query narrowed to the one chat).
+	IsSharedOrMultiplayerConversation(ctx context.Context, callerEmail, convID string) (bool, error)
 	// Files in a team share (ADR-0079). Per-file share state is stored as
 	// exclusions (default shared); a teammate branch records its origin and
 	// the shared files copied into it; the team link resolves to a status

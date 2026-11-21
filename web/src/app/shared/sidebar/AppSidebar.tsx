@@ -105,7 +105,6 @@ export function AppSidebar({
       focusedConversationId={null}
       renameSignal={null}
       loadConversation={async (id) => navigate(chatHref({ id }))}
-      streamingConvs={NO_STREAMS}
       togglePin={lib.togglePin}
       chatOrders={lib.chatOrders}
       onReorderChats={lib.canWrite ? lib.reorderChats : undefined}
@@ -136,14 +135,7 @@ export function AppSidebar({
       setShowArchived={setShowArchived}
       setConfirmBulkDelete={() => handOffToChat({ kind: "delete-temporary" })}
       // Selecting is a mode of Chat's sidebar, with Chat's bulk actions.
-      selectMode={false}
-      selectedIds={NO_SELECTION}
-      onToggleSelection={() => {}}
       onEnterSelectMode={() => handOffToChat({ kind: "select" })}
-      onExitSelectMode={() => {}}
-      onBulkDelete={() => {}}
-      onBulkPin={() => {}}
-      onBulkAddLabel={() => {}}
       searchShortcut={searchShortcut}
       // The new-chat chord is Chat's.
       newChatShortcut={false}
@@ -174,6 +166,3 @@ export function AppSidebar({
     />
   );
 }
-
-const NO_STREAMS: Set<string> = new Set();
-const NO_SELECTION: Set<string> = new Set();

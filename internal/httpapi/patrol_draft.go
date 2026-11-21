@@ -246,7 +246,8 @@ func (s *Server) handlePatrolByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	allowed := false
-	if p.Mine {
+	switch {
+	case p.Mine:
 		// The caller's own patrol, while they can still open its chat.
 		conv, err := s.getOwnedOrMultiplayerConversation(r.Context(), user, p.ConversationID)
 		if err != nil {
@@ -254,18 +255,26 @@ func (s *Server) handlePatrolByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		allowed = conv != nil
-	} else {
-		shared, err := s.store.ListSharedPatrols(r.Context(), user, patrolsIndexMax)
+	case p.OwnsChat:
+		// A participant's patrol in the caller's own chat: listed by
+		// ListSharedPatrols while that chat is live (not archived). Checked
+		// on the one chat, not by scanning the capped listing, so a patrol
+		// past the listing's cap still opens.
+		conv, err := s.getOwnedOrMultiplayerConversation(r.Context(), user, p.ConversationID)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		for i := range shared {
-			if shared[i].ID == p.ID {
-				allowed = true
-				break
-			}
+		allowed = conv != nil && conv.ArchivedAt == nil
+	default:
+		// A teammate's patrol: its chat must be one the caller's shared list
+		// holds — the same query, narrowed to that chat (one rule, no cap).
+		ok, err := s.store.IsSharedOrMultiplayerConversation(r.Context(), user, p.ConversationID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
 		}
+		allowed = ok
 	}
 	if !allowed {
 		http.Error(w, "patrol not found", http.StatusNotFound)

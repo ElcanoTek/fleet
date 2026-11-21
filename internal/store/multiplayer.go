@@ -626,6 +626,27 @@ func (s *Store) ListMultiplayerRoster(ctx context.Context, callerEmail, convID s
 // team_id gets their accessible multiplayer conversations (or an empty slice)
 // instead of ErrNoTeam.
 func (s *Store) ListSharedAndMultiplayerConversations(ctx context.Context, callerEmail string) ([]Conversation, error) {
+	return s.sharedAndMultiplayerConversations(ctx, callerEmail, "")
+}
+
+// IsSharedOrMultiplayerConversation reports whether convID is in the set
+// ListSharedAndMultiplayerConversations returns for the caller. It runs the
+// same query, narrowed to the one conversation, so the rule has one copy and
+// the answer does not depend on how long the caller's list is.
+func (s *Store) IsSharedOrMultiplayerConversation(ctx context.Context, callerEmail, convID string) (bool, error) {
+	if strings.TrimSpace(convID) == "" {
+		return false, nil
+	}
+	got, err := s.sharedAndMultiplayerConversations(ctx, callerEmail, convID)
+	if err != nil {
+		return false, err
+	}
+	return len(got) > 0, nil
+}
+
+// sharedAndMultiplayerConversations is the listing, optionally narrowed to
+// one conversation (onlyID != "").
+func (s *Store) sharedAndMultiplayerConversations(ctx context.Context, callerEmail, onlyID string) ([]Conversation, error) {
 	callerEmail = normalizeEmail(callerEmail)
 	if callerEmail == "" {
 		return []Conversation{}, nil
@@ -663,8 +684,9 @@ func (s *Store) ListSharedAndMultiplayerConversations(ctx context.Context, calle
 		    )
 		    OR (c.team_visible = TRUE AND $2 <> '' AND c.team_shared_with = $2 AND c.team_shared_with_id = (SELECT t.id FROM teams t WHERE t.name = $2))
 		  )
+		  AND ($3 = '' OR c.id = $3)
 		ORDER BY c.updated_at DESC, c.id DESC`,
-		callerEmail, callerTeam,
+		callerEmail, callerTeam, onlyID,
 	)
 	if err != nil {
 		return nil, err

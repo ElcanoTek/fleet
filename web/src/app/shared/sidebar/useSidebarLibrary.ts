@@ -134,9 +134,8 @@ export function useSidebarLibrary(userEmail: string, onError: (message: string) 
   const load = useCallback(async (): Promise<void> => {
     for (;;) {
       const at = gen.current;
-      const [own, archived, shared, projects, orders, config] = await Promise.all([
+      const [own, shared, projects, orders, config] = await Promise.all([
         readJSON<{ conversations?: ConversationSummary[] }>("/api/conversations"),
-        readJSON<{ conversations?: ConversationSummary[] }>("/api/conversations?archived=true"),
         readJSON<{ conversations?: ConversationSummary[] }>("/api/conversations?scope=shared"),
         readJSON<{ projects?: Project[] }>("/api/projects"),
         readJSON<{ orders?: Record<string, string[]> }>("/api/conversations/order"),
@@ -145,12 +144,12 @@ export function useSidebarLibrary(userEmail: string, onError: (message: string) 
       setLoading(false);
       if (projects) setProjectsLoaded(true);
       if (shared) setTeamSharedLoaded(true);
-      if (archived) setArchivedLoaded(true);
       if (at === gen.current) {
         setLibrary((cur) => ({
           // A list that could not be read keeps what was there.
           conversations: own ? (own.conversations ?? []) : cur.conversations,
-          archivedConversations: archived ? (archived.conversations ?? []) : cur.archivedConversations,
+          // Read on its own (loadArchived), once per page.
+          archivedConversations: cur.archivedConversations,
           teamSharedConversations: shared
             ? (shared.conversations ?? []).filter((c) => !mine || (c.user_email ?? "").trim().toLowerCase() !== mine)
             : cur.teamSharedConversations,
@@ -191,10 +190,22 @@ export function useSidebarLibrary(userEmail: string, onError: (message: string) 
     [load, onError],
   );
 
+  // The archived list is read once per page, after the lists the sidebar
+  // draws first, and not again after each change: nothing on these pages
+  // archives, unarchives or deletes a chat (each is handed to Chat, which
+  // reads its own). It feeds the Archived fold and search; until it is in,
+  // search says it has not looked there.
+  const loadArchived = useCallback(async () => {
+    const archived = await readJSON<{ conversations?: ConversationSummary[] }>("/api/conversations?archived=true");
+    if (!archived) return;
+    setArchivedLoaded(true);
+    setLibrary((cur) => ({ ...cur, archivedConversations: archived.conversations ?? [] }));
+  }, [setLibrary]);
+
   useEffect(() => {
     let live = true;
     queueMicrotask(() => {
-      if (live) void load();
+      if (live) void load().then(() => (live ? loadArchived() : undefined));
     });
     void fetchMe().then((me) => {
       if (!live || !me) return;
@@ -204,7 +215,7 @@ export function useSidebarLibrary(userEmail: string, onError: (message: string) 
     return () => {
       live = false;
     };
-  }, [load]);
+  }, [load, loadArchived]);
 
   // One request, an optimistic change, and the lists read again if it failed.
   const change = useCallback(

@@ -33,10 +33,15 @@ the redesign needed.
   `NavRail`, so a person always sees their pinned chats, projects and chats
   and one click takes them back to any of them. Chat feeds it from its own
   state. Every other page renders `AppSidebar`, which reads the same lists
-  itself (`useSidebarLibrary`: `GET /api/conversations`, `?archived=true`,
-  `?scope=shared`, `/api/projects`, `/api/conversations/order`,
-  `/api/server-config`), starting from what the last page showed so moving
-  between pages does not flash an empty sidebar. Page changes are client-side
+  itself (`useSidebarLibrary`: `GET /api/conversations`, `?scope=shared`,
+  `/api/projects`, `/api/conversations/order`, `/api/server-config`, then
+  `?archived=true`), starting from what the last page showed so moving
+  between pages does not flash an empty sidebar. The archived list is read
+  once per page, after the others, and not again after each change: nothing
+  on these pages archives, unarchives or deletes a chat (each is handed to
+  Chat). It still has to be read up front, because the Archived fold is
+  shown only when there is something in it; until it lands, search says it
+  has not looked there. Page changes are client-side
   navigations, so the lists survive them.
 - **What happens where.** On a page that is not Chat, opening a chat or a
   project navigates to Chat (`/chat?c=`, `/chat?team=`, `/chat?project=`). A
@@ -127,7 +132,9 @@ the redesign needed.
   list. Hiding them keeps which list they were in.
 - **Rows say one thing** (`RowStatus.tsx`). A row is its title and at most
   one status at its right edge, the first of these that applies: a reply
-  being written; the days left for a temporary chat inside the warning window
+  being written (on Chat only: Chat holds the live streams, and the sidebar
+  on other pages has no per-chat signal short of polling every chat, so
+  there the mark is not shown); the days left for a temporary chat inside the warning window
   ([CHAT-RETENTION.md](CHAT-RETENTION.md)); a patrol's next check ("19h") or
   **Paused**; **Live** (Multiplayer); shared with the team; shared by link;
   sealed. A teammate's chat also carries its owner's initial. The status is
@@ -411,7 +418,11 @@ migration.
   plus its `prompt` for its creator only, and up to 20 entries of its run
   history (`store.ListPatrolRuns`, from `sched.chat_schedule_runs`). A patrol
   that is neither the caller's nor shared with them is the 404 an unknown id
-  gets.
+  gets. A teammate's patrol is authorized on its one chat
+  (`store.IsSharedOrMultiplayerConversation`: the shared-chats query
+  narrowed to that chat, so the rule has one copy), not by scanning the
+  index, which is capped at 100; a participant's patrol in the caller's own
+  chat opens while that chat is not archived, as the index lists it.
 - **The sidebar layout** (`internal/sidebar`) gains a `pinned` section, put
   first in a layout saved before it existed (hidden or folded as that
   layout's Chats section is), and two optional flags, `status_off` and

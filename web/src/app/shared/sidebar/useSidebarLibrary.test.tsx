@@ -99,6 +99,8 @@ describe("useSidebarLibrary", () => {
     expect(result.current.loading).toBe(true);
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.conversations.map((c) => c.id)).toEqual(["own-1", "own-2"]);
+    // The archived list follows the lists the sidebar draws first.
+    await waitFor(() => expect(result.current.archivedLoaded).toBe(true));
     expect(result.current.archivedConversations.map((c) => c.id)).toEqual(["arch-1"]);
     expect(result.current.teamSharedConversations.map((c) => c.id)).toEqual(["team-1"]);
     expect(result.current.projects.map((p) => p.id)).toEqual(["p-1"]);
@@ -169,6 +171,21 @@ describe("useSidebarLibrary", () => {
     });
     expect(onError).toHaveBeenCalledWith("Couldn’t pin “Other”. Try again.");
     expect(result.current.conversations.find((c) => c.id === "own-2")?.pinned).toBe(false);
+  });
+
+  it("reads the archived list once per page, after the others, and not again after a change", async () => {
+    const calls = stubApi({ "POST /api/conversations/own-2/pin": () => new Response("{}", { status: 500 }) });
+    const { result } = renderHook(() => useSidebarLibrary("me@example.com", () => {}));
+    await waitFor(() => expect(result.current.archivedLoaded).toBe(true));
+    const gets = () => calls.filter((c) => c.method === "GET").map((c) => c.url);
+    expect(gets().indexOf("/api/conversations?archived=true")).toBe(gets().length - 1);
+    // A refused pin reads the lists again; the archived one is not among them.
+    await act(async () => {
+      await result.current.togglePin(result.current.conversations[1]);
+    });
+    await waitFor(() => expect(gets().filter((u) => u === "/api/conversations")).toHaveLength(2));
+    expect(gets().filter((u) => u === "/api/conversations?archived=true")).toHaveLength(1);
+    expect(result.current.archivedConversations.map((c) => c.id)).toEqual(["arch-1"]);
   });
 
   it("a first read overtaken by a quick pin is read again, so no list is left unread", async () => {

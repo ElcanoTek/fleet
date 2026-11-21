@@ -449,7 +449,7 @@ Clear the field and the rail returns exactly as you left it.
 
 A row is its title, with at most one status at its right edge, shown only
 when it matters and explained when you hover. The first of these that applies
-is the one shown: a pulsing dot while a reply is being written; the days left
+is the one shown: a pulsing dot while a reply is being written (in Chat only: the sidebar on other pages does not show it); the days left
 on a temporary chat that is about to be deleted; a pulse line on a **patrol**
 chat, with the time until its next check (or **Paused**); a green dot on a
 **Multiplayer** chat; a team glyph on a chat
