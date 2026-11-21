@@ -22,12 +22,19 @@ vi.mock("@/app/shared/sidebar/targets", async (original) => ({
   refreshPatrols,
 }));
 
+const sidebarListsChanged = vi.hoisted(() => vi.fn());
+vi.mock("@/app/shared/sidebar/useSidebarLibrary", async (original) => ({
+  ...(await original<typeof import("@/app/shared/sidebar/useSidebarLibrary")>()),
+  sidebarListsChanged,
+}));
+
 function OpenState() {
   return <p data-testid="open-state">{usePatrolWizardOpen() ? "open" : "closed"}</p>;
 }
 
 beforeEach(() => {
   resetPatrolWizardForTests();
+  sidebarListsChanged.mockClear();
   refreshPatrols.mockClear();
   window.history.replaceState(null, "", "/chat");
 });
@@ -73,6 +80,8 @@ describe("the patrol wizard, opened from anywhere on the page", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(screen.getByTestId("open-state")).toHaveTextContent("closed");
     expect(refreshPatrols).toHaveBeenCalledTimes(1);
+    // It may have created the patrol's chat: the sidebar's chats are read again too.
+    expect(sidebarListsChanged).toHaveBeenCalledTimes(1);
   });
 
   it("hands the focus back to what opened it", async () => {

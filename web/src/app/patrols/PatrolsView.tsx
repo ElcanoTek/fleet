@@ -26,7 +26,7 @@ import {
 } from "@/app/shared/lib/patrolApi";
 import { OwnerAvatar, compactUntil } from "@/app/shared/sidebar/RowStatus";
 import { teamChatHref } from "@/app/shared/sidebar/chatHandoff";
-import { freshPatrols, isOwnPatrol, refreshPatrols, usePatrols, type PatrolBrief } from "@/app/shared/sidebar/targets";
+import { forgetPatrol, freshPatrols, isOwnPatrol, refreshPatrols, usePatrols, type PatrolBrief } from "@/app/shared/sidebar/targets";
 import { Icon } from "@/app/shared/ui/Icon";
 import { Segmented } from "@/app/shared/ui/Segmented";
 import { Input } from "@/components/ui/input";
@@ -205,7 +205,9 @@ function PatrolCard({
     setDetail(d);
     setDetailState(d ? "idle" : "failed");
   }, [patrol.id]);
-  // Read when the row opens; `expanded` is the trigger.
+  // Read when the row opens, and again while it is open whenever the list
+  // says the patrol has moved on (a run, a pause), so Recent runs follows
+  // the row's own count and next check.
   useEffect(() => {
     if (!expanded) return;
     let live = true;
@@ -218,7 +220,7 @@ function PatrolCard({
     return () => {
       live = false;
     };
-  }, [expanded, patrol.id]);
+  }, [expanded, patrol.id, patrol.run_count, patrol.last_run_at, patrol.status]);
 
   // One action at a time per patrol: a Run now during a save would race it.
   const act = async (fn: () => Promise<unknown>, failed: string) => {
@@ -227,7 +229,11 @@ function PatrolCard({
     setBusy(true);
     try {
       await fn();
-      await onChanged();
+      // The change was made. If the list cannot be read back, say so rather
+      // than leave the old row looking current.
+      if ((await onChanged()) === null) {
+        onError(tr("Done, but the list could not be refreshed, so it may be out of date. Try again in a moment."));
+      }
       if (expanded) await loadDetail();
       return true;
     } catch (e) {
@@ -545,7 +551,10 @@ function PatrolCard({
                     }
                     // A refused or unreachable DELETE leaves the confirm
                     // armed so one click retries it.
-                    const ok = await act(() => deleteSchedule(patrol.conversation_id, patrol.id), tr("Couldn't cancel patrol"));
+                    const ok = await act(async () => {
+                      await deleteSchedule(patrol.conversation_id, patrol.id);
+                      forgetPatrol(patrol.id);
+                    }, tr("Couldn't cancel patrol"));
                     if (ok) setConfirmRemove(false);
                   }}
                   className={[

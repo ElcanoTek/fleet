@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { refreshPatrols } from "@/app/shared/sidebar/targets";
+import { sidebarListsChanged } from "@/app/shared/sidebar/useSidebarLibrary";
 
 // The Patrol Launchpad wizard, as something any part of the page can open
 // (docs/PATROL-LAUNCHPAD.md): the sidebar's + menu ("New patrol"), the
@@ -126,9 +127,11 @@ export function PatrolWizardHost({ onOpen }: { onOpen?: () => void }) {
               .find(onScreen)
               ?.focus();
           });
-          // The wizard may just have launched a patrol: every part of the
-          // page that lists patrols reads them again.
+          // The wizard may just have launched a patrol, in a chat it
+          // created: every part of the page that lists patrols reads them
+          // again, and so does the sidebar's list of chats.
           void refreshPatrols();
+          sidebarListsChanged();
         }}
       />
     </Suspense>,

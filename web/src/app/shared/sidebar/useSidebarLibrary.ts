@@ -51,6 +51,13 @@ export function rememberSidebarLibrary(next: Partial<SidebarLibrary>) {
 }
 
 /** Test hook. */
+// Something outside the sidebar created a chat (the patrol wizard's launch):
+// every sidebar on the page reads its lists again.
+const listsChangedListeners = new Set<() => void>();
+export function sidebarListsChanged(): void {
+  for (const l of listsChangedListeners) l();
+}
+
 export function resetSidebarLibraryForTests() {
   remembered = null;
 }
@@ -216,6 +223,14 @@ export function useSidebarLibrary(userEmail: string, onError: (message: string) 
       live = false;
     };
   }, [load, loadArchived]);
+
+  useEffect(() => {
+    const onChanged = () => void load();
+    listsChangedListeners.add(onChanged);
+    return () => {
+      listsChangedListeners.delete(onChanged);
+    };
+  }, [load]);
 
   // One request, an optimistic change, and the lists read again if it failed.
   const change = useCallback(

@@ -148,6 +148,19 @@ export function refreshPatrols(): Promise<readonly PatrolBrief[] | null> {
 }
 
 /**
+ * forgetPatrol: a patrol the server has just removed comes off the list at
+ * once, whether or not the read that follows succeeds, so it is never shown
+ * as still there (and still to be acted on). A read already on its way
+ * started before the removal and is not published.
+ */
+export function forgetPatrol(id: string): void {
+  patrolGen++;
+  patrolRead = null;
+  patrolList = patrolList.filter((p) => p.id !== id);
+  for (const l of patrolListeners) l();
+}
+
+/**
  * freshPatrols: a read that starts no earlier than now. A read still on its
  * way is shared (so a page that mounts while its sidebar is reading makes
  * one request, and the answer it judges by is the one it draws); an answer

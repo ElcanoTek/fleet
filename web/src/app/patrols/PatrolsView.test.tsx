@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useState } from "react";
 import { PatrolsView } from "./PatrolsView";
 import { resetPatrolCacheForTests, type PatrolBrief } from "@/app/shared/sidebar/targets";
@@ -240,6 +240,31 @@ describe("the Patrols page", () => {
     await waitFor(() => expect(card("pt-1")).toBeTruthy());
     expect(card("pt-2")).toBeTruthy();
     expect(n).toBe(1);
+  });
+
+  it("a removed patrol is gone even when the list cannot be read back, and the page says the list may be out of date", async () => {
+    render(<Page />);
+    await waitFor(() => expect(card("pt-1")).toBeTruthy());
+    expand("pt-1");
+    list = "fail";
+    const mine = within(card("pt-1"));
+    fireEvent.click(await mine.findByRole("button", { name: "Remove patrol" }));
+    fireEvent.click(mine.getByRole("button", { name: "Confirm remove" }));
+    await waitFor(() => expect(document.querySelector('[data-patrol-id="pt-1"]')).toBeNull());
+    expect(await screen.findByTestId("patrols-page-error")).toHaveTextContent("Done, but the list could not be refreshed");
+    expect(api.deleteSchedule).toHaveBeenCalledTimes(1);
+  });
+
+  it("an open row reads its history again when the list says the patrol has run", async () => {
+    render(<Page />);
+    await waitFor(() => expect(card("pt-1")).toBeTruthy());
+    expand("pt-1");
+    await waitFor(() => expect(calls.filter((c) => c.url === "/api/patrols/pt-1")).toHaveLength(1));
+    list = [{ ...MINE, run_count: (MINE.run_count ?? 0) + 1, last_run_at: NOW }, PAUSED, THEIRS];
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    await waitFor(() => expect(calls.filter((c) => c.url === "/api/patrols/pt-1")).toHaveLength(2));
   });
 
   const modeCalls = () => calls.filter((c) => c.method === "POST" && c.url.endsWith("/auto-approve"));

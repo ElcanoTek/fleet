@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { ConversationSummary } from "@/app/chat/ui/chat-experience";
 import type { Project } from "@/app/chat/ui/ProjectsModal";
-import { rememberSidebarLibrary, resetSidebarLibraryForTests, useSidebarLibrary } from "./useSidebarLibrary";
+import { rememberSidebarLibrary, resetSidebarLibraryForTests, sidebarListsChanged, useSidebarLibrary } from "./useSidebarLibrary";
 
 // What the sidebar lists on a page that is not Chat (docs/SIDEBAR.md): the
 // same lists, read from the same endpoints, with the few changes that are
@@ -186,6 +186,16 @@ describe("useSidebarLibrary", () => {
     await waitFor(() => expect(gets().filter((u) => u === "/api/conversations")).toHaveLength(2));
     expect(gets().filter((u) => u === "/api/conversations?archived=true")).toHaveLength(1);
     expect(result.current.archivedConversations.map((c) => c.id)).toEqual(["arch-1"]);
+  });
+
+  it("reads its chats again when something outside the sidebar made one (the patrol wizard)", async () => {
+    const calls = stubApi();
+    const { result } = renderHook(() => useSidebarLibrary("me@example.com", () => {}));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    const reads = () => calls.filter((c) => c.method === "GET" && c.url === "/api/conversations").length;
+    expect(reads()).toBe(1);
+    act(() => sidebarListsChanged());
+    await waitFor(() => expect(reads()).toBe(2));
   });
 
   it("a first read overtaken by a quick pin is read again, so no list is left unread", async () => {
