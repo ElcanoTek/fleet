@@ -19,6 +19,17 @@ const ChatOrderPinned = "pinned"
 // chatOrderProjectPrefix starts the scope of the person's chats in a project.
 const chatOrderProjectPrefix = "project:"
 
+// ChatOrderPinnedProjectPrefix starts a pinned PROJECT's entry in the pinned
+// order. The sidebar's Pinned section lists pinned chats and pinned projects
+// together, in one order the person sets, so the one saved list names both: a
+// chat by its ID, a project as "project:<project id>".
+const ChatOrderPinnedProjectPrefix = "project:"
+
+// ChatOrderPinnedProject is a pinned project's entry in the pinned order.
+func ChatOrderPinnedProject(projectID string) string {
+	return ChatOrderPinnedProjectPrefix + projectID
+}
+
 // ErrBadChatOrderScope rejects a scope that is neither "pinned" nor
 // "project:<id>".
 var ErrBadChatOrderScope = errors.New(`scope must be "pinned" or "project:<id>"`)
@@ -70,9 +81,11 @@ func (s *Store) ChatOrders(ctx context.Context, userEmail string) (map[string][]
 // Only live conversations that are in the scope are kept — in the order given
 // and without duplicates. The pinned scope is the user's own pinned chats plus
 // the chats other people own that the user has pinned for themselves
-// (SetSharedPin, which accepts only a chat shared with them); a project scope
-// is the user's own chats filed in that project. So a saved list never names a
-// chat the user did not put in the scope themselves. An ID
+// (SetSharedPin, which accepts only a chat shared with them), and the pinned
+// projects the user can see, each named "project:<id>"
+// (ChatOrderPinnedProject); a project scope is the user's own chats filed in
+// that project. So a saved list never names a chat the user did not put in
+// the scope themselves, nor a project they cannot see. An ID
 // outside that set is dropped rather than refused, since a chat can be
 // unpinned or moved in another tab between a drag and its save. A list that
 // keeps nothing removes the scope's row.
@@ -116,6 +129,11 @@ func (s *Store) SetChatOrder(ctx context.Context, userEmail, scope string, ids [
 		if err := rows.Err(); err != nil {
 			return nil, err
 		}
+		if projectID == "" {
+			if err := s.pinnedProjectEntries(ctx, userEmail, ids, inScope); err != nil {
+				return nil, err
+			}
+		}
 	}
 	kept := make([]string, 0, len(ids))
 	seen := map[string]bool{}
@@ -147,4 +165,46 @@ func (s *Store) SetChatOrder(ctx context.Context, userEmail, scope string, ids [
 		return nil, fmt.Errorf("save chat order: %w", err)
 	}
 	return kept, nil
+}
+
+// pinnedProjectEntries marks, in inScope, the "project:<id>" entries of ids
+// that name a pinned project userEmail can see: one they own, or one shared
+// with their team (the rule ListProjectsForUser applies). A project's pin is
+// its owner's, so a member orders a project the owner pinned; one that is
+// unpinned, deleted or no longer shared with them is not in scope and is
+// dropped by the caller.
+func (s *Store) pinnedProjectEntries(ctx context.Context, userEmail string, ids []string, inScope map[string]bool) error {
+	projectIDs := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if pid, ok := strings.CutPrefix(id, ChatOrderPinnedProjectPrefix); ok && pid != "" {
+			projectIDs = append(projectIDs, pid)
+		}
+	}
+	if len(projectIDs) == 0 {
+		return nil
+	}
+	team := ""
+	if u, err := s.GetUser(ctx, userEmail); err == nil && u != nil {
+		team = strings.TrimSpace(u.TeamID)
+	} else if err != nil && !errors.Is(err, ErrUserNotFound) {
+		return fmt.Errorf("check chat order: %w", err)
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id FROM projects
+		  WHERE id = ANY($1) AND pinned
+		    AND (owner_email = $2 OR (team_id != '' AND team_id = $3))`,
+		projectIDs, normalizeEmail(userEmail), team,
+	)
+	if err != nil {
+		return fmt.Errorf("check chat order: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return err
+		}
+		inScope[ChatOrderPinnedProject(id)] = true
+	}
+	return rows.Err()
 }

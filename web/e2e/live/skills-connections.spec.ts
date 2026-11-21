@@ -128,7 +128,10 @@ test("sharing: grantee sees a shared connection surface", async ({ page, login }
   // a user with no connections: no Shared-with-you section, no stray errors.
   await page.goto("/settings/connections");
   await expect(page.getByText("Added by you").first()).toBeVisible();
-  await expect(page.getByText("Shared with you")).toHaveCount(0);
+  // In the page itself: the sidebar beside it (the same one every page has)
+  // now lists the person's chats, and a chat shared with the team describes
+  // itself with words that begin the same way.
+  await expect(page.locator("main").getByText("Shared with you")).toHaveCount(0);
   await expect(page.getByText(/Authorization failed/)).toHaveCount(0);
   void creds; // fixture import kept for parity with sibling specs
 });

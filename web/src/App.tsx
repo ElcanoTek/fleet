@@ -15,6 +15,7 @@ const ChatPage = lazy(() => import("@/app/chat/page"));
 const LoginPage = lazy(() => import("@/app/login/page"));
 const NoAccessPage = lazy(() => import("@/app/no-access/page"));
 const OrchestratorPage = lazy(() => import("@/app/orchestrator/page"));
+const PatrolsPage = lazy(() => import("@/app/patrols/page"));
 const AnalyticsPage = lazy(() => import("@/app/analytics/page"));
 const SharedPage = lazy(() => import("@/app/shared/[token]/page"));
 const HelpLayout = lazy(() => import("@/app/help/layout"));
@@ -90,6 +91,7 @@ export function route(pathname: string): { page: ReactNode; title?: string } {
   if (path === "/chat") return { page: <ChatPage /> };
   if (path === "/login") return { page: <LoginPage /> };
   if (path === "/no-access") return { page: <NoAccessPage /> };
+  if (path === "/patrols") return { page: <PatrolsPage />, title: tr("Patrols") };
   if (path === "/orchestrator") return { page: <OrchestratorPage />, title: tr("Background tasks") };
   if (path === "/analytics") return { page: <AnalyticsPage />, title: tr("Analytics") };
   if (path.startsWith("/shared/")) return { page: <SharedPage /> };

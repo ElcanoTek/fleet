@@ -3,16 +3,16 @@ import type { Page, Route } from "@playwright/test";
 import { loginViaCookie } from "./_session";
 import { mockChatBoot } from "./_mocks";
 
-// Mocked e2e for the unified navigation rail (#169) + conversation organization
-// (#258/#279) + the collapsible rail / select mode (UI polish): the rail shows
-// the Chat/Operations Center nav with the active surface marked, derives the
-// Labels section from the conversation list, filters by label,
-// exposes the per-row kebab (whose "Select…" is the only way into select
-// mode), collapses to a 4.25rem icon strip with a persisted preference,
-// auto-collapses at ≤900px with an overlay+scrim expansion, explains the
-// sealed-row lock on hover/focus, and the account menu carries the unified
-// settings navigation (Settings · Connections · Skills · Admin) plus Theme +
-// Sign out identically on both surfaces. All /api/* calls are intercepted.
+// Mocked e2e for the sidebar frame (#169) + conversation organization
+// (#258/#279) + the collapsible rail / select mode: the sidebar's top items
+// (Patrols, Background tasks) mark the page that is open, the Chats menu
+// filters by label and starts select mode, the per-row ⋯ menu holds a chat's
+// actions, the sidebar collapses to an icon strip with a persisted
+// preference, auto-collapses at ≤900px with an overlay+scrim expansion, the +
+// menu offers a sealed chat where the deployment has them, and the account
+// menu carries the unified settings navigation (Settings · Connections ·
+// Skills · Admin) plus Theme + Sign out identically on every page. All
+// /api/* calls are intercepted.
 
 const CONVERSATIONS = [
   { id: "c1", title: "Acme Renewal", persona: "default", model: "", pinned: true, updated_at: 40, labels: ["client", "urgent"] },
@@ -40,20 +40,30 @@ test.beforeEach(async ({ context }) => {
   await loginViaCookie(context);
 });
 
-test("the rail marks the active surface and links to the other", async ({ page }) => {
+test("the sidebar's top items lead to Patrols and Background tasks and mark the open page", async ({ page }) => {
   await mockChatBoot(page);
   await mockConversations(page);
   await page.goto("/chat");
   await page.getByRole("heading", { name: /what can i help with/i }).waitFor({ timeout: 15_000 });
 
-  // By test id: each rail item's accessible name includes its subtitle, and
-  // "Runs without a chat" contains "chat" too.
-  await expect(page.getByTestId("nav-to-chat")).toHaveAttribute("aria-current", "page");
-  await expect(page.getByTestId("nav-to-chat")).toContainText("Talk it through");
-  // The rail names the ways of working: Chat · Patrols (an index of patrol
-  // chats, and the Launchpad wizard) · Background tasks (the Operations Center).
+  // The top of the sidebar names the other ways of working: Patrols (a page
+  // of patrol chats) and Background tasks (the Operations Center). Chat has
+  // no row of its own: the pen beside the search field starts one, and every
+  // chat row leads back to it.
+  await expect(page.getByTestId("nav-to-chat")).toHaveCount(0);
+  await expect(page.getByTestId("new-chat-button")).toBeVisible();
+  await expect(page.getByTestId("nav-to-patrols")).toHaveText(/Patrols/);
   await expect(page.getByTestId("nav-to-orchestrator")).toContainText("Background tasks");
-  await expect(page.getByTestId("launchpad-button")).toHaveText(/Patrols/);
+  // On Chat neither is the current page.
+  await expect(page.getByTestId("nav-to-patrols")).not.toHaveAttribute("aria-current", "page");
+  await expect(page.getByTestId("nav-to-orchestrator")).not.toHaveAttribute("aria-current", "page");
+
+  // Patrols is a page, with the same sidebar and its row marked.
+  await page.route("**/api/patrols", (r: Route) => r.fulfill({ json: { patrols: [] } }));
+  await page.getByTestId("nav-to-patrols").click();
+  await expect(page).toHaveURL(/\/patrols$/);
+  await expect(page.getByTestId("nav-to-patrols")).toHaveAttribute("aria-current", "page");
+  await expect(page.getByTestId("new-chat-button")).toBeVisible();
 });
 
 test("the account menu carries Settings (+subtext) + Theme + Sign out on chat", async ({ page }) => {
@@ -167,23 +177,29 @@ for (const layout of [
   });
 }
 
-test("the rail derives the Labels section and filters by label", async ({ page }) => {
+test("the Chats menu filters the list by label", async ({ page }) => {
   await mockChatBoot(page);
   await mockConversations(page);
   await page.goto("/chat");
   await page.getByRole("heading", { name: /what can i help with/i }).waitFor({ timeout: 15_000 });
 
   const bar = page.locator("aside").first();
-
-  // The Labels section materializes from the conversation list; pinned chats
-  // (including previously folder-filed ones — folders are gone) show under
-  // Pinned, loose unpinned ones under Temporary.
-  await expect(bar.getByRole("button", { name: /client/ }).first()).toBeVisible();
   await expect(bar.getByText("Loose Recent", { exact: true })).toBeVisible();
   await expect(bar.getByText("Acme Renewal", { exact: true })).toBeVisible();
 
-  // Filtering by a label reveals matches and a removable filter chip.
-  await bar.getByRole("button", { name: "client 2" }).click();
+  // The labels the person uses are derived from the conversation list and
+  // offered in the Chats menu, each with its count. (There is no standing
+  // Labels section in the sidebar.)
+  await page.getByTestId("recent-sort").click();
+  await page.getByTestId("chats-menu-labels").click();
+  const labels = page.getByRole("menu", { name: "Filter by label" });
+  await expect(labels.getByRole("menuitemcheckbox")).toHaveText([/client\s*2/, /research\s*1/, /urgent\s*1/]);
+
+  // Filtering by a label keeps the matches and shows a removable filter chip.
+  await labels.getByRole("menuitemcheckbox", { name: /client/ }).click();
+  await expect(labels.getByRole("menuitemcheckbox", { name: /client/ })).toHaveAttribute("aria-checked", "true");
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("Escape");
   await expect(bar.getByText(/Label:/)).toBeVisible();
   await expect(bar.getByText("Acme Renewal", { exact: true })).toBeVisible();
   await expect(bar.getByText("Omnicom Pacing", { exact: true })).toBeVisible();
@@ -197,6 +213,10 @@ test("the rail derives the Labels section and filters by label", async ({ page }
 test("the per-row kebab exposes pin / rename / labels / archive / delete", async ({ page }) => {
   await mockChatBoot(page);
   await mockConversations(page);
+  // A member whose saved sidebar has loaded: the menu then also offers the
+  // two sidebar items (Move to the top, Set as start page).
+  await page.route("**/api/me", (r: Route) => r.fulfill({ json: { email: "e2e@example.com", role: "member" } }));
+  await page.route("**/api/sidebar", (r: Route) => r.fulfill({ json: { layout: null, workspace_default: null } }));
   await page.goto("/chat");
   await page.getByRole("heading", { name: /what can i help with/i }).waitFor({ timeout: 15_000 });
 
@@ -205,20 +225,31 @@ test("the per-row kebab exposes pin / rename / labels / archive / delete", async
   const menu = page.getByRole("menu", { name: "Options for Loose Recent" });
   await bar.getByRole("button", { name: "Conversation options for Loose Recent" }).click();
   await expect(menu).toBeVisible();
-  // Exact set + order (#169 audit fix #3): plain verbs, no conversation title.
-  await expect(menu.getByRole("menuitem", { name: "Pin", exact: true })).toBeVisible();
-  await expect(menu.getByRole("menuitem", { name: "Rename", exact: true })).toBeVisible();
-  await expect(menu.getByRole("menuitem", { name: "Labels", exact: true })).toBeVisible();
-  await expect(menu.getByRole("menuitem", { name: "Download chat…", exact: true })).toBeVisible();
-  // One Share entry, not three: the dialog it opens holds both audiences —
-  // share by link and share with team (ADR-0057) — so the menu no longer forks
-  // on whether a public link happens to exist.
-  await expect(menu.getByRole("menuitem", { name: "Share…", exact: true })).toBeVisible();
-  await expect(menu.getByRole("menuitem", { name: "Select…", exact: true })).toBeVisible();
-  await expect(menu.getByRole("menuitem", { name: "Archive", exact: true })).toBeVisible();
-  await expect(menu.getByRole("menuitem", { name: "Delete", exact: true })).toBeVisible();
-  // Exactly two dividers (after Labels, after Share…).
-  await expect(menu.getByRole("separator")).toHaveCount(2);
+  // Exact set + order (#169 audit fix #3): plain verbs, no conversation
+  // title, grouped: where the chat sits · start page · what it can become ·
+  // who else gets it · putting it away. One Share entry, not three: the
+  // dialog it opens holds both audiences — share by link and share with team
+  // (ADR-0057) — so the menu does not fork on whether a public link happens
+  // to exist. Select is the Chats menu's, not a row's. (No "Move to project"
+  // here: this account has no projects.)
+  await expect(menu.getByRole("menuitem")).toHaveText([
+    "Pin",
+    "Move to the top",
+    "Rename",
+    "Labels",
+    "Set as start page",
+    "Add a patrol…",
+    "Make a background task…",
+    "Save as workflow…",
+    "Share…",
+    "Download chat…",
+    "Transfer ownership…",
+    "Archive",
+    "Delete…",
+  ]);
+  await expect(menu.getByRole("menuitem", { name: "Select…", exact: true })).toHaveCount(0);
+  // Four dividers, one between each group.
+  await expect(menu.getByRole("separator")).toHaveCount(4);
   // No menu item carries the conversation's name.
   await expect(menu.getByRole("menuitem", { name: /Loose Recent/ })).toHaveCount(0);
 
@@ -339,7 +370,7 @@ test("the rail collapses to an icon strip, persists, and repositions the account
   await expect(page.getByRole("searchbox", { name: "Search", exact: true })).toBeVisible();
 });
 
-test("Select… enters select mode with checkboxes + the bulk icon bar; Escape exits", async ({ page }) => {
+test("Select chats… enters select mode with checkboxes + the bulk icon bar; Escape exits", async ({ page }) => {
   await mockChatBoot(page);
   await mockConversations(page);
   await page.goto("/chat");
@@ -347,16 +378,16 @@ test("Select… enters select mode with checkboxes + the bulk icon bar; Escape e
 
   const bar = page.locator("aside").first();
   await expect(page.locator("main").getByText("Acme Renewal")).toBeVisible();
-  await bar.getByRole("button", { name: "Conversation options for Loose Recent" }).click();
-  await expect(page.getByRole("menu", { name: "Options for Loose Recent" })).toBeVisible();
-  await page
-    .getByRole("menu", { name: "Options for Loose Recent" })
-    .getByRole("menuitem", { name: "Select…", exact: true })
-    .click();
+  // Select mode starts from the Chats menu, with nothing selected yet.
+  await page.getByTestId("recent-sort").click();
+  await page.getByTestId("chats-menu-select").click();
 
-  // The bulk bar appears with the seed row selected; actions are enabled.
-  await expect(bar.getByText("1 selected")).toBeVisible();
+  // The bulk bar appears; with nothing selected its actions are off.
+  await expect(bar.getByText("0 selected")).toBeVisible();
   const deleteBtn = bar.getByRole("button", { name: "Delete selected" });
+  await expect(deleteBtn).toBeDisabled();
+  await bar.getByRole("button", { name: /Loose Recent/ }).click();
+  await expect(bar.getByText("1 selected")).toBeVisible();
   await expect(deleteBtn).toBeEnabled();
 
   // Row clicks toggle selection instead of opening the conversation.
@@ -389,27 +420,30 @@ test("Select… enters select mode with checkboxes + the bulk icon bar; Escape e
   await expect(bar.getByRole("button", { name: "Conversation options for Loose Recent" })).toBeAttached();
 });
 
-test("the sealed new-chat button explains itself on hover and keyboard focus", async ({ page }) => {
+test("the + menu offers a sealed chat where the deployment has them, and says what sealed means", async ({ page }) => {
   await mockChatBoot(page);
   await mockConversations(page);
-  // Re-stub server-config (the most recent route wins) to expose the sealed
-  // affordance the explainer tooltip lives on.
-  await page.route("**/api/server-config", (r: Route) =>
-    r.fulfill({ json: { lockdown_available: true, lockdown_only: false, lockdown_allowed_models: [] } }),
-  );
   await page.goto("/chat");
   await page.getByRole("heading", { name: /what can i help with/i }).waitFor({ timeout: 15_000 });
 
-  const sealedButton = page.getByRole("button", { name: /New sealed chat/ });
-  await expect(sealedButton).toBeVisible();
+  // Without sealed chats the menu does not mention them.
+  await page.getByTestId("new-menu-button").click();
+  const menu = page.getByRole("menu", { name: "New" });
+  await expect(menu.getByRole("menuitem")).toHaveText([/^New chat/, /^New patrol/, /^New background task/, "New project"]);
+  await page.keyboard.press("Escape");
 
-  await sealedButton.hover();
-  await expect(page.getByRole("tooltip")).toContainText(/sealed chat/i);
-  await page.mouse.move(600, 400);
-  await expect(page.getByRole("tooltip")).toHaveCount(0);
-
-  await sealedButton.focus();
-  await expect(page.getByRole("tooltip")).toBeVisible();
+  // Re-stub server-config (the most recent route wins) to expose them.
+  await page.route("**/api/server-config", (r: Route) =>
+    r.fulfill({ json: { lockdown_available: true, lockdown_only: false, lockdown_allowed_models: [] } }),
+  );
+  await page.reload();
+  await page.getByRole("heading", { name: /what can i help with/i }).waitFor({ timeout: 15_000 });
+  await page.getByTestId("new-menu-button").click();
+  const sealed = page.getByTestId("new-menu-sealed");
+  await expect(sealed).toHaveText("New sealed chat");
+  // The explanation rides the item (its description for a pointer and for
+  // assistive tech), where the standalone sealed button used to carry it.
+  await expect(sealed).toHaveAttribute("title", /Locked down and private/);
 });
 
 test("at ≤900px the rail auto-collapses and expands as an overlay with a scrim", async ({ page }) => {

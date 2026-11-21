@@ -150,7 +150,7 @@ const ADMIN_NOTE_POLL_MS = 60_000;
 import { expiresInDays, retentionPolicy, useNowSeconds } from "./chatRetention";
 import { WithheldFilesContext } from "./LockedFiles";
 import { DownloadChatDialog, type DownloadOptions } from "./DownloadChatDialog";
-import { useRailCollapse, keepFocusForDrawerShortcut } from "@/app/shared/ui/NavRail";
+import { useRailCollapse, keepFocusForDrawerShortcut, type RailCollapse } from "@/app/shared/ui/NavRail";
 import { isInteractiveTarget } from "@/app/shared/ui/interactiveTarget";
 import { loadWorkspaceModelCatalog } from "@/app/shared/lib/workspaceModels";
 import {
@@ -191,6 +191,9 @@ import {
   type TurnStreamDeps,
 } from "./useTurnStream";
 import { readChatSession, writeChatSession } from "./chatSessionStore";
+import { takeChatHandoff, type ChatHandoff } from "@/app/shared/sidebar/chatHandoff";
+import { rememberSidebarLibrary } from "@/app/shared/sidebar/useSidebarLibrary";
+import { patrolsChanged } from "@/app/shared/sidebar/targets";
 import { boardManifest } from "./dashboard/board";
 import { DashboardTranscriptContext } from "./dashboard/context";
 import { DashboardBoard, DashboardHud } from "./dashboard/DashboardView";
@@ -3387,9 +3390,11 @@ export function ChatExperience({
     });
   };
 
-  const enterSelectMode = (id: string) => {
+  // Entered from the Chats menu ("Select chats…") with nothing selected, or
+  // with one chat already ticked.
+  const enterSelectMode = (id?: string) => {
     setSelectMode(true);
-    setSelectedIds(new Set([id]));
+    setSelectedIds(new Set(id ? [id] : []));
   };
 
   const exitSelectMode = () => {
@@ -4220,7 +4225,28 @@ export function ChatExperience({
     setSidebarOpen,
   });
 
-  // The sidebar slid in over a dashboard (docs/SIDEBAR.md) is a modal
+  // In dashboard view the sidebar stays beside the board as its icon strip
+  // (docs/SIDEBAR.md), so there is always a way back to a chat; opening it
+  // slides the whole sidebar in over the board. Neither touches the person's
+  // own collapsed/expanded choice, which is for the chat view: here "expand"
+  // and "collapse" open and close the slide-over, and it has no edge to drag.
+  const dashboardCollapse = useMemo<RailCollapse>(
+    () => ({
+      ...railCollapse,
+      collapsed: !sidebarOpen,
+      isNarrow: false,
+      // The width animates only while the sidebar opens, out of the page's
+      // flow, over the board. Closing puts it back in the flow: animating
+      // from its full width there would push the board right and slide it
+      // back, so the strip comes back at once and the board never moves.
+      railReady: railCollapse.railReady && sidebarOpen,
+      setCollapsed: (next: boolean) => setSidebarOpen(!next),
+      setWidth: undefined,
+    }),
+    [railCollapse, sidebarOpen, setSidebarOpen],
+  );
+
+  // The sidebar slid in over a dashboard is a modal
   // drawer: focus moves into it, Tab stays inside it, Escape closes it (and
   // only it — captured before dashboard view's own Escape, which would leave
   // the view), and closing hands focus back to what opened it.
@@ -4278,9 +4304,19 @@ export function ChatExperience({
       // Hand focus back when it was in the drawer (or fell to <body> as the
       // drawer hid); a choice that left the view took it somewhere else.
       const now = document.activeElement;
-      if (opener?.isConnected && (now === document.body || (railEl?.contains(now) ?? false))) {
+      if (now !== document.body && !(railEl?.contains(now) ?? false)) return;
+      if (opener?.isConnected) {
         opener.focus();
+        return;
       }
+      // The opener left the page (a control that only the open sidebar
+      // draws): the strip's own expand button is where the keyboard resumes.
+      requestAnimationFrame(() => {
+        const at = document.activeElement;
+        if (at === document.body || (railEl?.contains(at) ?? false)) {
+          railEl?.querySelector<HTMLElement>('[data-testid="rail-expand"]')?.focus();
+        }
+      });
     };
   }, [dashboardRailOpen, setSidebarOpen]);
 
@@ -5724,8 +5760,8 @@ export function ChatExperience({
   // shared top-to-bottom order the sidebar renders — so what j/k walks always
   // matches what the user sees.
   const focusedConv = useMemo(
-    () => visibleOrder.find((c) => c.id === focusedConversationId) ?? null,
-    [visibleOrder, focusedConversationId],
+    () => conversations.find((c) => c.id === focusedConversationId) ?? null,
+    [conversations, focusedConversationId],
   );
 
   // moveFocus walks the cursor by `delta` rows through visibleOrder, clamping at
@@ -5736,19 +5772,32 @@ export function ChatExperience({
   // has mounted/opened.
   const moveFocus = useCallback(
     (delta: number) => {
-      if (visibleOrder.length === 0) return;
+      // The person's own rows, top to bottom, exactly as the sidebar draws
+      // them now: its chips, sort, date groups, folded sections and open
+      // projects all decide that, so the rows themselves are asked. Only
+      // until the sidebar has drawn its lists (not mounted, or still showing
+      // its loading row) does the computed order stand in: once drawn, a
+      // sidebar with none of the person's rows (Pinned and Chats hidden or
+      // folded) has nothing to walk, and the cursor must never land on a row
+      // nobody can see.
+      const listsDrawn = document.querySelector("[data-rail-body] [data-lists-drawn]") !== null;
+      const drawn = Array.from(
+        document.querySelectorAll<HTMLElement>("[data-rail-body] [data-own-row][data-conversation-id]"),
+      )
+        .map((row) => row.dataset.conversationId ?? "")
+        .filter(Boolean);
+      const order = listsDrawn ? drawn : visibleOrder.map((c) => c.id);
+      if (order.length === 0) return;
       if (!sidebarOpen) keepFocusForDrawerShortcut();
       setSidebarOpen(true);
-      const idx = focusedConversationId
-        ? visibleOrder.findIndex((c) => c.id === focusedConversationId)
-        : -1;
+      const idx = focusedConversationId ? order.indexOf(focusedConversationId) : -1;
       const next =
         idx === -1
           ? delta > 0
             ? 0
-            : visibleOrder.length - 1
-          : Math.min(visibleOrder.length - 1, Math.max(0, idx + delta));
-      setFocusedConversationId(visibleOrder[next]?.id ?? null);
+            : order.length - 1
+          : Math.min(order.length - 1, Math.max(0, idx + delta));
+      setFocusedConversationId(order[next] ?? null);
     },
     [visibleOrder, focusedConversationId, sidebarOpen],
   );
@@ -6667,6 +6716,7 @@ export function ChatExperience({
         allow_multiple: input.allowMultiple,
       }));
       applyScheduleResponse(convId, data);
+      patrolsChanged();
       notify({
         message: data.schedule
           ? tr("Scheduled {0} ({1}).", [data.schedule.title, formatScheduleCadence(data.schedule)])
@@ -6701,6 +6751,7 @@ export function ChatExperience({
     if (!convId || isPendingKey(convId)) return false;
     try {
       applyScheduleResponse(convId, await queuePatrolCall(convId, () => call(convId)));
+      patrolsChanged();
       after?.(convId);
       return true;
     } catch (e) {
@@ -6897,6 +6948,97 @@ export function ChatExperience({
   useEffect(() => {
     if (railSearching && bootstrapped && !archivedLoaded) void refreshConversationsRef.current();
   }, [railSearching, bootstrapped, archivedLoaded]);
+
+  // ── Actions handed over from another page's sidebar ──────────────────────
+  // The same sidebar is on every page (docs/SIDEBAR.md). What a row's menu
+  // offers there that needs one of this page's dialogs or confirmations is
+  // noted, and this page carries it out with the same handlers a click in
+  // its own sidebar runs (shared/sidebar/chatHandoff.ts). Taken once the
+  // lists are in hand: on a warm return that is at once.
+  const openPatrolsFor = (conversation: ConversationSummary) => {
+    setProjectHome(null);
+    setTeamChatView(null);
+    if (activeConversationIdRef.current === conversation.id) {
+      setPatrolsOpen(true);
+      return;
+    }
+    void loadConversationRef.current(conversation.id).then(() => {
+      if (activeConversationIdRef.current === conversation.id) setPatrolsOpen(true);
+    });
+  };
+  const runHandoff = (h: ChatHandoff) => {
+    switch (h.kind) {
+      case "new-chat":
+        clearConversation(h.sealed || serverConfig.lockdownOnly ? { lockdown: true } : undefined);
+        return;
+      case "new-project":
+        openNewProjectDialog();
+        return;
+      case "select":
+        enterSelectMode();
+        return;
+      case "delete-temporary":
+        setConfirmBulkDelete(true);
+        return;
+      case "move":
+        void moveConversationToProject(h.conversationId, h.projectId);
+        return;
+      case "project":
+        if (h.action === "delete") {
+          setPendingProjectDelete(h.projectId);
+        } else {
+          setTeamChatView(null);
+          setProjectHome(null);
+          void startProjectChat(h.projectId);
+        }
+        return;
+      case "chat": {
+        const c = h.conversation;
+        if (h.action === "share") openShareDialog(c);
+        else if (h.action === "download") void downloadConversation(c);
+        else if (h.action === "transfer") setTransferDialog({ id: c.id, title: c.title });
+        else if (h.action === "workflow") setPromptSaveTarget(c);
+        else if (h.action === "task") void promoteConversation(c);
+        else if (h.action === "patrol") openPatrolsFor(c);
+        else if (h.action === "delete") setPendingDeleteConversation({ id: c.id, title: c.title });
+        else void requestArchive(c, h.action === "archive");
+      }
+    }
+  };
+  const runHandoffRef = useRef(runHandoff);
+  useEffect(() => {
+    runHandoffRef.current = runHandoff;
+  });
+  useEffect(() => {
+    if (!bootstrapped || isLoadingHistory) return;
+    const handoff = takeChatHandoff();
+    if (handoff) runHandoffRef.current(handoff);
+  }, [bootstrapped, isLoadingHistory]);
+
+  // What this page's sidebar lists, left for the next page's first paint
+  // (useSidebarLibrary): leaving Chat for Background tasks or Settings shows
+  // the same chats and projects at once, then reads them again.
+  useEffect(() => {
+    if (!bootstrapped) return;
+    rememberSidebarLibrary({
+      conversations,
+      archivedConversations,
+      serverConfig,
+      ...(projectsLoaded ? { projects } : {}),
+      ...(teamSharedLoaded ? { teamSharedConversations: railTeamSharedConversations } : {}),
+      chatOrders,
+    });
+  }, [
+    bootstrapped,
+    conversations,
+    archivedConversations,
+    serverConfig,
+    projects,
+    projectsLoaded,
+    railTeamSharedConversations,
+    teamSharedLoaded,
+    chatOrders,
+  ]);
 
   // ── mount effects, hoisted below their callback dependencies ────────────
   // These three effects all kick off work via callbacks declared above
@@ -7242,10 +7384,15 @@ export function ChatExperience({
     // another page (docs/SIDEBAR.md). Consumed and stripped like ?c=; the
     // project's home opens once the boot has settled.
     let projectLinkId: string | null = null;
+    // &settings=1: open the project's settings with its home (the sidebar's
+    // "Project settings…" and "Share…" from another page).
+    let projectLinkSettings = false;
     {
       const params = new URLSearchParams(window.location.search);
       const proj = params.get("project");
       if (proj !== null) {
+        projectLinkSettings = params.get("settings") === "1";
+        params.delete("settings");
         params.delete("project");
         const qs = params.toString();
         window.history.replaceState(
@@ -7473,7 +7620,7 @@ export function ChatExperience({
           const pendingHome = pendingHomeRef.current;
           pendingHomeRef.current = null;
           if (projectLinkId) {
-            setProjectHome({ id: projectLinkId });
+            setProjectHome({ id: projectLinkId, settings: projectLinkSettings || undefined });
           } else if (pendingHome) {
             openHomeElsewhere(pendingHome);
           }
@@ -7586,6 +7733,13 @@ export function ChatExperience({
             fallbackToTeamChatView: route === "live",
           });
         });
+      }
+      // A project link followed from another page's sidebar arrives on a
+      // warm session too: the same sidebar is on every page, and moving
+      // between pages keeps this one's state.
+      if (projectLinkId) {
+        setTeamChatView(null);
+        setProjectHome({ id: projectLinkId, settings: projectLinkSettings || undefined });
       }
     } else {
       void loadInitialState();
@@ -7706,14 +7860,13 @@ export function ChatExperience({
           continuously through the collapse transition. */}
       <div
         className={[
-          "grid h-[100dvh] grid-cols-[minmax(0,1fr)]",
-          dashboardActive ? "" : "sm:grid-cols-[auto_minmax(0,1fr)]",
+          "grid h-[100dvh] grid-cols-[minmax(0,1fr)] sm:grid-cols-[auto_minmax(0,1fr)]",
         ].join(" ")}
       >
-        {/* Dashboard view takes the whole screen: the rail stays mounted
-            (its search, scroll and drafts survive) but is not drawn. */}
-        {/* …except when the dashboard header's sidebar button slides it in
-            over the board (docs/SIDEBAR.md), with a scrim to dismiss it. It
+        {/* Dashboard view keeps the sidebar beside the board as its icon
+            strip (on a phone it is the drawer, as everywhere). Opened — the
+            strip's own expand button, or the header's on a phone — it slides
+            in over the board (docs/SIDEBAR.md), with a scrim to dismiss it. It
             takes the rail overlay's own layers (scrim z-[380], panel z-[390],
             as NavRail.tsx), below the menus the rail opens (z-[400]/z-[410],
             Menu.tsx) and its dialogs (DialogShell layer="rail", z-[420]):
@@ -7727,19 +7880,18 @@ export function ChatExperience({
             onClick={() => setSidebarOpen(false)}
           />
         ) : null}
+        {/* The slid-in sidebar leaves the page's flow: this holds the strip's
+            column so the board does not move under it. */}
+        {dashboardActive && sidebarOpen ? (
+          <div aria-hidden="true" className="hidden w-[3.75rem] shrink-0 sm:block" />
+        ) : null}
         <div
           ref={dashboardRailRef}
           data-dashboard-rail-wrapper=""
-          className={
-            dashboardActive
-              ? sidebarOpen
-                ? "fixed inset-y-0 left-0 z-[390] flex"
-                : "hidden"
-              : "contents"
-          }
+          className={dashboardActive && sidebarOpen ? "fixed inset-y-0 left-0 z-[390] flex" : "contents"}
         >
         <ConversationSidebar
-          collapse={railCollapse}
+          collapse={dashboardActive ? dashboardCollapse : railCollapse}
           sidebarOpen={sidebarOpen}
           setSidebarOpen={setSidebarOpen}
           branding={branding}
@@ -7764,6 +7916,7 @@ export function ChatExperience({
           chatOrders={chatOrders}
           onReorderChats={accountRole !== undefined && accountRole !== "viewer" ? reorderChats : undefined}
           canPinTeamChats={accountRole !== undefined && accountRole !== "viewer"}
+          readOnly={accountRole === "viewer"}
           recentSort={recentSort}
           onRecentSortChange={setRecentSort}
           toggleArchive={requestArchive}
@@ -7771,6 +7924,7 @@ export function ChatExperience({
           downloadConversation={downloadConversation}
           promoteConversation={promoteConversation}
           savePromptFromConversation={setPromptSaveTarget}
+          onOpenPatrols={openPatrolsFor}
           setPendingDeleteConversation={setPendingDeleteConversation}
           setConversationLabels={setConversationLabels}
           openShareDialog={openShareDialog}

@@ -48,7 +48,9 @@ describe("sidebar store", () => {
     mockFetch({ get: { layout: null, workspace_default: WORKSPACE } });
     await loadSidebar();
     expect(getSidebarState()).toMatchObject({ status: "ready", source: "workspace", own: null });
-    expect(getSidebarState().layout.items[0].id).toBe("tasks");
+    // "chat" rides first in every layout and is never a row; the workspace's
+    // own order follows it.
+    expect(getSidebarState().layout.items.map((i) => i.id).slice(0, 2)).toEqual(["chat", "tasks"]);
   });
 
   it("the cached layout belongs to the account that saved it", () => {
@@ -275,6 +277,17 @@ describe("Home on entry", () => {
     }
     const listsAnswer: { current: unknown } = { current: null };
     beforeEach(() => resetFallbackTargetsForTests());
+
+    it("opens a start page that is not kept at the top of the sidebar", async () => {
+      // "Set as start page" from a row's menu keeps the item in the layout
+      // hidden: it is the start page without being a top item.
+      listsAnswer.current = {
+        layout: normalizeLayout({ items: [{ id: "s-1", kind: "chat", ref: "c1", title: "Board", hidden: true }], home: "s-1" }),
+        workspace_default: null,
+      };
+      stubLists(["c1"]);
+      expect((await resolveEntryHome(1000))?.ref).toBe("c1");
+    });
 
     it("skips a workspace Home this account cannot open", async () => {
       listsAnswer.current = { layout: null, workspace_default: chatHome("admins-own") };

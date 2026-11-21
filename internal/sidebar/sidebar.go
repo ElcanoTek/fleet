@@ -54,8 +54,10 @@ const ViewDashboard = "dashboard"
 // A layout always carries every one of them (Normalize appends the missing).
 var BuiltinIDs = []string{"chat", "patrols", "tasks"}
 
-// SectionIDs are the rail's sections, in their default order.
-var SectionIDs = []string{"projects", "chats", "team"}
+// SectionIDs are the sidebar's lists, in their default order. "pinned" is the
+// person's pinned chats and projects; "team" is teammates' shared chats as a
+// list of their own, used only with SeparateLists.
+var SectionIDs = []string{"pinned", "projects", "chats", "team"}
 
 // PageRefs are the pages a "page" shortcut may open.
 var PageRefs = []string{"analytics", "help", "settings"}
@@ -117,6 +119,14 @@ type Layout struct {
 	// the person's own. A view preference only: it changes where chats are
 	// listed, never which chats the person may open.
 	SeparateLists bool `json:"separate_lists,omitempty"`
+	// StatusOff leaves a row's one status mark (a patrol's next check,
+	// sharing, Live, days left) off: rows are their titles alone. DatesOff
+	// lists Chats as one run instead of under Today, Yesterday, This week and
+	// Older. Both are stored as the opposite of the default, so a layout that
+	// says nothing — every layout saved before they existed — shows statuses
+	// and date groups. View preferences only.
+	StatusOff bool `json:"status_off,omitempty"`
+	DatesOff  bool `json:"dates_off,omitempty"`
 }
 
 // Parse decodes raw JSON and normalizes it. A malformed document or one that
@@ -131,8 +141,15 @@ func Parse(raw []byte) (Layout, error) {
 
 // Normalize validates l and returns its normalized form: free text cleaned,
 // every built-in item and section present (missing ones appended in their
-// default order), and a home that names a visible, non-patrols item (else "").
+// default order; a missing Pinned section goes first, hidden or folded as
+// the layout's Chats section is), and a home that names an item fleet can
+// open to (else "").
 // Normalize is idempotent: a normalized layout normalizes to itself.
+//
+// Home may name a hidden shortcut: a chat, project, task or page a person
+// set as their start page without keeping it at the top of the sidebar is
+// stored as a hidden item. It may not name a hidden built-in (hiding a
+// destination says it is not used), nor Patrols.
 func Normalize(l Layout) (Layout, error) {
 	if l.Version != Version {
 		return Layout{}, invalid("version must be %d", Version)
@@ -140,7 +157,11 @@ func Normalize(l Layout) (Layout, error) {
 	if len(l.Items) > MaxItems {
 		return Layout{}, invalid("at most %d items", MaxItems)
 	}
-	out := Layout{Version: Version, Compact: l.Compact, SeparateLists: l.SeparateLists, Items: make([]Item, 0, len(l.Items)+len(BuiltinIDs))}
+	out := Layout{
+		Version: Version, Compact: l.Compact, SeparateLists: l.SeparateLists,
+		StatusOff: l.StatusOff, DatesOff: l.DatesOff,
+		Items: make([]Item, 0, len(l.Items)+len(BuiltinIDs)),
+	}
 	seen := map[string]bool{}
 	for i, in := range l.Items {
 		it, err := normalizeItem(in)
@@ -180,6 +201,21 @@ func Normalize(l Layout) (Layout, error) {
 		}
 		out.Sections = append(out.Sections, Section{ID: in.ID, Label: label, Hidden: in.Hidden, Collapsed: in.Collapsed})
 	}
+	// A layout saved before Pinned was a section of its own gets it first.
+	// Pinned chats were then drawn at the top of the Chats section, so a
+	// person who hid Chats, or set it to start folded, made that choice for
+	// their pinned chats as well: the new section starts the same way, and
+	// nothing they had put out of sight comes back on its own.
+	if !seenSec["pinned"] {
+		pinned := Section{ID: "pinned"}
+		for _, sec := range out.Sections {
+			if sec.ID == "chats" {
+				pinned.Hidden, pinned.Collapsed = sec.Hidden, sec.Collapsed
+			}
+		}
+		out.Sections = append([]Section{pinned}, out.Sections...)
+		seenSec["pinned"] = true
+	}
 	for _, id := range SectionIDs {
 		if !seenSec[id] {
 			out.Sections = append(out.Sections, Section{ID: id})
@@ -188,10 +224,14 @@ func Normalize(l Layout) (Layout, error) {
 
 	if l.Home != "" {
 		for _, it := range out.Items {
-			if it.ID == l.Home && !it.Hidden && (it.Kind != KindBuiltin || it.ID != "patrols") {
-				out.Home = it.ID
+			if it.ID != l.Home {
+				continue
+			}
+			if it.Kind == KindBuiltin && (it.Hidden || it.ID == "patrols") {
 				break
 			}
+			out.Home = it.ID
+			break
 		}
 	}
 	return out, nil

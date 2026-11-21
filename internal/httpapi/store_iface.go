@@ -359,6 +359,9 @@ type chatStore interface {
 	GetMultiplayerConversation(ctx context.Context, callerEmail, convID string) (*store.Conversation, error)
 	ListMultiplayerRoster(ctx context.Context, callerEmail, convID string) ([]string, error)
 	ListSharedAndMultiplayerConversations(ctx context.Context, callerEmail string) ([]store.Conversation, error)
+	// SharedOrMultiplayerConversation: convID as that list gives it to the
+	// caller (the same query narrowed to the one chat), or nil.
+	SharedOrMultiplayerConversation(ctx context.Context, callerEmail, convID string) (*store.Conversation, error)
 	// Files in a team share (ADR-0079). Per-file share state is stored as
 	// exclusions (default shared); a teammate branch records its origin and
 	// the shared files copied into it; the team link resolves to a status
@@ -434,6 +437,10 @@ type chatStore interface {
 	CreateChatSchedule(ctx context.Context, in store.ChatScheduleInput) (*store.ChatSchedule, error)
 	ListChatSchedules(ctx context.Context, userEmail, convID string, includeTerminal bool) ([]store.ChatSchedule, error)
 	ListUserPatrols(ctx context.Context, userEmail string, limit, offset int) ([]store.UserPatrol, error)
+	ListSharedPatrols(ctx context.Context, userEmail string, limit int) ([]store.UserPatrol, error)
+	PatrolSkips(ctx context.Context, scheduleIDs []string) (map[string]*store.ChatScheduleSkipped, error)
+	GetUserPatrol(ctx context.Context, userEmail, scheduleID string) (*store.UserPatrol, error)
+	ListPatrolRuns(ctx context.Context, scheduleID string, limit int) ([]store.PatrolRun, error)
 	ChatOrders(ctx context.Context, userEmail string) (map[string][]string, error)
 	SetChatOrder(ctx context.Context, userEmail, scope string, ids []string) ([]string, error)
 	// Saved left-rail layouts (migration 0202): the user's own and the

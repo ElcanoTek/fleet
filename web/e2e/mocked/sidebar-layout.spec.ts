@@ -3,12 +3,13 @@ import AxeBuilder from "@axe-core/playwright";
 import { loginViaCookie } from "./_session";
 import { mockChatBoot } from "./_mocks";
 
-// The customizable sidebar (docs/SIDEBAR.md): the default layout is the rail
-// as it always was; a saved layout pins shortcuts (chats, dashboards,
-// projects, pages), hides, renames and reorders the destinations and the chat
-// page's sections, and names a Home that opens when fleet is opened; the
-// Customize panel edits it live and saves it with PUT /api/sidebar; a
-// workspace default applies to anyone without their own.
+// The customizable sidebar (docs/SIDEBAR.md): the default layout is Patrols
+// and Background tasks at the top, then Pinned, Projects and Chats; a saved
+// layout keeps shortcuts at the top (chats, dashboards, projects, pages),
+// hides, renames and reorders the top items and the sections, and names a
+// start page that opens when fleet is opened; the Customize panel edits it
+// live and saves it with PUT /api/sidebar; a workspace default applies to
+// anyone without their own.
 //
 // SIDEBAR_SHOTS=<dir> also saves a screenshot of each configuration there
 // (how the PR's screenshots were made); the assertions are the test.
@@ -107,19 +108,34 @@ function railNames(page: Page) {
   return page.getByTestId("rail-nav").locator(":scope > a, :scope > button").allInnerTexts();
 }
 
+// An entry of the Add / Pin picker (a searchable list). Scoped to the list:
+// the panel's "Fleet opens to" select has options of its own, and a chat can
+// be named in both.
+function pickerOption(page: Page, name: string | RegExp, exact = false) {
+  return page.getByRole("listbox").getByRole("option", { name, exact });
+}
+
 test.beforeEach(async ({ context, page }) => {
   await loginViaCookie(context);
   await page.setViewportSize({ width: 1360, height: 860 });
 });
 
-test("the default layout is the rail as it always was", async ({ page }) => {
+test("the default layout: Patrols and Background tasks at the top, then Pinned, Projects and Chats", async ({ page }) => {
   await setup(page);
   await page.goto("/chat");
-  await expect(page.getByTestId("nav-to-chat")).toBeVisible();
-  await expect(page.getByTestId("launchpad-button")).toBeVisible();
+  await expect(page.getByTestId("nav-to-patrols")).toBeVisible();
   await expect(page.getByTestId("nav-to-orchestrator")).toBeVisible();
+  // Chat is not a row: the pen beside the search field starts one.
+  await expect(page.getByTestId("nav-to-chat")).toHaveCount(0);
+  await expect(page.getByTestId("new-chat-button")).toBeVisible();
   await expect(page.getByTestId("rail-shortcut")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Projects", exact: true })).toBeVisible();
+  // The lists, in the default order, all inside the one scroller.
+  const sections = await page
+    .getByTestId("rail-body")
+    .locator('section[data-testid$="-section"]')
+    .evaluateAll((els) => els.map((el) => el.getAttribute("data-testid")));
+  expect(sections).toEqual(["pinned-section", "projects-section", "chats-section"]);
   await shot(page, "01-default");
 });
 
@@ -142,13 +158,16 @@ test("a saved layout pins shortcuts, renames, hides, reorders and marks Home", a
   await page.goto("/chat?c=c4");
   const nav = page.getByTestId("rail-nav");
   await expect(nav.getByText("Revenue board")).toBeVisible();
-  await expect(nav.getByText("Ask anything")).toBeVisible();
   await expect(nav.getByText("Automations")).toBeVisible();
-  await expect(page.getByTestId("launchpad-button")).toHaveCount(0);
-  await expect(nav.getByText("(Home)")).toHaveCount(1);
+  // The "chat" destination is kept in every layout but is never a row (so a
+  // name saved for it shows nowhere); a hidden destination is not drawn.
+  await expect(nav.getByText("Ask anything")).toHaveCount(0);
+  await expect(page.getByTestId("nav-to-patrols")).toHaveCount(0);
+  await expect(nav.getByText("(Start page)")).toHaveCount(1);
   const names = await railNames(page);
   expect(names[0]).toContain("Revenue board");
-  expect(names[0]).toContain("Dashboard");
+  // A row is its name; what it is rides its tooltip.
+  await expect(page.getByTestId("rail-shortcut").first()).toHaveAttribute("title", "Revenue board · Dashboard");
   // The Projects section is hidden; the chats still list.
   await expect(page.getByRole("button", { name: "Projects", exact: true })).toHaveCount(0);
   await expect(page.getByTestId("pinned-section")).toBeVisible();
@@ -227,24 +246,36 @@ test("Customize: presets, adding a shortcut and renaming save to the account", a
   await expect(panel).toBeVisible();
   await shot(page, "04-customize-panel");
 
+  // The top of the sidebar lists what is at the top: Patrols and Background
+  // tasks. (Chat is not a row there, so it is not a row here.)
+  await expect(panel.getByTestId("sidebar-editor-item")).toHaveCount(2);
+
   // Add a dashboard: pick the chat, then make it open as a dashboard.
   await panel.getByTestId("sidebar-add-shortcut").click();
-  await page.getByRole("option", { name: /Revenue board/ }).click();
+  await pickerOption(page, /Revenue board/).click();
   const row = panel.getByTestId("sidebar-editor-item").filter({ has: page.getByPlaceholder("Revenue board") });
   await row.getByRole("button", { name: "Dashboard" }).click();
   await row.getByTestId("sidebar-item-home").click();
-  // The rail shows it at once, at the top, as Home.
-  await expect(page.getByTestId("rail-nav").getByText("Revenue board")).toBeVisible();
+  // The sidebar shows it at once, among the top items, as the start page; the
+  // panel's "Fleet opens to" says the same.
+  const nav = page.getByTestId("rail-nav");
+  await expect(nav.getByText("Revenue board")).toBeVisible();
+  await expect(nav.getByText("(Start page)")).toHaveCount(1);
+  await expect(panel.getByTestId("sidebar-home-select").locator("option:checked")).toHaveText("Revenue board · Dashboard");
+  expect((await railNames(page)).at(-1)).toContain("Revenue board");
 
-  // A preset rearranges the destinations and keeps the shortcut.
+  // A preset rearranges the top items and keeps the shortcut and the start
+  // page: Dashboards first puts what the person kept above Patrols.
   await panel.getByTestId("sidebar-preset-dashboards").click();
-  await expect(page.getByTestId("launchpad-button")).toHaveCount(0);
-  await expect(page.getByTestId("rail-nav").getByText("Revenue board")).toBeVisible();
+  await expect(panel.getByTestId("sidebar-preset-dashboards")).toHaveAttribute("aria-pressed", "true");
+  await expect.poll(async () => (await railNames(page))[0]).toContain("Revenue board");
+  await expect(page.getByTestId("nav-to-patrols")).toBeVisible();
+  await expect(nav.getByText("(Start page)")).toHaveCount(1);
 
   // Rename a destination.
-  const chatRow = panel.getByTestId("sidebar-editor-item").filter({ has: page.getByPlaceholder("Chat", { exact: true }) });
-  await chatRow.getByTestId("sidebar-item-name").fill("Ask the agent");
-  await expect(page.getByTestId("nav-to-chat")).toContainText("Ask the agent");
+  const tasksRow = panel.getByTestId("sidebar-editor-item").filter({ has: page.getByPlaceholder("Background tasks", { exact: true }) });
+  await tasksRow.getByTestId("sidebar-item-name").fill("Automations");
+  await expect(page.getByTestId("nav-to-orchestrator")).toContainText("Automations");
   await shot(page, "05-customize-live-preview");
 
   await expect.poll(() => puts.length).toBeGreaterThan(0);
@@ -252,10 +283,10 @@ test("Customize: presets, adding a shortcut and renaming save to the account", a
     .poll(() => {
       const last = puts[puts.length - 1] as { items?: { kind: string; ref?: string; view?: string; label?: string }[]; home?: string };
       const board = last.items?.find((i) => i.kind === "chat" && i.ref === "c2");
-      const chat = last.items?.find((i) => i.kind === "builtin" && (i as { id?: string }).id === "chat");
-      return [board?.view, chat?.label, Boolean(last.home)];
+      const tasks = last.items?.find((i) => i.kind === "builtin" && (i as { id?: string }).id === "tasks");
+      return [board?.view, tasks?.label, Boolean(last.home)];
     })
-    .toEqual(["dashboard", "Ask the agent", true]);
+    .toEqual(["dashboard", "Automations", true]);
 
   const results = await new AxeBuilder({ page })
     .include('[data-testid="sidebar-customizer"]')
@@ -346,20 +377,33 @@ async function teamRowGaps(page: Page) {
   );
 }
 
-test("a Team chats row's ⋯ never covers its badges or owner name", async ({ page }) => {
+test("a teammate's row's status steps aside for its ⋯, and the title keeps clear of it", async ({ page }) => {
   await setupTeamChats(page, CROWDED_TEAM_CHATS);
   await page.goto("/chat");
-  const first = page.getByTestId("team-shared-conv-row").first();
-  await first.hover();
-  const gaps = await teamRowGaps(page);
-  expect(gaps).toHaveLength(3);
-  for (const g of gaps) {
-    expect(g.drawn).toBeGreaterThanOrEqual(4);
-    expect(g.tap).toBeGreaterThanOrEqual(4);
+  const rows = page.getByTestId("team-shared-conv-row");
+  await expect(rows).toHaveCount(3);
+  for (let i = 0; i < 3; i++) {
+    const row = rows.nth(i);
+    const kebab = row.locator("..").getByTestId("team-chat-options");
+    // At rest (a mouse elsewhere): the status shows, the ⋯ is not drawn.
+    await page.mouse.move(900, 500);
+    await expect(row.getByTestId("row-status")).toBeVisible();
+    await expect.poll(() => kebab.evaluate((el) => getComputedStyle(el).opacity)).toBe("0");
+    // Under the pointer: the ⋯ takes the status's place (one or the other,
+    // never one over the other), and the title ends before it.
+    await row.hover();
+    await expect.poll(() => kebab.evaluate((el) => getComputedStyle(el).opacity)).toBe("1");
+    await expect(row.getByTestId("row-status")).toBeHidden();
+    const gap = await row.evaluate((el) => {
+      const title = el.querySelector(".truncate")!.getBoundingClientRect();
+      const k = el.parentElement!.querySelector('[data-testid="team-chat-options"]')!.getBoundingClientRect();
+      return k.left - title.right;
+    });
+    expect(gap).toBeGreaterThanOrEqual(4);
   }
 });
 
-test("a Team chats row has a menu: pin it, or copy the link that opens it", async ({ page, context }) => {
+test("a teammate's row has a menu: pin it, keep it at the top, or copy the link that opens it", async ({ page, context }) => {
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
   const { puts } = await setupTeamChats(page);
   await page.goto("/chat");
@@ -369,15 +413,17 @@ test("a Team chats row has a menu: pin it, or copy the link that opens it", asyn
   const menu = page.getByRole("menu", { name: "Options for Incident room" });
   // Only what a teammate can do with someone else's chat.
   // (Download is for a Multiplayer chat the person takes part in, as this is.)
-  await expect(menu.getByRole("menuitem")).toHaveText(["Pin", "Add to sidebar", "Copy link", "Download chat…"]);
-  await menu.getByTestId("add-to-sidebar").click();
-  await expect(page.getByTestId("rail-shortcut")).toContainText("Incident room");
-  await expect.poll(() => puts.length).toBeGreaterThan(0);
+  await expect(menu.getByRole("menuitem")).toHaveText([
+    "Pin",
+    "Move to the top",
+    "Set as start page",
+    "Copy link",
+    "Download chat…",
+  ]);
 
   // A chat reached only through Multiplayer copies its chat link (a team
   // link would refuse it)...
   const origin = new URL(page.url()).origin;
-  await row.getByTestId("team-chat-options").click();
   await menu.getByRole("menuitem", { name: "Copy link" }).click();
   await expect(menu.getByRole("menuitem", { name: "Copied ✓" })).toBeVisible();
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(`${origin}/chat?c=m1`);
@@ -390,11 +436,21 @@ test("a Team chats row has a menu: pin it, or copy the link that opens it", asyn
   // Read-only for this person: no download.
   await expect(page.getByRole("menu", { name: "Options for Q4 planning" }).getByRole("menuitem")).toHaveText([
     "Pin",
-    "Add to sidebar",
+    "Move to the top",
+    "Set as start page",
     "Copy link",
   ]);
   await page.getByRole("menu", { name: "Options for Q4 planning" }).getByRole("menuitem", { name: "Copy link" }).click();
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(`${origin}/chat?team=t1`);
+  await expect(page.getByRole("menu", { name: "Options for Q4 planning" })).toBeHidden();
+
+  // Move to the top keeps it among the top items, saved to the account, and
+  // the menu then offers the way back.
+  await row.hover();
+  await row.getByTestId("team-chat-options").click();
+  await menu.getByTestId("add-to-sidebar").click();
+  await expect(page.getByTestId("rail-shortcut")).toContainText("Incident room");
+  await expect.poll(() => puts.length).toBeGreaterThan(0);
 });
 
 test("copying a Team chats link from the keyboard returns focus to the row's menu button", async ({ page, context }) => {
@@ -575,7 +631,7 @@ test.describe("on a touch screen", () => {
     // ...and so are the items of the menu it opens.
     await team.getByTestId("team-chat-options").tap();
     const items = page.getByRole("menu", { name: "Options for Incident room" }).getByRole("menuitem");
-    await expect(items).toHaveCount(4); // Pin, Add to sidebar, Copy link, Download chat…
+    await expect(items).toHaveCount(5); // Pin, Move to the top, Set as start page, Copy link, Download chat…
     for (const item of await items.all()) {
       expect((await item.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(44);
     }
@@ -624,13 +680,13 @@ test("pinning is per item: one of many multiplayer chats, two of many dashboards
 
   // One multiplayer chat, from the Customize panel's picker.
   await panel.getByTestId("sidebar-add-shortcut").click();
-  await page.getByRole("option", { name: "Incident room", exact: true }).click();
+  await pickerOption(page, "Incident room", true).click();
   await expect(page.getByTestId("rail-shortcut")).toHaveCount(1);
 
   // Two of the four dashboards, from the same picker.
   for (const name of ["Revenue board", "Churn board"]) {
     await panel.getByTestId("sidebar-add-shortcut").click();
-    await page.getByRole("option", { name: new RegExp(name) }).click();
+    await pickerOption(page, new RegExp(name)).click();
     const row = panel.getByTestId("sidebar-editor-item").filter({ has: page.getByPlaceholder(name) });
     await row.getByRole("button", { name: "Dashboard" }).click();
   }
@@ -695,7 +751,7 @@ test("with separate lists, Team chats stay visible when Chats starts folded", as
   await expect(page.getByTestId("team-shared-conv-row")).toContainText("All-hands war room");
 });
 
-test("One list for all chats is the default: teammates' chats are in the Chats list, temporary chats are marked", async ({ page }) => {
+test("One list for all chats is the default: teammates' chats are in Chats, and Customize gives them a list of their own or hides them", async ({ page }) => {
   const { puts } = await setupTeamChats(page);
   await page.goto("/chat");
 
@@ -705,18 +761,28 @@ test("One list for all chats is the default: teammates' chats are in the Chats l
   await expect(page.getByTestId("team-chats-section")).toHaveCount(0);
   await expect(list).toContainText("My own notes");
   await expect(list).toContainText("Incident room");
-  // The person's own chat is temporary and says so; a teammate's is not theirs to lose.
-  await expect(list.getByTestId("temporary-mark")).toHaveCount(1);
-  await expect(list.getByTestId("temporary-mark")).toHaveAttribute("title", /90 days/);
-  // The mark does not rename the row; a screen reader gets it as the row's description.
-  await expect(list.getByRole("button", { name: "My own notes", exact: true })).toHaveAccessibleDescription(/90 days/);
+  // The person's own chat is temporary with months left: its row is its
+  // title and nothing else. A teammate's row says whose it is.
+  const mine = list.getByRole("button", { name: "My own notes", exact: true });
+  await expect(mine.getByTestId("row-status")).toHaveCount(0);
+  await expect(mine).not.toHaveAttribute("aria-describedby");
+  await expect(list.getByTestId("team-shared-conv-row").filter({ hasText: "Incident room" })).toHaveAccessibleDescription(
+    /Shared by ops@example\.com/,
+  );
+  // With teammates' chats in the list, chips narrow it to one or the other.
+  await page.getByTestId("chat-scope-shared").click();
+  await expect(list.locator("[data-rail-row]")).toHaveCount(2);
+  await page.getByTestId("chat-scope-mine").click();
+  await expect(list.locator("[data-rail-row]")).toHaveText(["My own notes"]);
+  await page.getByTestId("chat-scope-all").click();
 
   await page.getByTestId("account-menu-button").click();
   await page.getByTestId("customize-sidebar").click();
   const panel = page.getByTestId("sidebar-customizer");
-  await expect(panel.getByTestId("sidebar-editor-unified")).toBeChecked();
-  // The panel shows where Team chats went.
-  await expect(panel.getByTestId("sidebar-editor-team-merged")).toHaveText("In Chats");
+  // The panel shows where teammates' chats are.
+  const mode = panel.getByTestId("sidebar-editor-team-mode");
+  await expect(mode).toHaveAttribute("data-value", "chats");
+  await expect(mode.getByRole("button", { name: "In Chats" })).toHaveAttribute("aria-pressed", "true");
 
   const results = await new AxeBuilder({ page })
     .include('[data-testid="unified-chat-list"]')
@@ -725,16 +791,24 @@ test("One list for all chats is the default: teammates' chats are in the Chats l
     .analyze();
   expect(results.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(" ")).join(", ")}`)).toEqual([]);
 
-  // Separate lists are one switch away, and saved to the account.
-  await panel.getByTestId("sidebar-editor-unified").click();
-  await expect(page.getByTestId("team-chats-section")).toBeVisible();
-  await expect(page.getByTestId("unified-chat-list")).toHaveCount(0);
-  await expect(page.getByTestId("temporary-mark")).toHaveCount(0);
+  // A list of their own is one press away, and saved to the account.
+  await mode.getByRole("button", { name: "Own list" }).click();
+  await expect(page.getByTestId("team-chats-section").getByTestId("team-shared-conv-row")).toHaveCount(2);
+  // Chats is the person's own again, so it has nothing to narrow: no chips.
+  await expect(page.getByTestId("chat-scope")).toHaveCount(0);
   await expect.poll(() => (puts.at(-1) as { separate_lists?: boolean } | undefined)?.separate_lists).toBe(true);
 
+  // Hidden: not listed at all.
+  await mode.getByRole("button", { name: "Hidden" }).click();
+  await expect(page.getByTestId("team-chats-section")).toHaveCount(0);
+  await expect(page.getByTestId("team-shared-conv-row")).toHaveCount(0);
+  await expect
+    .poll(() => (puts.at(-1) as { sections?: { id: string; hidden?: boolean }[] } | undefined)?.sections?.find((x) => x.id === "team")?.hidden)
+    .toBe(true);
+
   // And back.
-  await panel.getByTestId("sidebar-editor-unified").click();
-  await expect(page.getByTestId("unified-chat-list")).toBeVisible();
+  await mode.getByRole("button", { name: "In Chats" }).click();
+  await expect(page.getByTestId("unified-chat-list").getByTestId("team-shared-conv-row")).toHaveCount(2);
   await expect.poll(() => (puts.at(-1) as { separate_lists?: boolean } | undefined)?.separate_lists).toBeUndefined();
 });
 
@@ -777,15 +851,22 @@ test("the sidebar over a dashboard is a modal drawer: Escape closes it, not the 
   await page.goto("/chat?c=c2");
   await page.getByTestId("dashboard-enter").click();
   await expect(page.getByTestId("dashboard-hud")).toBeVisible();
-  const opener = page.getByTestId("dashboard-sidebar-button");
+  // Beside the board the sidebar is its icon strip (there is always a way
+  // back to a chat); the header's own sidebar button is the phone's.
+  await expect(page.getByTestId("rail-nav")).toBeVisible();
+  await expect(page.getByTestId("dashboard-sidebar-button")).toBeHidden();
+  await expect(page.getByTestId("search-input")).toBeHidden();
+  const opener = page.getByTestId("rail-expand");
   await opener.click();
-  const rail = page.getByTestId("rail-nav");
-  await expect(rail).toBeVisible();
+  // Opened, the whole sidebar slides in over the board, above a scrim.
+  await expect(page.getByTestId("search-input")).toBeVisible();
+  await expect(page.getByTestId("dashboard-rail-scrim")).toBeVisible();
   await expect.poll(() => page.evaluate(() => document.activeElement?.closest("[data-dashboard-rail-wrapper]") !== null)).toBe(true);
   await page.keyboard.press("Escape");
-  await expect(rail).toBeHidden();
+  await expect(page.getByTestId("search-input")).toBeHidden();
+  await expect(page.getByTestId("dashboard-rail-scrim")).toHaveCount(0);
   await expect(page.getByTestId("dashboard-hud")).toBeVisible();
-  await expect(opener).toBeFocused();
+  await expect(page.getByTestId("rail-expand")).toBeFocused();
 });
 
 test("over a dashboard, the sidebar's menus open in front of it", async ({ page }) => {
@@ -793,8 +874,11 @@ test("over a dashboard, the sidebar's menus open in front of it", async ({ page 
   await page.goto("/chat?c=c2");
   await page.getByTestId("dashboard-enter").click();
   await expect(page.getByTestId("dashboard-hud")).toBeVisible();
-  await page.getByTestId("dashboard-sidebar-button").click();
-  await expect(page.getByTestId("rail-nav")).toBeVisible();
+  const openDrawer = async () => {
+    await page.getByTestId("rail-expand").click();
+    await expect(page.getByTestId("dashboard-rail-scrim")).toBeVisible();
+  };
+  await openDrawer();
   // What a person sees at a menu's centre is the menu, not the drawer or its scrim.
   const onTop = (menu: ReturnType<Page["locator"]>) =>
     menu.evaluate((el) => {
@@ -812,7 +896,7 @@ test("over a dashboard, the sidebar's menus open in front of it", async ({ page 
   await page.keyboard.press("Escape");
   await expect(page.getByTestId("sidebar-customizer")).toBeHidden();
   // A chat row's ⋯ menu too.
-  if (!(await page.getByTestId("rail-nav").isVisible())) await page.getByTestId("dashboard-sidebar-button").click();
+  if (!(await page.getByTestId("dashboard-rail-scrim").isVisible())) await openDrawer();
   const kebab = page.getByRole("button", { name: /^Conversation options for / }).first();
   await kebab.focus();
   await page.keyboard.press("Enter");
@@ -848,7 +932,7 @@ test("Start from my sidebar never copies a sidebar that failed to load", async (
       ? r.fulfill({ status: 502, body: "down" })
       : r.fulfill({
           json: {
-            layout: { version: 1, items: [{ id: "tasks", kind: "builtin", label: "Ops" }], sections: [] },
+            layout: { version: 1, items: [{ id: "patrols", kind: "builtin", label: "Ops" }], sections: [] },
             workspace_default: null,
           },
         }),
@@ -856,7 +940,8 @@ test("Start from my sidebar never copies a sidebar that failed to load", async (
   await page.route("**/api/admin/sidebar", (r: Route) =>
     r.fulfill({
       json: {
-        layout: { version: 1, items: [{ id: "chat", kind: "builtin", label: "Team default" }], sections: [] },
+        // (Named on Patrols, the editor's first row: Chat is not a row.)
+        layout: { version: 1, items: [{ id: "patrols", kind: "builtin", label: "Team default" }], sections: [] },
         updated_by: "boss@example.com",
         updated_at: 1_763_000_000,
       },
@@ -883,8 +968,8 @@ test("your own sidebar can pin a private chat; the workspace sidebar offers only
   await page.getByTestId("customize-sidebar").click();
   const panel = page.getByTestId("sidebar-customizer");
   await panel.getByTestId("sidebar-add-shortcut").click();
-  await expect(page.getByRole("option", { name: /Vendor comparison/ })).toBeVisible();
-  await page.getByRole("option", { name: /Vendor comparison/ }).click();
+  await expect(pickerOption(page, /Vendor comparison/)).toBeVisible();
+  await pickerOption(page, /Vendor comparison/).click();
   await expect(page.getByTestId("rail-nav").getByText("Vendor comparison")).toBeVisible();
 
   // Workspace: the same private chat is not offered; the multiplayer chat is.
@@ -902,9 +987,9 @@ test("your own sidebar can pin a private chat; the workspace sidebar offers only
   // A private pin already in the workspace default is flagged.
   await expect(editor.getByTestId("sidebar-item-not-shared")).toHaveCount(1);
   await editor.getByTestId("sidebar-add-shortcut").click();
-  await expect(page.getByRole("option", { name: /All-hands war room/ }).first()).toBeVisible();
-  await expect(page.getByRole("option", { name: /Vendor comparison/ })).toHaveCount(0);
-  await expect(page.getByRole("option", { name: /Draft launch email/ })).toHaveCount(0);
+  await expect(pickerOption(page, /All-hands war room/).first()).toBeVisible();
+  await expect(pickerOption(page, /Vendor comparison/)).toHaveCount(0);
+  await expect(pickerOption(page, /Draft launch email/)).toHaveCount(0);
 });
 
 test("the sidebar cannot be changed until the saved one has loaded", async ({ page }) => {
@@ -957,7 +1042,12 @@ test("a pin to a deleted project reads as not available once projects have loade
   });
   await page.route("**/api/projects", (r: Route) => r.fulfill({ json: { projects: [] } }));
   await page.goto("/chat");
-  await expect(page.getByTestId("rail-shortcut")).toContainText("Not available to you");
+  // The row keeps its name (so it can be found and removed), dimmed, and
+  // says why in its tooltip.
+  const gone = page.getByTestId("rail-shortcut");
+  await expect(gone).toHaveText("Old project");
+  await expect(gone).toHaveAttribute("title", "Old project — not available to you");
+  await expect(gone).toHaveClass(/opacity-55/);
 });
 
 test("the workspace editor flags an archived chat pinned there, and never copies Analytics", async ({ page }) => {

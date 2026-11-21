@@ -626,6 +626,30 @@ func (s *Store) ListMultiplayerRoster(ctx context.Context, callerEmail, convID s
 // team_id gets their accessible multiplayer conversations (or an empty slice)
 // instead of ErrNoTeam.
 func (s *Store) ListSharedAndMultiplayerConversations(ctx context.Context, callerEmail string) ([]Conversation, error) {
+	return s.sharedAndMultiplayerConversations(ctx, callerEmail, "")
+}
+
+// SharedOrMultiplayerConversation returns convID as
+// ListSharedAndMultiplayerConversations lists it for the caller, or nil when
+// it is not in that set. It runs the same query, narrowed to the one
+// conversation, so the rule has one copy and the answer does not depend on
+// how long the caller's list is. The row is the caller's view of the chat:
+// Multiplayer is false for a reader excluded from (or not admitted to) a
+// Multiplayer chat they can still read as a team chat.
+func (s *Store) SharedOrMultiplayerConversation(ctx context.Context, callerEmail, convID string) (*Conversation, error) {
+	if strings.TrimSpace(convID) == "" {
+		return nil, nil
+	}
+	got, err := s.sharedAndMultiplayerConversations(ctx, callerEmail, convID)
+	if err != nil || len(got) == 0 {
+		return nil, err
+	}
+	return &got[0], nil
+}
+
+// sharedAndMultiplayerConversations is the listing, optionally narrowed to
+// one conversation (onlyID != "").
+func (s *Store) sharedAndMultiplayerConversations(ctx context.Context, callerEmail, onlyID string) ([]Conversation, error) {
 	callerEmail = normalizeEmail(callerEmail)
 	if callerEmail == "" {
 		return []Conversation{}, nil
@@ -663,8 +687,9 @@ func (s *Store) ListSharedAndMultiplayerConversations(ctx context.Context, calle
 		    )
 		    OR (c.team_visible = TRUE AND $2 <> '' AND c.team_shared_with = $2 AND c.team_shared_with_id = (SELECT t.id FROM teams t WHERE t.name = $2))
 		  )
+		  AND ($3 = '' OR c.id = $3)
 		ORDER BY c.updated_at DESC, c.id DESC`,
-		callerEmail, callerTeam,
+		callerEmail, callerTeam, onlyID,
 	)
 	if err != nil {
 		return nil, err

@@ -316,6 +316,7 @@
     "path escapes workspace",
     "path is a directory; use ?format=zip to download the workspace",
     "path is not a regular file",
+    "patrol not found",
     "permissions cannot be combined with role; set one or the other",
     "permissions cannot be combined with type; a typed key derives its permissions from its type",
     "persona id required",

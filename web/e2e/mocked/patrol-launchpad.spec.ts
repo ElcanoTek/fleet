@@ -4,9 +4,11 @@ import AxeBuilder from "@axe-core/playwright";
 import { loginViaCookie } from "./_session";
 
 // Mocked e2e for the Patrol Launchpad (docs/PATROL-LAUNCHPAD.md): the
-// top-bar button opens the wizard on any surface (the Guides here), it walks
-// to a launched patrol through the real bundle and Go gateway, and the dialog
-// passes axe in both colour schemes.
+// sidebar's + menu ("New patrol") opens the wizard on any page (the Guides
+// here), it walks to a launched patrol through the real bundle and Go
+// gateway, and the dialog passes axe in both colour schemes. The Patrols page
+// lists the patrols a person already has and is the other way in ("Use guided
+// setup").
 
 type Call = { url: string; method: string; body: unknown };
 
@@ -53,9 +55,19 @@ async function mockShell(page: Page, calls: Call[], patrols: unknown[] = []) {
     r.fulfill({ json: { personas: ["assistant", "trader"], default: "assistant", user_personas: [] } }),
   );
   await page.route("**/api/conversations", (r) => {
+    // The sidebar on every page reads the person's chats (none here); the
+    // wizard's POST creates the patrol's chat.
+    if (r.request().method() === "GET") return r.fulfill({ json: { conversations: [] } });
     record(r);
     return r.fulfill({ json: { id: "conv-9" } });
   });
+  await page.route("**/api/conversations?*", (r) => r.fulfill({ json: { conversations: [] } }));
+  await page.route("**/api/conversations/order", (r) => r.fulfill({ json: { orders: {} } }));
+  await page.route("**/api/projects", (r) => r.fulfill({ json: { projects: [] } }));
+  await page.route("**/api/server-config", (r) =>
+    r.fulfill({ json: { lockdown_available: false, lockdown_only: false, lockdown_allowed_models: [] } }),
+  );
+  await page.route("**/api/sidebar", (r) => r.fulfill({ json: { layout: null, workspace_default: null } }));
   await page.route("**/api/conversations/conv-9/**", (r) => {
     record(r);
     const path = new URL(r.request().url()).pathname;
@@ -73,10 +85,11 @@ test("the Launchpad walks from nothing to a launched patrol", async ({ page }) =
   await mockShell(page, calls);
   await page.goto("/help");
 
-  const button = page.getByTestId("launchpad-button");
-  await expect(button).toBeVisible({ timeout: 15_000 });
-  await expect(page.getByTestId("launchpad-new-dot")).toBeVisible();
-  await button.click();
+  // "New patrol" in the sidebar's + menu, on a page that is not Chat.
+  const plus = page.getByTestId("new-menu-button");
+  await expect(plus).toBeVisible({ timeout: 15_000 });
+  await plus.click();
+  await page.getByTestId("new-menu-patrol").click();
 
   const dialog = page.getByRole("dialog", { name: "Patrol Launchpad" });
   await expect(dialog).toBeVisible();
@@ -172,37 +185,51 @@ for (const scheme of ["light", "dark"] as const) {
   });
 }
 
-test("with patrols already running, Patrols lists them and offers New patrol", async ({ page }) => {
+test("with patrols already running, the Patrols page lists them and offers the guided setup", async ({ page }) => {
   await mockShell(page, [], [
     { id: "s1", conversation_id: "c1", title: "Deal sweep", conversation_title: "Deals chat", cron: "0 8 * * 1-5", status: "active" },
     { id: "s2", conversation_id: "c2", title: "Inbox triage", conversation_title: "Inbox triage", cron: "0 */2 * * *", status: "paused" },
   ]);
   await page.goto("/help");
-  await page.getByTestId("launchpad-button").click();
-  const menu = page.getByRole("menu", { name: "Patrols" });
-  await expect(menu).toBeVisible({ timeout: 15_000 });
-  await expect(menu.getByText("Each patrol is a chat")).toBeVisible();
-  await expect(page.getByTestId("patrols-menu-item-s2")).toContainText("Paused");
+  // Patrols is a page now (it was a menu): the sidebar's row leads to it.
+  await page.getByTestId("nav-to-patrols").click();
+  await expect(page).toHaveURL(/\/patrols$/);
+  const cards = page.getByTestId("patrol-card");
+  await expect(cards).toHaveCount(2, { timeout: 15_000 });
+  await expect(page.getByTestId("patrols-count")).toHaveText("2 patrols");
+  await expect(cards.nth(0)).toContainText("Deal sweep");
+  await expect(cards.nth(0)).toContainText("Deals chat");
+  await expect(page.locator('[data-patrol-id="s2"]').getByTestId("patrol-next")).toHaveText("paused");
+  // Listing them starts nothing: the wizard opens only when asked for.
   await expect(page.getByRole("dialog", { name: "Patrol Launchpad" })).toHaveCount(0);
-  await page.getByTestId("patrols-menu-new").click();
+  // New patrol opens the short form in the page; the wizard is one press on.
+  await page.getByTestId("patrols-new").click();
+  await page.getByTestId("patrols-guided").click();
   await expect(page.getByRole("dialog", { name: "Patrol Launchpad" })).toBeVisible();
 });
 
-test("a long Patrols menu stays inside the viewport and scrolls to New patrol", async ({ page }) => {
+test("a long list of patrols scrolls in the page, with New patrol always in reach", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 520 });
   const many = Array.from({ length: 40 }, (_, i) => ({
     id: `s${i}`, conversation_id: `c${i}`, title: `Patrol ${i}`, conversation_title: "x", cron: "0 8 * * *", status: "active",
   }));
   await mockShell(page, [], many);
-  await page.goto("/help");
-  await page.getByTestId("launchpad-button").click();
-  const menu = page.getByRole("menu", { name: "Patrols" });
-  await expect(menu).toBeVisible({ timeout: 15_000 });
-  const box = await menu.boundingBox();
-  expect(box && box.y >= 0 && box.y + box.height <= 520).toBe(true);
-  const newPatrol = page.getByTestId("patrols-menu-new");
-  await newPatrol.scrollIntoViewIfNeeded();
+  await page.goto("/patrols");
+  const cards = page.getByTestId("patrol-card");
+  await expect(cards).toHaveCount(40, { timeout: 15_000 });
+  // The list is the page's to scroll (it was a menu that had to fit the
+  // window): the header and its New patrol button stay put above it.
+  const newPatrol = page.getByTestId("patrols-new");
   await expect(newPatrol).toBeInViewport();
+  await cards.last().scrollIntoViewIfNeeded();
+  await expect(cards.last()).toBeInViewport();
+  await expect(newPatrol).toBeInViewport();
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+  expect(overflow).toBeLessThanOrEqual(1);
+  // Search narrows it.
+  await page.getByTestId("patrols-search").fill("Patrol 37");
+  await expect(cards).toHaveCount(1);
+  await expect(page.getByTestId("patrols-count")).toHaveText("1 of 40");
 });
 
 test("on a phone, closing the wizard puts the focus on the visible Open sidebar button", async ({ page }) => {
@@ -210,7 +237,8 @@ test("on a phone, closing the wizard puts the focus on the visible Open sidebar 
   await mockShell(page, []);
   await page.goto("/help");
   await page.getByRole("button", { name: "Open sidebar", exact: true }).click();
-  await page.getByTestId("launchpad-button").click(); // no patrols: the wizard opens, the drawer closes
+  await page.getByTestId("new-menu-button").click();
+  await page.getByTestId("new-menu-patrol").click(); // the wizard opens, the drawer closes
   const dialog = page.getByRole("dialog", { name: "Patrol Launchpad" });
   await expect(dialog).toBeVisible({ timeout: 15_000 });
   await page.keyboard.press("Escape");

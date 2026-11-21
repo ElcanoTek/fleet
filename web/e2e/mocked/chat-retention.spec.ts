@@ -6,11 +6,14 @@ import { mockChatBoot } from "./_mocks";
 
 // Mocked e2e for the warning before a temporary chat is deleted
 // (docs/CHAT-RETENTION.md). A temporary chat is deleted after a period without
-// activity; for the last days of that period the rail marks it with the days
-// left and counts such chats under the heading, and the chat itself carries a
-// notice with the keep action. A chat with months left says none of this.
+// activity; for the last days of that period its row's one status is the days
+// left, such chats are counted under the heading, and the chat itself carries
+// a notice with the keep action. A chat with months left says none of this:
+// a temporary chat's row is just its title until then.
 
 const DAY = 86_400;
+// A row's one status when it is the days left before the chat is deleted.
+const EXPIRING = '[data-testid="row-status"][data-status="expiring"]';
 const idleFor = (days: number) => Math.floor(Date.now() / 1000) - days * DAY - 3600;
 
 const CONVERSATIONS = [
@@ -49,10 +52,14 @@ test("a temporary chat near the end of its window says so in the rail and in the
   // The rail: one chat is counted, and only that row carries the countdown.
   const notice = page.getByTestId("expiring-chats-notice");
   await expect(notice).toContainText("1 chat will be deleted soon.");
-  await expect(page.getByTestId("expiring-mark")).toHaveCount(1);
-  await expect(page.getByTestId("expiring-mark")).toHaveText("5d");
+  await expect(page.locator(EXPIRING)).toHaveCount(1);
   const row = page.locator("aside").getByRole("button", { name: "Idle for months", exact: true });
+  await expect(row.locator(EXPIRING)).toHaveText("5d");
   await expect(row).toHaveAccessibleDescription(/deleted in 5 days/);
+  // The other temporary chat has months left: its row says nothing.
+  await expect(
+    page.locator("aside").getByRole("button", { name: "Started today", exact: true }).getByTestId("row-status"),
+  ).toHaveCount(0);
 
   // The count leads to the chat; the chat says how long it has left.
   await notice.click();
@@ -72,7 +79,7 @@ test("a temporary chat near the end of its window says so in the rail and in the
   // Pin to keep: the chat is no longer temporary, so every warning goes.
   await banner.getByRole("button", { name: "Pin to keep" }).click();
   await expect(banner).toHaveCount(0);
-  await expect(page.getByTestId("expiring-mark")).toHaveCount(0);
+  await expect(page.locator(EXPIRING)).toHaveCount(0);
   await expect(notice).toHaveCount(0);
   expect(pins).toEqual([{ pinned: true }]);
 
@@ -81,8 +88,10 @@ test("a temporary chat near the end of its window says so in the rail and in the
   await page.locator("aside").getByRole("button", { name: "Conversation options for Idle for months" }).click();
   await page.getByRole("menuitem", { name: "Unpin", exact: true }).click();
   await expect.poll(() => pins.length).toBe(2);
-  await expect(page.getByTestId("temporary-mark")).toHaveCount(2);
-  await expect(page.getByTestId("expiring-mark")).toHaveCount(0);
+  // Back in Chats with the other temporary chat, and no countdown on either.
+  await expect(page.getByTestId("unified-chat-list").getByRole("button", { name: "Idle for months", exact: true })).toBeVisible();
+  await expect(page.getByTestId("unified-chat-list").getByTestId("row-status")).toHaveCount(0);
+  await expect(page.locator(EXPIRING)).toHaveCount(0);
   await expect(banner).toHaveCount(0);
 });
 
@@ -101,8 +110,7 @@ test("a chat with time left carries no warning", async ({ page }) => {
   );
   await page.goto("/chat");
   await page.locator("aside").getByRole("button", { name: "Started today", exact: true }).click();
-  await expect(page.getByTestId("temporary-mark")).toHaveCount(1);
-  await expect(page.getByTestId("expiring-mark")).toHaveCount(0);
+  await expect(page.getByTestId("row-status")).toHaveCount(0);
   await expect(page.getByTestId("expiring-chats-notice")).toHaveCount(0);
   await expect(page.getByTestId("expiring-chat-banner")).toHaveCount(0);
 });

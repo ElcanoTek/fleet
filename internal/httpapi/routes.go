@@ -74,6 +74,7 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("/patrol-draft", auth(member(mutate(s.rateLimitMiddleware(http.HandlerFunc(s.handlePatrolDraft))))))
 	// The Patrols hub's index: the caller's live patrols across their chats.
 	mux.Handle("/patrols", auth(member(http.HandlerFunc(s.handlePatrols))))
+	mux.Handle("/patrols/", auth(member(http.HandlerFunc(s.handlePatrolByID))))
 	// Trust-labeled MCP directory (#538): bundled connectors vs curated
 	// third-party hosted servers, for the settings catalog UI.
 	mux.Handle("/mcp-catalog", auth(member(http.HandlerFunc(s.mcpCatalog))))

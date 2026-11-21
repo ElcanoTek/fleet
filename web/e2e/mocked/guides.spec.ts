@@ -41,9 +41,9 @@ test("a signed-in user can open the guides from the rail and read a guide", asyn
   await page.getByRole("link", { name: "7. Working conventions" }).click();
   expect(new URL(page.url()).hash).toBe("#7-working-conventions");
 
-  // And the rail still crosses back to chat from here.
-  await page.getByTestId("nav-to-chat").click();
-  await page.waitForURL("**/chat");
+  // And the sidebar still crosses back to chat from here: its pen starts one.
+  await page.getByTestId("new-chat-button").click();
+  await page.waitForURL((url) => url.pathname === "/chat");
 });
 
 // A slug outside the GUIDES table must 404 rather than reach the page — the

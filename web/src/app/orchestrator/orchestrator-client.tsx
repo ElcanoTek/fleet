@@ -6,12 +6,13 @@ import { orchestratorApi, type Task } from "@/app/shared/lib/orchestratorApi";
 import { useOrchestratorSession } from "@/app/shared/hooks/useOrchestratorSession";
 import { useDashboardData } from "@/app/shared/hooks/useDashboardData";
 import { useMcpServers } from "@/app/shared/hooks/useMcpServers";
-import { refreshClientConfig, useClientConfig } from "@/app/lib/useClientConfig";
+import { refreshClientConfig } from "@/app/lib/useClientConfig";
 import { ToastProvider, useToast } from "@/app/shared/ui/Toast";
 import { ConfirmDialog } from "@/app/shared/ui/ConfirmDialog";
 import { ThemeToggle } from "@/app/shared/ui/ThemeToggle";
 import { NavToChat } from "@/app/shared/ui/CrossViewNav";
-import { NavRail, useRailCollapse } from "@/app/shared/ui/NavRail";
+import { useRailCollapse } from "@/app/shared/ui/NavRail";
+import { AppSidebar } from "@/app/shared/sidebar/AppSidebar";
 import { PageTopBar } from "@/app/shared/ui/PageTopBar";
 import { Icon } from "@/app/shared/ui/Icon";
 import { OrchestratorLogin } from "./OrchestratorLogin";
@@ -99,6 +100,17 @@ function initialLinkedTaskId(): string | null {
   return new URLSearchParams(window.location.search).get("task")?.trim().toLowerCase() || null;
 }
 
+// initialNewTask reads the one-shot ?new=1 link and takes it back out of the
+// address bar, so a reload shows the board rather than reopening the form.
+function initialNewTask(): boolean {
+  if (typeof window === "undefined") return false;
+  const url = new URL(window.location.href);
+  if (url.searchParams.get("new") !== "1") return false;
+  url.searchParams.delete("new");
+  window.history.replaceState(window.history.state, "", url.pathname + url.search + url.hash);
+  return true;
+}
+
 // transientLoadError is a failure that says nothing about the task itself: no
 // HTTP answer at all (fetch rejects with a TypeError), a rate limit, or a
 // server error.
@@ -132,7 +144,6 @@ function OrchestratorInner({
   const session = useOrchestratorSession();
   const dashboard = useDashboardData(session.signedIn);
   const { servers, loading: serversLoading } = useMcpServers(session.signedIn);
-  const { branding } = useClientConfig();
   // The task-create form pre-fills from the live model tiers, and this page is
   // left open for hours. Without a refresh path of its own (the chat shell has
   // one) an admin's tier change would never reach this tab and the next task
@@ -153,7 +164,9 @@ function OrchestratorInner({
   }, []);
 
   const [statFilter, setStatFilter] = useState<StatFilter | null>(null);
-  const [taskModalOpen, setTaskModalOpen] = useState(false);
+  // ?new=1 (the sidebar's + menu, "New background task", from another page)
+  // opens the new-task form with the page.
+  const [taskModalOpen, setTaskModalOpen] = useState(initialNewTask);
   const [editTask, setEditTask] = useState<Task | null>(null);
   const [logTask, setLogTask] = useState<Task | null>(null);
   // The viewer gets the dashboard's CURRENT copy of the task, not the snapshot
@@ -482,59 +495,35 @@ function OrchestratorInner({
       // is the one page background shared with the chat view.
       className="grid h-[100dvh] grid-cols-[minmax(0,1fr)] overflow-hidden text-[var(--color-text-primary)] sm:grid-cols-[auto_minmax(0,1fr)]"
     >
-      <NavRail
+      <AppSidebar
         activeView="orchestrator"
-        brandName={branding.app_name}
-        brandLogoSrc={branding.logo_url || undefined}
         opsCount={dashboard.stats?.running_tasks}
         sidebarOpen={sidebarOpen}
         setSidebarOpen={setSidebarOpen}
         collapse={railCollapse}
-        account={{
-          email: session.username ?? "",
-          // Clear the orchestrator's own state best-effort, then sign out
-          // the same way every other surface does: a top-level POST that
-          // ends Fleet's session and, for central-Auth sessions, Auth's too.
-          onSignOut: () => void signOutAfter(session.logout()),
-        }}
-      >
-        {readOnly ? null : (
-          <div
-            className={railCollapse.collapsed ? "sm:flex sm:justify-center" : ""}
-          >
-            <button
-              type="button"
-              data-testid="new-task-btn"
-              className={[
-                "flex w-full items-center justify-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-surface-1)] px-3 py-2 text-[0.8125rem] font-semibold text-[var(--color-text-primary)] transition hover:border-[var(--color-status-success-border)] hover:bg-[var(--color-status-success-bg)]",
-                railCollapse.collapsed
-                  ? "sm:size-10 sm:w-10 sm:gap-0 sm:p-0"
-                  : "",
-              ].join(" ")}
-              data-tip={railCollapse.collapsed ? "New task" : undefined}
-              onClick={() => setTaskModalOpen(true)}
-            >
-              <Icon name="plus" className="size-4" />
-              <span className={railCollapse.collapsed ? "sm:sr-only" : ""}>
-                {tr("New task")}
-              </span>
-            </button>
-          </div>
-        )}
-      </NavRail>
+        // Clear the orchestrator's own state best-effort, then sign out
+        // the same way every other surface does: a top-level POST that
+        // ends Fleet's session and, for central-Auth sessions, Auth's too.
+        onSignOut={() => void signOutAfter(session.logout())}
+        // The + menu's "New background task" opens this page's own form
+        // (not offered to a read-only account, as the button was not).
+        onNewTask={readOnly ? null : () => setTaskModalOpen(true)}
+      />
 
       <main className="flex min-h-0 flex-col overflow-hidden">
         <PageTopBar
           title={tr("Background tasks")}
           onMenu={() => setSidebarOpen(true)}
           actions={
-            /* Mobile-only New task: on phones the rail's button is inside the
-               off-canvas drawer, so surface the primary action in the bar. */
+            /* The page's one primary action, in its header at every width.
+               It used to sit in the sidebar on this page; the sidebar is now
+               the same on every page (its + menu offers "New background
+               task" too), so the button lives with the page it belongs to. */
             readOnly ? undefined : (
               <button
                 type="button"
-                className="inline-flex items-center gap-1.5 rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-surface-1)] px-3 py-1.5 text-[0.8125rem] font-semibold text-[var(--color-text-primary)] transition hover:border-[var(--color-accent)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:hidden"
-                data-testid="new-task-btn-topbar"
+                className="inline-flex h-9 items-center gap-1.5 rounded-[var(--radius-md)] bg-[var(--color-primary-fill)] px-3.5 text-[0.8125rem] font-semibold text-[var(--color-on-primary-fill)] transition hover:bg-[var(--color-primary-fill-hover)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:h-8"
+                data-testid="new-task-btn"
                 onClick={() => setTaskModalOpen(true)}
               >
                 <Icon name="plus" className="size-4" />
@@ -652,7 +641,8 @@ function OrchestratorInner({
 
       <TaskCreateModal
         key={editTask ? `edit-${editTask.id}` : "create"}
-        open={taskModalOpen || !!editTask}
+        // A read-only account that followed a ?new=1 link gets no form.
+        open={(taskModalOpen && !readOnly) || !!editTask}
         servers={servers}
         serversLoading={serversLoading}
         onClose={() => {

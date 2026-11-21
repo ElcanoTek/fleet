@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { ConversationSidebar } from "./ConversationSidebar";
 import { DEFAULT_BRANDING } from "@/app/lib/useClientConfig";
 import type { ConversationSummary, ServerConfig } from "./chat-experience";
 import type { Project } from "./ProjectsModal";
+import { BUILTIN_LAYOUT } from "@/app/shared/sidebar/layout";
+import { loadSidebar, resetSidebarStoreForTests } from "@/app/shared/sidebar/store";
 
 // The sidebar's quick pin is offered only once /api/me confirms a role that
 // may save a layout (docs/SIDEBAR.md); these rows are a member's.
@@ -122,7 +124,16 @@ function expandProject(name: string, chats = 0) {
   );
 }
 
+// The one line an expanded, empty project shows (its words and the action in
+// it are separate nodes).
+function emptyLine(projectId: string) {
+  return document.querySelector(`[data-project-id="${projectId}"] p`)?.textContent;
+}
+
+const menuItems = () => screen.getAllByRole("menuitem").map((el) => el.textContent?.trim());
+
 beforeEach(() => {
+  resetSidebarStoreForTests();
   vi.stubGlobal(
     "fetch",
     vi.fn(async () => new Response("{}", { status: 200 })),
@@ -142,15 +153,20 @@ describe("ConversationSidebar — team-shared project rows", () => {
     // vocabulary), and reachable by a screen reader rather than living only
     // in a title attribute.
     expect(screen.getByText("Shared with quant")).toBeInTheDocument();
-    expect(
-      document.querySelector('[title="Shared with quant"]'),
-    ).toBeInTheDocument();
+    // The row's one status is the team mark at its right edge; its sentence
+    // is the row's tooltip, after the project's name.
+    const row = screen.getByRole("button", { name: "Open project Quant" });
+    expect(row).toHaveAttribute("title", "Quant · Shared with quant");
+    expect(row.querySelector("svg")).not.toBeNull();
   });
 
   it("leaves a personal project row unbadged", () => {
     renderSidebar({ projects: [PERSONAL_PROJECT] });
     expect(screen.queryByText(/Shared with/)).not.toBeInTheDocument();
-    expect(document.querySelector("[title^='Shared with']")).toBeNull();
+    expect(document.querySelector("[title*='Shared with']")).toBeNull();
+    const row = screen.getByRole("button", { name: "Open project Scratch" });
+    expect(row).toHaveAttribute("title", "Scratch");
+    expect(row.querySelector("svg")).toBeNull();
   });
 });
 
@@ -189,11 +205,15 @@ describe("ConversationSidebar — a project's empty state is viewer-aware", () =
   it("says just “No chats yet” when a team-shared project really is empty", () => {
     // Counts loaded, and this project has none: nothing here for anyone.
     // Decision #23 replaced the filing-paths paragraph with the short line.
-    renderSidebar({ teamSharedChatCounts: {} });
+    const onNewChatInProject = vi.fn();
+    renderSidebar({ teamSharedChatCounts: {}, onNewChatInProject });
     expandProject("Quant");
-    expect(screen.getByText("No chats yet")).toBeInTheDocument();
+    expect(emptyLine("p-shared")).toBe("No chats yet · New chat here");
     expect(screen.queryByText(/drag one here/)).not.toBeInTheDocument();
     expect(screen.queryByText(/No chats of yours yet/)).not.toBeInTheDocument();
+    // The line offers the next step, in that project.
+    fireEvent.click(screen.getByRole("button", { name: "New chat in Quant" }));
+    expect(onNewChatInProject).toHaveBeenCalledWith("p-shared");
   });
 
   it("says “No chats yet” for an empty personal project", () => {
@@ -201,8 +221,14 @@ describe("ConversationSidebar — a project's empty state is viewer-aware", () =
     expandProject("Scratch");
     // A personal project cannot hold a team-shared chat, so no count can
     // apply to it — and none is quoted even when the map bogusly carries one.
-    expect(screen.getByText("No chats yet")).toBeInTheDocument();
+    expect(emptyLine("p-mine")).toBe("No chats yet · New chat here");
     expect(screen.queryByText(/shared by your team/)).not.toBeInTheDocument();
+  });
+
+  it("offers no “New chat here” where the page cannot start one", () => {
+    renderSidebar({ teamSharedChatCounts: {}, onNewChatInProject: undefined });
+    expandProject("Scratch");
+    expect(emptyLine("p-mine")).toBe("No chats yet");
   });
 
   it("asserts no number when the counts have not loaded", () => {
@@ -211,27 +237,60 @@ describe("ConversationSidebar — a project's empty state is viewer-aware", () =
 
     // Not "No chats yet": teammates may have shared chats the rail can't
     // count yet, so it only speaks for the viewer's own.
-    expect(screen.getByText("No chats of yours yet")).toBeInTheDocument();
+    expect(emptyLine("p-shared")).toBe("No chats of yours yet · New chat here");
     expect(screen.queryByText(/shared by your team/)).not.toBeInTheDocument();
-    expect(screen.queryByText("No chats yet")).not.toBeInTheDocument();
   });
 });
 
 describe("ConversationSidebar — project rows (decision #23)", () => {
-  it("opens the project's home AND expands it when the name is clicked", () => {
+  // Three targets on a project's row, each doing one thing: the name opens
+  // the project's page, the chevron folds its chats, the dots open its menu.
+  it("the name opens the project's page and leaves the fold as it is", () => {
     const onOpenProjectHome = vi.fn();
     renderSidebar({ onOpenProjectHome, teamSharedChatCounts: {} });
     const chevron = screen.getByRole("button", { name: "Project Scratch (0 chats)" });
     expect(chevron).toHaveAttribute("aria-expanded", "false");
 
     fireEvent.click(screen.getByRole("button", { name: "Open project Scratch" }));
+    expect(onOpenProjectHome).toHaveBeenCalledTimes(1);
     expect(onOpenProjectHome).toHaveBeenCalledWith("p-mine");
-    expect(chevron).toHaveAttribute("aria-expanded", "true");
-    expect(screen.getByText("No chats yet")).toBeInTheDocument();
+    // Folded stays folded…
+    expect(chevron).toHaveAttribute("aria-expanded", "false");
 
-    // Clicking the name again keeps it open — opening never folds.
+    // …and unfolded stays unfolded.
+    fireEvent.click(chevron);
+    expect(chevron).toHaveAttribute("aria-expanded", "true");
+    expect(emptyLine("p-mine")).toBe("No chats yet · New chat here");
     fireEvent.click(screen.getByRole("button", { name: "Open project Scratch" }));
     expect(chevron).toHaveAttribute("aria-expanded", "true");
+    expect(onOpenProjectHome).toHaveBeenCalledTimes(2);
+  });
+
+  it("the dots open the menu, and neither open the page nor fold the project", async () => {
+    const onOpenProjectHome = vi.fn();
+    renderSidebar({ onOpenProjectHome });
+    const chevron = screen.getByRole("button", { name: "Project Scratch (0 chats)" });
+    fireEvent.click(screen.getByRole("button", { name: "Project options for Scratch" }));
+    expect(await screen.findByRole("menu", { name: "Options for project Scratch" })).toBeInTheDocument();
+    expect(onOpenProjectHome).not.toHaveBeenCalled();
+    expect(chevron).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("the three targets are three separate controls, the chevron shown always on a touch screen", () => {
+    renderSidebar({});
+    const chevron = screen.getByRole("button", { name: "Project Scratch (0 chats)" });
+    expect(chevron).toHaveAttribute("data-testid", "project-fold");
+    const name = screen.getByRole("button", { name: "Open project Scratch" });
+    const dots = screen.getByRole("button", { name: "Project options for Scratch" });
+    expect(new Set([chevron, name, dots]).size).toBe(3);
+    for (const el of [chevron, name, dots]) {
+      for (const other of [chevron, name, dots]) if (el !== other) expect(el.contains(other)).toBe(false);
+    }
+    expect(chevron).toHaveAttribute("title", "Show this project's chats");
+    // No hover on a touch screen: the chevron is drawn in place of the icon.
+    const [icon, arrow] = Array.from(chevron.querySelectorAll("svg"));
+    expect(icon.getAttribute("class")).toContain("any-pointer-coarse:hidden");
+    expect(arrow.getAttribute("class")).toContain("any-pointer-coarse:opacity-100");
   });
 
   it("only folds and unfolds from the chevron — it never opens the home", () => {
@@ -245,48 +304,151 @@ describe("ConversationSidebar — project rows (decision #23)", () => {
     expect(onOpenProjectHome).not.toHaveBeenCalled();
   });
 
-  it("offers Open, New chat, Share and Project settings to the owner", () => {
+  // The ⋯ menu keeps one order on every row (docs/SIDEBAR.md): open and
+  // start; where it lives (Pin, Move to the top, Rename) and where fleet
+  // opens; pass it on; put it away. The two sidebar items appear once the
+  // account is known to be able to save its sidebar.
+  it("gives the owner the whole menu, in the one order", async () => {
     const onOpenProjectHome = vi.fn();
     const onNewChatInProject = vi.fn();
-    renderSidebar({ onOpenProjectHome, onNewChatInProject });
-    const items = () =>
-      screen.getAllByRole("menuitem").map((el) => el.textContent?.trim());
+    const onPinProject = vi.fn();
+    const onDeleteProject = vi.fn();
+    renderSidebar({ onOpenProjectHome, onNewChatInProject, onPinProject, onDeleteProject });
+    const open = () => fireEvent.click(screen.getByRole("button", { name: "Project options for Scratch" }));
 
-    fireEvent.click(
-      screen.getByRole("button", { name: "Project options for Scratch" }),
+    open();
+    await waitFor(() =>
+      expect(menuItems()).toEqual([
+        "Open project",
+        "New chat",
+        "Pin",
+        "Move to the top",
+        "Rename",
+        "Set as start page",
+        "Share…",
+        "Project settings…",
+        "Delete project",
+      ]),
     );
-    expect(items().slice(0, 4)).toEqual([
-      "Open project",
-      "New chat",
-      "Share…",
-      "Project settings…",
-    ]);
     // Share opens the project's sharing, which lives in its settings.
     fireEvent.click(screen.getByRole("menuitem", { name: "Share…" }));
     expect(onOpenProjectHome).toHaveBeenCalledWith("p-mine", true);
 
-    fireEvent.click(
-      screen.getByRole("button", { name: "Project options for Scratch" }),
-    );
+    open();
     fireEvent.click(screen.getByRole("menuitem", { name: "New chat" }));
     expect(onNewChatInProject).toHaveBeenCalledWith("p-mine");
 
-    fireEvent.click(
-      screen.getByRole("button", { name: "Project options for Scratch" }),
-    );
+    open();
     fireEvent.click(screen.getByRole("menuitem", { name: "Open project" }));
     expect(onOpenProjectHome).toHaveBeenLastCalledWith("p-mine");
+
+    open();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Pin" }));
+    expect(onPinProject).toHaveBeenCalledWith("p-mine", true);
+
+    open();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Delete project" }));
+    expect(onDeleteProject).toHaveBeenCalledWith("p-mine");
   });
 
-  it("gives a member Open, New chat and Add to sidebar only — settings and sharing are the owner's", async () => {
+  it("renames a project in place from its menu", () => {
+    const onRenameProject = vi.fn();
+    renderSidebar({ onRenameProject });
+    fireEvent.click(screen.getByRole("button", { name: "Project options for Scratch" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Rename" }));
+    const field = screen.getByRole("textbox", { name: "Rename project Scratch" });
+    expect(document.activeElement).toBe(field);
+    fireEvent.change(field, { target: { value: "Scratchpad" } });
+    fireEvent.keyDown(field, { key: "Enter" });
+    expect(onRenameProject).toHaveBeenCalledWith("p-mine", "Scratchpad");
+    expect(screen.queryByRole("textbox", { name: "Rename project Scratch" })).toBeNull();
+  });
+
+  it("gives a member Open, New chat and the two sidebar items only — the rest is the owner's", async () => {
     renderSidebar();
     fireEvent.click(
       screen.getByRole("button", { name: "Project options for Quant" }),
     );
     await waitFor(() =>
-      expect(
-        screen.getAllByRole("menuitem").map((el) => el.textContent?.trim()),
-      ).toEqual(["Open project", "New chat", "Add to sidebar"]),
+      expect(menuItems()).toEqual(["Open project", "New chat", "Move to the top", "Set as start page"]),
     );
+  });
+});
+
+// The Projects section lists the most recently updated few; the rest are one
+// click away, and a pinned project is listed in Pinned, not here.
+describe("ConversationSidebar — the Projects section stays short", () => {
+  const many: Project[] = Array.from({ length: 11 }, (_, i) => ({
+    ...PERSONAL_PROJECT,
+    id: `p-${i}`,
+    name: `Project ${String.fromCharCode(65 + i)}`,
+    // Project A is the most recently updated.
+    updated_at: 1_700_000_100 - i,
+  }));
+  const listed = () =>
+    within(screen.getByTestId("projects-section"))
+      .getAllByRole("button", { name: /^Open project / })
+      .map((b) => b.textContent);
+
+  it("shows eight, then “All N projects”, which opens the rest in place", () => {
+    renderSidebar({ projects: many });
+    expect(listed()).toEqual(many.slice(0, 8).map((p) => p.name));
+    const all = screen.getByTestId("projects-show-all");
+    expect(all).toHaveTextContent("All 11 projects");
+    expect(all).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(all);
+    expect(listed()).toHaveLength(11);
+    expect(all).toHaveTextContent("Show fewer");
+    expect(all).toHaveAttribute("aria-expanded", "true");
+    fireEvent.click(all);
+    expect(listed()).toHaveLength(8);
+  });
+
+  it("offers no “All N projects” at eight or fewer", () => {
+    renderSidebar({ projects: many.slice(0, 8) });
+    expect(listed()).toHaveLength(8);
+    expect(screen.queryByTestId("projects-show-all")).toBeNull();
+  });
+
+  it("never leaves the open project behind the fold", () => {
+    renderSidebar({ projects: many, activeProjectId: "p-10" });
+    expect(listed()).toHaveLength(11);
+    expect(screen.getByRole("button", { name: "Open project Project K" })).toHaveAttribute("aria-current", "page");
+  });
+
+  it("lists a pinned project in Pinned and not in Projects", () => {
+    const pinned = { ...PERSONAL_PROJECT, id: "p-pin", name: "Kept close", pinned: true };
+    renderSidebar({ projects: [pinned, PERSONAL_PROJECT] });
+    expect(within(screen.getByTestId("pinned-section")).getByRole("button", { name: "Open project Kept close" })).toBeTruthy();
+    expect(listed()).toEqual(["Scratch"]);
+  });
+
+  it("offers “New project” when there is none to list", () => {
+    const onCreateProject = vi.fn();
+    renderSidebar({ projects: [], onCreateProject });
+    fireEvent.click(within(screen.getByTestId("projects-section")).getByRole("button", { name: "New project…" }));
+    expect(onCreateProject).toHaveBeenCalledTimes(1);
+  });
+});
+
+// "Status on rows" off (docs/SIDEBAR.md): the mark is not drawn; what it
+// says still reaches a screen reader.
+describe("ConversationSidebar — project rows with row statuses turned off", () => {
+  it("draws no team mark and keeps the audience for a screen reader", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) =>
+        String(input).startsWith("/api/sidebar")
+          ? new Response(JSON.stringify({ layout: { ...BUILTIN_LAYOUT, status_off: true }, rev: 1 }), { status: 200 })
+          : new Response("{}", { status: 200 }),
+      ),
+    );
+    await act(async () => {
+      await loadSidebar();
+    });
+    renderSidebar();
+    const row = screen.getByRole("button", { name: "Open project Quant" });
+    expect(row.querySelector("svg")).toBeNull();
+    expect(screen.getByText("Shared with quant")).toBeInTheDocument();
   });
 });

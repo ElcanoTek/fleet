@@ -51,22 +51,25 @@ workspace files. A deployment that had set `CONVERSATION_TTL_DAYS` or
 
 Nothing, until a chat is inside its warning window. Then:
 
-- **Its row in the sidebar** turns its hourglass to the warning colour and
-  shows the days left (`5d`). The tooltip, and the row's description for a
-  screen reader, say "will be deleted in 5 days" and list the ways to keep it.
-  This is shown in both sidebar layouts; the plain hourglass on every
-  temporary chat in the one-list layout is unchanged.
-- **A line under the Recent / Temporary heading** counts the person's chats
-  that are about to be deleted. It is a button: it scrolls to and focuses the
-  first of them.
+- **Its row in the sidebar** shows an hourglass in the warning colour with
+  the days left (`5d`), as the row's one status ([SIDEBAR.md](SIDEBAR.md)).
+  The tooltip, and the row's description for a screen reader, say "will be
+  deleted in 5 days" and list the ways to keep it. Until the November 2026
+  sidebar redesign every temporary chat also carried a plain hourglass from
+  its first minute; that standing mark is gone, so a row says a chat is
+  temporary only when it is about to matter.
+- **A line under the Chats heading** counts the person's chats that are
+  about to be deleted. It is a button: it shows the whole list and scrolls to
+  and focuses the first of them.
 - **The chat itself** carries a notice above the transcript: how many days it
   has left, that sending a message keeps it for another full window, and a
   **Pin to keep** button.
 - **Near the cap** (within a tenth of it), a second line under the heading
   says how many temporary chats the person has and what happens past the cap.
 
-The ⓘ explainer now also names archiving as a way to keep a chat, which was
-always true of the sweep and never said.
+The row's tooltip and **Delete temporary chats…** in the Chats menu say what
+a temporary chat is and name the ways to keep one, archiving included (the
+heading's ⓘ explainer that used to say it went with the sidebar redesign).
 
 The numbers come from `GET /api/server-config` (`conversation_ttl_days`,
 `conversation_expiry_warning_days`, `conversation_unpinned_cap`), and the

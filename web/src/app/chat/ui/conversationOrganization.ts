@@ -226,6 +226,96 @@ export function pinnedGroup<T extends { id?: string; updated_at?: number }>(
   return pinOrder && pinOrder.length > 0 ? applyChatOrder(merged, pinOrder) : merged;
 }
 
+// ── The Pinned section: chats and projects in one order (docs/SIDEBAR.md) ────
+
+// A pinned project's name in the saved "pinned" order. Chats are named by
+// their id; a project by "project:<id>", so one list orders both. Mirrors the
+// server (store.ChatOrderPinnedProject).
+export const PINNED_PROJECT_PREFIX = "project:";
+export const pinnedProjectToken = (projectId: string) => `${PINNED_PROJECT_PREFIX}${projectId}`;
+
+export type PinnedEntry<C, P> =
+  | { id: string; kind: "chat"; chat: C }
+  | { id: string; kind: "project"; project: P };
+
+// pinnedEntries is the Pinned section's rows: the pinned projects and the
+// pinned chats (the person's own and the teammates' chats they pinned), in
+// the person's saved order. What the order does not name yet goes above what
+// it does (applyChatOrder), projects before chats. `chats` is the pinned
+// chats as pinnedGroup gives them with no order.
+export function pinnedEntries<C extends { id?: string }, P extends { id: string }>(
+  chats: readonly C[],
+  projects: readonly P[],
+  order?: readonly string[],
+): PinnedEntry<C, P>[] {
+  const entries: PinnedEntry<C, P>[] = [
+    ...projects.map((project) => ({ id: pinnedProjectToken(project.id), kind: "project" as const, project })),
+    ...chats.map((chat) => ({ id: chat.id ?? "", kind: "chat" as const, chat })),
+  ];
+  return order && order.length > 0 ? applyChatOrder(entries, order) : entries;
+}
+
+// ── The Chats list: who it shows, and its date groups ────────────────────────
+
+// The chips over the Chats list. "all" is the person's own chats and
+// teammates' shared chats together; "mine" the person's own; "shared"
+// teammates' only; "patrols" the chats that check in on a schedule.
+export type ChatScope = "all" | "mine" | "shared" | "patrols";
+export const CHAT_SCOPES: readonly { value: ChatScope; label: string }[] = [
+  { value: "all", label: tr("All") },
+  { value: "mine", label: tr("Mine") },
+  { value: "shared", label: tr("Shared") },
+  { value: "patrols", label: tr("Patrols") },
+];
+
+export type DateGroupId = "today" | "yesterday" | "week" | "older";
+
+export function dateGroupLabel(id: DateGroupId): string {
+  switch (id) {
+    case "today":
+      return tr("Today");
+    case "yesterday":
+      return tr("Yesterday");
+    case "week":
+      return tr("This week");
+    case "older":
+      return tr("Older");
+  }
+}
+
+// dateGroupOf places a moment (unix seconds) by the reader's own calendar:
+// today, yesterday, the five days before that ("This week": the last seven
+// days in all), or older. Days are local midnights, so the groups change at
+// the reader's midnight and a daylight-saving day is still one day.
+export function dateGroupOf(unixSeconds: number, now: Date): DateGroupId {
+  const midnight = (daysAgo: number) =>
+    new Date(now.getFullYear(), now.getMonth(), now.getDate() - daysAgo).getTime() / 1000;
+  if (unixSeconds >= midnight(0)) return "today";
+  if (unixSeconds >= midnight(1)) return "yesterday";
+  if (unixSeconds >= midnight(6)) return "week";
+  return "older";
+}
+
+// groupByDate splits the Chats list, already sorted, into its date groups by
+// the date the sort uses (last activity, or when the chat was started). An
+// A–Z list has no dates to group by: null, and the list is shown flat.
+export function groupByDate<T extends { updated_at?: number; created_at?: number }>(
+  chats: readonly T[],
+  sort: RecentSort,
+  now: Date,
+): { id: DateGroupId; chats: T[] }[] | null {
+  if (sort === "title") return null;
+  const groups: { id: DateGroupId; chats: T[] }[] = [];
+  for (const c of chats) {
+    const at = sort === "created" ? (c.created_at ?? c.updated_at ?? 0) : (c.updated_at ?? 0);
+    const id = dateGroupOf(at, now);
+    const last = groups[groups.length - 1];
+    if (last && last.id === id) last.chats.push(c);
+    else groups.push({ id, chats: [c] });
+  }
+  return groups;
+}
+
 // ── Hand-set chat order (docs/CHAT-ORDER.md) ─────────────────────────────
 
 // The scopes a person can put in their own order: their pinned chats, and

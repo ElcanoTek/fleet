@@ -264,7 +264,7 @@ test("the Recent list follows the chosen sort, remembered on this device", async
   const budget = "c7"; // "Budget Notes"
   await expect.poll(async () => (await y(loose)) < (await y(budget))).toBe(true); // Recent activity (default)
   const sort = page.getByTestId("recent-sort");
-  await expect(sort).toHaveAccessibleName("Sort chats: Recent activity");
+  await expect(sort).toHaveAccessibleName("Chat list options. Sorted by: Recent activity");
   await sort.click();
   await page.getByRole("menuitemradio", { name: "Title A–Z" }).click();
   await expect.poll(async () => (await y(budget)) < (await y(loose))).toBe(true); // Title A–Z
@@ -275,7 +275,7 @@ test("the Recent list follows the chosen sort, remembered on this device", async
   await page.getByRole("menuitemradio", { name: "Newest first" }).click();
   await expect.poll(async () => (await y(budget)) < (await y(loose))).toBe(true); // Newest first
   await page.reload();
-  await expect(page.getByTestId("recent-sort")).toHaveAccessibleName("Sort chats: Newest first");
+  await expect(page.getByTestId("recent-sort")).toHaveAccessibleName("Chat list options. Sorted by: Newest first");
 });
 
 for (const scheme of ["light", "dark"] as const) {

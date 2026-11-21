@@ -275,3 +275,66 @@ test("with one list (the default), a folded Chats list never hides a search resu
   await expect(page.getByTestId("search-group-team").getByTestId("team-shared-conv-row")).toContainText("Launch checklist");
   await expect(page.getByTestId("search-hidden-note")).toHaveCount(0);
 });
+
+// The redesign puts the same sidebar on every page (docs/SIDEBAR.md), fed by
+// useSidebarLibrary instead of Chat's own state. Its search must be Chat's:
+// the person's chats, teammates' chats and message hits in one list, with a
+// hit leading back to its chat. Checked on two pages that are not Chat.
+for (const path of ["/patrols", "/help"]) {
+  test(`search on ${path} finds own chats, teammates' chats and message hits, as Chat does`, async ({ page }) => {
+    await mockChatBoot(page);
+    const own = [
+      { id: "c1", title: "Budget pacing review", archived_at: null, updated_at: 1_700_000_000 },
+      { id: "c2", title: "Weekly notes", archived_at: null, updated_at: 1_699_999_000 },
+    ];
+    const shared = [{ id: "t1", title: "Quarterly pacing plan", team_visible: true, user_email: "dana@example.com", updated_at: 1_699_998_000 }];
+    await page.route("**/api/conversations", (r: Route) => r.fulfill({ json: { conversations: own } }));
+    await page.route("**/api/conversations?*", (r: Route) => {
+      const url = new URL(r.request().url());
+      if (url.searchParams.get("scope") === "shared") return r.fulfill({ json: { conversations: shared } });
+      return r.fulfill({ json: { conversations: [] } });
+    });
+    await page.route("**/api/me", (r: Route) => r.fulfill({ json: { email: "e2e@example.com", role: "member" } }));
+    await page.route("**/api/projects", (r: Route) => r.fulfill({ json: { projects: [] } }));
+    await page.route("**/api/patrols", (r: Route) => r.fulfill({ json: { patrols: [] } }));
+    await page.route("**/api/sidebar", (r: Route) => r.fulfill({ json: { layout: null, workspace_default: null } }));
+    await page.route("**/api/search**", (r: Route) => {
+      const q = new URL(r.request().url()).searchParams.get("q") ?? "";
+      return r.fulfill({
+        json: q.includes("rollback")
+          ? { results: [{ conversation_id: "c2", title: "Weekly notes", match_preview: "the <mark>rollback</mark> plan", matched_at: 1_700_000_000 }], total: 1 }
+          : { results: [], total: 0 },
+      });
+    });
+    await page.goto(path);
+    await expect(page.getByTestId("search-input")).toBeVisible({ timeout: 15_000 });
+
+    await page.keyboard.press("Control+k");
+    await expect(page.getByTestId("search-input")).toBeFocused();
+
+    // Own and teammates' chats, each in its group, with the words marked.
+    await page.getByTestId("search-input").fill("pacing");
+    await expect(page.getByTestId("search-group-chats")).toContainText("Budget pacing review");
+    await expect(page.getByTestId("search-group-team").getByTestId("team-shared-conv-row")).toContainText("Quarterly pacing plan");
+    // A teammate's chat is found by whose it is, too.
+    await page.getByTestId("search-input").fill("dana");
+    await expect(page.getByTestId("search-group-team")).toContainText("Quarterly pacing plan");
+    await expect(page.getByTestId("search-group-chats")).toHaveCount(0);
+
+    const results = await new AxeBuilder({ page }).include('[data-testid="search-results"]').analyze();
+    expect(results.violations).toEqual([]);
+
+    // Clearing gives the sidebar back.
+    await page.getByTestId("search-input").fill("");
+    await expect(page.getByTestId("search-results")).toHaveCount(0);
+    await expect(page.getByTestId("unified-chat-list")).toBeVisible();
+
+    // A match inside a chat's messages is found, and leads to that chat.
+    await page.getByTestId("search-input").fill("rollback");
+    const hit = page.getByTestId("search-group-messages").getByTestId("search-result");
+    await expect(hit).toContainText("Weekly notes");
+    await expect(hit.locator("mark")).toHaveText("rollback");
+    await hit.click();
+    await expect(page).toHaveURL(/\/chat\?c=c2$/);
+  });
+}

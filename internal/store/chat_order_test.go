@@ -176,3 +176,60 @@ func TestChatOrder_GoesWithTheAccount(t *testing.T) {
 		t.Errorf("order rows after DeleteUser = %d, want 0", n)
 	}
 }
+
+// TestChatOrder_PinnedProjects: the sidebar's Pinned section lists pinned
+// projects with the pinned chats, in one order. A pinned project the person
+// can see is kept as "project:<id>", in place among the chats; one that is
+// not pinned, not theirs to see, or unknown is dropped.
+func TestChatOrder_PinnedProjects(t *testing.T) {
+	t.Parallel()
+
+	f := newTeamFixture(t)
+	s, ctx := f.s, f.ctx
+	conv, err := s.CreateConversation(ctx, "alice@x.com", "Pinned chat", "victoria", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetPinned(ctx, "alice@x.com", conv.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	pin := true
+	project := func(owner, name, team string, pinned bool) string {
+		t.Helper()
+		p, err := s.CreateProject(ctx, &Project{OwnerEmail: owner, Name: name, TeamID: team})
+		if err != nil {
+			t.Fatalf("CreateProject: %v", err)
+		}
+		if pinned {
+			if _, err := s.UpdateProject(ctx, owner, p.ID, ProjectPatch{Pinned: &pin}); err != nil {
+				t.Fatalf("pin project: %v", err)
+			}
+		}
+		return p.ID
+	}
+	mine := project("alice@x.com", "Mine", "", true)
+	teams := project("bob@x.com", "Team's", "quant", true)
+	loose := project("alice@x.com", "Unpinned", "", false)
+	foreign := project("dana@x.com", "Other team's", "ops", true)
+
+	order := []string{
+		ChatOrderPinnedProject(teams), conv.ID, ChatOrderPinnedProject(loose),
+		ChatOrderPinnedProject(foreign), ChatOrderPinnedProject("nope"), ChatOrderPinnedProject(mine),
+	}
+	kept, err := s.SetChatOrder(ctx, "alice@x.com", ChatOrderPinned, order)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{ChatOrderPinnedProject(teams), conv.ID, ChatOrderPinnedProject(mine)}
+	if !reflect.DeepEqual(kept, want) {
+		t.Fatalf("kept = %v, want %v", kept, want)
+	}
+	got, err := s.ChatOrders(ctx, "alice@x.com")
+	if err != nil || !reflect.DeepEqual(got[ChatOrderPinned], want) {
+		t.Errorf("saved order = %v, %v; want %v", got[ChatOrderPinned], err, want)
+	}
+	// Someone on no team cannot place the team's project in their order.
+	if kept, err := s.SetChatOrder(ctx, "carol@x.com", ChatOrderPinned, []string{ChatOrderPinnedProject(teams)}); err != nil || len(kept) != 0 {
+		t.Errorf("an outsider's order kept %v, %v; want nothing", kept, err)
+	}
+}

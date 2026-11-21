@@ -284,9 +284,9 @@ above fails otherwise.
 - [`CHAT-PATROLS.md`](CHAT-PATROLS.md) — In-Chat Patrols & Timers (`chat_patrol`)
 - [`CHAT-TRANSFER.md`](CHAT-TRANSFER.md) — Transferring a chat, with its dashboard and patrols, to another person
 - [`CHAT-ORDER.md`](CHAT-ORDER.md) — your own order for pinned chats and for each project's chats, and the Temporary sort (Reorder mode; `GET`/`PUT /api/conversations/order`)
-- [`SIDEBAR.md`](SIDEBAR.md) — a sidebar of your own: pinned chats, dashboards, patrols, projects, tasks and pages, Home, presets, and the admin workspace default (`/api/sidebar`, `/api/admin/sidebar`)
+- [`SIDEBAR.md`](SIDEBAR.md) — the sidebar: one frame that scrolls as a whole and is the same on every page; top items, Pinned, Projects and Chats; one status per row; the Patrols page; Customize, the start page and presets; the admin workspace default; what the November 2026 redesign shipped, left out and changed on the server (`/api/sidebar`, `/api/admin/sidebar`, `GET /api/patrols`, `GET /api/patrols/{id}`)
 - [`SIDEBAR-SEARCH.md`](SIDEBAR-SEARCH.md) — the rail's search looks everywhere: own, team, project and archived chats in one list of results, whatever sections are hidden or folded
-- [`PATROL-LAUNCHPAD.md`](PATROL-LAUNCHPAD.md) — Patrols in the rail and the Patrol Launchpad wizard (Chat · Patrols · Background tasks; `GET /api/patrols`, `POST /api/patrol-draft`)
+- [`PATROL-LAUNCHPAD.md`](PATROL-LAUNCHPAD.md) — the Patrol Launchpad wizard and where it opens from (the sidebar's + menu, the Patrols page, `?launchpad=1`; `GET /api/patrols`, `POST /api/patrol-draft`)
 - [`CHAT-RETENTION.md`](CHAT-RETENTION.md) — Temporary chats: what is deleted, when, and what people are told first
 - [`CHAT-STREAM-RECOVERY.md`](CHAT-STREAM-RECOVERY.md) — Chat stream recovery — losing the socket is not losing the turn
 - [`CHAT-SURFACE-METRICS.md`](CHAT-SURFACE-METRICS.md) — Chat-surface metrics: rate-limit 429s and stream reattaches (`/metrics`)

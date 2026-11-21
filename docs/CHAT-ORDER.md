@@ -6,15 +6,14 @@ left out on purpose.
 
 ## What shipped
 
-- **Your own order for pinned chats.** With two or more pinned chats, the
-  **Pinned** heading shows **Reorder**. In the one list the group also holds
-  the teammates' chats the person pinned for themselves
-  ([SIDEBAR.md](SIDEBAR.md)), in the same order: one group, one order.
+- **Your own order for what is pinned.** With two or more entries, the
+  **Pinned** heading shows **Reorder**. The section holds the person's pinned
+  chats, the teammates' chats they pinned for themselves, and pinned projects
+  ([SIDEBAR.md](SIDEBAR.md)), in the same order: one section, one order.
 - **Your own order for a project's chats.** A project's options menu offers
   **Reorder chats** when the project holds two or more of your chats. It
   expands the project and puts its chats in reorder mode.
-- **A sort for Temporary chats.** The **Temporary** heading (**Recent** in the
-  one list) has a sort control, a small menu button:
+- **A sort for the Chats list.** The **Chats** heading's menu holds the sort:
   **Recent activity** (the default and the old behaviour), **Newest first** (by
   when the chat was started) or **Title A–Z**. The choice is remembered on this
   device (browser storage, `fleet.rail.recentSort`), not saved to the account.
@@ -69,6 +68,17 @@ left out on purpose.
   order (`{"orders": {"pinned": [...], "project:p1": [...]}}`).
   `PUT /api/conversations/order` with `{"scope", "conversation_ids"}` replaces
   one scope's order and answers with what was kept.
+- **The pinned order also names pinned projects.** The sidebar's Pinned
+  section lists pinned projects with pinned chats, in one order
+  ([SIDEBAR.md](SIDEBAR.md)), so an entry of the `pinned` scope is a chat's ID
+  or `project:<project id>` for a pinned project
+  (`store.ChatOrderPinnedProject`; `pinnedProjectToken` in the client). The
+  server keeps a project entry only when it names a pinned project the caller
+  owns or that is shared with their team, and drops it otherwise, as it drops
+  a chat that has left the scope. A project's pin is its owner's, so a member
+  can place a project the owner pinned but not unpin it. Entries the saved
+  order does not name yet are shown above the ones it does, projects before
+  chats.
 - **Table.** The store keeps one row per user and scope in `conversation_order`
   (migration 095): a JSON array of conversation IDs, first to last. This avoids
   changing the conversations table and its shared column list, and a reorder

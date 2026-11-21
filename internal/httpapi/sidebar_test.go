@@ -39,7 +39,7 @@ func decodeSidebar[T any](t *testing.T, w *httptest.ResponseRecorder) T {
 	return out
 }
 
-const fullDefaults = `"sections":[{"id":"projects"},{"id":"chats"},{"id":"team"}]`
+const fullDefaults = `"sections":[{"id":"pinned"},{"id":"projects"},{"id":"chats"},{"id":"team"}]`
 
 // TestSidebar_UserLayout drives /sidebar through the real routes: a fresh
 // user has no layout and no workspace default; a PUT saves and answers the
@@ -143,7 +143,7 @@ func TestSidebar_AdminWorkspaceDefault(t *testing.T) {
 		t.Fatalf("fresh GET = %+v", got)
 	}
 	put := `{"version":1,"sections":[{"id":"team","label":"Crew","hidden":true}],"home":"chat"}`
-	want := `{"version":1,"items":[{"id":"chat","kind":"builtin"},{"id":"patrols","kind":"builtin"},{"id":"tasks","kind":"builtin"}],"sections":[{"id":"team","label":"Crew","hidden":true},{"id":"projects"},{"id":"chats"}],"home":"chat"}`
+	want := `{"version":1,"items":[{"id":"chat","kind":"builtin"},{"id":"patrols","kind":"builtin"},{"id":"tasks","kind":"builtin"}],"sections":[{"id":"pinned"},{"id":"team","label":"Crew","hidden":true},{"id":"projects"},{"id":"chats"}],"home":"chat"}`
 	saved := decodeSidebar[adminSidebarGet](t, doRaw(t, h, http.MethodPut, "/admin/sidebar", put, "boss@x.com"))
 	if string(saved.Layout) != want || saved.UpdatedBy != "boss@x.com" || saved.UpdatedAt == 0 {
 		t.Errorf("PUT = %+v (layout %s)", saved, saved.Layout)
@@ -152,7 +152,7 @@ func TestSidebar_AdminWorkspaceDefault(t *testing.T) {
 	if string(got.Layout) != want || got.UpdatedBy != "boss@x.com" || got.UpdatedAt != saved.UpdatedAt {
 		t.Errorf("GET = %+v (layout %s)", got, got.Layout)
 	}
-	if w := doRaw(t, h, http.MethodPut, "/admin/sidebar", `{"version":1,"sections":[{"id":"pinned"}]}`, "boss@x.com"); w.Code != http.StatusBadRequest {
+	if w := doRaw(t, h, http.MethodPut, "/admin/sidebar", `{"version":1,"sections":[{"id":"starred"}]}`, "boss@x.com"); w.Code != http.StatusBadRequest {
 		t.Errorf("bad section = %d; want 400", w.Code)
 	}
 

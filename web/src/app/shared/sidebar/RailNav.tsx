@@ -1,31 +1,31 @@
 import { t as tr } from "@/app/lib/i18n";
 import type { ReactNode } from "react";
-import { LaunchpadButton } from "@/app/launchpad/LaunchpadButton";
-import { NavToChat, NavToOrchestrator } from "@/app/shared/ui/CrossViewNav";
+import { NavToOrchestrator } from "@/app/shared/ui/CrossViewNav";
 import { Link } from "@/app/lib/Link";
-import { navItemClass, navTileClass, RailLabel } from "@/app/shared/ui/railStyles";
+import { navItemClass, railIconClass, RailLabel } from "@/app/shared/ui/railStyles";
 import { writeDashboardView } from "@/app/chat/ui/dashboard/prefs";
+import { useNowSeconds } from "@/app/chat/ui/chatRetention";
 import {
-  builtinSubtitle,
   defaultIcon,
   itemName,
   kindName,
   pageHref,
+  topItems,
   type SidebarItem,
 } from "./layout";
 import { HomeIcon, ItemIcon } from "./glyphs";
-import { Icon } from "@/app/shared/ui/Icon";
-import { openSidebarCustomizer, useSidebar } from "./store";
-import { useFallbackTargets, usePatrolIds, useSidebarTargets } from "./targets";
+import { RowStatus } from "./RowStatus";
+import { useSidebar } from "./store";
+import { patrolsByConversation, useFallbackTargets, usePatrols, useSidebarTargets } from "./targets";
 import { useIsAdmin } from "@/app/settings/useIsAdmin";
 import type { RailView } from "@/app/shared/ui/NavRail";
 
-// RailNav — the rail's destinations, in the person's own order
-// (docs/SIDEBAR.md). With the default layout it renders exactly the three
-// items NavRail always had (Chat, Patrols, Background tasks, with their
-// subtitles and test ids); a customized layout adds pinned shortcuts —
-// chats, dashboards, patrols, projects, background tasks, pages — hides,
-// renames and reorders them, and marks one as Home.
+// RailNav — the top of the sidebar, in the person's own order
+// (docs/SIDEBAR.md): Patrols and Background tasks, then whatever they keep
+// there — a dashboard, a chat, a project, a background task, a page. Each is
+// one row: an icon, a name, and one quiet status when it matters (a patrol
+// chat's next check, the start-page mark). Starting a chat is the pen button
+// beside the search field, so there is no "Chat" row.
 
 /** Where a shortcut leads when the surface cannot open it in place. */
 export function shortcutHref(item: SidebarItem): string {
@@ -69,13 +69,15 @@ export function RailNav({
 }) {
   const { layout, source } = useSidebar();
   const pageTargets = useSidebarTargets();
-  const needsLists = !pageTargets && layout.items.some((i) => !i.hidden && (i.kind === "chat" || i.kind === "project"));
+  const items = topItems(layout);
+  const needsLists = !pageTargets && items.some((i) => i.kind === "chat" || i.kind === "project");
   const fallbackTargets = useFallbackTargets(needsLists);
   const isAdmin = useIsAdmin() === "admin";
   const targets = pageTargets ?? fallbackTargets;
-  const hasChatShortcuts = layout.items.some((i) => i.kind === "chat" && !i.hidden && !i.icon);
-  const patrolIds = usePatrolIds(hasChatShortcuts);
-  const compact = Boolean(layout.compact);
+  const hasChatShortcuts = items.some((i) => i.kind === "chat");
+  const patrols = patrolsByConversation(usePatrols(hasChatShortcuts));
+  // A patrol's next check is quoted to the minute or the hour.
+  const now = useNowSeconds(60_000);
 
   const isActive = (item: SidebarItem): boolean => {
     if (item.kind === "chat") return activeView === "chat" && targets?.activeConversationId === item.ref;
@@ -90,8 +92,7 @@ export function RailNav({
     return false;
   };
 
-  const visible = layout.items.filter((item) => {
-    if (item.hidden) return false;
+  const visible = items.filter((item) => {
     // The server refuses a task pin in a workspace default (only its owner
     // and admins can open a task); one arriving anyway is never shown.
     if (item.kind === "task") return source === "user";
@@ -106,55 +107,47 @@ export function RailNav({
     if (source === "user") return true;
     return targets?.availability(item) === "yes";
   });
-  const shortcutActive = visible.some((i) => i.kind !== "builtin" && isActive(i));
 
+  // The start page's mark takes the row's one status slot.
   const homeMark = (item: SidebarItem): ReactNode =>
     layout.home === item.id ? (
       <span
-        className={["inline-flex shrink-0 text-[var(--color-accent)]", collapsed ? "sm:hidden" : ""].join(" ")}
-        title={tr("Home — fleet opens here")}
+        className={["ml-auto inline-flex shrink-0 pl-1 text-[var(--color-link)]", collapsed ? "sm:hidden" : ""].join(" ")}
+        title={tr("Start page — fleet opens here")}
       >
-        <HomeIcon className="size-3" />
-        <span className="sr-only">{tr("(Home)")}</span>
+        <HomeIcon className="size-3.5" />
+        <span className="sr-only">{tr("(Start page)")}</span>
       </span>
     ) : null;
+
+  const icon = (item: SidebarItem, active: boolean, isPatrol = false) => (
+    <span aria-hidden="true" className="flex shrink-0">
+      <ItemIcon icon={item.icon || defaultIcon(item, isPatrol)} className={railIconClass(active)} />
+    </span>
+  );
 
   const renderBuiltin = (item: SidebarItem) => {
     const id = item.id;
     const title = itemName(item);
-    const subtitle = compact ? undefined : builtinSubtitle(id as "chat" | "patrols" | "tasks");
-    const icon = item.icon || defaultIcon(item);
-    if (id === "chat") {
-      const active = activeView === "chat" && !shortcutActive;
-      return (
-        <NavToChat
-          key={id}
-          className={navItemClass(active, collapsed)}
-          ariaCurrent={active ? "page" : undefined}
-          dataTip={collapsed ? tr("{0} — talk it through", [title]) : undefined}
-        >
-          <span className={navTileClass(active)} aria-hidden="true">
-            <ItemIcon icon={icon} className="size-[1rem]" />
-          </span>
-          <RailLabel title={title} subtitle={subtitle} collapsed={collapsed} trailing={homeMark(item)} />
-        </NavToChat>
-      );
-    }
     if (id === "patrols") {
+      const active = activeView === "patrols";
       return (
-        <LaunchpadButton
+        <Link
           key={id}
-          className={`${navItemClass(false, collapsed)} w-full cursor-pointer text-left`}
-          tileClassName={navTileClass(false)}
-          icon={item.icon ? <ItemIcon icon={item.icon} className="size-[1rem]" /> : undefined}
-          label={<RailLabel title={title} subtitle={subtitle} collapsed={collapsed} />}
-          dataTip={collapsed ? tr("{0} — chats that check in on a schedule", [title]) : undefined}
-          collapsed={collapsed}
-          onOpen={onNavigate}
-        />
+          href="/patrols"
+          data-testid="nav-to-patrols"
+          className={navItemClass(active, collapsed)}
+          aria-current={active ? "page" : undefined}
+          data-tip={collapsed ? tr("{0} — chats that check in on a schedule", [title]) : undefined}
+          onClick={onNavigate}
+        >
+          {icon(item, active)}
+          <RailLabel title={title} collapsed={collapsed} />
+        </Link>
       );
     }
     const active = activeView === "orchestrator";
+    const running = typeof opsCount === "number" && opsCount > 0 ? opsCount : 0;
     return (
       <NavToOrchestrator
         key={id}
@@ -162,49 +155,47 @@ export function RailNav({
         ariaCurrent={active ? "page" : undefined}
         dataTip={
           collapsed
-            ? typeof opsCount === "number" && opsCount > 0
-              ? tr("{0} · {1} running", [title, opsCount])
+            ? running
+              ? tr("{0} · {1} running", [title, running])
               : tr("{0} · Runs without a chat", [title])
             : undefined
         }
       >
-        <span className={navTileClass(active)} aria-hidden="true">
-          <ItemIcon icon={icon} className="size-[1rem]" />
-        </span>
-        <RailLabel title={title} subtitle={subtitle} collapsed={collapsed} trailing={homeMark(item)} />
-        {typeof opsCount === "number" && opsCount > 0 ? (
-          <span
-            className={[
-              "font-[family-name:var(--font-code)] text-[0.7rem] text-[var(--color-text-muted)]",
-              collapsed ? "sm:hidden" : "",
-            ].join(" ")}
-          >
-            {opsCount}
-          </span>
-        ) : null}
+        {icon(item, active)}
+        <RailLabel title={title} collapsed={collapsed} />
+        {homeMark(item) ??
+          (running ? (
+            <span
+              title={tr("{0} running", [running])}
+              className={[
+                "ml-auto shrink-0 pl-1 text-[0.72rem] font-medium tabular-nums text-[var(--color-text-muted)]",
+                collapsed ? "sm:hidden" : "",
+              ].join(" ")}
+            >
+              {running}
+            </span>
+          ) : null)}
       </NavToOrchestrator>
     );
   };
 
   const renderShortcut = (item: SidebarItem) => {
-    const isPatrol = item.kind === "chat" && patrolIds.has(item.ref ?? "");
+    const patrol = item.kind === "chat" ? patrols.get(item.ref ?? "") : undefined;
     const title = itemName(item, targets?.titleFor(item));
-    const kind = kindName(item, isPatrol);
-    const icon = item.icon || defaultIcon(item, isPatrol);
+    const kind = kindName(item, Boolean(patrol));
     const active = isActive(item);
     const unavailable = targets?.availability(item) === "no";
     const tip = unavailable ? tr("{0} — not available to you", [title]) : `${title} · ${kind}`;
     const body = (
       <>
-        <span className={navTileClass(active)} aria-hidden="true">
-          <ItemIcon icon={icon} className="size-[1rem]" />
-        </span>
-        <RailLabel
-          title={title}
-          subtitle={compact ? undefined : unavailable ? tr("Not available to you") : kind}
-          collapsed={collapsed}
-          trailing={homeMark(item)}
-        />
+        {icon(item, active, Boolean(patrol))}
+        <RailLabel title={title} collapsed={collapsed} />
+        {homeMark(item) ??
+          (patrol ? (
+            <span className={["ml-auto inline-flex shrink-0", collapsed ? "sm:hidden" : ""].join(" ")}>
+              <RowStatus status={{ patrol: { status: patrol.status, nextRunAt: patrol.next_run_at } }} now={now} />
+            </span>
+          ) : null)}
       </>
     );
     const className = [navItemClass(active, collapsed), unavailable ? "opacity-55" : ""].join(" ");
@@ -213,7 +204,7 @@ export function RailNav({
       "data-shortcut-kind": item.kind,
       "data-tip": collapsed ? tip : undefined,
       "aria-current": active ? ("page" as const) : undefined,
-      title: !collapsed && unavailable ? tip : undefined,
+      title: !collapsed ? (unavailable ? tip : `${title} · ${kind}`) : undefined,
       className,
     };
     if (item.kind === "page") {
@@ -245,42 +236,14 @@ export function RailNav({
     );
   };
 
+  if (visible.length === 0) return null;
   return (
     <nav
       aria-label={tr("Switch surface")}
       data-testid="rail-nav"
-      className={[
-        "grid grid-cols-[minmax(0,1fr)] gap-0.5",
-        // Many shortcuts scroll on their own rather than squeezing the chat
-        // list. Expanded only: a scroller would also clip the collapsed
-        // strip's hover labels, which are drawn beside it.
-        collapsed ? "sm:justify-items-center" : "max-h-[42vh] overflow-y-auto overflow-x-hidden",
-      ].join(" ")}
+      className={["group/nav grid shrink-0 grid-cols-[minmax(0,1fr)] gap-px", collapsed ? "sm:justify-items-center sm:gap-1" : ""].join(" ")}
     >
       {visible.map((item) => (item.kind === "builtin" ? renderBuiltin(item) : renderShortcut(item)))}
     </nav>
-  );
-}
-
-/**
- * CustomizeRailButton — the quiet way into the Customize panel from the rail
- * itself: a small pill on the divider under the destinations that shows when
- * the rail is hovered or the pill has keyboard focus.
- */
-export function CustomizeRailButton({ collapsed }: { collapsed: boolean }) {
-  return (
-    <div className={["relative my-1 h-px shrink-0 bg-[var(--color-border)]", collapsed ? "" : "group/divider"].join(" ")}>
-      {collapsed ? null : (
-        <button
-          type="button"
-          data-testid="customize-sidebar-pill"
-          onClick={openSidebarCustomizer}
-          className="absolute left-1/2 top-1/2 inline-flex -translate-x-1/2 -translate-y-1/2 items-center gap-1 rounded-full border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-0.5 text-[0.66rem] font-medium text-[var(--color-text-muted)] opacity-0 shadow-[var(--shadow-sm)] transition hover:border-[var(--color-accent)] hover:text-[var(--color-text-primary)] focus-visible:opacity-100 focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] group-hover/rail:opacity-100 any-pointer-coarse:hidden"
-        >
-          <Icon name="edit" className="size-3" />
-          {tr("Customize")}
-        </button>
-      )}
-    </div>
   );
 }

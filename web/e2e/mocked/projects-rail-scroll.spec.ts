@@ -5,8 +5,10 @@ import { mockChatBoot } from "./_mocks";
 
 // The rail used to show only the five freshest projects; a sixth project, and
 // every chat filed in it, vanished from the rail with nothing to scroll to.
-// Every project now renders inside the Projects section's own scroller, which
-// scrolls like the Chats list below it. All /api/* calls are intercepted.
+// The Projects section now lists the freshest few and says how many there
+// are: "All N projects" opens the rest in place, and the sidebar scrolls as
+// one (the section is not a scroll box of its own any more). All /api/* calls
+// are intercepted.
 
 const PROJECTS = Array.from({ length: 12 }, (_, i) => ({
   id: `p-${i}`,
@@ -22,7 +24,7 @@ test.beforeEach(async ({ context }) => {
   await loginViaCookie(context);
 });
 
-test("the rail lists every project and the Projects section scrolls", async ({ page }) => {
+test("the sidebar lists the freshest projects, All N projects shows the rest, and it scrolls as one", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 720 });
   await page.route("**/api/projects", (r: Route) => r.fulfill({ json: { projects: PROJECTS } }));
   await mockChatBoot(page, {
@@ -35,25 +37,44 @@ test("the rail lists every project and the Projects section scrolls", async ({ p
   await page.goto("/chat");
   await page.getByRole("heading", { name: /what can i help with/i }).waitFor({ timeout: 15_000 });
 
-  // Most recent first; the oldest (twelfth) project is rendered too.
+  // Most recent first: the eight freshest are listed, the rest are one press
+  // away, and the count says they exist.
+  const section = page.getByTestId("projects-section");
+  const projects = section.getByRole("button", { name: /^Open project / });
   const newest = page.getByRole("button", { name: "Open project Project 12" });
   const oldest = page.getByRole("button", { name: "Open project Project 01" });
   await expect(newest).toBeVisible();
-  await expect(oldest).toHaveCount(1);
+  await expect(projects).toHaveCount(8);
+  await expect(oldest).toHaveCount(0);
+  const showAll = page.getByTestId("projects-show-all");
+  await expect(showAll).toHaveText("All 12 projects");
+  await expect(showAll).toHaveAttribute("aria-expanded", "false");
+  await showAll.click();
+  await expect(projects).toHaveCount(12);
+  await expect(showAll).toHaveText("Show fewer");
+  await expect(showAll).toHaveAttribute("aria-expanded", "true");
 
-  // From sm up (this viewport) the section is its own scroller; on a phone
-  // the drawer's body is the one scroller instead. Here: it overflows, and scrolling it brings the
-  // oldest project into view while the Chats list keeps its place below.
-  const scroller = page.locator("div.sm\\:overflow-y-auto", { has: newest });
-  const { clientHeight, scrollHeight } = await scroller.evaluate((el) => ({
+  // One scroller for the whole sidebar: nothing inside it is a scroll box of
+  // its own, so Projects and Chats move together.
+  const body = page.getByTestId("rail-body");
+  const nested = await body.evaluate((el) =>
+    [...el.querySelectorAll<HTMLElement>("*")].filter((n) => {
+      const o = getComputedStyle(n).overflowY;
+      return (o === "auto" || o === "scroll") && n.scrollHeight > n.clientHeight + 1;
+    }).length,
+  );
+  expect(nested).toBe(0);
+  const { clientHeight, scrollHeight } = await body.evaluate((el) => ({
     clientHeight: el.clientHeight,
     scrollHeight: el.scrollHeight,
   }));
   expect(scrollHeight).toBeGreaterThan(clientHeight);
   await oldest.scrollIntoViewIfNeeded();
   await expect(oldest).toBeInViewport();
-  expect(await scroller.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
-  await expect(page.getByRole("button", { name: "Chat 2", exact: true })).toBeInViewport();
+  const lastChat = page.getByRole("button", { name: "Chat 30", exact: true });
+  await lastChat.scrollIntoViewIfNeeded();
+  await expect(lastChat).toBeInViewport();
+  expect(await body.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
 
   // A chat filed in the oldest project is reachable from the rail again:
   // expanding its project shows the chat's row.

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { ChatExperience, type ConversationSummary } from "./chat-experience";
 import { clearChatSession } from "./chatSessionStore";
+import { RECENT_SORT_ITEM } from "./conversationOrganization";
 
 // Full-mount coverage for the rail's delete / rename / archive mutations
 // against a backend that says no. Each used to fail silently: the confirm
@@ -74,6 +75,16 @@ async function pickRowAction(title: string, item: string) {
   fireEvent.click(await screen.findByRole("menuitem", { name: item }));
 }
 
+// The Chats heading's menu (sort, select, tidy up) and one of its items.
+async function pickChatsMenuItem(testId: string) {
+  fireEvent.click(screen.getByTestId("recent-sort"));
+  fireEvent.click(await screen.findByTestId(testId));
+}
+
+// A chat's row in the rail (its primary button).
+const railRow = (id: string) =>
+  document.querySelector<HTMLElement>(`[data-conversation-id="${id}"] [data-rail-row]`)!;
+
 beforeEach(() => {
   // jsdom has neither; the rail collapse hook and the transcript read the
   // former, and the transcript scrolls with the latter.
@@ -105,7 +116,7 @@ describe("deleting a chat against a failing backend", () => {
     const fetchMock = mockBackend(() => new Response("db locked", { status: 500 }));
     await mountChat();
 
-    await pickRowAction("Beta chat", "Delete");
+    await pickRowAction("Beta chat", "Delete…");
     const dialog = await screen.findByRole("dialog", { name: "Delete chat?" });
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
 
@@ -125,7 +136,7 @@ describe("deleting a chat against a failing backend", () => {
     mockBackend(() => new TypeError("Failed to fetch"));
     await mountChat();
 
-    await pickRowAction("Beta chat", "Delete");
+    await pickRowAction("Beta chat", "Delete…");
     await screen.findByRole("dialog", { name: "Delete chat?" });
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
 
@@ -140,7 +151,7 @@ describe("deleting a chat against a failing backend", () => {
     mockBackend(() => new Response(JSON.stringify({}), { status: 200 }));
     await mountChat();
 
-    await pickRowAction("Beta chat", "Delete");
+    await pickRowAction("Beta chat", "Delete…");
     await screen.findByRole("dialog", { name: "Delete chat?" });
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
 
@@ -162,7 +173,7 @@ describe("deleting the active chat when the next one fails to load", () => {
     mockBackend(() => new Response(JSON.stringify({}), { status: 200 }));
     await mountChat();
 
-    await pickRowAction("Alpha chat", "Delete");
+    await pickRowAction("Alpha chat", "Delete…");
     await screen.findByRole("dialog", { name: "Delete chat?" });
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
 
@@ -265,9 +276,16 @@ describe("bulk-pinning chats against a failing backend", () => {
   // patchConversationIds used to throw on a non-2xx from a `void` call site,
   // so a refused pin or label was an unhandled rejection: nothing said why
   // and the user could not tell it had failed (#1998).
+  // Select mode starts from the Chats menu with nothing selected; the rows
+  // then tick on a click.
   async function bulkPinBeta() {
-    await pickRowAction("Beta chat", "Select…");
-    fireEvent.click(await screen.findByRole("button", { name: "Pin selected" }));
+    await pickChatsMenuItem("chats-menu-select");
+    const pin = await screen.findByRole("button", { name: "Pin selected" });
+    expect(pin).toBeDisabled();
+    fireEvent.click(railRow("conv-b"));
+    expect(railRow("conv-b")).toHaveAttribute("aria-pressed", "true");
+    expect(railRow("conv-a")).toHaveAttribute("aria-pressed", "false");
+    fireEvent.click(pin);
   }
 
   it("says why on a non-2xx and leaves the chat unpinned", async () => {
@@ -306,5 +324,61 @@ describe("bulk-pinning chats against a failing backend", () => {
     // The rail grows its Pinned section once the server has agreed.
     expect(await screen.findByText("Pinned")).toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+});
+
+describe("the Chats menu, from the full page", () => {
+  it("leaves select mode on Exit selection, and gives the menu back", async () => {
+    mockBackend(() => new Response("{}", { status: 200 }));
+    await mountChat();
+
+    await pickChatsMenuItem("chats-menu-select");
+    // While selecting, the rows are checkboxes, with no ⋯ and no Chats menu.
+    expect(await screen.findByRole("button", { name: "Exit selection" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Conversation options for Beta chat" })).not.toBeInTheDocument();
+    expect(screen.queryByTestId("recent-sort")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Exit selection" }));
+    await waitFor(() => expect(screen.getByTestId("recent-sort")).toBeInTheDocument());
+    expect(railRow("conv-b")).not.toHaveAttribute("aria-pressed");
+  });
+
+  it("asks before deleting the temporary chats, and says what is kept", async () => {
+    const fetchMock = mockBackend(() => new Response("{}", { status: 200 }));
+    await mountChat();
+
+    fireEvent.click(screen.getByTestId("recent-sort"));
+    const item = await screen.findByTestId("delete-temporary-chats");
+    expect(item).toHaveTextContent("Delete temporary chats…");
+    expect(item).toHaveTextContent("Keeps pinned, filed, shared and patrol chats.");
+    fireEvent.click(item);
+
+    expect(await screen.findByRole("dialog", { name: "Delete all temporary chats?" })).toBeInTheDocument();
+    // Nothing is deleted by opening the question.
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "DELETE")).toHaveLength(0);
+  });
+
+  it("sorts by title from the menu, where the date groups step aside, and remembers it", async () => {
+    mockBackend(() => new Response("{}", { status: 200 }));
+    try {
+      await mountChat();
+      const sort = () => screen.getByTestId("recent-sort");
+      const groups = () =>
+        Array.from(document.querySelectorAll('[data-testid="unified-chat-list"] [data-date-group]')).map((g) =>
+          g.getAttribute("aria-label"),
+        );
+      // Most recently active first, under the date each was last active.
+      expect(sort()).toHaveAttribute("data-value", "activity");
+      expect(groups()).toEqual(["Older"]);
+
+      await pickChatsMenuItem("recent-sort-title");
+      await waitFor(() => expect(sort()).toHaveAttribute("data-value", "title"));
+      expect(sort()).toHaveAccessibleName("Chat list options. Sorted by: Title A–Z");
+      // An A–Z list has no dates to group by.
+      expect(groups()).toEqual([]);
+      expect(window.localStorage.getItem(RECENT_SORT_ITEM)).toBe("title");
+    } finally {
+      window.localStorage.removeItem(RECENT_SORT_ITEM);
+    }
   });
 });

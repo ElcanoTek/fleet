@@ -5,11 +5,11 @@ import { DEFAULT_BRANDING } from "@/app/lib/useClientConfig";
 import type { ConversationSummary, ServerConfig } from "./chat-experience";
 import type { Project } from "./ProjectsModal";
 
-// The rail's hand-set chat orders (Pinned, and each project) and the
-// Temporary sort
-// (docs/CHAT-ORDER.md): rows follow the saved order, Reorder swaps them
-// for the drag-and-arrow list, a move hands the whole new order up, and Done
-// brings the ordinary rows back.
+// The rail's hand-set orders (Pinned — chats and projects together — and each
+// project's chats) and the Chats list's sort and menu (docs/CHAT-ORDER.md,
+// docs/SIDEBAR.md): rows follow the saved order, Reorder swaps them for the
+// drag-and-arrow list, a move hands the whole new order up, and Done brings
+// the ordinary rows back.
 
 afterEach(cleanup);
 
@@ -209,7 +209,7 @@ describe("ConversationSidebar chat order", () => {
     expect(screen.queryByRole("menuitem", { name: "Reorder chats" })).toBeNull();
   });
 
-  it("sorts Temporary chats by the chosen sort and reports a change", () => {
+  it("sorts the Chats list by the chosen sort and reports a change", () => {
     const temp = [
       { ...CONV, id: "t1", title: "Zulu", updated_at: 30, created_at: 1 },
       { ...CONV, id: "t2", title: "Alpha", updated_at: 20, created_at: 2 },
@@ -219,14 +219,16 @@ describe("ConversationSidebar chat order", () => {
     const zulu = screen.getByText("Zulu");
     const alpha = screen.getByText("Alpha");
     expect(alpha.compareDocumentPosition(zulu) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    // The sort is a small button naming what it is and its value, opening a
-    // menu of the three choices (not a native select, which a touch screen
-    // draws at twice the heading's size).
-    const sort = screen.getByRole("button", { name: "Sort chats: Title A–Z" });
+    // The sort lives in the Chats menu: a small button at the heading's edge
+    // naming what it is and what the list is sorted by, opening a menu whose
+    // first three choices are the sorts (not a native select, which a touch
+    // screen draws at twice the heading's size).
+    const sort = screen.getByRole("button", { name: "Chat list options. Sorted by: Title A–Z" });
+    expect(sort).toBe(screen.getByTestId("recent-sort"));
     expect(sort.getAttribute("data-value")).toBe("title");
     expect(screen.queryByRole("combobox")).toBeNull();
     fireEvent.click(sort);
-    const menu = screen.getByRole("menu", { name: "Sort chats" });
+    const menu = screen.getByRole("menu", { name: "Chat list options" });
     const choices = within(menu).getAllByRole("menuitemradio");
     expect(choices.map((c) => [c.textContent, c.getAttribute("aria-checked")])).toEqual([
       ["Recent activity", "false"],
@@ -235,7 +237,7 @@ describe("ConversationSidebar chat order", () => {
     ]);
     fireEvent.click(within(menu).getByRole("menuitemradio", { name: "Newest first" }));
     expect(onRecentSortChange).toHaveBeenCalledWith("created");
-    expect(screen.queryByRole("menu", { name: "Sort chats" })).toBeNull();
+    expect(screen.queryByRole("menu", { name: "Chat list options" })).toBeNull();
     // Choosing the sort already on changes nothing.
     fireEvent.click(sort);
     fireEvent.click(screen.getByRole("menuitemradio", { name: "Title A–Z" }));
@@ -335,5 +337,233 @@ describe("ConversationSidebar chat order", () => {
     renderSidebar({ teamSharedConversations: team, teamSharedLoaded: true, togglePin });
     fireEvent.click(screen.getByRole("button", { name: "Conversation options for Team loose" }));
     expect(screen.queryByRole("menuitem", { name: "Pin" })).toBeNull();
+  });
+  // ── Pinned holds chats AND projects, in one order ─────────────────────────
+  // The saved "pinned" order names a chat by its ID and a project as
+  // "project:<id>" (docs/CHAT-ORDER.md).
+  describe("pinned projects and chats together", () => {
+    const LAUNCH: Project = { ...PROJECT, id: "p-9", name: "Launch", pinned: true };
+    const pinnedTitles = () =>
+      [...screen.getByTestId("pinned-section").querySelectorAll("[data-rail-row]")].map(
+        (r) => r.querySelector(".truncate")?.textContent,
+      );
+
+    it("follows the one saved order across both kinds", () => {
+      renderSidebar({
+        conversations: chats,
+        filteredConversations: chats,
+        projects: [PROJECT, LAUNCH],
+        chatOrders: { pinned: ["b", "project:p-9", "a", "c"] },
+        onReorderChats: noop,
+      });
+      expect(pinnedTitles()).toEqual(["Bravo", "Launch", "Alpha", "Charlie"]);
+      // A pinned project is a project row there (it opens the project)…
+      const pinned = screen.getByTestId("pinned-section");
+      expect(within(pinned).getByRole("button", { name: "Open project Launch" })).toBeTruthy();
+      // …and is listed once: not in Projects as well.
+      const projects = screen.getByTestId("projects-section");
+      expect(within(projects).queryByRole("button", { name: "Open project Launch" })).toBeNull();
+      expect(within(projects).getByRole("button", { name: "Open project Roadmap" })).toBeTruthy();
+    });
+
+    it("puts what the order does not name yet first: projects, then chats", () => {
+      renderSidebar({
+        conversations: chats,
+        filteredConversations: chats,
+        projects: [LAUNCH],
+        chatOrders: { pinned: ["c", "a"] },
+        onReorderChats: noop,
+      });
+      expect(pinnedTitles()).toEqual(["Launch", "Bravo", "Charlie", "Alpha"]);
+    });
+
+    it("ignores a project the order names that is no longer pinned", () => {
+      renderSidebar({
+        conversations: chats,
+        filteredConversations: chats,
+        projects: [PROJECT],
+        chatOrders: { pinned: ["project:p-1", "c", "a", "b"] },
+        onReorderChats: noop,
+      });
+      expect(pinnedTitles()).toEqual(["Charlie", "Alpha", "Bravo"]);
+    });
+
+    it("reorders them as one list, saving a project as “project:<id>”", () => {
+      const onReorderChats = vi.fn();
+      renderSidebar({
+        conversations: chats,
+        filteredConversations: chats,
+        projects: [LAUNCH],
+        chatOrders: {},
+        onReorderChats,
+      });
+      fireEvent.click(screen.getByTestId("pinned-reorder-toggle"));
+      const list = screen.getByTestId("chat-reorder-list");
+      expect(within(list).getAllByRole("listitem").map((li) => li.textContent)).toEqual(
+        ["Launch", "Alpha", "Bravo", "Charlie"].map((t) => expect.stringContaining(t)),
+      );
+      fireEvent.click(within(list).getByRole("button", { name: "Move Alpha up" }));
+      expect(onReorderChats).toHaveBeenCalledWith("pinned", ["a", "project:p-9", "b", "c"]);
+    });
+
+    it("can be reordered with one chat and one project, and the pinned project opens from there", () => {
+      const onOpenProjectHome = vi.fn();
+      renderSidebar({
+        conversations: [chats[0]],
+        filteredConversations: [chats[0]],
+        projects: [LAUNCH],
+        onReorderChats: noop,
+        onOpenProjectHome,
+      });
+      expect(screen.getByTestId("pinned-reorder-toggle")).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: "Open project Launch" }));
+      expect(onOpenProjectHome).toHaveBeenCalledWith("p-9");
+    });
+
+    it("shows no Pinned section with nothing pinned", () => {
+      renderSidebar();
+      expect(screen.queryByTestId("pinned-section")).toBeNull();
+    });
+  });
+
+  // ── The Chats menu: sort, filter by label, select, tidy up ────────────────
+  describe("the Chats menu", () => {
+    const openMenu = () => fireEvent.click(screen.getByTestId("recent-sort"));
+    const labelled = [
+      { ...CONV, id: "l1", title: "Budget", labels: ["finance", "q4"] },
+      { ...CONV, id: "l2", title: "Forecast", labels: ["finance"] },
+      { ...CONV, id: "l3", title: "Standup" },
+    ];
+
+    it("filters by label when the person uses labels, and marks the button while a filter is on", () => {
+      const setFilterLabels = vi.fn();
+      const { rerenderWith } = renderSidebar({
+        conversations: labelled,
+        filteredConversations: labelled,
+        setFilterLabels,
+        onRecentSortChange: noop,
+      });
+      // No labels on the rows themselves: a row is its title.
+      expect(screen.queryByText("finance")).toBeNull();
+      openMenu();
+      const entry = screen.getByTestId("chats-menu-labels");
+      expect(entry.textContent).toContain("Filter by label");
+      fireEvent.click(entry);
+      const flyout = screen.getByRole("menu", { name: "Filter by label" });
+      const choices = within(flyout).getAllByRole("menuitemcheckbox");
+      // Each label with how many chats carry it.
+      expect(choices.map((c) => [c.textContent, c.getAttribute("aria-checked")])).toEqual([
+        ["finance2", "false"],
+        ["q41", "false"],
+      ]);
+      fireEvent.click(choices[0]);
+      const toggle = setFilterLabels.mock.calls[0][0] as (ls: string[]) => string[];
+      expect(toggle([])).toEqual(["finance"]);
+      expect(toggle(["finance", "q4"])).toEqual(["q4"]);
+
+      // With the filter on: the entry counts it, and Chats lists what matches
+      // under a chip that takes the filter off.
+      const matching = labelled.slice(0, 2);
+      rerenderWith({
+        conversations: labelled,
+        filteredConversations: matching,
+        filterLabels: ["finance"],
+        setFilterLabels,
+        onRecentSortChange: noop,
+      });
+      expect(screen.getByTestId("chats-menu-labels").textContent).toContain("Filter by label (1)");
+      const section = screen.getByTestId("chats-section");
+      expect([...section.querySelectorAll("[data-rail-row]")].map((r) => r.getAttribute("title"))).toEqual([
+        "Budget · finance, q4",
+        "Forecast · finance",
+      ]);
+      expect(within(section).getByRole("button", { name: "Remove label filter finance" })).toBeTruthy();
+    });
+
+    it("has no label entry for a person with no labels", () => {
+      renderSidebar({ onRecentSortChange: noop });
+      openMenu();
+      expect(screen.queryByTestId("chats-menu-labels")).toBeNull();
+    });
+
+    it("starts select mode with nothing ticked, and steps aside while selecting", () => {
+      const onEnterSelectMode = vi.fn();
+      const { rerenderWith } = renderSidebar({ onEnterSelectMode });
+      openMenu();
+      fireEvent.click(screen.getByTestId("chats-menu-select"));
+      expect(onEnterSelectMode).toHaveBeenCalledWith();
+      expect(screen.queryByRole("menu", { name: "Chat list options" })).toBeNull();
+      rerenderWith({ onEnterSelectMode, selectMode: true });
+      expect(screen.queryByTestId("recent-sort")).toBeNull();
+      // Each row is a tick box now, with no ⋯.
+      const row = screen.getByRole("button", { name: "Quarterly review" });
+      expect(row.getAttribute("aria-pressed")).toBe("false");
+      expect(screen.queryByRole("button", { name: "Conversation options for Quarterly review" })).toBeNull();
+    });
+
+    it("offers Select only when the person has chats of their own to select", () => {
+      const team = [{ ...CONV, id: "t1", title: "Team room", user_email: "ana@example.com", team_visible: true }];
+      renderSidebar({ conversations: [], filteredConversations: [], teamSharedConversations: team, teamSharedLoaded: true });
+      openMenu();
+      expect(screen.queryByTestId("chats-menu-select")).toBeNull();
+      // Nor a bulk delete: none of these is theirs to delete.
+      expect(screen.queryByTestId("delete-temporary-chats")).toBeNull();
+    });
+
+    it("asks before deleting temporary chats, says what it keeps, and is absent with none", () => {
+      const setConfirmBulkDelete = vi.fn();
+      const { unmount } = renderSidebar({ setConfirmBulkDelete });
+      openMenu();
+      const item = screen.getByTestId("delete-temporary-chats");
+      expect(item.textContent).toContain("Delete temporary chats…");
+      expect(item.textContent).toContain(
+        "Keeps pinned, filed, shared and patrol chats. Temporary chats go after 90 days without activity anyway.",
+      );
+      fireEvent.click(item);
+      expect(setConfirmBulkDelete).toHaveBeenCalledWith(true);
+      unmount();
+      // Every chat is kept by something (pinned, filed, shared): nothing to delete.
+      const kept = [
+        { ...CONV, id: "k1", title: "Pinned", pinned: true },
+        { ...CONV, id: "k2", title: "Filed", project_id: "p-1" },
+        { ...CONV, id: "k3", title: "Shared", team_visible: true },
+      ];
+      renderSidebar({ conversations: kept, filteredConversations: kept, setConfirmBulkDelete });
+      openMenu();
+      expect(screen.queryByTestId("delete-temporary-chats")).toBeNull();
+    });
+
+    it("has no sort choices where the page cannot change the sort", () => {
+      renderSidebar();
+      openMenu();
+      expect(screen.queryByRole("menuitemradio")).toBeNull();
+      expect(screen.getByTestId("chats-menu-select")).toBeTruthy();
+    });
+  });
+
+  // ── The icon strip ────────────────────────────────────────────────────────
+  // Collapsed (from sm up) the sidebar is the + and the top items only: the
+  // search field, the pen and every list come back with the sidebar. The pen
+  // stays rendered for the phone drawer, which always shows everything.
+  describe("collapsed to the icon strip", () => {
+    const strip = { collapsed: true, setCollapsed: noop, toggle: noop, hydrated: true };
+
+    it("keeps the + and hides the pen, the search field and the lists", () => {
+      const pinnedProject: Project = { ...PROJECT, id: "p-9", name: "Launch", pinned: true };
+      renderSidebar({ collapse: strip, conversations: chats, filteredConversations: chats, projects: [PROJECT, pinnedProject] });
+      expect(screen.getByTestId("new-menu-button")).toBeTruthy();
+      expect(screen.getByTestId("new-chat-button").className.split(/\s+/)).toContain("sm:hidden");
+      expect(screen.getByTestId("search-input").parentElement?.className.split(/\s+/)).toContain("sm:hidden");
+      expect(screen.getByTestId("rail-lists").className.split(/\s+/)).toContain("sm:hidden");
+      // No strip of pinned icons: pinned things are in the sidebar's lists.
+      expect(screen.queryByTestId("rail-pinned-icons")).toBeNull();
+    });
+
+    it("shows the pen beside the search field when expanded", () => {
+      renderSidebar({ conversations: chats, filteredConversations: chats });
+      expect(screen.getByTestId("new-chat-button").className.split(/\s+/)).not.toContain("sm:hidden");
+      expect(screen.getByTestId("rail-lists").className.split(/\s+/)).not.toContain("sm:hidden");
+      expect(screen.queryByTestId("rail-pinned-icons")).toBeNull();
+    });
   });
 });
