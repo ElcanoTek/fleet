@@ -224,6 +224,24 @@ describe("the Patrols page", () => {
     await waitFor(() => expect(within(mine.getByTestId("patrol-runs")).getAllByRole("listitem")).toHaveLength(3));
   });
 
+  it("the first read is one request, and the page draws the answer it judged by", async () => {
+    // Only the first read succeeds: a second request on mount would have
+    // thrown the good answer away and left the page failed or empty.
+    let n = 0;
+    const realFetch = globalThis.fetch;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: string, init?: RequestInit) => {
+        if (String(input) === "/api/patrols" && ++n > 1) return Promise.resolve(new Response("{}", { status: 500 }));
+        return realFetch(input, init);
+      }),
+    );
+    render(<Page />);
+    await waitFor(() => expect(card("pt-1")).toBeTruthy());
+    expect(card("pt-2")).toBeTruthy();
+    expect(n).toBe(1);
+  });
+
   const modeCalls = () => calls.filter((c) => c.method === "POST" && c.url.endsWith("/auto-approve"));
 
   it("switching a running patrol's chat to Autonomous asks once more first", async () => {

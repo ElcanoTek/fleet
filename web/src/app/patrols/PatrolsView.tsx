@@ -26,7 +26,7 @@ import {
 } from "@/app/shared/lib/patrolApi";
 import { OwnerAvatar, compactUntil } from "@/app/shared/sidebar/RowStatus";
 import { teamChatHref } from "@/app/shared/sidebar/chatHandoff";
-import { fetchPatrolList, isOwnPatrol, refreshPatrols, usePatrols, type PatrolBrief } from "@/app/shared/sidebar/targets";
+import { freshPatrols, isOwnPatrol, refreshPatrols, usePatrols, type PatrolBrief } from "@/app/shared/sidebar/targets";
 import { Icon } from "@/app/shared/ui/Icon";
 import { Segmented } from "@/app/shared/ui/Segmented";
 import { Input } from "@/components/ui/input";
@@ -787,14 +787,15 @@ export function PatrolsView({
     setState(list ? "ready" : "failed");
     return list;
   }, []);
-  // The first read tells "none yet" from "could not load"; the shared store
-  // (usePatrols) then keeps this page and the sidebar's marks in step.
+  // The first read tells "none yet" from "could not load". It is the shared
+  // store's own read (published before it resolves), shared with the
+  // sidebar's when that one is still on its way, so the list this page draws
+  // and the answer it judges by are one response, and one request.
   useEffect(() => {
     let live = true;
-    void fetchPatrolList().then((list) => {
+    void freshPatrols().then((list) => {
       if (!live) return;
       setState(list ? "ready" : "failed");
-      void refreshPatrols();
     });
     return () => {
       live = false;

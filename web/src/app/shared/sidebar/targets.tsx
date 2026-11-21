@@ -101,6 +101,8 @@ let patrolRead: Promise<readonly PatrolBrief[] | null> | null = null;
 // (a focus read overtaken by the read after a pause, edit or removal) must
 // not publish its older list over the newer one.
 let patrolGen = 0;
+// Whether patrolRead has answered (a cached answer) or is still on its way.
+let patrolReadDone = false;
 const patrolListeners = new Set<() => void>();
 
 /**
@@ -121,13 +123,19 @@ export async function fetchPatrolList(): Promise<PatrolBrief[] | null> {
 function readPatrols(): Promise<readonly PatrolBrief[] | null> {
   if (!patrolRead) {
     const gen = patrolGen;
-    patrolRead = fetchPatrolList().then((list) => {
+    patrolReadDone = false;
+    const read: Promise<readonly PatrolBrief[] | null> = fetchPatrolList().then((list) => {
+      if (patrolRead === read) patrolReadDone = true;
       if (list && gen === patrolGen) {
         patrolList = list;
         for (const l of patrolListeners) l();
       }
+      // A failed read is not kept: the next part of the page that asks
+      // (a mount, a page change) reads again instead of reusing the failure.
+      if (!list && patrolRead === read) patrolRead = null;
       return list;
     });
+    patrolRead = read;
   }
   return patrolRead;
 }
@@ -137,6 +145,17 @@ export function refreshPatrols(): Promise<readonly PatrolBrief[] | null> {
   patrolGen++;
   patrolRead = null;
   return readPatrols();
+}
+
+/**
+ * freshPatrols: a read that starts no earlier than now. A read still on its
+ * way is shared (so a page that mounts while its sidebar is reading makes
+ * one request, and the answer it judges by is the one it draws); an answer
+ * already in hand, from earlier in the session, is read again.
+ */
+export function freshPatrols(): Promise<readonly PatrolBrief[] | null> {
+  if (patrolRead && !patrolReadDone) return patrolRead;
+  return refreshPatrols();
 }
 
 /**
@@ -194,6 +213,7 @@ export function usePatrolIds(enabled: boolean): Set<string> {
 export function resetPatrolCacheForTests() {
   patrolRead = null;
   patrolGen = 0;
+  patrolReadDone = false;
   patrolList = NO_PATROLS;
 }
 

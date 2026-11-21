@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import {
   fetchPatrolList,
+  freshPatrols,
   isOwnPatrol,
   patrolsByConversation,
   patrolsChanged,
@@ -111,6 +112,31 @@ describe("the patrols a sidebar row is marked from", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     render(<Names />);
     await waitFor(() => expect(screen.getByTestId("names")).toHaveTextContent("New"));
+  });
+
+  it("a failed read is not kept: the next part of the page that asks reads again", async () => {
+    const fetchMock = stubPatrols(["fail", [patrol({ title: "Back" })]]);
+    const first = render(<Names />);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId("names")).toHaveTextContent("");
+    first.unmount();
+    render(<Names />);
+    await waitFor(() => expect(screen.getByTestId("names")).toHaveTextContent("Back"));
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("freshPatrols shares a read on its way, and reads again over an answer already in hand", async () => {
+    const fetchMock = stubPatrols([[patrol({ title: "One" })], [patrol({ title: "Two" })]]);
+    render(<Names />);
+    // The sidebar's read is on its way: the page shares it.
+    expect((await freshPatrols())?.map((p) => p.title)).toEqual(["One"]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    // Answered: a later fresh read asks again.
+    expect((await freshPatrols())?.map((p) => p.title)).toEqual(["Two"]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("keeps what it knew when a refresh fails", async () => {
