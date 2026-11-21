@@ -173,4 +173,5 @@ view and pinned notes are [ADR-0117](adr/0117-helping-a-chats-people.md)). Opera
   view and typing as them (ADR-0117).
 - The administrator's view of a conversation does not draw approval cards or
   generated-UI cards as the chat does; it lists the waiting cards above the
-  conversation instead.
+  conversation instead: the 50 that have waited longest, with the number
+  still waiting beyond them when there are more.

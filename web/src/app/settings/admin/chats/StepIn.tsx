@@ -185,7 +185,13 @@ function NoteForm({ chat, note, onChanged }: { chat: AdminChat; note: AdminNote 
   const trimmed = text.trim();
   const unchanged = base.at !== 0 && trimmed === base.text;
   const current = note?.version ?? 0;
-  const moved = current !== base.at;
+  // After this form's own write the server has answered but `note` is still
+  // the chat as it was read before: `behind` is that older version, which is
+  // not someone else's change. It is forgotten as soon as `note` moves on, to
+  // this form's write or to anyone's later one.
+  const [behind, setBehind] = useState<number | null>(null);
+  if (behind !== null && current !== behind) setBehind(null);
+  const moved = current !== base.at && current !== behind;
   const startOver = () => {
     setText(note?.text ?? "");
     setBase({ at: current, text: note?.text ?? "" });
@@ -216,6 +222,7 @@ function NoteForm({ chat, note, onChanged }: { chat: AdminChat; note: AdminNote 
         if (res) {
           setText(res.note.text);
           setBase({ at: res.note.version, text: res.note.text });
+          setBehind(current);
         }
       },
       base.at !== 0 ? tr("Note updated. It shows as new in the chat.") : tr("Note pinned to the chat."),
@@ -228,6 +235,7 @@ function NoteForm({ chat, note, onChanged }: { chat: AdminChat; note: AdminNote 
       await sendJSON(`${chatUrl(chat.id, "/note")}?expect_version=${base.at}`, "DELETE");
       setText("");
       setBase({ at: 0, text: "" });
+      setBehind(current);
     }, tr("Note removed from the chat."));
   };
   return (
@@ -266,7 +274,7 @@ function NoteForm({ chat, note, onChanged }: { chat: AdminChat; note: AdminNote 
           )
         }
       >
-        {note ? <InlineConfirmButton label={tr("Unpin")} confirmLabel={tr("Confirm unpin")} onConfirm={unpin} disabled={busy} testId="admin-note-unpin" /> : null}
+        {base.at !== 0 ? <InlineConfirmButton label={tr("Unpin")} confirmLabel={tr("Confirm unpin")} onConfirm={unpin} disabled={busy} testId="admin-note-unpin" /> : null}
         <Button type="submit" size="sm" disabled={busy || !trimmed || unchanged || tooLong} aria-describedby={hintId} data-testid="admin-note-pin">
           <Icon name="pin" className="size-3.5" />
           {base.at !== 0 ? tr("Update note") : tr("Pin note")}

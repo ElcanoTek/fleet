@@ -101,6 +101,9 @@ let requestPolls: unknown[];
 let note: AdminNote | null;
 let detailChat: AdminChat;
 let purged: boolean;
+// When set, the chat's detail keeps answering with this note: a re-read that
+// has not caught up with a write yet.
+let laggingNote: AdminNote | null | undefined;
 let overviewNow: ChatOverview;
 let patrolNow: AdminPatrol;
 
@@ -110,6 +113,7 @@ beforeEach(() => {
   note = null;
   detailChat = CHAT;
   purged = false;
+  laggingNote = undefined;
   overviewNow = OVERVIEW;
   patrolNow = PATROL;
   nav.set("");
@@ -153,7 +157,7 @@ beforeEach(() => {
             detailChat.pending_approvals > 0
               ? [{ id: "ap-1", tool: "send_email", for_email: CHAT.owner_email, created_at: NOW - 3 * 3600, expires_at: NOW + 3600 }]
               : [],
-          note,
+          note: laggingNote === undefined ? note : laggingNote,
         });
       }
       if (url.endsWith("/requests") && method === "POST") {
@@ -314,6 +318,32 @@ describe("a chat", () => {
     // The unpin names the note it is removing, so a replacement is not what goes.
     await waitFor(() => expect(calls.some((c) => c.method === "DELETE" && c.url.endsWith("/note?expect_version=41"))).toBe(true));
     await waitFor(() => expect(screen.queryByTestId("admin-pinned-note")).toBeNull());
+  });
+
+  it("keeps its own saved note while the chat it was read from is still the older one", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    note = { text: "First.", author: "admin@x", via: "web", created_at: NOW - 600, updated_at: NOW - 600, version: 3 };
+    await openChat();
+    const box = (await screen.findByTestId("admin-note-text")) as HTMLTextAreaElement;
+    fireEvent.change(box, { target: { value: "Second." } });
+    // The save is answered, but the re-reads of the chat have not caught up:
+    // the view still holds the note as it was before the save.
+    laggingNote = note;
+    fireEvent.click(screen.getByTestId("admin-note-pin"));
+    expect(await screen.findByText("Note updated. It shows as new in the chat.")).toBeTruthy();
+    expect(box.value).toBe("Second.");
+    expect(screen.queryByTestId("admin-note-stale")).toBeNull();
+    // Unpinning then names the note that was just saved, not the older one.
+    const unpin = screen.getByTestId("admin-note-unpin");
+    fireEvent.click(unpin);
+    fireEvent.click(unpin);
+    await waitFor(() => expect(calls.some((c) => c.method === "DELETE" && c.url.endsWith("/note?expect_version=4"))).toBe(true));
+  });
+
+  it("says how many more cards are waiting than it lists", async () => {
+    detailChat = { ...CHAT, pending_approvals: 60, attention: ["cards_waiting"], waiting_since: NOW - 3 * 3600 };
+    await openChat();
+    expect((await screen.findByTestId("attention-more-cards")).textContent).toBe("These are the 1 that have waited longest; 59 more are waiting.");
   });
 
   it("keeps a draft when another administrator changes the note, warns, and saves against the version it started from", async () => {

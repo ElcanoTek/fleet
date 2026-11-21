@@ -459,6 +459,11 @@ function AttentionCallout({ chat, cards }: { chat: AdminChat; cards: PendingCard
               </li>
             ))}
           </ul>
+          {chat.pending_approvals > cards.length ? (
+            <p className="mb-0 mt-1.5 text-[0.75rem] text-[var(--color-text-muted)]" data-testid="attention-more-cards">
+              {tr("These are the {0} that have waited longest; {1} more are waiting.", [cards.length, chat.pending_approvals - cards.length])}
+            </p>
+          ) : null}
         </>
       ) : (
         <p className="mb-0 mt-1.5 text-[0.78rem] leading-[1.55] text-[var(--color-text-secondary)]">

@@ -428,6 +428,10 @@ func chatsShow(argv []string, out io.Writer) int {
 			}
 			fmt.Fprintf(out, "  %-28s for %s, waiting since %s UTC, %s\n", truncateRunes(tool, 28), k.ForEmail, fmtTime(k.CreatedAt), expires)
 		}
+		if more := c.PendingApprovals - len(cards); more > 0 {
+			// The listing is bounded; the count is not.
+			fmt.Fprintf(out, "  these are the %d that have waited longest; %d more are waiting\n", len(cards), more)
+		}
 	}
 	if len(patrols) > 0 {
 		fmt.Fprintln(out, "\npatrols:")
@@ -502,7 +506,15 @@ func chatsHistory(argv []string, out io.Writer) int {
 	if len(entries) > 0 && len(entries) == *tail {
 		// A full page: there may be older entries (the hint is also printed
 		// when the page happens to end exactly at the chat's first entry).
-		fmt.Fprintf(out, "older entries: fleet chats history %s --before %d\n", c.ID, entries[0].ID)
+		// The hint continues the same reading: the same entry set and page size.
+		hint := fmt.Sprintf("fleet chats history %s --before %d", c.ID, entries[0].ID)
+		if *tools {
+			hint += " --tools"
+		}
+		if *tail != 30 {
+			hint += fmt.Sprintf(" --tail %d", *tail)
+		}
+		fmt.Fprintf(out, "older entries: %s\n", hint)
 	}
 	return 0
 }

@@ -457,6 +457,12 @@ func TestChatsShow_AttentionNoteAndCards(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil || got.Note == nil || got.Note.Author != "robbie@ops" || len(got.PendingCards) != 2 || len(got.Chat.Attention) != 2 {
 		t.Fatalf("show json = %v\n%s", err, out.String())
 	}
+	// The card list is bounded and the count is not: the difference is said.
+	f.chat.PendingApprovals = 60
+	out.Reset()
+	if code := chatsShow([]string{"dfe4adc7"}, &out); code != 0 || !strings.Contains(out.String(), "these are the 2 that have waited longest; 58 more are waiting") {
+		t.Fatalf("show with more cards than listed = %d\n%s", code, out.String())
+	}
 	// A quiet chat prints none of it, and its JSON note is null.
 	f.chat.Attention, f.note, f.cards = nil, nil, nil
 	out.Reset()
@@ -479,9 +485,19 @@ func TestChatsHistory_BeforeAndOlderHint(t *testing.T) {
 	if o := f.transcripts[0]; o.BeforeID != 90 || o.Tail != 3 {
 		t.Fatalf("transcript options = %+v", o)
 	}
-	if want := "older entries: fleet chats history " + f.chat.ID + " --before 41\n"; !strings.HasSuffix(out.String(), want) {
+	// The hint continues the same reading: the page size that was asked for.
+	if want := "older entries: fleet chats history " + f.chat.ID + " --before 41 --tail 3\n"; !strings.HasSuffix(out.String(), want) {
 		t.Fatalf("history does not end with %q:\n%s", want, out.String())
 	}
+	// And the tool calls, when they were asked for.
+	out.Reset()
+	if code := chatsHistory([]string{"dfe4adc7", "--tail", "3", "--tools"}, &out); code != 0 {
+		t.Fatalf("history --tools code %d", code)
+	}
+	if want := " --before 41 --tools --tail 3\n"; !strings.HasSuffix(out.String(), want) {
+		t.Fatalf("history --tools does not end with %q:\n%s", want, out.String())
+	}
+	f.transcripts = f.transcripts[:1]
 	// A page that is not full is the last one: no hint. Nor in JSON.
 	out.Reset()
 	if code := chatsHistory([]string{"dfe4adc7", "--tail", "5"}, &out); code != 0 || strings.Contains(out.String(), "older entries") {

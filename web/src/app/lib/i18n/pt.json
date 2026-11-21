@@ -6290,5 +6290,6 @@
   "Earlier messages were summarized here": "As mensagens anteriores foram resumidas aqui",
   "Tool calls from every participant’s turns are shown. In the chat, each person sees only their own.": "São mostradas as chamadas de ferramentas dos turnos de todos os participantes. No chat, cada pessoa vê apenas as suas.",
   "expect_version must be a number": "expect_version deve ser um número",
-  "Only the first {0} people are listed; the counts above cover everyone. Search or shorten the period to find the rest.": "Somente as primeiras {0} pessoas são listadas; as contagens acima incluem todas. Pesquise ou reduza o período para encontrar o restante."
+  "Only the first {0} people are listed; the counts above cover everyone. Search or shorten the period to find the rest.": "Somente as primeiras {0} pessoas são listadas; as contagens acima incluem todas. Pesquise ou reduza o período para encontrar o restante.",
+  "These are the {0} that have waited longest; {1} more are waiting.": "Estas são as {0} que aguardam há mais tempo; há mais {1} aguardando."
 }

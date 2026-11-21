@@ -241,7 +241,9 @@ type AdminPendingCard struct {
 	ExpiresAt int64 `json:"expires_at,omitempty"`
 }
 
-// AdminListPendingCards lists a chat's waiting approval cards, oldest first.
+// AdminListPendingCards lists a chat's waiting approval cards, oldest first,
+// at most 50. AdminChat.PendingApprovals counts all of them, so a caller says
+// how many more are waiting when the count is larger than this list.
 func (s *Store) AdminListPendingCards(ctx context.Context, convID string) ([]AdminPendingCard, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, tool_name, COALESCE(mcp_server, ''), user_email, created_at, COALESCE(expires_at, 0)
