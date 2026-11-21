@@ -2051,7 +2051,7 @@ func (s *Server) runClaimedApprovalAction(execCtx context.Context, user, convID 
 		// manage_tasks is the same shape for tasks that already exist (#1152).
 		return s.runStagedManageTasks(execCtx, approval)
 	default:
-		return s.runStagedTool(withApprovedCardDigest(execCtx, strings.TrimSpace(req.CardSHA256)), approval)
+		return s.runStagedTool(withApprovedCard(execCtx, approval, strings.TrimSpace(req.CardSHA256)), approval)
 	}
 }
 
