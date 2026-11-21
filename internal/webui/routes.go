@@ -225,7 +225,10 @@ func chatRoutes() []chatRoute {
 		{"POST /api/admin/storage/cleanup", fixed("/admin/storage/cleanup"), jsonBodyAlways, passthroughJSON},
 		{"POST /api/admin/teams/rename", fixed("/admin/teams/rename"), jsonBodyAlways, textJSON},
 		{"GET /api/admin/chats", func(r *http.Request) string {
-			return "/admin/chats" + passThroughQuery(r, "owner", "q", "active_days", "archived", "deleted", "limit")
+			return "/admin/chats" + passThroughQuery(r, "owner", "q", "active_days", "archived", "deleted", "state", "limit")
+		}, noBody, textJSON},
+		{"GET /api/admin/chat-overview", func(r *http.Request) string {
+			return "/admin/chat-overview" + passThroughQuery(r, "owner", "q", "active_days", "archived")
 		}, noBody, textJSON},
 		{"GET /api/admin/chat-actions", func(r *http.Request) string {
 			return "/admin/chat-actions" + passThroughQuery(r, "limit")
@@ -234,10 +237,14 @@ func chatRoutes() []chatRoute {
 		{"GET /api/admin/chats/{id}", func(r *http.Request) string { return "/admin/chats/" + p(r, "id") }, noBody, textJSON},
 		{"PATCH /api/admin/chats/{id}", func(r *http.Request) string { return "/admin/chats/" + p(r, "id") }, jsonBodyAlways, textJSON},
 		{"GET /api/admin/chats/{id}/history", func(r *http.Request) string {
-			return "/admin/chats/" + p(r, "id") + "/history" + passThroughQuery(r, "tail", "tools")
+			return "/admin/chats/" + p(r, "id") + "/history" + passThroughQuery(r, "tail", "tools", "before", "max_chars")
 		}, noBody, textJSON},
 		{"POST /api/admin/chats/{id}/requests", func(r *http.Request) string { return "/admin/chats/" + p(r, "id") + "/requests" }, jsonBodyAlways, textJSON},
 		{"POST /api/admin/chats/{id}/notice", func(r *http.Request) string { return "/admin/chats/" + p(r, "id") + "/notice" }, jsonBodyAlways, textJSON},
+		{"PUT /api/admin/chats/{id}/note", func(r *http.Request) string { return "/admin/chats/" + p(r, "id") + "/note" }, jsonBodyAlways, textJSON},
+		{"DELETE /api/admin/chats/{id}/note", func(r *http.Request) string {
+			return "/admin/chats/" + p(r, "id") + "/note" + passThroughQuery(r, "expect_version")
+		}, noBody, textJSON},
 		{"GET /api/admin/patrols/{id}", func(r *http.Request) string { return "/admin/patrols/" + p(r, "id") }, noBody, textJSON},
 		{"PATCH /api/admin/patrols/{id}", func(r *http.Request) string { return "/admin/patrols/" + p(r, "id") }, jsonBodyAlways, textJSON},
 		{"GET /api/admin/users", fixed("/admin/users"), noBody, textJSON},
@@ -316,6 +323,8 @@ func chatRoutes() []chatRoute {
 		{"POST /api/conversations/{id}/approvals/{approvalId}/stop", func(r *http.Request) string {
 			return conv(r) + "/approvals/" + p(r, "approvalId") + "/stop"
 		}, noBody, textJSON},
+		{"GET /api/conversations/{id}/admin-note", func(r *http.Request) string { return conv(r) + "/admin-note" }, noBody, textJSON},
+		{"POST /api/conversations/{id}/admin-note", func(r *http.Request) string { return conv(r) + "/admin-note" }, jsonBodyAlways, textJSON},
 		{"POST /api/conversations/{id}/archive", func(r *http.Request) string { return conv(r) + "/archive" }, jsonBodyIfAny, textOK},
 		{"POST /api/conversations/{id}/auto-approve", func(r *http.Request) string { return conv(r) + "/auto-approve" }, jsonBodyIfAny, textJSON},
 		{"POST /api/conversations/{id}/autosubmit/pause", func(r *http.Request) string { return conv(r) + "/autosubmit/pause" }, jsonBodyIfAny, textJSON},

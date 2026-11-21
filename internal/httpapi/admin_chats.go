@@ -50,6 +50,12 @@ type adminChatStore interface {
 	AdminGetChatSchedule(ctx context.Context, idOrPrefix string) (store.AdminChatSchedule, error)
 	AdminSetChatSchedulePrompt(ctx context.Context, in store.AdminChatSchedulePromptEdit) (before, after store.AdminChatSchedule, err error)
 	AdminSetChatScheduleStatus(ctx context.Context, a store.AdminActor, idOrPrefix, status, reason string) (store.AdminChatSchedule, error)
+	AdminChatOverview(ctx context.Context, f store.AdminChatFilter) (store.AdminChatOverview, error)
+	AdminListPendingCards(ctx context.Context, convID string) ([]store.AdminPendingCard, error)
+	GetAdminNote(ctx context.Context, convID string) (*store.AdminNote, error)
+	AdminSetNoteIfUnchanged(ctx context.Context, a store.AdminActor, convID, text string, expect *int64) (store.AdminNote, error)
+	AdminClearNoteIfUnchanged(ctx context.Context, a store.AdminActor, convID string, expect *int64) (bool, error)
+	AckAdminNote(ctx context.Context, convID, userEmail string, version int64) (*store.AdminNote, error)
 }
 
 func (s *Server) adminChats() (adminChatStore, bool) {
@@ -349,13 +355,29 @@ func adminChatError(w http.ResponseWriter, err error) {
 		http.Error(w, "the patrol's instructions changed since you opened them; reload and edit again", http.StatusConflict)
 	case errors.As(err, &staleDef):
 		http.Error(w, "the patrol changed since you opened it; reload and edit again", http.StatusConflict)
+	case errors.Is(err, store.ErrAdminNoteChanged):
+		http.Error(w, "the pinned note changed since you opened it; reload and edit again", http.StatusConflict)
 	case errors.Is(err, store.ErrAdminReasonRequired):
 		http.Error(w, "a reason is required: it is recorded and shown in the chat", http.StatusBadRequest)
 	case errors.Is(err, store.ErrAdminChatNotAllowed), errors.Is(err, store.ErrInvalidChatSchedule),
-		errors.Is(err, store.ErrAdminChatAmbiguous), errors.Is(err, store.ErrChatScheduleAmbiguous):
+		errors.Is(err, store.ErrAdminChatAmbiguous), errors.Is(err, store.ErrChatScheduleAmbiguous),
+		errors.Is(err, store.ErrAdminChatState), errors.Is(err, store.ErrAdminNoteEmpty), errors.Is(err, store.ErrAdminNoteTooLong):
 		http.Error(w, err.Error(), http.StatusBadRequest)
 	default:
 		http.Error(w, err.Error(), http.StatusBadRequest)
+	}
+}
+
+// adminChatFilterFromQuery reads the filter the chat listing and the overview
+// share: owner, q, active_days, archived, deleted, state, limit.
+func adminChatFilterFromQuery(r *http.Request) store.AdminChatFilter {
+	q := r.URL.Query()
+	on := func(k string) bool { return q.Get(k) == "1" || q.Get(k) == "true" }
+	days, _ := strconv.Atoi(q.Get("active_days"))
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	return store.AdminChatFilter{
+		OwnerEmail: q.Get("owner"), Search: q.Get("q"), ActiveWithinDays: days,
+		IncludeArchived: on("archived"), Deleted: on("deleted"), State: q.Get("state"), Limit: limit,
 	}
 }
 
@@ -370,14 +392,11 @@ func (s *Server) handleAdminChats(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "chat administration is not available", http.StatusNotImplemented)
 		return
 	}
-	q := r.URL.Query()
-	days, _ := strconv.Atoi(q.Get("active_days"))
-	deleted := q.Get("deleted") == "1" || q.Get("deleted") == "true"
-	limit, _ := strconv.Atoi(q.Get("limit"))
-	chats, err := st.AdminListChats(r.Context(), store.AdminChatFilter{
-		OwnerEmail: q.Get("owner"), Search: q.Get("q"), ActiveWithinDays: days,
-		IncludeArchived: q.Get("archived") == "1" || q.Get("archived") == "true", Deleted: deleted, Limit: limit,
-	})
+	chats, err := st.AdminListChats(r.Context(), adminChatFilterFromQuery(r))
+	if errors.Is(err, store.ErrAdminChatState) {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -385,14 +404,41 @@ func (s *Server) handleAdminChats(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, r, map[string]any{"chats": chats})
 }
 
+// handleAdminChatOverview serves GET /admin/chat-overview: the chats a filter
+// covers, counted as a whole and per owner (ADR-0117). It is how the Chats
+// page answers "who needs help?" without listing every chat.
+func (s *Server) handleAdminChatOverview(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	st, ok := s.adminChats()
+	if !ok {
+		http.Error(w, "chat administration is not available", http.StatusNotImplemented)
+		return
+	}
+	overview, err := st.AdminChatOverview(r.Context(), adminChatFilterFromQuery(r))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, r, map[string]any{"overview": overview})
+}
+
 // handleAdminChatItem serves the /admin/chats/{id}[/...] item routes:
 //
 //	GET   /admin/chats/{id}                 the chat, its patrols, its queued
-//	                                        inputs and its recent admin changes
+//	                                        inputs, its waiting approval cards,
+//	                                        its pinned note and its recent
+//	                                        admin changes
 //	PATCH /admin/chats/{id}                 title, model, approval mode, archive
 //	GET   /admin/chats/{id}/history         the transcript's latest entries
 //	POST  /admin/chats/{id}/requests        send a message, stop, or transfer
 //	POST  /admin/chats/{id}/notice          a notice in the chat
+//	PUT   /admin/chats/{id}/note            pin a note to the chat (ADR-0117;
+//	                                        expect_version makes it a
+//	                                        compare-and-swap)
+//	DELETE /admin/chats/{id}/note           remove the pinned note
 //
 // (An admin request's progress is GET /admin/chat-requests/{id}; the record of
 // admin changes across every chat is GET /admin/chat-actions.)
@@ -427,8 +473,14 @@ func (s *Server) handleAdminChatItem(w http.ResponseWriter, r *http.Request) {
 	case sub == "history" && r.Method == http.MethodGet:
 		q := r.URL.Query()
 		tail, _ := strconv.Atoi(q.Get("tail"))
+		before, _ := strconv.ParseInt(q.Get("before"), 10, 64)
+		maxChars, _ := strconv.Atoi(q.Get("max_chars"))
+		if maxChars > adminTranscriptMaxChars {
+			maxChars = adminTranscriptMaxChars
+		}
 		entries, err := st.AdminChatTranscript(r.Context(), chat.ID, store.AdminTranscriptOptions{
 			Tail: tail, IncludeTools: q.Get("tools") == "1" || q.Get("tools") == "true",
+			BeforeID: max(before, 0), MaxTextRunes: maxChars,
 		})
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -449,9 +501,96 @@ func (s *Server) handleAdminChatItem(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
+	case sub == "note" && r.Method == http.MethodPut:
+		var body struct {
+			Text string `json:"text"`
+			// ExpectVersion names the note this edit was made from: its
+			// version, or 0 for "no note was pinned". Sent, a note that has
+			// changed since answers 409 instead of being replaced; omitted,
+			// the note is pinned unconditionally.
+			ExpectVersion *int64 `json:"expect_version"`
+		}
+		if !decodeJSONBody(w, r, &body) {
+			return
+		}
+		note, err := st.AdminSetNoteIfUnchanged(r.Context(), s.adminActor(r), chat.ID, body.Text, body.ExpectVersion)
+		if err != nil {
+			adminChatError(w, err)
+			return
+		}
+		writeJSON(w, r, map[string]any{"note": note})
+	case sub == "note" && r.Method == http.MethodDelete:
+		// ?expect_version= makes the removal a compare-and-swap, like the
+		// PUT's field of the same name (a DELETE carries no body).
+		var expect *int64
+		if raw := r.URL.Query().Get("expect_version"); raw != "" {
+			v, err := strconv.ParseInt(raw, 10, 64)
+			if err != nil {
+				http.Error(w, "expect_version must be a number", http.StatusBadRequest)
+				return
+			}
+			expect = &v
+		}
+		if _, err := st.AdminClearNoteIfUnchanged(r.Context(), s.adminActor(r), chat.ID, expect); err != nil {
+			adminChatError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	default:
 		http.Error(w, "not found", http.StatusNotFound)
 	}
+}
+
+// adminTranscriptMaxChars bounds how much of one entry's text a transcript
+// read may ask for (the default is the store's 4000).
+const adminTranscriptMaxChars = 50_000
+
+// adminNoteForConversation is the pinned note a chat's people are shown, or
+// nil. It is display data: a failed read is logged and shows no note.
+func (s *Server) adminNoteForConversation(ctx context.Context, convID string) *store.AdminNote {
+	st, ok := s.adminChats()
+	if !ok {
+		return nil
+	}
+	note, err := st.GetAdminNote(ctx, convID)
+	if err != nil {
+		logging.From(ctx).Warn("conversation get: pinned note lookup failed", "conv_id", safe.LogSafe(convID), "err", safe.LogSafe(err.Error()))
+		return nil
+	}
+	return note
+}
+
+// handleConversationAdminNoteGet serves GET /conversations/{id}/admin-note:
+// the note pinned to the chat as it stands now, or null. A chat that is open
+// and idle re-reads it with this, so a note pinned, replaced or removed while
+// its owner is looking at the chat appears without a reload; it reads one row
+// and none of the history.
+func (s *Server) handleConversationAdminNoteGet(w http.ResponseWriter, r *http.Request, _, id string, _ *store.Conversation) {
+	writeJSON(w, r, map[string]any{"admin_note": s.adminNoteForConversation(r.Context(), id)})
+}
+
+// handleConversationAdminNoteAck serves POST /conversations/{id}/admin-note:
+// someone in the chat pressed "Got it" on the note an administrator pinned to
+// it (ADR-0117). The body names the text they read (version), so a note
+// replaced meanwhile stays unread. It answers with the note as it stands.
+func (s *Server) handleConversationAdminNoteAck(w http.ResponseWriter, r *http.Request, user, id string, _ *store.Conversation) {
+	st, ok := s.adminChats()
+	if !ok {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	var body struct {
+		Version int64 `json:"version"`
+	}
+	if !decodeJSONBody(w, r, &body) {
+		return
+	}
+	note, err := st.AckAdminNote(r.Context(), id, user, body.Version)
+	if err != nil {
+		http.Error(w, "could not record that", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, r, map[string]any{"admin_note": note})
 }
 
 func (s *Server) adminChatDetail(w http.ResponseWriter, r *http.Request, st adminChatStore, chat store.AdminChat) {
@@ -486,7 +625,20 @@ func (s *Server) adminChatDetail(w http.ResponseWriter, r *http.Request, st admi
 	if patrols == nil {
 		patrols = []store.AdminChatSchedule{}
 	}
-	writeJSON(w, r, map[string]any{"chat": chat, "patrols": patrols, "queue": qs, "actions": actions})
+	cards, err := st.AdminListPendingCards(ctx, chat.ID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	note, err := st.GetAdminNote(ctx, chat.ID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, r, map[string]any{
+		"chat": chat, "patrols": patrols, "queue": qs, "actions": actions,
+		"pending_cards": cards, "note": note,
+	})
 }
 
 func (s *Server) adminChatPatch(w http.ResponseWriter, r *http.Request, st adminChatStore, chat store.AdminChat) {

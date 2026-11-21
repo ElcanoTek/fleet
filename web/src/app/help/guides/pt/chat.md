@@ -472,6 +472,17 @@ tipo de nota no chat. Um administrador também pode arquivar ou excluir um
 chat; um chat excluído fica 30 dias em uma lixeira, então peça para
 restaurá-lo se foi um engano.
 
+Um administrador também pode **fixar uma nota** no seu chat. Ela fica acima da
+conversa, com o título **Nota de um administrador** e o e-mail dele, até que
+ele a remova. Pressione **Entendido** para avisar que você leu; a nota então
+se recolhe em uma linha que volta a abrir com um clique. Em um chat
+colaborativo todas as pessoas do chat veem a nota, e o primeiro **Entendido**
+vale para o chat. A nota não faz parte da conversa: o assistente nunca a lê,
+então digitar uma resposta na caixa de mensagem não chegará ao administrador.
+
+Para ajudar você, um administrador pode ler o seu chat. Ele não pode escrever
+como você nem responder aos seus cartões de aprovação; isso continua sendo seu.
+
 ### Conversas longas
 
 À medida que a conversa cresce, **Resumir mensagens anteriores** em **Mais opções** (`•••`) mostra quanto espaço do chat está ocupado como percentagem da janela de contexto do modelo. Com **Mostrar detalhes** ativo, uma linha de totais sobre o editor mostra a mesma percentagem junto ao custo acumulado da conversa. Quando a conversa fica cheia, um aviso indica-o e o assistente começa a demorar e a custar mais por turno. **Resumir mensagens anteriores**, em **Mais opções** ou no aviso, substitui os turnos antigos por um resumo breve para a conversa voltar a caber confortavelmente; a transcrição mantém o histórico e só é reduzida a vista de trabalho do assistente. Se a conversa mudar enquanto o resumo é escrito, por exemplo por uma resposta de outro separador ou uma nova tentativa, o resumo não é guardado e o chat indica *«A conversa mudou enquanto era resumida, pelo que o resumo não foi guardado. Volte a resumi-la».* Volte a resumir para incluir o estado atual. Não precisa de vigiar: por predefinição, quando um pedido atinge cerca de 90% do limite do modelo, a plataforma resume por si só a parte mais antiga dessa vista, entre turnos ou a meio de um turno longo que continua a obter dados; uma nota na resposta indica-o. Se um modelo continuar a recusar um pedido por ser demasiado longo, a plataforma resume e tenta novamente por si só em vez de dar o turno como falhado. Se o tema mudar por completo, começar outra conversa é mais barato e claro do que compactar a anterior.

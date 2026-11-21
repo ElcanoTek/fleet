@@ -300,11 +300,14 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, u
 		// historyForParticipant: the owner's own entries carry
 		// `injected_context`; another multiplayer participant's are omitted
 		// so their attachment paths are not exposed.
-		"history":                   historyPayload,
-		"pending_approvals":         approvals,
-		"resolved_approvals":        resolvedCards,
-		"pending_memory_proposals":  memProposals,
-		"schedules":                 schedules,
+		"history":                  historyPayload,
+		"pending_approvals":        approvals,
+		"resolved_approvals":       resolvedCards,
+		"pending_memory_proposals": memProposals,
+		"schedules":                schedules,
+		// The note an administrator pinned to this chat (ADR-0117), or null.
+		// It lives outside the history, so the model never reads it.
+		"admin_note":                s.adminNoteForConversation(r.Context(), id),
 		"ui_autosubmits":            uiAutoSubmits,
 		"autonomous_accepted":       autonomousAccepted,
 		"autonomous_policy_version": store.CurrentAutonomousPolicyVersion,

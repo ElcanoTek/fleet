@@ -27,6 +27,8 @@
 //   - GET    /conversations/{id}                — full history replay
 //   - DELETE /conversations/{id}                — delete (+ cascade messages)
 //   - POST   /conversations/{id}/pin            — { pinned: bool }
+//   - GET    /conversations/{id}/admin-note     — the administrator's pinned note as it stands (or null)
+//   - POST   /conversations/{id}/admin-note     — { version } "Got it" on the administrator's pinned note
 //   - POST   /chat                              — start a turn, stream SSE
 //
 // # SSE framing

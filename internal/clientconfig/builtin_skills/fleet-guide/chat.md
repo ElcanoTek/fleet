@@ -1592,6 +1592,17 @@ of note in the chat. An administrator can also archive or delete a chat; a
 deleted chat stays in a recycle bin for 30 days, so ask them to restore it if
 it was a mistake.
 
+An administrator can also **pin a note** to your chat. It sits above the
+conversation, titled **Note from an administrator** with their email, until
+they remove it. Press **Got it** to tell them you have read it; the note then
+folds to one line that opens again when you click it. In a Multiplayer chat
+everyone in the chat sees the note, and the first **Got it** counts for the
+chat. The note is not part of the conversation: the assistant never reads it,
+so typing a reply in the message box will not reach the administrator.
+
+To help you, an administrator can read your chat. They cannot type as you or
+answer your approval cards; those stay yours.
+
 ### Long conversations
 
 As a conversation grows, **Summarize earlier messages** in **More options** (`•••`)

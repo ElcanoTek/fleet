@@ -562,10 +562,13 @@ jobs:
         # GHC toolchains that Fleet never uses. Removing them before restoring
         # the Go build + module cache prevents root-disk exhaustion ("No space
         # left on device") while actions/cache extracts the archive.
+        # In the background: deleting these trees takes about 90 seconds and
+        # frees the space as it goes, and nothing in the job needs all of it
+        # at once, so no step waits for it. The runner reaps the process when
+        # the job ends.
         run: |
           df -h /
-          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
-          df -h /
+          sudo nohup rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc >/dev/null 2>&1 &
 
       - name: Restore the Go build cache (cover lane)
         # setup-go's own cache (disabled above) is ONE entry keyed on go.sum,
@@ -869,11 +872,29 @@ jobs:
     # the same job, so the ~18 min race suite added end-to-end to the Go lane
     # instead of overlapping it. Same DSN, same tag, same podman mask; it is
     # a separate runner, so it starts its own Postgres.
-    name: Go test -race
+    #
+    # Two runners, because one package sets the floor: internal/agentcore takes
+    # ~290 s under -race, more than a third of what the whole tree took in one
+    # run (~520 s at -p 4). It gets a runner to itself and the rest of the tree
+    # shares the other, so the lane ends when agentcore does. The two
+    # selections are complements, except for ./scripts, which the race lane
+    # leaves to the `go` job: those tests run shell scripts and read repo
+    # files (~175 s here), there is no fleet goroutine in them for the
+    # detector to watch, and the `go` job runs every one of them on every PR.
+    # scripts/go_test_script_test.go fails if a package is in neither half.
+    name: Go test -race (${{ matrix.shard }})
     runs-on: ubuntu-latest
     timeout-minutes: 35
     needs: changes
     if: ${{ needs.changes.outputs.docs_only != 'true' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard: agentcore
+            select: "--only=/internal/agentcore$"
+          - shard: rest
+            select: "--skip=/internal/agentcore$|/scripts$"
 
     env:
       FLEET_TEST_DATABASE_URL: postgres://fleet:fleet@localhost:5432/fleet?sslmode=disable  # see the go job
@@ -916,10 +937,13 @@ jobs:
           cache: false
 
       - name: Reclaim runner disk space for Go build cache
+        # In the background: deleting these trees takes about 90 seconds and
+        # frees the space as it goes, and nothing in the job needs all of it
+        # at once, so no step waits for it. The runner reaps the process when
+        # the job ends.
         run: |
           df -h /
-          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
-          df -h /
+          sudo nohup rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc >/dev/null 2>&1 &
 
       - name: Restore the Go build cache (race lane)
         # setup-go's own cache (disabled above) is ONE entry keyed on go.sum,
@@ -935,9 +959,12 @@ jobs:
           path: |
             ~/.cache/go-build
             ~/go/pkg/mod
-          key: go-build-race-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.sha }}
+          # One entry per half: each compiles its own test binaries. The last
+          # restore key is the single entry the lane kept before it was split.
+          key: go-build-race-${{ matrix.shard }}-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.sha }}
           restore-keys: |
-            go-build-race-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
+            go-build-race-${{ matrix.shard }}-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
+            go-build-race-${{ matrix.shard }}-${{ runner.os }}-
             go-build-race-${{ runner.os }}-
 
       - name: Age restored Go build cache entries so unused objects can be pruned
@@ -1010,7 +1037,9 @@ jobs:
           echo "podman is not on PATH (container sandbox tests will skip)"
 
       - name: go test -race
-        run: scripts/go-test.sh --race --count=1
+        env:
+          SELECT: ${{ matrix.select }}
+        run: scripts/go-test.sh --race --count=1 "$SELECT"
 
       - name: Prune unused Go build cache entries before saving (main only)
         if: ${{ success() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
@@ -1028,7 +1057,7 @@ jobs:
           path: |
             ~/.cache/go-build
             ~/go/pkg/mod
-          key: go-build-race-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.sha }}
+          key: go-build-race-${{ matrix.shard }}-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.sha }}
 
   prompt-cache-live:
     # Blocking live prompt-cache regression gate against OpenRouter.
@@ -1075,10 +1104,13 @@ jobs:
 
       - name: Reclaim runner disk space for Go build cache
         if: ${{ needs.changes.outputs.cache_relevant == 'true' }}
+        # In the background: deleting these trees takes about 90 seconds and
+        # frees the space as it goes, and nothing in the job needs all of it
+        # at once, so no step waits for it. The runner reaps the process when
+        # the job ends.
         run: |
           df -h /
-          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
-          df -h /
+          sudo nohup rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc >/dev/null 2>&1 &
 
       - name: Restore the Go build cache
         if: ${{ needs.changes.outputs.cache_relevant == 'true' }}
@@ -1336,12 +1368,20 @@ jobs:
           echo "docs/openapi.yaml and web/src/api/generated/ match the router."
 
   playwright:
-    name: Web e2e (Playwright, mocked)
+    # Three runners, each a third of the specs (Playwright's --shard splits the
+    # sorted test list): the suite is serial by design (one worker, one
+    # gateway), and at ~285 tests one runner took 7 minutes of an 8.5-minute
+    # job. Every spec still runs on every PR; a shard that fails fails the job.
+    name: Web e2e (Playwright, mocked ${{ matrix.shard }}/3)
     runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: changes
     # Skipped for a docs-only change; the `CI gate` job treats a skip as a pass.
     if: ${{ needs.changes.outputs.docs_only != 'true' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     defaults:
       run:
         working-directory: web
@@ -1401,13 +1441,15 @@ jobs:
           (cd .. && go build -o .e2e-bin/web-e2e-server ./cmd/web-e2e-server)
 
       - name: Run Playwright tests
-        run: npx playwright test
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: npx playwright test --shard="${SHARD}/3"
 
       - name: Upload Playwright HTML report
         if: ${{ failure() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: playwright-report
+          name: playwright-report-${{ matrix.shard }}
           path: web/playwright-report/
           retention-days: 14
 

@@ -149,6 +149,9 @@ there) and [`../.agents/skills/steward/SKILL.md`](../.agents/skills/steward/SKIL
   recorded and noted in the chat): [`docs/OPERATORS.md`](OPERATORS.md#chat-administration--fleet-chats-and-fleet-patrol)
   + design note [`docs/CHAT-ADMINISTRATION.md`](CHAT-ADMINISTRATION.md)
   + [ADR-0115](adr/0115-chat-administration.md)
+  + [ADR-0117](adr/0117-helping-a-chats-people.md) (who needs help, the
+  read-only view of a chat as its owner sees it, and the note an
+  administrator pins to a chat)
 - **Sharing work inside a project** (team-shared chats and the read-only view
   teammates branch from, "team learnings" as the user-facing name for a
   project's shared memory, the vocabulary, and why a team-shared chat can only
