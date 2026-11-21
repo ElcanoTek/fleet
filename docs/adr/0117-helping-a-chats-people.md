@@ -126,9 +126,15 @@ can find who is stuck and leave them a note without a browser.
 - "Seen" is one mark per note, not one per person. In a Multiplayer chat it
   says someone read it, not that everyone did.
 - A chat whose latest turn failed stays in "needs attention" until its next
-  turn. There is no way to dismiss it; the count is of facts, not of a to-do
-  list. An install with many abandoned failed chats narrows the page with
-  "active in the last N days".
+  turn, or until that turn's record is swept: finished turns are deleted after
+  `FLEET_TURN_EVENT_RETENTION_DAYS` (14 days by default), so a chat abandoned
+  after a failure drops out of "needs attention" then. Nothing is stored to
+  outlast the sweep on purpose: a failure nobody has come back to in two weeks
+  is not something an administrator can usefully act on, and keeping one turn
+  (with its event ledger) per chat for ever to say so is the wrong trade.
+  There is no way to dismiss it earlier; the count is of facts, not of a to-do
+  list. An install with many failed chats narrows the page with "active in the
+  last N days".
 - An open chat tab does not show a newly pinned note until its next load or
   turn, as with every admin change (ADR-0115's deferral, unchanged).
 - The overview runs two aggregate queries over the chats in scope, each with

@@ -163,7 +163,8 @@ view and pinned notes are [ADR-0117](adr/0117-helping-a-chats-people.md)). Opera
 - "Seen" on a pinned note is one mark per note, not one per person: in a
   Multiplayer chat it says someone read it, not that everyone did.
 - A chat whose latest turn failed stays in "needs attention" until its next
-  turn; there is no dismiss.
+  turn, or until that turn's record is swept (`FLEET_TURN_EVENT_RETENTION_DAYS`,
+  14 days by default); there is no dismiss.
 - Not built on purpose: an administrator opening someone's chat in the chat
   view and typing as them (ADR-0117).
 - The administrator's view of a conversation does not draw approval cards or

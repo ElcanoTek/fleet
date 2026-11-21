@@ -100,6 +100,7 @@ let requestPolls: unknown[];
 let note: AdminNote | null;
 let detailChat: AdminChat;
 let purged: boolean;
+let patrolNow: AdminPatrol;
 
 beforeEach(() => {
   calls = [];
@@ -107,6 +108,7 @@ beforeEach(() => {
   note = null;
   detailChat = CHAT;
   purged = false;
+  patrolNow = PATROL;
   nav.set("");
   vi.stubGlobal(
     "fetch",
@@ -136,7 +138,7 @@ beforeEach(() => {
       if (url === `/api/admin/chats/${CHAT.id}` && method === "GET") {
         return jsonResponse({
           chat: detailChat,
-          patrols: [PATROL],
+          patrols: [patrolNow],
           queue: [],
           actions: [{ id: 7, created_at: NOW - 30, actor: "robbie@ops", via: "cli", action: "request_message", reason: "seed the shared log" }],
           pending_cards:
@@ -221,6 +223,16 @@ describe("overview", () => {
     await waitFor(() => expect(calls.some((c) => c.url.startsWith("/api/admin/chats?") && c.url.includes("deleted=1"))).toBe(true));
     // The bin is a flat list: grouping by person is not offered there.
     expect(screen.queryByRole("group", { name: "Group by" })).toBeNull();
+  });
+
+  it("re-reads the chat rows when the overview is re-read", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    render(<AdminChatsPage />);
+    await screen.findByTestId("admin-chat-row");
+    const reads = () => calls.filter((c) => c.url.startsWith("/api/admin/chats?")).length;
+    const before = reads();
+    await vi.advanceTimersByTimeAsync(31_000);
+    await waitFor(() => expect(reads()).toBeGreaterThan(before));
   });
 
   it("keeps its filters behind an open chat", async () => {
@@ -352,6 +364,45 @@ describe("patrol instructions", () => {
   });
 });
 
+describe("a patrol that changes while it is being edited", () => {
+  it("saves with the sha256 the draft was made from, and warns, so the server refuses the stale edit", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    await openChat("patrols");
+    fireEvent.click(await screen.findByRole("button", { name: "Edit instructions" }));
+    fireEvent.change(screen.getByTestId("admin-patrol-prompt"), { target: { value: "13. LOGGING\n- Mine." } });
+    fireEvent.change(screen.getByTestId("admin-patrol-reason"), { target: { value: "log moved" } });
+
+    // Someone else edits the instructions; the next read of the chat brings
+    // the new text and sha256 in under the open editor.
+    patrolNow = { ...PATROL, prompt: "13. LOGGING\n- Theirs.", prompt_sha256: "def456", def_version: 5 };
+    await vi.advanceTimersByTimeAsync(9000); // the view's own refresh
+    expect(await screen.findByTestId("admin-patrol-stale")).toBeTruthy();
+
+    // The draft is kept, the diff is still against what it was made from...
+    expect((screen.getByTestId("admin-patrol-prompt") as HTMLTextAreaElement).value).toBe("13. LOGGING\n- Mine.");
+    expect(screen.getByTestId("admin-patrol-diff").textContent).toContain("- - Offer a memory card.");
+    // ...and Save sends the OLD sha256, which the server's compare-and-swap refuses.
+    fireEvent.click(screen.getByRole("button", { name: "Save instructions" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "PATCH")).toBe(true));
+    expect(calls.find((c) => c.method === "PATCH")?.body).toEqual({ prompt: "13. LOGGING\n- Mine.", expect_sha256: "abc123", reason: "log moved" });
+  });
+
+  it("previews and saves a schedule with the def_version the editor opened on", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    await openChat("patrols");
+    fireEvent.click(await screen.findByRole("button", { name: "Change schedule" }));
+    await screen.findByText("No changes yet. Next runs:");
+    patrolNow = { ...PATROL, cron: "0 9 * * *", def_version: 5 };
+    await vi.advanceTimersByTimeAsync(9000); // the view's own refresh
+    expect(await screen.findByTestId("admin-patrol-stale")).toBeTruthy();
+    fireEvent.change(screen.getByTestId("admin-patrol-cron"), { target: { value: "30 6 * * *" } });
+    await waitFor(() => {
+      const dry = calls.filter((c) => c.method === "PATCH" && (c.body as { dry_run?: boolean }).dry_run);
+      expect(dry.at(-1)?.body).toMatchObject({ cron: "30 6 * * *", expect_def_version: 4 });
+    });
+  });
+});
+
 describe("patrol schedule", () => {
   it("previews the next runs in the patrol's timezone and saves with the def_version it read", async () => {
     await openChat("patrols");
@@ -390,6 +441,14 @@ describe("patrol schedule", () => {
 });
 
 describe("lineDiff", () => {
+  it("never reports a change in very large text as no change", () => {
+    const big = Array.from({ length: 2100 }, (_, i) => `line ${i}`).join("\n");
+    const edited = big.replace("line 7\n", "line seven\n");
+    const diff = lineDiff(big, edited);
+    expect(diff.some((d) => d.kind !== " ")).toBe(true);
+    expect(lineDiff(big, big).every((d) => d.kind === " ")).toBe(true);
+  });
+
   it("prints removals before additions", () => {
     expect(lineDiff("a\nb\nc", "a\nB\nc")).toEqual([
       { kind: " ", text: "a" },

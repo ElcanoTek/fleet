@@ -105,8 +105,11 @@ function Overview({ version, onOpen }: { version: number; onOpen: (id: string) =
     return () => window.clearTimeout(t);
   }, [query]);
 
-  // Bumped by the poll to read the overview again.
+  // Bumped by the poll to read the overview, and the chat rows under it,
+  // again: a chat that recovers or starts running elsewhere must leave or
+  // join the list on screen, not only change the counts above it.
   const [tick, setTick] = useState(0);
+  const fresh = version + tick;
   useVisibleInterval(() => setTick((t) => t + 1), OVERVIEW_POLL_MS);
   useEffect(() => {
     let stale = false;
@@ -193,11 +196,11 @@ function Overview({ version, onOpen }: { version: number; onOpen: (id: string) =
       <div className="mt-3">
         {error ? <NoticeBanner tone="danger">{error}</NoticeBanner> : null}
         {flat ? (
-          <ChatList key={`${filter}|${q}|${days}`} queryString={listQuery(filter, q, days)} version={version} onOpen={onOpen} showOwner emptyText={emptyText(filter)} />
+          <ChatList key={`${filter}|${q}|${days}`} queryString={listQuery(filter, q, days)} version={fresh} onOpen={onOpen} showOwner emptyText={emptyText(filter)} />
         ) : overview === null ? (
           error ? null : <p className="text-sm text-[var(--color-text-muted)]">{tr("Loading chats…")}</p>
         ) : (
-          <PeopleList people={overview.people.filter((p) => personCount(p, filter) > 0)} filter={filter} q={q} days={days} version={version} onOpen={onOpen} />
+          <PeopleList people={overview.people.filter((p) => personCount(p, filter) > 0)} filter={filter} q={q} days={days} version={fresh} onOpen={onOpen} />
         )}
       </div>
     </SetSection>

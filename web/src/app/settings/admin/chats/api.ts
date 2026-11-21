@@ -154,7 +154,13 @@ export function chatUrl(chatId: string, sub = ""): string {
 export function lineDiff(a: string, b: string): { kind: " " | "-" | "+"; text: string }[] {
   const al = a.split("\n");
   const bl = b.split("\n");
-  if ((al.length + 1) * (bl.length + 1) > 4_000_000) return [];
+  if ((al.length + 1) * (bl.length + 1) > 4_000_000) {
+    // Too large to align line by line. Identical text is still no change;
+    // anything else is shown as the old text removed and the new text added,
+    // so a real change is never reported as none.
+    if (a === b) return al.map((text) => ({ kind: " " as const, text }));
+    return [...al.map((text) => ({ kind: "-" as const, text })), ...bl.map((text) => ({ kind: "+" as const, text }))];
+  }
   const n = al.length;
   const m = bl.length;
   const lcs: number[][] = Array.from({ length: n + 1 }, () => new Array<number>(m + 1).fill(0));

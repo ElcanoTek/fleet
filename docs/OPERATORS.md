@@ -958,7 +958,7 @@ above takes `--json`.
   `fleet chats list --attention` lists the chats themselves; add
   `--user EMAIL` for one person's. A chat **needs attention** in exactly two
   cases: an approval card is waiting, or the chat's latest turn ended in an
-  error. The STATE column shows which
+  error. A failed turn counts until the chat's next turn, or until its record is swept (`FLEET_TURN_EVENT_RETENTION_DAYS`, 14 days by default). The STATE column shows which
   (`attention:cards_waiting`, `attention:turn_failed`,
   `attention:cards_waiting+turn_failed`), and `show` lists the waiting cards:
   tool, for whom, since when, and when they expire. `--search` matches the

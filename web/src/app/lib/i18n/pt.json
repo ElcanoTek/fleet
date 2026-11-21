@@ -6281,5 +6281,6 @@
   "1 note": "1 nota",
   "{0} notes": "{0} notas",
   "could not record that": "não foi possível registrar",
-  "This chat no longer exists. It was deleted permanently.": "Este chat não existe mais. Ele foi excluído permanentemente."
+  "This chat no longer exists. It was deleted permanently.": "Este chat não existe mais. Ele foi excluído permanentemente.",
+  "This patrol changed while you were editing. Close the editor and open it again to start from the current version; saving now will be refused.": "Esta patrulha mudou enquanto você a editava. Feche o editor e abra-o novamente para partir da versão atual; salvar agora será recusado."
 }

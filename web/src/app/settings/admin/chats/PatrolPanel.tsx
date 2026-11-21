@@ -20,9 +20,16 @@ export function PatrolPanel({ patrol, onDone }: { patrol: AdminPatrol; onDone: (
   const [editing, setEditing] = useState(false);
   const [editingSchedule, setEditingSchedule] = useState(false);
   const [draft, setDraft] = useState(patrol.prompt);
+  // What the open editor started from. The chat is re-read every few seconds,
+  // so `patrol` may be newer than the text being edited: the diff and the
+  // compare-and-swap must use the text and sha256 the draft was made from, or
+  // a save would pass the check and overwrite a change someone else made
+  // meanwhile.
+  const [base, setBase] = useState({ prompt: patrol.prompt, sha: patrol.prompt_sha256 });
   const [reason, setReason] = useState("");
   const [status, setStatus] = useState<{ text: string; error: boolean } | null>(null);
-  const diff = useMemo(() => (editing ? lineDiff(patrol.prompt, draft.trim()) : []), [editing, patrol.prompt, draft]);
+  const diff = useMemo(() => (editing ? lineDiff(base.prompt, draft.trim()) : []), [editing, base.prompt, draft]);
+  const promptMoved = editing && patrol.prompt_sha256 !== base.sha;
   const changedLines = diff.filter((d) => d.kind !== " ").length;
 
   const patch = async (body: Record<string, unknown>, ok: string) => {
@@ -63,7 +70,19 @@ export function PatrolPanel({ patrol, onDone }: { patrol: AdminPatrol; onDone: (
           </button>
         ) : null}
         {live ? (
-          <button type="button" className={btnClass({ sm: true, reveal: true })} onClick={() => setEditing((v) => !v)} aria-expanded={editing}>
+          <button
+            type="button"
+            className={btnClass({ sm: true, reveal: true })}
+            onClick={() => {
+              // Opening starts a fresh edit of the patrol as it stands now.
+              if (!editing) {
+                setDraft(patrol.prompt);
+                setBase({ prompt: patrol.prompt, sha: patrol.prompt_sha256 });
+              }
+              setEditing((v) => !v);
+            }}
+            aria-expanded={editing}
+          >
             {editing ? tr("Cancel editing") : tr("Edit instructions")}
           </button>
         ) : null}
@@ -82,13 +101,14 @@ export function PatrolPanel({ patrol, onDone }: { patrol: AdminPatrol; onDone: (
         <ScheduleEditor
           patrol={patrol}
           canSave={Boolean(reason.trim())}
-          onSave={(cron, timezone) =>
-            void patch({ cron, timezone, expect_def_version: patrol.def_version }, tr("Schedule changed and noted in the chat."))
+          onSave={(cron, timezone, defVersion) =>
+            void patch({ cron, timezone, expect_def_version: defVersion }, tr("Schedule changed and noted in the chat."))
           }
         />
       ) : null}
       {editing ? (
         <div className="mt-3 grid gap-2">
+          {promptMoved ? <StaleEdit /> : null}
           <textarea
             className={cn(SETTINGS_INPUT, "min-h-[16rem] font-mono text-[0.75rem]")}
             value={draft}
@@ -118,7 +138,7 @@ export function PatrolPanel({ patrol, onDone }: { patrol: AdminPatrol; onDone: (
               type="button"
               className={btnClass({ variant: "primary", sm: true })}
               disabled={changedLines === 0 || !reason.trim() || !draft.trim()}
-              onClick={() => void patch({ prompt: draft, expect_sha256: patrol.prompt_sha256 }, tr("Instructions updated and noted in the chat."))}
+              onClick={() => void patch({ prompt: draft, expect_sha256: base.sha }, tr("Instructions updated and noted in the chat."))}
             >
               {tr("Save instructions")}
             </button>
@@ -127,6 +147,17 @@ export function PatrolPanel({ patrol, onDone }: { patrol: AdminPatrol; onDone: (
       ) : null}
       {status ? <div className="mt-2"><Status tone={status.error ? "error" : "ok"} text={status.text} /></div> : null}
     </ConnPanel>
+  );
+}
+
+// StaleEdit warns that the patrol changed under an open editor. Saving is
+// still possible and is refused by the server's compare-and-swap; the warning
+// says why before the administrator finds out that way.
+function StaleEdit() {
+  return (
+    <p role="alert" className="m-0 text-[0.75rem] text-[var(--color-danger)]" data-testid="admin-patrol-stale">
+      {tr("This patrol changed while you were editing. Close the editor and open it again to start from the current version; saving now will be refused.")}
+    </p>
   );
 }
 
@@ -144,10 +175,13 @@ function ScheduleEditor({
 }: {
   patrol: AdminPatrol;
   canSave: boolean;
-  onSave: (cron: string, timezone: string) => void;
+  onSave: (cron: string, timezone: string, defVersion: number) => void;
 }) {
   const [cron, setCron] = useState(patrol.cron ?? "");
   const [zone, setZone] = useState(patrol.timezone);
+  // The version this edit started from (the editor mounts when it is opened).
+  // Previews and the save use it, not a newer one a refresh brought in.
+  const [defVersion] = useState(patrol.def_version);
   const [preview, setPreview] = useState<{ cron: string; zone: string; changed: boolean; runs: number[]; timezone: string } | null>(null);
   const [previewError, setPreviewError] = useState<{ cron: string; zone: string; text: string } | null>(null);
   const zones = useMemo(() => timeZoneOptions(patrol.timezone), [patrol.timezone]);
@@ -160,7 +194,7 @@ function ScheduleEditor({
       sendJSON<SchedulePreviewResponse>(`/api/admin/patrols/${encodeURIComponent(patrol.id)}`, "PATCH", {
         cron: want.cron,
         timezone: want.zone,
-        expect_def_version: patrol.def_version,
+        expect_def_version: defVersion,
         dry_run: true,
       })
         .then((res) => {
@@ -178,7 +212,7 @@ function ScheduleEditor({
       live = false;
       clearTimeout(timer);
     };
-  }, [cron, zone, patrol.id, patrol.def_version]);
+  }, [cron, zone, patrol.id, defVersion]);
 
   const want = cron.trim();
   const current = preview && preview.cron === want && preview.zone === zone ? preview : null;
@@ -189,6 +223,7 @@ function ScheduleEditor({
       : null;
   return (
     <div className="mt-3 grid gap-2" data-testid="admin-patrol-schedule">
+      {patrol.def_version !== defVersion ? <StaleEdit /> : null}
       <div className="grid gap-2 sm:grid-cols-2">
         <Field label={tr("Schedule (cron: minute hour day month weekday)")}>
           <input
@@ -238,7 +273,7 @@ function ScheduleEditor({
           type="button"
           className={btnClass({ variant: "primary", sm: true })}
           disabled={!current?.changed || Boolean(error) || !canSave}
-          onClick={() => onSave(want, zone)}
+          onClick={() => onSave(want, zone, defVersion)}
         >
           {tr("Save schedule")}
         </button>
