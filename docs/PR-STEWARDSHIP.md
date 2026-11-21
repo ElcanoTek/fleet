@@ -40,7 +40,9 @@ against a real backend + sandbox), the Grype image scan, Helm lint, migration
 DDL lint, gitleaks, actionlint/shellcheck, CodeQL and Semgrep. `CI gate` is the
 one required status check, so red is always a hard block; a docs-only PR skips
 the heavy jobs via the `changes` classifier and the gate accepts exactly that
-skip. Expect a full run to take about 25 minutes, most of it the `-race` lane.
+skip. Expect a full run to take about 6 minutes: the `-race` lane and the mocked
+Playwright suite are each split across runners (docs/TESTING.md), so no one
+job sets the pace.
 
 Three jobs depend on live external data and can go red on a diff that did not
 cause it: `govulncheck` (Go vulnerability DB), `npm audit` (advisory feed, both

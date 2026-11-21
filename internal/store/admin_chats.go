@@ -277,8 +277,12 @@ const adminChatSelect = `
 
 // The SQL behind the states a listing filters and counts on. Each reads the
 // chat as "c"; the attention rule here and in scanAdminChat must agree.
+//
+// A chat's latest turn is the one with the highest turn_index: CreateTurn
+// assigns it serially per chat, so it orders two turns that started in the
+// same second, which started_at (seconds) and turn_id (random) cannot.
 const (
-	adminChatLastTurnSQL = `COALESCE((SELECT t.status FROM chat.turns t WHERE t.conversation_id = c.id ORDER BY t.started_at DESC, t.turn_id DESC LIMIT 1), '')`
+	adminChatLastTurnSQL = `COALESCE((SELECT t.status FROM chat.turns t WHERE t.conversation_id = c.id ORDER BY t.turn_index DESC, t.started_at DESC LIMIT 1), '')`
 	adminChatCardsSQL    = `EXISTS (SELECT 1 FROM chat.approvals a WHERE a.conversation_id = c.id AND a.status = 'pending')`
 	adminChatAttnSQL     = `(` + adminChatCardsSQL + ` OR ` + adminChatLastTurnSQL + ` = 'error')`
 	adminChatRunningSQL  = `EXISTS (SELECT 1 FROM chat.turns t WHERE t.conversation_id = c.id AND t.status = 'running')`

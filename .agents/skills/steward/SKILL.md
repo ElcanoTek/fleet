@@ -93,7 +93,7 @@ not the event that woke you. Events arrive late and out of order.
 - Re-read your diff as the linter would: `predeclared` (`max`, `min`, `len` as
   names), `nolintlint` (every `//nolint` needs a reason), `gocyclo`, gofmt.
 - Every PR runs the full gate, `-race` lane and Playwright included, so a
-  push that is red there costs a 25-minute cycle. If you touched concurrency,
+  push that is red there costs a full CI cycle (about 6 minutes). If you touched concurrency,
   dependencies, the sandbox image or web flows, run the slow parts yourself
   first: `make test-race`, `make govulncheck`, `make ci-e2e-mocked` (the
   Playwright command itself must run from `web/`; the Makefile target does).

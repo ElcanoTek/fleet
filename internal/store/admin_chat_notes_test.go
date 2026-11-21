@@ -376,3 +376,56 @@ func TestAdminChatTranscript_PagesBack(t *testing.T) {
 		t.Fatalf("oldest = %q", texts(oldest))
 	}
 }
+
+// A chat's latest turn is the last one created, even when two turns start in
+// the same second: a retry that succeeded clears "needs attention", and a
+// failure after a success raises it.
+func TestAdminChats_LatestTurnIsTheLastCreated(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	ctx := context.Background()
+	now := time.Now().Unix()
+	// Turn ids chosen so that sorting by id would pick the wrong turn in
+	// both chats.
+	for _, tc := range []struct {
+		title         string
+		first, second TurnStatus
+		firstID       string
+		secondID      string
+		wantStatus    string
+		wantAttention bool
+	}{
+		{"Retried and fine", TurnStatusError, TurnStatusCompleted, "zz-first", "aa-second", "completed", false},
+		{"Fine, then failed", TurnStatusCompleted, TurnStatusError, "zz-first-2", "aa-second-2", "error", true},
+	} {
+		c, err := s.CreateConversation(ctx, "dana@client.example", tc.title, "victoria", "m1", false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, turn := range []struct {
+			id     string
+			status TurnStatus
+		}{{tc.firstID, tc.first}, {tc.secondID, tc.second}} {
+			if err := s.CreateTurn(ctx, turn.id, c.ID, now); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.FinishTurn(ctx, turn.id, turn.status, now, false); err != nil {
+				t.Fatal(err)
+			}
+		}
+		got, err := s.AdminGetChat(ctx, c.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.LastTurnStatus != tc.wantStatus || (len(got.Attention) > 0) != tc.wantAttention {
+			t.Errorf("%s: last turn %q, attention %v; want %q, attention=%t", tc.title, got.LastTurnStatus, got.Attention, tc.wantStatus, tc.wantAttention)
+		}
+	}
+	listed, err := s.AdminListChats(ctx, AdminChatFilter{State: AdminChatStateAttention})
+	if err != nil || len(listed) != 1 || listed[0].Title != "Fine, then failed" {
+		t.Fatalf("attention list = %+v, %v", listed, err)
+	}
+	if o, _ := s.AdminChatOverview(ctx, AdminChatFilter{}); o.Attention != 1 {
+		t.Fatalf("overview counts %d chats needing attention, want 1", o.Attention)
+	}
+}

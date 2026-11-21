@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import AdminChatsPage, { formatRunTime, lineDiff, type AdminChat, type AdminPatrol } from "./page";
 import { toRows } from "./AdminTranscript";
+import { mergeLatest } from "./ChatDetail";
 import { attentionLabel, initials, type AdminNote, type ChatOverview } from "./api";
 import { jsonResponse } from "@/test/fetch";
 
@@ -98,12 +99,14 @@ let calls: Call[];
 let requestPolls: unknown[];
 let note: AdminNote | null;
 let detailChat: AdminChat;
+let purged: boolean;
 
 beforeEach(() => {
   calls = [];
   requestPolls = [];
   note = null;
   detailChat = CHAT;
+  purged = false;
   nav.set("");
   vi.stubGlobal(
     "fetch",
@@ -121,6 +124,7 @@ beforeEach(() => {
         note = null;
         return jsonResponse(null, 204);
       }
+      if (purged && url.startsWith(`/api/admin/chats/${CHAT.id}`) && method === "GET") return new Response("not found", { status: 404 });
       if (url.includes("/history")) {
         return jsonResponse({
           entries: [
@@ -143,6 +147,7 @@ beforeEach(() => {
         });
       }
       if (url.endsWith("/requests") && method === "POST") {
+        if ((JSON.parse(String(init?.body)) as { kind: string }).kind === "purge") purged = true;
         return jsonResponse({ request: { id: "req-1", kind: "message", state: "done", input_state: "queued" } }, 202);
       }
       if (url.startsWith("/api/admin/chat-requests/")) {
@@ -446,6 +451,12 @@ describe("delete", () => {
     fireEvent.click(purge);
     await waitFor(() => expect(calls.filter((c) => c.url.endsWith("/requests")).length).toBe(2));
     expect(calls.filter((c) => c.url.endsWith("/requests"))[1].body).toEqual({ kind: "purge", reason: "forked by mistake", confirm: CHAT.title });
+    // The chat is gone: the view says so instead of showing a chat that no
+    // longer exists, and offers the way back.
+    expect((await screen.findByTestId("admin-chat-gone")).textContent).toContain("no longer exists");
+    expect(screen.queryByTestId("admin-chat-panel")).toBeNull();
+    fireEvent.click(screen.getByTestId("admin-chat-back"));
+    await waitFor(() => expect(screen.queryByTestId("admin-chat-gone")).toBeNull());
   });
 });
 
@@ -463,6 +474,25 @@ describe("helpers", () => {
     expect(rows.map((r) => r.kind)).toEqual(["user", "assistant", "tool", "assistant", "patrol", "notice"]);
     // One reply stored in two pieces reads as one.
     expect(rows[1]).toMatchObject({ kind: "assistant", text: "Hello there." });
+  });
+
+  it("joins a refreshed latest page onto earlier pages, and drops them rather than show a hole", () => {
+    const e = (id: number, text = String(id)) => ({ id, created_at: id, role: "user", type: "text", text });
+    const ids = (r: { entries: { id: number }[] }) => r.entries.map((x) => x.id);
+    // The fresh page overlaps what is shown: it replaces the tail.
+    const joined = mergeLatest([e(1), e(2), e(3), e(4)], [e(3, "edited"), e(4), e(5)]);
+    expect(ids(joined)).toEqual([1, 2, 3, 4, 5]);
+    expect(joined.joined).toBe(true);
+    expect(joined.entries[2].text).toBe("edited");
+    // An entry removed since the last read does not linger.
+    expect(ids(mergeLatest([e(1), e(2), e(3)], [e(2), e(4)]))).toEqual([1, 2, 4]);
+    // More than a page arrived between reads: 5..9 were never read, so the
+    // earlier pages are dropped, not shown with 4 followed by 10.
+    const hole = mergeLatest([e(1), e(2), e(3), e(4)], [e(10), e(11)]);
+    expect(ids(hole)).toEqual([10, 11]);
+    expect(hole.joined).toBe(false);
+    // The first read.
+    expect(mergeLatest([], [e(1)])).toEqual({ entries: [e(1)], joined: true });
   });
 
   it("names why a chat needs attention, and an avatar's letters", () => {

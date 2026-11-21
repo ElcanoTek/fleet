@@ -43,6 +43,9 @@ const MAX_CHARS = 20000;
 // turn is seen as it lands.
 export const DETAIL_POLL_MS = 8000;
 
+// What a read answers for a chat that no longer exists; never shown.
+const GONE = "admin-chat-gone";
+
 type Tab = "conversation" | "patrols" | "settings" | "activity";
 
 function historyUrl(chatId: string, withTools: boolean, before?: number): string {
@@ -52,10 +55,30 @@ function historyUrl(chatId: string, withTools: boolean, before?: number): string
   return `${chatUrl(chatId, "/history")}?${q.toString()}`;
 }
 
+// mergeLatest joins a fresh read of the latest entries onto what is already on
+// screen (earlier pages the reader loaded, then the previous latest page).
+//
+// The fresh page replaces everything from its first entry on, so an entry
+// that changed or went away since the last read is shown as it now stands.
+// It only joins when it reaches back into what is shown. If it starts after
+// the last entry on screen, entries in between were never read (more than a
+// page arrived between two reads) or the earlier ones are gone (the chat was
+// truncated): the pages on screen are then dropped rather than shown with a
+// silent hole, and the reader can load earlier messages again.
+export function mergeLatest(shown: TranscriptEntry[], fresh: TranscriptEntry[]): { entries: TranscriptEntry[]; joined: boolean } {
+  if (shown.length === 0 || fresh.length === 0) return { entries: fresh, joined: shown.length === 0 };
+  const firstFresh = fresh[0].id;
+  if (firstFresh > shown[shown.length - 1].id) return { entries: fresh, joined: false };
+  return { entries: [...shown.filter((e) => e.id < firstFresh), ...fresh], joined: true };
+}
+
 export function ChatDetail({ chatId, onBack, onChanged }: { chatId: string; onBack: () => void; onChanged: () => void }) {
   const [detail, setDetail] = useState<ChatDetailData | null>(null);
-  const [latest, setLatest] = useState<TranscriptEntry[] | null>(null);
-  const [older, setOlder] = useState<TranscriptEntry[]>([]);
+  // Every entry on screen, oldest first: earlier pages the reader loaded,
+  // then the latest page. null until the first read lands.
+  const [shown, setShown] = useState<TranscriptEntry[] | null>(null);
+  // The chat was deleted for good while this view was open.
+  const [gone, setGone] = useState(false);
   const [moreOlder, setMoreOlder] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [withTools, setWithTools] = useState(false);
@@ -72,28 +95,38 @@ export function ChatDetail({ chatId, onBack, onChanged }: { chatId: string; onBa
   // been superseded is dropped.
   useEffect(() => {
     let stale = false;
+    const missing = { 404: GONE };
     Promise.all([
-      getGatedJson<ChatDetailData>(chatUrl(chatId), { label: tr("Chat") }),
-      getGatedJson<{ entries: TranscriptEntry[] }>(historyUrl(chatId, withTools), { label: tr("Conversation") }),
+      getGatedJson<ChatDetailData>(chatUrl(chatId), { label: tr("Chat"), statusText: missing }),
+      getGatedJson<{ entries: TranscriptEntry[] }>(historyUrl(chatId, withTools), { label: tr("Conversation"), statusText: missing }),
     ])
       .then(([d, h]) => {
         if (stale) return;
         if (d) setDetail(d);
         if (h) {
-          setLatest(h.entries);
-          // A full page means there may be earlier entries to page back to.
-          setMoreOlder((prev) => prev || h.entries.length >= PAGE);
+          const full = h.entries.length >= PAGE;
+          setShown((prev) => {
+            const merged = mergeLatest(prev ?? [], h.entries);
+            // Joined: whether earlier entries remain is what it was. Not
+            // joined (first read, or a hole): a full page means there may be.
+            if (!merged.joined || prev === null) setMoreOlder(full);
+            return merged.entries;
+          });
         }
         setError(null);
       })
       .catch((err: unknown) => {
-        if (!stale) setError(errorMessage(err, tr("Couldn’t load this chat.")));
+        if (stale) return;
+        // Deleted for good (by this administrator a moment ago, or by
+        // another): there is nothing left to show or to poll.
+        if (err instanceof Error && err.message === GONE) setGone(true);
+        else setError(errorMessage(err, tr("Couldn’t load this chat.")));
       });
     return () => {
       stale = true;
     };
   }, [chatId, withTools, tick]);
-  useVisibleInterval(refresh, DETAIL_POLL_MS);
+  useVisibleInterval(refresh, DETAIL_POLL_MS, !gone);
 
   const changed = useCallback(() => {
     refresh();
@@ -103,18 +136,20 @@ export function ChatDetail({ chatId, onBack, onChanged }: { chatId: string; onBa
   // Entries paged back to belong to one choice of the tool-calls switch.
   const switchTools = (next: boolean) => {
     setWithTools(next);
-    setOlder([]);
+    setShown(null);
     setMoreOlder(false);
   };
 
   const loadOlder = async () => {
-    const first = older[0]?.id ?? latest?.[0]?.id;
+    const first = shown?.[0]?.id;
     if (!first) return;
     setLoadingOlder(true);
     try {
       const h = await getGatedJson<{ entries: TranscriptEntry[] }>(historyUrl(chatId, withTools, first), { label: tr("Conversation") });
       if (h) {
-        setOlder((prev) => [...h.entries, ...prev]);
+        // Only onto the page they were asked for: a refresh may have dropped
+        // the pages on screen meanwhile.
+        setShown((prev) => (prev && prev[0]?.id === first ? [...h.entries, ...prev] : prev));
         setMoreOlder(h.entries.length >= PAGE);
       }
     } catch (err) {
@@ -130,6 +165,14 @@ export function ChatDetail({ chatId, onBack, onChanged }: { chatId: string; onBa
       {tr("All chats")}
     </Button>
   );
+  if (gone) {
+    return (
+      <div data-testid="admin-chat-gone">
+        {back}
+        <ConnEmpty>{tr("This chat no longer exists. It was deleted permanently.")}</ConnEmpty>
+      </div>
+    );
+  }
   if (error && !detail) {
     return (
       <div>
@@ -150,7 +193,7 @@ export function ChatDetail({ chatId, onBack, onChanged }: { chatId: string; onBa
   const binned = Boolean(c.deleted_at);
   const note = detail.note ?? null;
   const cards = detail.pending_cards ?? [];
-  const entries = [...older, ...(latest ?? [])];
+  const entries = shown ?? [];
   const livePatrols = detail.patrols.filter((p) => p.status === "active" || p.status === "paused");
   return (
     <div data-testid="admin-chat-panel">
@@ -186,7 +229,7 @@ export function ChatDetail({ chatId, onBack, onChanged }: { chatId: string; onBa
           <ConversationFrame
             chat={c}
             entries={entries}
-            loaded={latest !== null}
+            loaded={shown !== null}
             withTools={withTools}
             onWithTools={switchTools}
             moreOlder={moreOlder}

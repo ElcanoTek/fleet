@@ -6280,5 +6280,6 @@
   "{0} with patrols": "{0} con patrullas",
   "1 note": "1 nota",
   "{0} notes": "{0} notas",
-  "could not record that": "no se pudo registrar"
+  "could not record that": "no se pudo registrar",
+  "This chat no longer exists. It was deleted permanently.": "Este chat ya no existe. Se eliminó permanentemente."
 }
