@@ -129,8 +129,9 @@ func (s *Store) AdminSetNoteIfUnchanged(ctx context.Context, a AdminActor, convI
 	// UpdatedAt names the text a reader acknowledges and an administrator
 	// edits against, so no two texts of one chat may ever share it: not the
 	// text this replaces, and not a note that was removed earlier in the same
-	// second either. The record of note changes outlives the note, so the
-	// newest of them bounds every version this chat has used.
+	// second either. A removal is recorded at no earlier than the version it
+	// removed (AdminClearNoteIfUnchanged), and that record outlives the note,
+	// so the newest note record bounds every version this chat has used.
 	now := time.Now().Unix()
 	if cur != nil && now <= cur.UpdatedAt {
 		now = cur.UpdatedAt + 1
@@ -208,14 +209,23 @@ func (s *Store) AdminClearNoteIfUnchanged(ctx context.Context, a AdminActor, con
 		}
 	}
 	var body string
-	err = tx.QueryRowContext(ctx, `DELETE FROM chat.admin_notes WHERE conversation_id = $1 RETURNING body`, convID).Scan(&body)
+	var removed int64
+	err = tx.QueryRowContext(ctx, `DELETE FROM chat.admin_notes WHERE conversation_id = $1 RETURNING body, updated_at`, convID).Scan(&body, &removed)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
-	if err := recordAdminAction(ctx, tx, a, "note_clear", convID, "", "", body); err != nil {
+	// Recorded at no earlier than the removed note's version, which can run a
+	// second ahead of the clock (a replacement made in the same second as the
+	// text before it). The next note takes a version above this record, so it
+	// can never reuse the removed one.
+	at := time.Now().Unix()
+	if removed > at {
+		at = removed
+	}
+	if err := recordAdminActionAt(ctx, tx, at, a, "note_clear", convID, "", "", body); err != nil {
 		return false, err
 	}
 	return true, tx.Commit()

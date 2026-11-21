@@ -572,3 +572,36 @@ func TestAdminChatTranscript_KeepsSummaryBoundaries(t *testing.T) {
 		t.Fatalf("summary entry = %+v, want a content-free boundary", got[1])
 	}
 }
+
+// A note replaced, removed and pinned again within one second: the replaced
+// note's version already runs a second ahead of the clock, and the new note
+// must still get one above it.
+func TestAdminNote_VersionIsUniqueAcrossReplaceClearAndRepin(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	ctx := context.Background()
+	c := noteChat(t, s)
+	if _, err := s.AdminSetNote(ctx, webAdmin, c.ID, "First."); err != nil {
+		t.Fatal(err)
+	}
+	replaced, err := s.AdminSetNote(ctx, webAdmin, c.ID, "Replaced.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AdminClearNote(ctx, webAdmin, c.ID); err != nil {
+		t.Fatal(err)
+	}
+	again, err := s.AdminSetNote(ctx, webAdmin, c.ID, "Again.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.UpdatedAt <= replaced.UpdatedAt {
+		t.Fatalf("the repinned note reuses the replaced note's version: replaced %d, again %d", replaced.UpdatedAt, again.UpdatedAt)
+	}
+	if n, _ := s.AckAdminNote(ctx, c.ID, "dana@client.example", replaced.UpdatedAt); n == nil || n.SeenAt != nil {
+		t.Fatalf("an acknowledgement of the removed replacement marked the new note: %+v", n)
+	}
+	if _, err := s.AdminSetNoteIfUnchanged(ctx, cliAdmin, c.ID, "Stale.", &replaced.UpdatedAt); !errors.Is(err, ErrAdminNoteChanged) {
+		t.Fatalf("stale replace err = %v", err)
+	}
+}

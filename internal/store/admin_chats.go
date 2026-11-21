@@ -126,10 +126,17 @@ type execer interface {
 }
 
 func recordAdminAction(ctx context.Context, db execer, a AdminActor, action, convID, schedID, reason, detail string) error {
+	return recordAdminActionAt(ctx, db, time.Now().Unix(), a, action, convID, schedID, reason, detail)
+}
+
+// recordAdminActionAt records an admin change with a given time. It exists
+// for the one record whose time is also a bound other code reads (a removed
+// note's version, AdminClearNoteIfUnchanged).
+func recordAdminActionAt(ctx context.Context, db execer, at int64, a AdminActor, action, convID, schedID, reason, detail string) error {
 	_, err := db.ExecContext(ctx,
 		`INSERT INTO chat.admin_actions (created_at, actor, via, action, conversation_id, schedule_id, reason, detail)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-		time.Now().Unix(), strings.ToLower(strings.TrimSpace(a.Email)), a.Via, action, convID, schedID,
+		at, strings.ToLower(strings.TrimSpace(a.Email)), a.Via, action, convID, schedID,
 		pgtext.Content(reason), pgtext.Content(detail))
 	return err
 }
