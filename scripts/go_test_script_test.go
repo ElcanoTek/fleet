@@ -239,3 +239,67 @@ func TestGoTestScriptBoundsConnections(t *testing.T) {
 		}
 	}
 }
+
+// The race lane's two halves, as ci.yml passes them to go-test.sh. Changing
+// one here without the other (or in ci.yml without here) fails below.
+const (
+	raceShardAgentcore = "--only=/internal/agentcore$"
+	raceShardRest      = "--skip=/internal/agentcore$|/scripts$"
+)
+
+// TestRaceLaneHalvesCoverTheTree: CI runs the -race lane on two runners
+// (ci.yml, job go-race). Together the two selections must be every package
+// but ./scripts — whose tests run shell scripts and read repo files, and run
+// in the plain `go` lane on every PR — with no package in both, so splitting
+// the lane can never drop a package from the race detector unnoticed.
+func TestRaceLaneHalvesCoverTheTree(t *testing.T) {
+	root := repoRoot(t)
+	ci := readFile(t, root, ".github/workflows/ci.yml")
+	for _, sel := range []string{raceShardAgentcore, raceShardRest} {
+		if !strings.Contains(ci, `select: "`+sel+`"`) {
+			t.Errorf("ci.yml's go-race matrix does not pass %q", sel)
+		}
+	}
+	if !strings.Contains(ci, `scripts/go-test.sh --race --count=1 "$SELECT"`) {
+		t.Error(`ci.yml's go-race job does not run scripts/go-test.sh --race --count=1 "$SELECT"`)
+	}
+
+	script := filepath.Join(root, "scripts", "go-test.sh")
+	list := func(args ...string) []string {
+		t.Helper()
+		cmd := exec.Command("bash", append([]string{script, "--list"}, args...)...)
+		cmd.Dir = root
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("go-test.sh --list %v: %v", args, err)
+		}
+		return strings.Fields(string(out))
+	}
+	all := list()
+	seen := map[string]int{}
+	for _, half := range [][]string{list(raceShardAgentcore), list(raceShardRest)} {
+		if len(half) == 0 {
+			t.Fatal("a race-lane half selects no package")
+		}
+		for _, pkg := range half {
+			seen[pkg]++
+		}
+	}
+	for _, pkg := range all {
+		switch n := seen[pkg]; {
+		case strings.HasSuffix(pkg, "/scripts"):
+			if n != 0 {
+				t.Errorf("%s is in the race lane; it is left to the plain lane on purpose", pkg)
+			}
+		case n != 1:
+			t.Errorf("%s is in %d race-lane halves, want exactly 1", pkg, n)
+		}
+	}
+
+	// A selection that matches nothing is refused, not run as an empty suite.
+	cmd := exec.Command("bash", script, "--list", "--only=/no/such/package$")
+	cmd.Dir = root
+	if err := cmd.Run(); err == nil {
+		t.Error("go-test.sh accepted a selection that matches no package")
+	}
+}
