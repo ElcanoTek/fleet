@@ -40,6 +40,8 @@ func conversationRoutePairs() []routePairProbe {
 		{sub: "", method: http.MethodDelete, body: nil, want: http.StatusNoContent},
 		{sub: "truncate", method: http.MethodPost, body: nil, want: http.StatusNoContent},
 		{sub: "pin", method: http.MethodPost, body: map[string]bool{"pinned": true}, want: http.StatusNoContent},
+		// No note is pinned: "Got it" answers the note as it stands (null).
+		{sub: "admin-note", method: http.MethodPost, body: map[string]int64{"updated_at": 1}, want: http.StatusOK},
 		{sub: "archive", method: http.MethodPost, body: map[string]bool{"archived": true}, want: http.StatusNoContent},
 		// Empty project_id = unfile: exercises the refile handler without a project fixture.
 		{sub: "project", method: http.MethodPost, body: map[string]string{"project_id": ""}, want: http.StatusNoContent},

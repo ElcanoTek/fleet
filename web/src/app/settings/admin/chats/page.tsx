@@ -105,25 +105,27 @@ function Overview({ version, onOpen }: { version: number; onOpen: (id: string) =
     return () => window.clearTimeout(t);
   }, [query]);
 
-  const loadOverview = useCallback(async () => {
+  // Bumped by the poll to read the overview again.
+  const [tick, setTick] = useState(0);
+  useVisibleInterval(() => setTick((t) => t + 1), OVERVIEW_POLL_MS);
+  useEffect(() => {
+    let stale = false;
     const p = new URLSearchParams();
     if (q.trim()) p.set("q", q.trim());
     if (days !== "0") p.set("active_days", days);
-    try {
-      const data = await getGatedJson<{ overview: ChatOverview }>(`/api/admin/chat-overview?${p.toString()}`, { label: tr("Chats") });
-      if (data) {
+    getGatedJson<{ overview: ChatOverview }>(`/api/admin/chat-overview?${p.toString()}`, { label: tr("Chats") })
+      .then((data) => {
+        if (stale || !data) return;
         setOverview(data.overview);
         setError(null);
-      }
-    } catch (err) {
-      setError(errorMessage(err, tr("Couldn’t load chats.")));
-    }
-  }, [q, days]);
-
-  useEffect(() => {
-    void loadOverview();
-  }, [loadOverview, version]);
-  useVisibleInterval(() => void loadOverview(), OVERVIEW_POLL_MS);
+      })
+      .catch((err: unknown) => {
+        if (!stale) setError(errorMessage(err, tr("Couldn’t load chats.")));
+      });
+    return () => {
+      stale = true;
+    };
+  }, [q, days, version, tick]);
 
   const flat = view === "chats" || filter === "archived" || filter === "bin";
   const tile = (f: Filter) => () => setFilter((cur) => (cur === f ? "all" : f));

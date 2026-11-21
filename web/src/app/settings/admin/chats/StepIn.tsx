@@ -143,9 +143,10 @@ export function StepIn({
   onChanged: () => void;
 }) {
   return (
-    <ConnPanel className="mb-0" >
+    <ConnPanel className="mb-0">
       <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
         <h3 className="m-0 text-[0.95rem] font-semibold text-[var(--color-text-primary)]">{tr("Step in")}</h3>
+        <div className="max-w-full overflow-x-auto">
         <Segmented<StepInMode>
           label={tr("How to step in")}
           value={mode}
@@ -156,6 +157,7 @@ export function StepIn({
             { value: "notice", label: tr("Add a notice") },
           ]}
         />
+        </div>
       </div>
       <div className="mt-3">
         {mode === "note" ? (

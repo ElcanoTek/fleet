@@ -62,20 +62,22 @@ export function ChatDetail({ chatId, onBack, onChanged }: { chatId: string; onBa
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("conversation");
   const [mode, setMode] = useState<StepInMode>("note");
-  const gen = useRef(0);
+  // Bumped to read the chat again: by the poll, by a change made here, by
+  // the refresh button.
+  const [tick, setTick] = useState(0);
+  const refresh = useCallback(() => setTick((t) => t + 1), []);
 
   // One read of the chat and its latest entries. Reads overlap (the poll, a
-  // change, the tool-calls switch) and can land out of order, so only the
-  // newest read is applied.
-  const load = useCallback(
-    async (quiet: boolean) => {
-      const mine = ++gen.current;
-      try {
-        const [d, h] = await Promise.all([
-          getGatedJson<ChatDetailData>(chatUrl(chatId), { label: tr("Chat") }),
-          getGatedJson<{ entries: TranscriptEntry[] }>(historyUrl(chatId, withTools), { label: tr("Conversation") }),
-        ]);
-        if (mine !== gen.current) return;
+  // change, the tool-calls switch) and can land out of order; a read that has
+  // been superseded is dropped.
+  useEffect(() => {
+    let stale = false;
+    Promise.all([
+      getGatedJson<ChatDetailData>(chatUrl(chatId), { label: tr("Chat") }),
+      getGatedJson<{ entries: TranscriptEntry[] }>(historyUrl(chatId, withTools), { label: tr("Conversation") }),
+    ])
+      .then(([d, h]) => {
+        if (stale) return;
         if (d) setDetail(d);
         if (h) {
           setLatest(h.entries);
@@ -83,27 +85,27 @@ export function ChatDetail({ chatId, onBack, onChanged }: { chatId: string; onBa
           setMoreOlder((prev) => prev || h.entries.length >= PAGE);
         }
         setError(null);
-      } catch (err) {
-        if (mine !== gen.current || quiet) return;
-        setError(errorMessage(err, tr("Couldn’t load this chat.")));
-      }
-    },
-    [chatId, withTools],
-  );
-
-  useEffect(() => {
-    // Entries paged back to belong to one chat and one choice of the
-    // tool-calls switch.
-    setOlder([]);
-    setMoreOlder(false);
-    void load(false);
-  }, [load]);
-  useVisibleInterval(() => void load(true), DETAIL_POLL_MS);
+      })
+      .catch((err: unknown) => {
+        if (!stale) setError(errorMessage(err, tr("Couldn’t load this chat.")));
+      });
+    return () => {
+      stale = true;
+    };
+  }, [chatId, withTools, tick]);
+  useVisibleInterval(refresh, DETAIL_POLL_MS);
 
   const changed = useCallback(() => {
-    void load(true);
+    refresh();
     onChanged();
-  }, [load, onChanged]);
+  }, [refresh, onChanged]);
+
+  // Entries paged back to belong to one choice of the tool-calls switch.
+  const switchTools = (next: boolean) => {
+    setWithTools(next);
+    setOlder([]);
+    setMoreOlder(false);
+  };
 
   const loadOlder = async () => {
     const first = older[0]?.id ?? latest?.[0]?.id;
@@ -159,14 +161,14 @@ export function ChatDetail({ chatId, onBack, onChanged }: { chatId: string; onBa
 
       <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)} className="mt-5 gap-4">
         <TabsList variant="line" className="w-full justify-start overflow-x-auto">
-          <TabsTrigger value="conversation">{tr("Conversation")}</TabsTrigger>
-          <TabsTrigger value="patrols" data-testid="admin-tab-patrols">
+          <TabsTrigger value="conversation" className="max-sm:px-2">{tr("Conversation")}</TabsTrigger>
+          <TabsTrigger value="patrols" className="max-sm:px-2" data-testid="admin-tab-patrols">
             {tr("Patrols")}
             {livePatrols.length > 0 ? <TabCount n={livePatrols.length} /> : null}
           </TabsTrigger>
-          <TabsTrigger value="settings" data-testid="admin-tab-settings">{tr("Settings")}</TabsTrigger>
-          <TabsTrigger value="activity" data-testid="admin-tab-activity">
-            {tr("Admin activity")}
+          <TabsTrigger value="settings" className="max-sm:px-2" data-testid="admin-tab-settings">{tr("Settings")}</TabsTrigger>
+          <TabsTrigger value="activity" className="max-sm:px-2" data-testid="admin-tab-activity">
+            {tr("Activity")}
             {detail.actions.length > 0 ? <TabCount n={detail.actions.length} /> : null}
           </TabsTrigger>
         </TabsList>
@@ -186,11 +188,11 @@ export function ChatDetail({ chatId, onBack, onChanged }: { chatId: string; onBa
             entries={entries}
             loaded={latest !== null}
             withTools={withTools}
-            onWithTools={setWithTools}
+            onWithTools={switchTools}
             moreOlder={moreOlder}
             loadingOlder={loadingOlder}
             onLoadOlder={() => void loadOlder()}
-            onRefresh={() => void load(false)}
+            onRefresh={refresh}
           />
           {binned ? null : <StepIn chat={c} note={note} mode={mode} onMode={setMode} onChanged={changed} />}
         </TabsContent>
@@ -247,7 +249,7 @@ function ChatHeader({ chat, onChanged }: { chat: AdminChat; onChanged: () => voi
           </Button>
         ) : null}
       </div>
-      <div className="mt-2 flex flex-wrap items-center gap-x-2.5 gap-y-1.5 text-[0.8rem] text-[var(--color-text-secondary)]">
+      <div className="mt-2 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[0.8rem] text-[var(--color-text-secondary)] max-sm:gap-x-3">
         <Avatar className="size-6 ring-0">
           <AvatarFallback className="size-6 text-[0.62rem] ring-0">{initials(chat.owner_email)}</AvatarFallback>
         </Avatar>
@@ -299,7 +301,7 @@ function IdChip({ id }: { id: string }) {
 
 function Dot() {
   return (
-    <span aria-hidden="true" className="text-[var(--color-text-muted)]">
+    <span aria-hidden="true" className="text-[var(--color-text-muted)] max-sm:hidden">
       ·
     </span>
   );
@@ -369,9 +371,10 @@ function StopForm({ chat, onDone }: { chat: AdminChat; onDone: () => void }) {
 // administrator cannot answer someone else's approval card (ADR-0115); what
 // they can do is point the owner at it, which is what the note is for.
 function AttentionCallout({ chat, cards }: { chat: AdminChat; cards: PendingCard[] }) {
+  // The moment this callout was first drawn: "waiting 3h" is as of then.
+  const [now] = useState(() => Math.floor(Date.now() / 1000));
   const failed = chat.last_turn_status === "error";
   if (cards.length === 0 && !failed) return null;
-  const now = Math.floor(Date.now() / 1000);
   return (
     <div
       role="status"
@@ -471,7 +474,9 @@ function ConversationFrame({
           </Button>
         </span>
       </div>
-      <div ref={box} className="max-h-[32rem] min-h-[10rem] overflow-y-auto px-4 py-4" tabIndex={0} data-testid="admin-chat-scroll">
+      {/* A scrolling region must be reachable by keyboard to be scrolled by it. */}
+      {/* eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex */}
+      <div ref={box} role="group" aria-label={tr("Conversation")} className="max-h-[32rem] min-h-[10rem] overflow-y-auto px-4 py-4" tabIndex={0} data-testid="admin-chat-scroll">
         {moreOlder && entries.length > 0 ? (
           <div className="mb-4 flex justify-center">
             <Button type="button" variant="ghost" size="xs" disabled={loadingOlder} onClick={onLoadOlder} data-testid="admin-chat-older">

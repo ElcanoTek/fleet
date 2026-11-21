@@ -208,9 +208,9 @@ export function LifecyclePanel({ chat, onDone }: { chat: AdminChat; onDone: () =
         <p className="mb-2 mt-0 text-[0.75rem] leading-[1.55] text-[var(--color-text-muted)]">
           {tr("Delete permanently is for emergencies, such as a full disk, and cannot be undone.")}
         </p>
-        <div className="flex flex-wrap items-end gap-2">
+        <div className="flex flex-wrap items-end gap-2 max-sm:flex-col max-sm:items-stretch">
           <input
-            className={cn(SETTINGS_INPUT, "max-w-[20rem] flex-1")}
+            className={cn(SETTINGS_INPUT, "flex-1 sm:max-w-[20rem]")}
             placeholder={tr("Type the chat’s title to delete permanently")}
             aria-label={tr("Type the chat’s title to delete permanently")}
             value={confirm}

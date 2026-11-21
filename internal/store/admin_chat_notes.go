@@ -65,7 +65,14 @@ func scanAdminNote(row interface{ Scan(dest ...any) error }) (*AdminNote, error)
 const adminNoteSelect = `SELECT body, author, via, created_at, updated_at, seen_at, seen_by FROM chat.admin_notes WHERE conversation_id = $1`
 
 // GetAdminNote returns the note pinned to a chat, or nil when there is none.
+//
+// It is read on every load of a chat, so it answers "no note" on a store with
+// no database behind it (a test double that embeds a nil *Store) instead of
+// failing the whole load.
 func (s *Store) GetAdminNote(ctx context.Context, convID string) (*AdminNote, error) {
+	if s == nil || s.db == nil {
+		return nil, nil
+	}
 	return scanAdminNote(s.db.QueryRowContext(ctx, adminNoteSelect, convID))
 }
 
