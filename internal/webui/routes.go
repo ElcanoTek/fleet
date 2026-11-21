@@ -242,7 +242,9 @@ func chatRoutes() []chatRoute {
 		{"POST /api/admin/chats/{id}/requests", func(r *http.Request) string { return "/admin/chats/" + p(r, "id") + "/requests" }, jsonBodyAlways, textJSON},
 		{"POST /api/admin/chats/{id}/notice", func(r *http.Request) string { return "/admin/chats/" + p(r, "id") + "/notice" }, jsonBodyAlways, textJSON},
 		{"PUT /api/admin/chats/{id}/note", func(r *http.Request) string { return "/admin/chats/" + p(r, "id") + "/note" }, jsonBodyAlways, textJSON},
-		{"DELETE /api/admin/chats/{id}/note", func(r *http.Request) string { return "/admin/chats/" + p(r, "id") + "/note" }, noBody, textJSON},
+		{"DELETE /api/admin/chats/{id}/note", func(r *http.Request) string {
+			return "/admin/chats/" + p(r, "id") + "/note" + passThroughQuery(r, "expect_updated_at")
+		}, noBody, textJSON},
 		{"GET /api/admin/patrols/{id}", func(r *http.Request) string { return "/admin/patrols/" + p(r, "id") }, noBody, textJSON},
 		{"PATCH /api/admin/patrols/{id}", func(r *http.Request) string { return "/admin/patrols/" + p(r, "id") }, jsonBodyAlways, textJSON},
 		{"GET /api/admin/users", fixed("/admin/users"), noBody, textJSON},

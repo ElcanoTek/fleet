@@ -54,7 +54,7 @@ type adminChatStore interface {
 	AdminListPendingCards(ctx context.Context, convID string) ([]store.AdminPendingCard, error)
 	GetAdminNote(ctx context.Context, convID string) (*store.AdminNote, error)
 	AdminSetNoteIfUnchanged(ctx context.Context, a store.AdminActor, convID, text string, expect *int64) (store.AdminNote, error)
-	AdminClearNote(ctx context.Context, a store.AdminActor, convID string) (bool, error)
+	AdminClearNoteIfUnchanged(ctx context.Context, a store.AdminActor, convID string, expect *int64) (bool, error)
 	AckAdminNote(ctx context.Context, convID, userEmail string, updatedAt int64) (*store.AdminNote, error)
 }
 
@@ -520,7 +520,18 @@ func (s *Server) handleAdminChatItem(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, r, map[string]any{"note": note})
 	case sub == "note" && r.Method == http.MethodDelete:
-		if _, err := st.AdminClearNote(r.Context(), s.adminActor(r), chat.ID); err != nil {
+		// ?expect_updated_at= makes the removal a compare-and-swap, like the
+		// PUT's field of the same name (a DELETE carries no body).
+		var expect *int64
+		if raw := r.URL.Query().Get("expect_updated_at"); raw != "" {
+			v, err := strconv.ParseInt(raw, 10, 64)
+			if err != nil {
+				http.Error(w, "expect_updated_at must be a number", http.StatusBadRequest)
+				return
+			}
+			expect = &v
+		}
+		if _, err := st.AdminClearNoteIfUnchanged(r.Context(), s.adminActor(r), chat.ID, expect); err != nil {
 			adminChatError(w, err)
 			return
 		}

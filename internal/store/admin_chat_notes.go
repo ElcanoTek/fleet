@@ -126,11 +126,24 @@ func (s *Store) AdminSetNoteIfUnchanged(ctx context.Context, a AdminActor, convI
 	if cur != nil && cur.Text == t {
 		return *cur, nil
 	}
+	// UpdatedAt names the text a reader acknowledges and an administrator
+	// edits against, so no two texts of one chat may ever share it: not the
+	// text this replaces, and not a note that was removed earlier in the same
+	// second either. The record of note changes outlives the note, so the
+	// newest of them bounds every version this chat has used.
 	now := time.Now().Unix()
 	if cur != nil && now <= cur.UpdatedAt {
-		// UpdatedAt names the text a reader acknowledges, so two texts of
-		// one chat never share it.
 		now = cur.UpdatedAt + 1
+	}
+	var lastChange sql.NullInt64
+	if err := tx.QueryRowContext(ctx,
+		`SELECT max(created_at) FROM chat.admin_actions
+		  WHERE conversation_id = $1 AND action IN ('note_set', 'note_replace', 'note_clear')`,
+		convID).Scan(&lastChange); err != nil {
+		return AdminNote{}, err
+	}
+	if lastChange.Valid && now <= lastChange.Int64 {
+		now = lastChange.Int64 + 1
 	}
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO chat.admin_notes (conversation_id, body, author, via, created_at, updated_at)
@@ -161,6 +174,15 @@ func (s *Store) AdminSetNoteIfUnchanged(ctx context.Context, a AdminActor, convI
 // AdminClearNote removes the note pinned to a chat and records it. It reports
 // whether there was a note to remove.
 func (s *Store) AdminClearNote(ctx context.Context, a AdminActor, convID string) (bool, error) {
+	return s.AdminClearNoteIfUnchanged(ctx, a, convID, nil)
+}
+
+// AdminClearNoteIfUnchanged is AdminClearNote as a compare-and-swap: with a
+// non-nil expect, the note is removed only if it is still the one the caller
+// read (its UpdatedAt). Otherwise nothing is removed and ErrAdminNoteChanged
+// is returned, so confirming "unpin" on a note another administrator has just
+// replaced does not delete the replacement.
+func (s *Store) AdminClearNoteIfUnchanged(ctx context.Context, a AdminActor, convID string, expect *int64) (bool, error) {
 	if err := a.validate(); err != nil {
 		return false, err
 	}
@@ -171,6 +193,19 @@ func (s *Store) AdminClearNote(ctx context.Context, a AdminActor, convID string)
 	defer func() { _ = tx.Rollback() }()
 	if err := s.lockLiveConversation(ctx, tx, convID); err != nil {
 		return false, err
+	}
+	if expect != nil {
+		cur, err := scanAdminNote(tx.QueryRowContext(ctx, adminNoteSelect, convID))
+		if err != nil {
+			return false, err
+		}
+		var have int64
+		if cur != nil {
+			have = cur.UpdatedAt
+		}
+		if have != *expect {
+			return false, ErrAdminNoteChanged
+		}
 	}
 	var body string
 	err = tx.QueryRowContext(ctx, `DELETE FROM chat.admin_notes WHERE conversation_id = $1 RETURNING body`, convID).Scan(&body)

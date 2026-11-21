@@ -169,6 +169,10 @@ func TestAdminNote_ListedCountedAndRemoved(t *testing.T) {
 		t.Fatalf("overview = %d %s", rec.Code, rec.Body.String())
 	}
 
+	// An unpin confirmed against an earlier version removes nothing.
+	if rec := adminDo(t, h, "admin@x", http.MethodDelete, notePath+"?expect_updated_at="+jsonInt(note.UpdatedAt-1), ""); rec.Code != http.StatusConflict {
+		t.Fatalf("stale unpin = %d %s", rec.Code, rec.Body.String())
+	}
 	// Removing it takes it away from the owner's chat.
 	if rec := adminDo(t, h, "admin@x", http.MethodDelete, notePath, ""); rec.Code != http.StatusNoContent {
 		t.Fatalf("unpin = %d %s", rec.Code, rec.Body.String())

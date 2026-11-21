@@ -520,6 +520,13 @@ function ConversationFrame({
       {/* A scrolling region must be reachable by keyboard to be scrolled by it. */}
       {/* eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex */}
       <div ref={box} role="group" aria-label={tr("Conversation")} className="max-h-[32rem] min-h-[10rem] overflow-y-auto px-4 py-4" tabIndex={0} data-testid="admin-chat-scroll">
+        {withTools && chat.multiplayer ? (
+          // In a Multiplayer chat each person sees their own turns' tool
+          // calls, not the others'. This switch shows all of them.
+          <p className="mb-4 mt-0 text-[0.75rem] leading-[1.5] text-[var(--color-text-muted)]" data-testid="admin-chat-tools-note">
+            {tr("Tool calls from every participant’s turns are shown. In the chat, each person sees only their own.")}
+          </p>
+        ) : null}
         {moreOlder && entries.length > 0 ? (
           <div className="mb-4 flex justify-center">
             <Button type="button" variant="ghost" size="xs" disabled={loadingOlder} onClick={onLoadOlder} data-testid="admin-chat-older">

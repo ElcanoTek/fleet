@@ -223,7 +223,9 @@ function NoteForm({ chat, note, onChanged }: { chat: AdminChat; note: AdminNote 
   };
   const unpin = () => {
     void run(async () => {
-      await sendJSON(chatUrl(chat.id, "/note"), "DELETE");
+      // Against the note this form is showing, so a replacement another
+      // administrator has just pinned is not what gets removed.
+      await sendJSON(`${chatUrl(chat.id, "/note")}?expect_updated_at=${base.at}`, "DELETE");
       setText("");
       setBase({ at: 0, text: "" });
     }, tr("Note removed from the chat."));

@@ -12,6 +12,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
@@ -507,6 +508,8 @@ func transcriptLabel(e store.AdminTranscriptEntry, owner string) string {
 	switch {
 	case e.Type == "notice":
 		return "notice (" + e.Kind + ")"
+	case e.Type == agent.EntryTypeSummaryBoundary:
+		return "earlier messages were summarized here"
 	case e.Type == "tool_call":
 		return "tool call: " + e.Tool
 	case e.Type == "tool_result" && e.IsErr:

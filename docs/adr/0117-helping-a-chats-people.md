@@ -62,6 +62,13 @@ tool calls on request and earlier messages paged in (`?before=`).
 
 - It is **read-only**. There is no composer, and it does not appear in the
   administrator's own chat list.
+- **Tool calls in a Multiplayer chat.** In the chat, each participant sees
+  the tool calls of their own turns only. The administrator's "Show tool
+  calls" shows every turn's (reading any chat with its tool calls is ADR-0115's
+  power, unchanged), and says so above the conversation when it is on, since
+  that is more than any one participant sees.
+- **Compaction.** Where the chat was compacted, the view shows a divider and
+  no summary text, and never joins the replies either side of it.
 - **Files stay with the owner.** The workspace route is the owner's, so a file
   or image the conversation points at is named, never fetched.
 - **Answering an approval card stays with the chat's people** (ADR-0115,
@@ -101,7 +108,11 @@ An administrator can pin **one note** to a chat.
   the note the edit was made from; 0 for "none pinned"): if the note has
   changed since, it answers 409 and nothing is written. The browser always
   sends it, so two administrators editing one note cannot silently replace
-  each other's text; the CLI pins unconditionally. At most 2000 characters. Allowed on an archived or
+  each other's text; the CLI pins unconditionally. `DELETE` takes
+  `?expect_updated_at=` the same way, so an unpin confirmed against a note
+  that has just been replaced removes nothing. A note's `updated_at` is never
+  reused within a chat, including by a note pinned in the same second as the
+  one before it was removed. At most 2000 characters. Allowed on an archived or
   Lockdown chat (nothing runs); refused on a chat in the recycle bin.
 - **Accountability.** Recorded in `chat.admin_actions` as `note_set`,
   `note_replace` or `note_clear`, with the text. It takes **no reason** and

@@ -184,6 +184,7 @@
     "endpoint and keys (auth, p256dh) are required",
     "endpoint is required",
     "event is required",
+    "expect_updated_at must be a number",
     "expected a list",
     "expected a list of strings",
     "expected an object",

@@ -6286,5 +6286,8 @@
   "… and {0} more lines not shown. The whole change is saved.": "… y {0} líneas más que no se muestran. Se guarda el cambio completo.",
   "Another administrator changed this note while you were writing. Saving now will be refused.": "Otro administrador cambió esta nota mientras escribías. Si guardas ahora, se rechazará.",
   "Start from the current note": "Empezar desde la nota actual",
-  "the pinned note changed since you opened it; reload and edit again": "la nota fijada cambió desde que la abriste; recarga y vuelve a editar"
+  "the pinned note changed since you opened it; reload and edit again": "la nota fijada cambió desde que la abriste; recarga y vuelve a editar",
+  "Earlier messages were summarized here": "Los mensajes anteriores se resumieron aquí",
+  "Tool calls from every participant’s turns are shown. In the chat, each person sees only their own.": "Se muestran las llamadas a herramientas de los turnos de todos los participantes. En el chat, cada persona solo ve las suyas.",
+  "expect_updated_at must be a number": "expect_updated_at debe ser un número"
 }

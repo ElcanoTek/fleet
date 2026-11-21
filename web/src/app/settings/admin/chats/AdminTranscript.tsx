@@ -15,7 +15,7 @@ import { lazy, Suspense, useMemo, type ReactNode } from "react";
 import { AdminMessageNotice, AutoContinueNotice, FleetNotices, PatrolTurnNotice } from "@/app/chat/ui/FleetNotices";
 import { ReplyBubble, SubmissionBubble } from "@/app/chat/ui/genui/SubmissionBubble";
 import { parseReplyMessage, parseSubmissionMessage } from "@/app/chat/ui/genui/model";
-import { ADMIN_MESSAGE_KIND, APPROVAL_RESUME_KIND, CHAT_PATROL_KIND } from "@/app/chat/ui/history";
+import { ADMIN_MESSAGE_KIND, APPROVAL_RESUME_KIND, CHAT_PATROL_KIND, SUMMARY_BOUNDARY } from "@/app/chat/ui/history";
 import { ReadOnlyFilesContext } from "@/app/chat/ui/LockedFiles";
 import { redactUnsharedFiles, type ReadOnlyFilePolicy } from "@/app/chat/ui/workspaceHref";
 import { Icon } from "@/app/shared/ui/Icon";
@@ -31,7 +31,7 @@ type Row =
   | { kind: "user"; id: number; at: number; text: string; sender?: string; images: string[] }
   | { kind: "assistant"; id: number; at: number; text: string; truncated: boolean }
   | { kind: "admin"; id: number; at: number; text: string; sender?: string }
-  | { kind: "patrol" | "resume" | "notice" | "fleet"; id: number; at: number; text: string }
+  | { kind: "patrol" | "resume" | "notice" | "fleet" | "summary"; id: number; at: number; text: string }
   | { kind: "tool"; id: number; at: number; tool: string; text: string; result: boolean; error: boolean };
 
 // toRows shapes stored entries into what the chat draws. Consecutive
@@ -42,6 +42,12 @@ export function toRows(entries: TranscriptEntry[]): Row[] {
   for (const e of entries) {
     if (e.type === "tool_call" || e.type === "tool_result") {
       rows.push({ kind: "tool", id: e.id, at: e.created_at, tool: e.tool ?? "", text: e.text, result: e.type === "tool_result", error: Boolean(e.is_error) });
+      continue;
+    }
+    if (e.type === SUMMARY_BOUNDARY) {
+      // Where the chat was compacted: its own row, so the replies either side
+      // are never joined into one Markdown document.
+      rows.push({ kind: "summary", id: e.id, at: e.created_at, text: "" });
       continue;
     }
     if (e.type === "notice") {
@@ -169,6 +175,12 @@ export function AdminTranscript({ entries, owner }: { entries: TranscriptEntry[]
               <AutoContinueNotice text={row.text} />
             ) : row.kind === "tool" ? (
               <ToolRow row={row} />
+            ) : row.kind === "summary" ? (
+              <p className="m-0 flex items-center gap-3 text-[0.72rem] text-[var(--color-text-muted)]" data-testid="admin-transcript-summary">
+                <span className="h-px flex-1 bg-[var(--color-border)]" />
+                {tr("Earlier messages were summarized here")}
+                <span className="h-px flex-1 bg-[var(--color-border)]" />
+              </p>
             ) : (
               <FleetNotices notices={[row.text]} />
             )}

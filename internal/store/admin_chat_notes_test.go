@@ -491,3 +491,84 @@ func TestAdminNote_CompareAndSwap(t *testing.T) {
 		t.Fatalf("recorded %d changes, want 2 (refused writes record nothing)", len(actions))
 	}
 }
+
+// A note pinned in the same second as the one before it was removed gets a
+// version of its own: an acknowledgement or an edit made against the removed
+// note cannot land on the new one.
+func TestAdminNote_VersionIsUniqueAcrossClearAndRepin(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	ctx := context.Background()
+	c := noteChat(t, s)
+	first, err := s.AdminSetNote(ctx, webAdmin, c.ID, "First.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AdminClearNote(ctx, webAdmin, c.ID); err != nil {
+		t.Fatal(err)
+	}
+	second, err := s.AdminSetNote(ctx, webAdmin, c.ID, "Second.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.UpdatedAt <= first.UpdatedAt {
+		t.Fatalf("the repinned note reuses a version: first %d, second %d", first.UpdatedAt, second.UpdatedAt)
+	}
+	// A delayed "Got it" for the removed text does not mark the new one.
+	if n, _ := s.AckAdminNote(ctx, c.ID, "dana@client.example", first.UpdatedAt); n == nil || n.SeenAt != nil {
+		t.Fatalf("an acknowledgement of the removed note marked the new one: %+v", n)
+	}
+	// Nor does an edit made against it replace the new one.
+	if _, err := s.AdminSetNoteIfUnchanged(ctx, cliAdmin, c.ID, "Stale.", &first.UpdatedAt); !errors.Is(err, ErrAdminNoteChanged) {
+		t.Fatalf("stale replace after a repin err = %v", err)
+	}
+}
+
+// Removing a note is a compare-and-swap too: an unpin confirmed against a
+// note that has since been replaced removes nothing.
+func TestAdminNote_ClearCompareAndSwap(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	ctx := context.Background()
+	c := noteChat(t, s)
+	first, err := s.AdminSetNote(ctx, webAdmin, c.ID, "First.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := s.AdminSetNote(ctx, cliAdmin, c.ID, "Replacement.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := s.AdminClearNoteIfUnchanged(ctx, webAdmin, c.ID, &first.UpdatedAt); !errors.Is(err, ErrAdminNoteChanged) || ok {
+		t.Fatalf("stale unpin = %t, %v", ok, err)
+	}
+	if n, _ := s.GetAdminNote(ctx, c.ID); n == nil || n.Text != "Replacement." {
+		t.Fatalf("the replacement was removed: %+v", n)
+	}
+	if ok, err := s.AdminClearNoteIfUnchanged(ctx, webAdmin, c.ID, &second.UpdatedAt); err != nil || !ok {
+		t.Fatalf("unpin at the read version = %t, %v", ok, err)
+	}
+}
+
+// A compaction summary is returned as a content-free boundary, so a reader
+// does not join the replies either side of it into one.
+func TestAdminChatTranscript_KeepsSummaryBoundaries(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	ctx := context.Background()
+	c := noteChat(t, s)
+	if _, err := s.AppendHistory(ctx, c.ID, []agent.HistoryEntry{
+		entry(t, "assistant", "text", agent.TextContent{Text: "Before."}),
+		entry(t, "assistant", "summary", agent.TextContent{Text: "SECRET SUMMARY TEXT"}),
+		entry(t, "assistant", "text", agent.TextContent{Text: "After."}),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.AdminChatTranscript(ctx, c.ID, AdminTranscriptOptions{})
+	if err != nil || len(got) != 3 {
+		t.Fatalf("transcript = %+v, %v", got, err)
+	}
+	if got[1].Type != agent.EntryTypeSummaryBoundary || got[1].Text != "" {
+		t.Fatalf("summary entry = %+v, want a content-free boundary", got[1])
+	}
+}

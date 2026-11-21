@@ -494,7 +494,9 @@ func (s *Store) AdminChatTranscript(ctx context.Context, convID string, o AdminT
 	if maxRunes <= 0 {
 		maxRunes = 4000
 	}
-	types := []string{"text", agent.EntryTypeNotice}
+	// "summary" rows (a compaction) are returned as content-free boundaries:
+	// see decodeTranscriptContent.
+	types := []string{"text", agent.EntryTypeNotice, "summary"}
 	if o.IncludeTools {
 		types = append(types, "tool_call", "tool_result")
 	}
@@ -527,6 +529,12 @@ func (s *Store) AdminChatTranscript(ctx context.Context, convID string, o AdminT
 
 func decodeTranscriptContent(e *AdminTranscriptEntry, content []byte) {
 	switch e.Type {
+	case "summary":
+		// Where the chat was compacted. The owner's chat starts a new message
+		// here, so a reader must too, or the replies either side would be
+		// joined into one. Only the position is returned, as in the team and
+		// share views (agent.EntryTypeSummaryBoundary).
+		e.Type, e.Text = agent.EntryTypeSummaryBoundary, ""
 	case "text":
 		var c agent.TextContent
 		if json.Unmarshal(content, &c) == nil {

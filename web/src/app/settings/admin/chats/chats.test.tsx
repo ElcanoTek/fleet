@@ -128,7 +128,7 @@ beforeEach(() => {
         note = { text: (JSON.parse(String(init?.body)) as { text: string }).text, author: "admin@x", via: "web", created_at: NOW, updated_at: NOW };
         return jsonResponse({ note });
       }
-      if (url.endsWith("/note") && method === "DELETE") {
+      if (url.includes("/note?expect_updated_at=") && method === "DELETE") {
         note = null;
         return jsonResponse(null, 204);
       }
@@ -293,7 +293,8 @@ describe("a chat", () => {
     fireEvent.click(unpin);
     expect(calls.some((c) => c.method === "DELETE")).toBe(false); // armed, not fired
     fireEvent.click(unpin);
-    await waitFor(() => expect(calls.some((c) => c.method === "DELETE" && c.url.endsWith("/note"))).toBe(true));
+    // The unpin names the note it is removing, so a replacement is not what goes.
+    await waitFor(() => expect(calls.some((c) => c.method === "DELETE" && c.url.endsWith(`/note?expect_updated_at=${NOW}`))).toBe(true));
     await waitFor(() => expect(screen.queryByTestId("admin-pinned-note")).toBeNull());
   });
 
@@ -597,6 +598,14 @@ describe("helpers", () => {
       { id: 7, created_at: 7, role: "assistant", type: "notice", text: "Heads up." },
     ]);
     expect(rows.map((r) => r.kind)).toEqual(["user", "assistant", "tool", "assistant", "patrol", "notice"]);
+    // A compaction boundary is its own row and keeps the replies either side apart.
+    const split = toRows([
+      { id: 1, created_at: 1, role: "assistant", type: "text", text: "```\nunclosed" },
+      { id: 2, created_at: 2, role: "assistant", type: "summary_boundary", text: "" },
+      { id: 3, created_at: 3, role: "assistant", type: "text", text: "After." },
+    ]);
+    expect(split.map((r) => r.kind)).toEqual(["assistant", "summary", "assistant"]);
+    expect(split[2]).toMatchObject({ text: "After." });
     // A message that is only an image is still a row, with the image named.
     expect(toRows([{ id: 9, created_at: 9, role: "user", type: "text", text: "", images: ["chart.png"] }])).toMatchObject([
       { kind: "user", text: "", images: ["chart.png"] },
