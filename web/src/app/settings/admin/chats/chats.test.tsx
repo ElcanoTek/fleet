@@ -101,6 +101,7 @@ let requestPolls: unknown[];
 let note: AdminNote | null;
 let detailChat: AdminChat;
 let purged: boolean;
+let overviewNow: ChatOverview;
 let patrolNow: AdminPatrol;
 
 beforeEach(() => {
@@ -109,6 +110,7 @@ beforeEach(() => {
   note = null;
   detailChat = CHAT;
   purged = false;
+  overviewNow = OVERVIEW;
   patrolNow = PATROL;
   nav.set("");
   vi.stubGlobal(
@@ -117,7 +119,7 @@ beforeEach(() => {
       const url = String(input);
       const method = init?.method ?? "GET";
       calls.push({ url, method, body: init?.body ? JSON.parse(String(init.body)) : undefined });
-      if (url.startsWith("/api/admin/chat-overview")) return jsonResponse({ overview: OVERVIEW });
+      if (url.startsWith("/api/admin/chat-overview")) return jsonResponse({ overview: overviewNow });
       if (url.startsWith("/api/admin/chats?")) return jsonResponse({ chats: [CHAT] });
       if (url.endsWith("/note") && method === "PUT") {
         // As the server does: a write made from another version is refused.
@@ -231,6 +233,12 @@ describe("overview", () => {
     expect(screen.queryByRole("group", { name: "Group by" })).toBeNull();
   });
 
+  it("says when the people list is cut short", async () => {
+    overviewNow = { ...OVERVIEW, people_truncated: true };
+    render(<AdminChatsPage />);
+    expect((await screen.findByTestId("admin-people-truncated")).textContent).toContain("Only the first 1 people are listed");
+  });
+
   it("re-reads the chat rows when the overview is re-read", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     render(<AdminChatsPage />);
@@ -261,6 +269,16 @@ describe("a chat", () => {
     expect(calls.some((c) => c.url.includes("/history?") && c.url.includes("max_chars=20000") && !c.url.includes("tools=1"))).toBe(true);
     fireEvent.click(screen.getByTestId("admin-chat-tools"));
     await waitFor(() => expect(calls.some((c) => c.url.includes("/history?") && c.url.includes("tools=1"))).toBe(true));
+  });
+
+  it("keeps the waiting time current while the chat stays open", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    detailChat = { ...CHAT, pending_approvals: 1, waiting_since: NOW - 3 * 3600, attention: ["cards_waiting"] };
+    await openChat();
+    const callout = await screen.findByTestId("admin-chat-attention");
+    expect(callout.textContent).toContain("waiting 3h");
+    await vi.advanceTimersByTimeAsync(2 * 3600 * 1000 + 60_000);
+    await waitFor(() => expect(callout.textContent).toContain("waiting 5h"));
   });
 
   it("says what the owner is stuck behind", async () => {

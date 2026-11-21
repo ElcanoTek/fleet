@@ -302,6 +302,9 @@ func chatsPeople(argv []string, out io.Writer) int {
 	}
 	fmt.Fprintf(out, "\n%d chat(s): %d need attention, %d approval card(s) waiting, %d running, %d with patrols, %d with a note; %d archived, %d in the recycle bin\n",
 		o.Chats, o.Attention, o.CardsWaiting, o.Running, o.Patrols, o.Noted, o.Archived, o.Deleted)
+	if o.PeopleTruncated {
+		fmt.Fprintf(out, "only the first %d people are listed (the totals cover everyone); narrow with --search, --user or --active-days\n", len(o.People))
+	}
 	return 0
 }
 

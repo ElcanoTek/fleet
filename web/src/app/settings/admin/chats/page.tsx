@@ -200,7 +200,14 @@ function Overview({ version, onOpen }: { version: number; onOpen: (id: string) =
         ) : overview === null ? (
           error ? null : <p className="text-sm text-[var(--color-text-muted)]">{tr("Loading chats…")}</p>
         ) : (
-          <PeopleList people={overview.people.filter((p) => personCount(p, filter) > 0)} filter={filter} q={q} days={days} version={fresh} onOpen={onOpen} />
+          <>
+            <PeopleList people={overview.people.filter((p) => personCount(p, filter) > 0)} filter={filter} q={q} days={days} version={fresh} onOpen={onOpen} />
+            {overview.people_truncated ? (
+              <p className="mb-0 mt-3 text-[0.78rem] text-[var(--color-text-muted)]" role="status" data-testid="admin-people-truncated">
+                {tr("Only the first {0} people are listed; the counts above cover everyone. Search or shorten the period to find the rest.", [overview.people.length])}
+              </p>
+            ) : null}
+          </>
         )}
       </div>
     </SetSection>

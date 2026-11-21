@@ -42,6 +42,8 @@ const MAX_CHARS = 20000;
 // How often an open chat is re-read while its tab is visible, so a running
 // turn is seen as it lands.
 export const DETAIL_POLL_MS = 8000;
+// How often the waiting times shown for approval cards are brought up to date.
+const CLOCK_TICK_MS = 30_000;
 
 // What a read answers for a chat that no longer exists; never shown.
 const GONE = "admin-chat-gone";
@@ -149,8 +151,15 @@ export function ChatDetail({ chatId, onBack, onChanged }: { chatId: string; onBa
       if (h) {
         // Only onto the page they were asked for: a refresh may have dropped
         // the pages on screen meanwhile.
-        setShown((prev) => (prev && prev[0]?.id === first ? [...h.entries, ...prev] : prev));
-        setMoreOlder(h.entries.length >= PAGE);
+        // Whether more remain is a fact about the page that was applied, so
+        // it is set only with it: a page that arrived too late must not hide
+        // "Load earlier messages" for the pages that replaced the ones it
+        // belonged to.
+        setShown((prev) => {
+          if (!prev || prev[0]?.id !== first) return prev;
+          setMoreOlder(h.entries.length >= PAGE);
+          return [...h.entries, ...prev];
+        });
       }
     } catch (err) {
       setError(errorMessage(err, tr("Couldn’t load earlier messages.")));
@@ -414,8 +423,10 @@ function StopForm({ chat, onDone }: { chat: AdminChat; onDone: () => void }) {
 // administrator cannot answer someone else's approval card (ADR-0115); what
 // they can do is point the owner at it, which is what the note is for.
 function AttentionCallout({ chat, cards }: { chat: AdminChat; cards: PendingCard[] }) {
-  // The moment this callout was first drawn: "waiting 3h" is as of then.
-  const [now] = useState(() => Math.floor(Date.now() / 1000));
+  // "Waiting 3h" and "denied unanswered in 20h" are read off a clock that
+  // keeps time while the view stays open, not the moment it was first drawn.
+  const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
+  useVisibleInterval(() => setNow(Math.floor(Date.now() / 1000)), CLOCK_TICK_MS);
   const failed = chat.last_turn_status === "error";
   if (cards.length === 0 && !failed) return null;
   return (

@@ -669,3 +669,31 @@ func TestAdminChats_LatestTurnWhenTheClockStepsBack(t *testing.T) {
 		t.Fatalf("last turn %q, attention %v; want the retry (completed)", got.LastTurnStatus, got.Attention)
 	}
 }
+
+// An overview that lists fewer owners than are in scope says so, and its
+// counts still cover every chat. (Not parallel: it lowers the package's limit.)
+func TestAdminChatOverview_SaysWhenPeopleAreTruncated(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	for _, owner := range []string{"a@client.example", "b@client.example", "c@client.example"} {
+		if _, err := s.CreateConversation(ctx, owner, "Chat", "victoria", "m1", false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	prev := AdminOverviewPeopleLimit
+	t.Cleanup(func() { AdminOverviewPeopleLimit = prev })
+
+	AdminOverviewPeopleLimit = 2
+	o, err := s.AdminChatOverview(ctx, AdminChatFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !o.PeopleTruncated || len(o.People) != 2 || o.Chats != 3 {
+		t.Fatalf("truncated overview = %d people, truncated=%t, %d chats; want 2, true, 3", len(o.People), o.PeopleTruncated, o.Chats)
+	}
+	// Exactly as many owners as the limit is a whole listing, not a cut one.
+	AdminOverviewPeopleLimit = 3
+	if o, _ := s.AdminChatOverview(ctx, AdminChatFilter{}); o.PeopleTruncated || len(o.People) != 3 {
+		t.Fatalf("overview at the limit = %d people, truncated=%t", len(o.People), o.PeopleTruncated)
+	}
+}

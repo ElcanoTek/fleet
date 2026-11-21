@@ -295,13 +295,18 @@ type AdminChatOverview struct {
 	// archived chats and the recycle bin.
 	Archived int `json:"archived"`
 	Deleted  int `json:"deleted"`
-	// People is every owner with a chat in scope: those with chats needing
+	// People is the owners with a chat in scope: those with chats needing
 	// attention first, then the most recently active.
 	People []AdminChatPerson `json:"people"`
+	// PeopleTruncated reports that more owners are in scope than People
+	// lists (AdminOverviewPeopleLimit). The counts above still cover every
+	// chat; narrow the filter to reach the owners left out.
+	PeopleTruncated bool `json:"people_truncated,omitempty"`
 }
 
-// adminOverviewPeopleLimit bounds the owners an overview lists.
-const adminOverviewPeopleLimit = 2000
+// AdminOverviewPeopleLimit bounds the owners an overview lists. A variable
+// only so a test can reach the bound without two thousand owners.
+var AdminOverviewPeopleLimit = 2000
 
 // AdminChatOverview counts the chats a filter covers, as a whole and per
 // owner. It reads the filter's Search, OwnerEmail, ActiveWithinDays and
@@ -352,7 +357,7 @@ func (s *Store) AdminChatOverview(ctx context.Context, f AdminChatFilter) (Admin
 		  FROM shown
 		 GROUP BY owner
 		 ORDER BY count(*) FILTER (WHERE attention) DESC, max(updated_at) DESC, owner
-		 LIMIT $5`, append(args, adminOverviewPeopleLimit)...)
+		 LIMIT $5`, append(args, AdminOverviewPeopleLimit+1)...)
 	if err != nil {
 		return AdminChatOverview{}, err
 	}
@@ -364,6 +369,11 @@ func (s *Store) AdminChatOverview(ctx context.Context, f AdminChatFilter) (Admin
 			return AdminChatOverview{}, err
 		}
 		o.People = append(o.People, p)
+	}
+	// One more row than the limit was asked for: its presence is how a
+	// truncated listing is told from one that happens to fill the limit.
+	if len(o.People) > AdminOverviewPeopleLimit {
+		o.People, o.PeopleTruncated = o.People[:AdminOverviewPeopleLimit], true
 	}
 	return o, rows.Err()
 }

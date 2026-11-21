@@ -135,6 +135,8 @@ export type ChatOverview = ChatCounts & {
   archived: number;
   deleted: number;
   people: ChatPerson[];
+  /** More owners are in scope than `people` lists; the counts cover them all. */
+  people_truncated?: boolean;
 };
 
 // sendJSON is the page's one mutation path: a JSON body, the server's reason
