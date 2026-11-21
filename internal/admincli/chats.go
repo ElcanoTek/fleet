@@ -489,7 +489,11 @@ func chatsHistory(argv []string, out io.Writer) int {
 	}
 	fmt.Fprintf(out, "%s — %s (owner %s), %s %d entries\n\n", c.Title, c.ID, c.OwnerEmail, which, len(entries))
 	for _, e := range entries {
-		fmt.Fprintf(out, "[%s] %s\n%s\n\n", fmtTime(e.CreatedAt), transcriptLabel(e, c.OwnerEmail), strings.TrimSpace(e.Text))
+		text := strings.TrimSpace(e.Text)
+		for _, img := range e.Images {
+			text = strings.TrimSpace(text + "\n[image: " + img + "]")
+		}
+		fmt.Fprintf(out, "[%s] %s\n%s\n\n", fmtTime(e.CreatedAt), transcriptLabel(e, c.OwnerEmail), text)
 	}
 	if len(entries) > 0 && len(entries) == *tail {
 		// A full page: there may be older entries (the hint is also printed

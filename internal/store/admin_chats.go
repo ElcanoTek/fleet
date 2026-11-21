@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -458,6 +459,10 @@ type AdminTranscriptEntry struct {
 	Tool  string `json:"tool,omitempty"`
 	Text  string `json:"text"`
 	IsErr bool   `json:"is_error,omitempty"`
+	// Images names the images attached to a user message, by file name only:
+	// the files stay in the owner's workspace, and their paths are not an
+	// administrator's to read. A message can be nothing but images.
+	Images []string `json:"images,omitempty"`
 	// Truncated reports Text was cut to the caller's limit.
 	Truncated bool `json:"truncated,omitempty"`
 }
@@ -526,6 +531,16 @@ func decodeTranscriptContent(e *AdminTranscriptEntry, content []byte) {
 		var c agent.TextContent
 		if json.Unmarshal(content, &c) == nil {
 			e.Text, e.Kind, e.Sender = c.Text, c.Kind, c.SenderEmail
+			for _, img := range c.Images {
+				name := strings.TrimSpace(img.Name)
+				if name == "" {
+					name = path.Base(strings.ReplaceAll(img.Path, `\`, "/"))
+				}
+				if name == "" || name == "." || name == "/" {
+					name = "image"
+				}
+				e.Images = append(e.Images, path.Base(name))
+			}
 			if c.AdminEmail != "" {
 				e.Sender = c.AdminEmail
 			}

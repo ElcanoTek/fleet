@@ -78,6 +78,8 @@ export type TranscriptEntry = {
   text: string;
   is_error?: boolean;
   truncated?: boolean;
+  /** File names of images attached to a user message (never their paths). */
+  images?: string[];
 };
 
 export type AdminRequest = {

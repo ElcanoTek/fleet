@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import AdminChatsPage, { formatRunTime, lineDiff, type AdminChat, type AdminPatrol } from "./page";
 import { toRows } from "./AdminTranscript";
 import { mergeLatest } from "./ChatDetail";
+import { DIFF_PREVIEW_LINES } from "./PatrolPanel";
 import { attentionLabel, initials, type AdminNote, type ChatOverview } from "./api";
 import { jsonResponse } from "@/test/fetch";
 
@@ -403,6 +404,26 @@ describe("a patrol that changes while it is being edited", () => {
   });
 });
 
+describe("a very large patrol prompt", () => {
+  it("can be saved, with a diff preview that stays bounded", async () => {
+    const big = Array.from({ length: 2100 }, (_, i) => `line ${i}`).join("\n");
+    patrolNow = { ...PATROL, prompt: big, prompt_sha256: "big1" };
+    await openChat("patrols");
+    fireEvent.click(await screen.findByRole("button", { name: "Edit instructions" }));
+    fireEvent.change(screen.getByTestId("admin-patrol-prompt"), { target: { value: big.replace("line 7\n", "line seven\n") } });
+    // Too large to align: thousands of lines changed, a few hundred drawn.
+    const diff = screen.getByTestId("admin-patrol-diff");
+    expect(diff.children.length).toBeLessThanOrEqual(DIFF_PREVIEW_LINES + 1);
+    expect(screen.getByTestId("admin-patrol-diff-more").textContent).toContain("more lines not shown");
+    fireEvent.change(screen.getByTestId("admin-patrol-reason"), { target: { value: "wording" } });
+    const save = screen.getByRole("button", { name: "Save instructions" }) as HTMLButtonElement;
+    expect(save.disabled).toBe(false);
+    fireEvent.click(save);
+    await waitFor(() => expect(calls.some((c) => c.method === "PATCH")).toBe(true));
+    expect(calls.find((c) => c.method === "PATCH")?.body).toMatchObject({ expect_sha256: "big1" });
+  });
+});
+
 describe("patrol schedule", () => {
   it("previews the next runs in the patrol's timezone and saves with the def_version it read", async () => {
     await openChat("patrols");
@@ -531,6 +552,12 @@ describe("helpers", () => {
       { id: 7, created_at: 7, role: "assistant", type: "notice", text: "Heads up." },
     ]);
     expect(rows.map((r) => r.kind)).toEqual(["user", "assistant", "tool", "assistant", "patrol", "notice"]);
+    // A message that is only an image is still a row, with the image named.
+    expect(toRows([{ id: 9, created_at: 9, role: "user", type: "text", text: "", images: ["chart.png"] }])).toMatchObject([
+      { kind: "user", text: "", images: ["chart.png"] },
+    ]);
+    // An empty entry with nothing attached is not.
+    expect(toRows([{ id: 10, created_at: 10, role: "user", type: "text", text: "" }])).toEqual([]);
     // One reply stored in two pieces reads as one.
     expect(rows[1]).toMatchObject({ kind: "assistant", text: "Hello there." });
   });

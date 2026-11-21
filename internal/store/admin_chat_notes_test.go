@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sort"
 	"strings"
@@ -427,5 +428,33 @@ func TestAdminChats_LatestTurnIsTheLastCreated(t *testing.T) {
 	}
 	if o, _ := s.AdminChatOverview(ctx, AdminChatFilter{}); o.Attention != 1 {
 		t.Fatalf("overview counts %d chats needing attention, want 1", o.Attention)
+	}
+}
+
+// An attached image is named in the transcript by its file name, never by its
+// path, and a message that is only an image is still an entry.
+func TestAdminChatTranscript_NamesImagesWithoutPaths(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	ctx := context.Background()
+	c := noteChat(t, s)
+	if _, err := s.AppendHistory(ctx, c.ID, []agent.HistoryEntry{
+		entry(t, "user", "text", agent.TextContent{Text: "", Images: []agent.ImageRefMeta{
+			{Path: "/opt/chat/uploads/tok-123/chart.png", MediaType: "image/png", Name: "Q4 chart.png"},
+			{Path: "/opt/chat/uploads/tok-456/photo.jpg", MediaType: "image/jpeg"},
+		}}),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.AdminChatTranscript(ctx, c.ID, AdminTranscriptOptions{})
+	if err != nil || len(got) != 1 {
+		t.Fatalf("transcript = %+v, %v", got, err)
+	}
+	if strings.Join(got[0].Images, "|") != "Q4 chart.png|photo.jpg" {
+		t.Fatalf("images = %q", got[0].Images)
+	}
+	raw, _ := json.Marshal(got)
+	if strings.Contains(string(raw), "/opt/chat") || strings.Contains(string(raw), "tok-") {
+		t.Fatalf("the transcript carries an upload path: %s", raw)
 	}
 }

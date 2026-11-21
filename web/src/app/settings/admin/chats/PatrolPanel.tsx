@@ -16,6 +16,9 @@ import { ConnPanel, ConnPanelHead, ConnPanelSub } from "../../ui/panels";
 import { formatRunTime, lineDiff, sendJSON, type AdminPatrol } from "./api";
 import { Field, Status } from "./StepIn";
 
+// The most lines the instructions diff draws.
+export const DIFF_PREVIEW_LINES = 400;
+
 export function PatrolPanel({ patrol, onDone }: { patrol: AdminPatrol; onDone: () => void }) {
   const [editing, setEditing] = useState(false);
   const [editingSchedule, setEditingSchedule] = useState(false);
@@ -31,6 +34,17 @@ export function PatrolPanel({ patrol, onDone }: { patrol: AdminPatrol; onDone: (
   const diff = useMemo(() => (editing ? lineDiff(base.prompt, draft.trim()) : []), [editing, base.prompt, draft]);
   const promptMoved = editing && patrol.prompt_sha256 !== base.sha;
   const changedLines = diff.filter((d) => d.kind !== " ").length;
+  // What the preview draws: changed lines with two lines of context, and no
+  // more than DIFF_PREVIEW_LINES of them. A prompt too large to align comes
+  // back as every old line removed and every new line added, which is tens of
+  // thousands of rows for a 64 KiB prompt; drawing them all on each keystroke
+  // would freeze the editor. The count above still says a change exists.
+  const preview = useMemo(() => {
+    const lines = diff
+      .map((d, i) => ({ ...d, i }))
+      .filter((d, i, all) => d.kind !== " " || all.slice(Math.max(0, i - 2), i + 3).some((x) => x.kind !== " "));
+    return { lines: lines.slice(0, DIFF_PREVIEW_LINES), more: Math.max(0, lines.length - DIFF_PREVIEW_LINES) };
+  }, [diff]);
 
   const patch = async (body: Record<string, unknown>, ok: string) => {
     try {
@@ -118,17 +132,19 @@ export function PatrolPanel({ patrol, onDone }: { patrol: AdminPatrol; onDone: (
           />
           {changedLines > 0 ? (
             <pre className="m-0 max-h-72 overflow-auto whitespace-pre-wrap rounded-md border border-[var(--color-border)] p-2 font-mono text-[0.7rem] leading-[1.5] [overflow-wrap:anywhere]" data-testid="admin-patrol-diff">
-              {diff
-                .map((d, i) => ({ ...d, i }))
-                .filter((d, i, all) => d.kind !== " " || all.slice(Math.max(0, i - 2), i + 3).some((x) => x.kind !== " "))
-                .map((d) => (
-                  <div
-                    key={d.i}
-                    className={d.kind === "-" ? "text-[var(--color-danger)]" : d.kind === "+" ? "text-[var(--color-success)]" : "text-[var(--color-text-muted)]"}
-                  >
-                    {d.kind} {d.text}
-                  </div>
-                ))}
+              {preview.lines.map((d) => (
+                <div
+                  key={d.i}
+                  className={d.kind === "-" ? "text-[var(--color-danger)]" : d.kind === "+" ? "text-[var(--color-success)]" : "text-[var(--color-text-muted)]"}
+                >
+                  {d.kind} {d.text}
+                </div>
+              ))}
+              {preview.more > 0 ? (
+                <div className="mt-1 text-[var(--color-text-muted)]" data-testid="admin-patrol-diff-more">
+                  {tr("… and {0} more lines not shown. The whole change is saved.", [preview.more])}
+                </div>
+              ) : null}
             </pre>
           ) : (
             <p className="m-0 text-[0.75rem] text-[var(--color-text-muted)]">{tr("No changes yet.")}</p>

@@ -28,7 +28,7 @@ import type { TranscriptEntry } from "./api";
 const AssistantMarkdown = lazy(() => import("@/app/chat/ui/AssistantContent"));
 
 type Row =
-  | { kind: "user"; id: number; at: number; text: string; sender?: string }
+  | { kind: "user"; id: number; at: number; text: string; sender?: string; images: string[] }
   | { kind: "assistant"; id: number; at: number; text: string; truncated: boolean }
   | { kind: "admin"; id: number; at: number; text: string; sender?: string }
   | { kind: "patrol" | "resume" | "notice" | "fleet"; id: number; at: number; text: string }
@@ -48,13 +48,15 @@ export function toRows(entries: TranscriptEntry[]): Row[] {
       rows.push({ kind: "notice", id: e.id, at: e.created_at, text: e.text });
       continue;
     }
-    if (e.type !== "text" || !e.text) continue;
+    const images = e.role === "user" ? (e.images ?? []) : [];
+    // A message can be nothing but images; it is still something they sent.
+    if (e.type !== "text" || (!e.text && images.length === 0)) continue;
     if (e.role === "user") {
       if (e.kind === ADMIN_MESSAGE_KIND) rows.push({ kind: "admin", id: e.id, at: e.created_at, text: e.text, sender: e.sender });
       else if (e.kind === CHAT_PATROL_KIND) rows.push({ kind: "patrol", id: e.id, at: e.created_at, text: e.text });
       else if (e.kind === APPROVAL_RESUME_KIND) rows.push({ kind: "resume", id: e.id, at: e.created_at, text: e.text });
       else if (e.kind && e.kind !== "text") rows.push({ kind: "fleet", id: e.id, at: e.created_at, text: e.text });
-      else rows.push({ kind: "user", id: e.id, at: e.created_at, text: e.text, sender: e.sender });
+      else rows.push({ kind: "user", id: e.id, at: e.created_at, text: e.text, sender: e.sender, images });
       continue;
     }
     const last = rows[rows.length - 1];
@@ -90,12 +92,27 @@ function UserRow({ row, owner }: { row: Extract<Row, { kind: "user" }>; owner: s
           <SubmissionBubble submission={submission} raw={row.text} />
         ) : reply ? (
           <ReplyBubble reply={reply} />
-        ) : (
+        ) : !row.text ? null : (
           <div className="whitespace-pre-wrap rounded-[1rem] bg-[var(--color-overlay-soft)] px-4 py-2.5 text-[0.9rem] leading-[1.55] text-[var(--color-text-primary)] [overflow-wrap:anywhere]">
             {row.text}
           </div>
         )}
       </div>
+      {row.images.length > 0 ? (
+        // Named, not shown: the file is in the owner's workspace.
+        <ul className="m-0 mt-1.5 flex max-w-[85%] list-none flex-wrap justify-end gap-1.5 p-0" data-testid="admin-transcript-images">
+          {row.images.map((name, i) => (
+            <li
+              key={`${name}-${i}`}
+              title={tr("Image kept in the owner’s workspace.")}
+              className="flex min-w-0 items-center gap-1.5 rounded-[var(--radius-md)] border border-[var(--color-border)] px-2 py-1 text-[0.75rem] text-[var(--color-text-secondary)]"
+            >
+              <Icon name="image" className="size-3.5 shrink-0 text-[var(--color-text-muted)]" />
+              <span className="min-w-0 truncate">{name}</span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
       <Stamp at={row.at}>{from ? <span className="min-w-0 truncate">{from} ·</span> : null}</Stamp>
     </div>
   );
