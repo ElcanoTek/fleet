@@ -637,12 +637,12 @@ func TestPatrols_OneSharedPatrolOpensPastTheListingCap(t *testing.T) {
 	}
 	private := seedConv(t, s, mate)
 	for _, id := range []string{last.ConversationID, private.ID, "nope", ""} {
-		got, err := s.store.IsSharedOrMultiplayerConversation(ctx, me, id)
+		got, err := s.store.SharedOrMultiplayerConversation(ctx, me, id)
 		if err != nil {
-			t.Fatalf("IsSharedOrMultiplayerConversation(%q): %v", id, err)
+			t.Fatalf("SharedOrMultiplayerConversation(%q): %v", id, err)
 		}
-		if got != inList[id] {
-			t.Errorf("IsSharedOrMultiplayerConversation(%q) = %v, the list says %v", id, got, inList[id])
+		if (got != nil) != inList[id] {
+			t.Errorf("SharedOrMultiplayerConversation(%q) = %v, the list says %v", id, got != nil, inList[id])
 		}
 	}
 	// Taking the caller out of the chat closes the patrol to them.
@@ -653,5 +653,82 @@ func TestPatrols_OneSharedPatrolOpensPastTheListingCap(t *testing.T) {
 	s.handlePatrolByID(w, r)
 	if w.Code != http.StatusNotFound {
 		t.Errorf("after unsharing: status = %d, want 404", w.Code)
+	}
+}
+
+// TestPatrols_SharedPatrolLinksTheWayTheCallerCanOpenIt: a teammate's chat
+// that is shared with the team and in Multiplayer, with the caller excluded
+// from Multiplayer, is one the caller reads as a team chat. Its patrol must
+// say so (multiplayer false), in the index and in the one-patrol read, so
+// Open chat goes to the team view instead of a chat link that refuses them.
+func TestPatrols_SharedPatrolLinksTheWayTheCallerCanOpenIt(t *testing.T) {
+	t.Parallel()
+
+	s := serverFixture(t)
+	st := s.concreteStore(t)
+	ctx := context.Background()
+	const owner, reader = "owner@x.com", "excluded@x.com"
+	for _, email := range []string{owner, reader} {
+		if _, err := st.CreateUser(ctx, email, "pw-123456"); err != nil {
+			t.Fatalf("CreateUser: %v", err)
+		}
+		team := "quant"
+		if _, err := st.SetUserRoleTeam(ctx, email, nil, &team); err != nil {
+			t.Fatalf("SetUserRoleTeam: %v", err)
+		}
+	}
+	c := seedConv(t, s, owner)
+	// A chat is shared with the team from inside a project shared with it.
+	proj, err := st.CreateProject(ctx, &store.Project{OwnerEmail: owner, Name: "Quant", TeamID: "quant"})
+	if err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	if err := st.SetConversationProject(ctx, owner, c.ID, proj.ID); err != nil {
+		t.Fatalf("SetConversationProject: %v", err)
+	}
+	if stored, err := st.SetConversationTeamVisible(ctx, owner, c.ID, true); err != nil || !stored {
+		t.Fatalf("SetConversationTeamVisible = (%v, %v)", stored, err)
+	}
+	if _, err := st.SetConversationMultiplayer(ctx, owner, c.ID, true, nil, []string{reader}); err != nil {
+		t.Fatalf("SetConversationMultiplayer: %v", err)
+	}
+	sched, err := st.CreateChatSchedule(ctx, store.ChatScheduleInput{
+		ConversationID: c.ID, UserEmail: owner, Title: "Team watch", Prompt: "check", CronExpr: "0 9 * * 1", Timezone: "UTC",
+	})
+	if err != nil {
+		t.Fatalf("CreateChatSchedule: %v", err)
+	}
+
+	type row struct {
+		ID          string `json:"id"`
+		Multiplayer bool   `json:"multiplayer"`
+		TeamVisible bool   `json:"team_visible"`
+	}
+	req := httptest.NewRequest(http.MethodGet, "/patrols", nil)
+	req = req.WithContext(asUser(req.Context(), reader))
+	rec := httptest.NewRecorder()
+	s.handlePatrols(rec, req)
+	var index struct {
+		Patrols []row `json:"patrols"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &index); err != nil {
+		t.Fatalf("decode: %v (%s)", err, rec.Body.String())
+	}
+	if len(index.Patrols) != 1 || index.Patrols[0].ID != sched.ID || index.Patrols[0].Multiplayer || !index.Patrols[0].TeamVisible {
+		t.Fatalf("index = %+v, want the patrol with multiplayer false and team_visible true", index.Patrols)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/patrols/"+sched.ID, nil)
+	req = req.WithContext(asUser(req.Context(), reader))
+	rec = httptest.NewRecorder()
+	s.handlePatrolByID(rec, req)
+	var one struct {
+		Patrol row `json:"patrol"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &one); err != nil || rec.Code != http.StatusOK {
+		t.Fatalf("one patrol: status %d, err %v, body %s", rec.Code, err, rec.Body.String())
+	}
+	if one.Patrol.Multiplayer || !one.Patrol.TeamVisible {
+		t.Fatalf("one patrol = %+v, want multiplayer false and team_visible true", one.Patrol)
 	}
 }

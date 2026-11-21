@@ -629,19 +629,22 @@ func (s *Store) ListSharedAndMultiplayerConversations(ctx context.Context, calle
 	return s.sharedAndMultiplayerConversations(ctx, callerEmail, "")
 }
 
-// IsSharedOrMultiplayerConversation reports whether convID is in the set
-// ListSharedAndMultiplayerConversations returns for the caller. It runs the
-// same query, narrowed to the one conversation, so the rule has one copy and
-// the answer does not depend on how long the caller's list is.
-func (s *Store) IsSharedOrMultiplayerConversation(ctx context.Context, callerEmail, convID string) (bool, error) {
+// SharedOrMultiplayerConversation returns convID as
+// ListSharedAndMultiplayerConversations lists it for the caller, or nil when
+// it is not in that set. It runs the same query, narrowed to the one
+// conversation, so the rule has one copy and the answer does not depend on
+// how long the caller's list is. The row is the caller's view of the chat:
+// Multiplayer is false for a reader excluded from (or not admitted to) a
+// Multiplayer chat they can still read as a team chat.
+func (s *Store) SharedOrMultiplayerConversation(ctx context.Context, callerEmail, convID string) (*Conversation, error) {
 	if strings.TrimSpace(convID) == "" {
-		return false, nil
+		return nil, nil
 	}
 	got, err := s.sharedAndMultiplayerConversations(ctx, callerEmail, convID)
-	if err != nil {
-		return false, err
+	if err != nil || len(got) == 0 {
+		return nil, err
 	}
-	return len(got) > 0, nil
+	return &got[0], nil
 }
 
 // sharedAndMultiplayerConversations is the listing, optionally narrowed to

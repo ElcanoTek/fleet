@@ -4235,6 +4235,11 @@ export function ChatExperience({
       ...railCollapse,
       collapsed: !sidebarOpen,
       isNarrow: false,
+      // The width animates only while the sidebar opens, out of the page's
+      // flow, over the board. Closing puts it back in the flow: animating
+      // from its full width there would push the board right and slide it
+      // back, so the strip comes back at once and the board never moves.
+      railReady: railCollapse.railReady && sidebarOpen,
       setCollapsed: (next: boolean) => setSidebarOpen(!next),
       setWidth: undefined,
     }),

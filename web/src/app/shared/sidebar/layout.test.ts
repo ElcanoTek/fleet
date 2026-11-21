@@ -267,6 +267,14 @@ describe("the start page", () => {
     expect(topItems(l).map((i) => i.id)).toEqual(["patrols", "tasks"]);
   });
 
+  it("a chat that already has a shortcut opens as start page the way it was chosen, chat or dashboard", () => {
+    let l = keepAtTop(BUILTIN_LAYOUT, { kind: "chat", ref: "c1", title: "Board", view: "dashboard" });
+    l = setStartPage(l, { kind: "chat", ref: "c1" });
+    expect(findShortcut(l, "chat", "c1")?.view).toBeUndefined();
+    l = setStartPage(l, { kind: "chat", ref: "c1", view: "dashboard" });
+    expect(findShortcut(l, "chat", "c1")?.view).toBe("dashboard");
+  });
+
   it("choosing another drops the one kept only to be the start page", () => {
     let l = setStartPage(BUILTIN_LAYOUT, { kind: "project", ref: "p1" });
     l = setStartPage(l, { kind: "chat", ref: "c1", view: "dashboard" });

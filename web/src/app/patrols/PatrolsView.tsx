@@ -206,8 +206,9 @@ function PatrolCard({
     setDetailState(d ? "idle" : "failed");
   }, [patrol.id]);
   // Read when the row opens, and again while it is open whenever the list
-  // says the patrol has moved on (a run, a pause), so Recent runs follows
-  // the row's own count and next check.
+  // says the patrol has moved on (a run, a pause, or a skipped slot, which
+  // moves next_run_at without a run but is in the history too), so Recent
+  // runs follows the row's own count and next check.
   useEffect(() => {
     if (!expanded) return;
     let live = true;
@@ -220,7 +221,7 @@ function PatrolCard({
     return () => {
       live = false;
     };
-  }, [expanded, patrol.id, patrol.run_count, patrol.last_run_at, patrol.status]);
+  }, [expanded, patrol.id, patrol.run_count, patrol.last_run_at, patrol.status, patrol.next_run_at, patrol.skipped?.count]);
 
   // One action at a time per patrol: a Run now during a save would race it.
   const act = async (fn: () => Promise<unknown>, failed: string) => {

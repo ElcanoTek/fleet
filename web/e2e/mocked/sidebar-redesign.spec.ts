@@ -1067,8 +1067,25 @@ test.describe("on a desktop", () => {
     await expect(page.getByTestId("pinned-section")).toBeVisible();
     await expect(page.getByTestId("rail-resize")).toHaveCount(0);
 
-    // Escape closes the slide-over, not the view.
+    // Escape closes the slide-over, not the view, and the board stays put
+    // through every frame of the close: the sidebar going back to the strip
+    // must never push it right and slide it back.
+    const framesWhileClosing = page.evaluate(
+      () =>
+        new Promise<number[]>((resolve) => {
+          const hud = document.querySelector('[data-testid="dashboard-hud"]')!;
+          const xs: number[] = [];
+          const start = performance.now();
+          const tick = () => {
+            xs.push(Math.round(hud.getBoundingClientRect().x));
+            if (performance.now() - start < 500) requestAnimationFrame(tick);
+            else resolve(xs);
+          };
+          requestAnimationFrame(tick);
+        }),
+    );
     await page.keyboard.press("Escape");
+    expect(new Set(await framesWhileClosing)).toEqual(new Set([boardAt]));
     await expect(page.getByTestId("search-input")).toBeHidden();
     await expect(page.getByTestId("dashboard-rail-scrim")).toHaveCount(0);
     await expect(page.getByTestId("dashboard-hud")).toBeVisible();

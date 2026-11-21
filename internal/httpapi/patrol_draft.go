@@ -269,12 +269,17 @@ func (s *Server) handlePatrolByID(w http.ResponseWriter, r *http.Request) {
 	default:
 		// A teammate's patrol: its chat must be one the caller's shared list
 		// holds — the same query, narrowed to that chat (one rule, no cap).
-		ok, err := s.store.IsSharedOrMultiplayerConversation(r.Context(), user, p.ConversationID)
+		conv, err := s.store.SharedOrMultiplayerConversation(r.Context(), user, p.ConversationID)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		allowed = ok
+		allowed = conv != nil
+		if conv != nil {
+			// The caller's way into the chat, as the shared list says it.
+			p.Multiplayer = conv.Multiplayer
+			p.TeamVisible = conv.TeamVisible
+		}
 	}
 	if !allowed {
 		http.Error(w, "patrol not found", http.StatusNotFound)

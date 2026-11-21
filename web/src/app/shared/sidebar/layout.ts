@@ -382,6 +382,10 @@ export function setStartPage(layout: SidebarLayout, target: ShortcutTarget): Sid
       hidden: true,
     };
     next.items.push(item);
+  } else if (item.kind === "chat") {
+    // An existing shortcut opens the start page the way it was chosen: in
+    // chat or dashboard view, as the person was looking at it then.
+    item.view = target.view;
   }
   next.home = item.id;
   dropFormerStartPage(next, layout.home);

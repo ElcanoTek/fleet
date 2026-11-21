@@ -759,8 +759,10 @@ func (s *Store) ListSharedPatrols(ctx context.Context, userEmail string, limit i
 		return nil, err
 	}
 	ids := make([]string, 0, len(shared))
+	sharedByID := make(map[string]*Conversation, len(shared))
 	for i := range shared {
 		ids = append(ids, shared[i].ID)
+		sharedByID[shared[i].ID] = &shared[i]
 	}
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT `+userPatrolCols+`
@@ -786,6 +788,14 @@ func (s *Store) ListSharedPatrols(ctx context.Context, userEmail string, limit i
 		p, err := scanUserPatrol(rows, userEmail)
 		if err != nil {
 			return nil, err
+		}
+		// How the caller reaches a teammate's chat is the shared list's
+		// answer, not the chat's raw flags: a Multiplayer chat the caller is
+		// excluded from but can read as a team chat is listed there with
+		// Multiplayer false, and its patrol must link to the team view.
+		if c, ok := sharedByID[p.ConversationID]; ok {
+			p.Multiplayer = c.Multiplayer
+			p.TeamVisible = c.TeamVisible
 		}
 		out = append(out, p)
 	}

@@ -419,7 +419,7 @@ migration.
   history (`store.ListPatrolRuns`, from `sched.chat_schedule_runs`). A patrol
   that is neither the caller's nor shared with them is the 404 an unknown id
   gets. A teammate's patrol is authorized on its one chat
-  (`store.IsSharedOrMultiplayerConversation`: the shared-chats query
+  (`store.SharedOrMultiplayerConversation`: the shared-chats query
   narrowed to that chat, so the rule has one copy), not by scanning the
   index, which is capped at 100; a participant's patrol in the caller's own
   chat opens while that chat is not archived, as the index lists it.

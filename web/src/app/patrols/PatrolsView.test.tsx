@@ -258,6 +258,18 @@ describe("the Patrols page", () => {
     expect(api.deleteSchedule).toHaveBeenCalledTimes(1);
   });
 
+  it("an open row reads its history again after a skipped slot (next check moves, no run)", async () => {
+    render(<Page />);
+    await waitFor(() => expect(card("pt-1")).toBeTruthy());
+    expand("pt-1");
+    await waitFor(() => expect(calls.filter((c) => c.url === "/api/patrols/pt-1")).toHaveLength(1));
+    list = [{ ...MINE, next_run_at: (MINE.next_run_at ?? NOW) + 3600 }, PAUSED, THEIRS];
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    await waitFor(() => expect(calls.filter((c) => c.url === "/api/patrols/pt-1")).toHaveLength(2));
+  });
+
   it("an open row reads its history again when the list says the patrol has run", async () => {
     render(<Page />);
     await waitFor(() => expect(card("pt-1")).toBeTruthy());
