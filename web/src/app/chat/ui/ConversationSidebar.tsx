@@ -457,11 +457,15 @@ function ProjectKebab({
   onRename,
   onDelete,
   onReorder,
+  readOnly = false,
 }: {
   projectId: string;
   projectName: string;
   pinned: boolean;
   isOwner: boolean;
+  // A read-only (Viewer) account: no New chat, and none of the owner's
+  // changes, whoever owns the project — the API refuses them all.
+  readOnly?: boolean;
   onOpen: () => void;
   onNewChat: () => void;
   // Offered when the project holds two or more of the viewer's chats.
@@ -480,6 +484,7 @@ function ProjectKebab({
     fn();
   };
   const target = { kind: "project" as const, ref: projectId, title: projectName };
+  const owner = isOwner && !readOnly;
   return (
     <>
       <KebabButton
@@ -500,16 +505,18 @@ function ProjectKebab({
         <MenuItem icon={<Icon name="external-link" className="size-4" />} onClick={item(onOpen)}>
           {tr("Open project")}
         </MenuItem>
-        <MenuItem icon={<Icon name="edit" className="size-4" />} onClick={item(onNewChat)}>
-          {tr("New chat")}
-        </MenuItem>
+        {readOnly ? null : (
+          <MenuItem icon={<Icon name="edit" className="size-4" />} onClick={item(onNewChat)}>
+            {tr("New chat")}
+          </MenuItem>
+        )}
         {onReorder ? (
           <MenuItem icon={<Icon name="selector" className="size-4" />} onClick={item(onReorder)}>
             {tr("Reorder chats")}
           </MenuItem>
         ) : null}
         <MenuSeparator />
-        {isOwner ? (
+        {owner ? (
           <MenuItem icon={<Icon name="pin" className="size-4" />} onClick={item(onPin)}>
             {pinned ? tr("Unpin") : tr("Pin")}
           </MenuItem>
@@ -517,13 +524,13 @@ function ProjectKebab({
         {/* Keeping it at the top and opening fleet to it are the viewer's own
             (docs/SIDEBAR.md), so every member gets them. */}
         <KeepAtTopItem target={target} onDone={close} />
-        {isOwner ? (
+        {owner ? (
           <MenuItem icon={<Icon name="edit" className="size-4" />} onClick={item(onRename)}>
             {tr("Rename")}
           </MenuItem>
         ) : null}
         <StartPageItem target={target} onDone={close} />
-        {isOwner ? (
+        {owner ? (
           <>
             <MenuSeparator />
             {/* The TEAM glyph, not the chain link: the chain link means "by
@@ -565,8 +572,13 @@ function ConversationKebab({
   isShared,
   onArchive,
   onDelete,
+  readOnly = false,
 }: {
   conversation: ConversationSummary;
+  // A read-only (Viewer) account: the menu keeps Download and leaves out
+  // every change the API would refuse (Move to the top and Set as start
+  // page already hide themselves for a Viewer: useCanCustomize).
+  readOnly?: boolean;
   allLabelNames: string[];
   projects: Project[];
   // The chat already checks in on a schedule: the item opens its patrols
@@ -657,88 +669,103 @@ function ConversationKebab({
         onFlyoutClose={() => setFlyout(null)}
         flyoutLabel={flyout === "project" ? tr("Move to project") : tr("Labels")}
       >
+        {/* A read-only (Viewer) account keeps only Download: every other
+            item here is a write the API refuses (the two layout items hide
+            themselves for a Viewer). */}
         {/* Pinning is meaningless for a project chat: it lives only under
             its project (never in Pinned) and is already retention-exempt —
             filing even clears the flag server-side. Hide rather than no-op. */}
-        {conversation.project_id ? null : (
+        {readOnly || conversation.project_id ? null : (
           <MenuItem icon={<Icon name="pin" className="size-4" />} onClick={item(onPin)}>
             {conversation.pinned ? tr("Unpin") : tr("Pin")}
           </MenuItem>
         )}
         <KeepAtTopItem target={target} onDone={close} />
-        <MenuItem icon={<Icon name="edit" className="size-4" />} onClick={item(onRename)}>
-          {tr("Rename")}
-        </MenuItem>
-        {projects.length > 0 || conversation.project_id ? (
-          <MenuItem
-            icon={<Icon name="briefcase" className="size-4" />}
-            ariaHasPopup
-            ariaExpanded={flyout === "project"}
-            trailing={caret}
-            onClick={(e) => toggleFlyout("project", e.currentTarget)}
-          >
-            {tr("Move to project")}
-          </MenuItem>
-        ) : null}
-        <MenuItem
-          icon={<Icon name="tag" className="size-4" />}
-          ariaHasPopup
-          ariaExpanded={flyout === "labels"}
-          trailing={caret}
-          onClick={(e) => toggleFlyout("labels", e.currentTarget)}
-        >
-          {tr("Labels")}
-        </MenuItem>
+        {readOnly ? null : (
+          <>
+            <MenuItem icon={<Icon name="edit" className="size-4" />} onClick={item(onRename)}>
+              {tr("Rename")}
+            </MenuItem>
+            {projects.length > 0 || conversation.project_id ? (
+              <MenuItem
+                icon={<Icon name="briefcase" className="size-4" />}
+                ariaHasPopup
+                ariaExpanded={flyout === "project"}
+                trailing={caret}
+                onClick={(e) => toggleFlyout("project", e.currentTarget)}
+              >
+                {tr("Move to project")}
+              </MenuItem>
+            ) : null}
+            <MenuItem
+              icon={<Icon name="tag" className="size-4" />}
+              ariaHasPopup
+              ariaExpanded={flyout === "labels"}
+              trailing={caret}
+              onClick={(e) => toggleFlyout("labels", e.currentTarget)}
+            >
+              {tr("Labels")}
+            </MenuItem>
+          </>
+        )}
         <MenuSeparator />
         <StartPageItem target={target} onDone={close} />
         <MenuSeparator />
-        {onPatrol && !conversation.lockdown ? (
-          <MenuItem icon={<Icon name="activity" className="size-4" />} testId="chat-menu-patrol" onClick={item(onPatrol)}>
-            {hasPatrol ? tr("Patrols…") : tr("Add a patrol…")}
-          </MenuItem>
-        ) : null}
-        <MenuItem icon={<Icon name="grid" className="size-4" />} onClick={item(onPromote)}>
-          {tr("Make a background task…")}
-        </MenuItem>
-        <MenuItem icon={<Icon name="book" className="size-4" />} onClick={item(onSavePrompt)}>
-          {tr("Save as workflow…")}
-        </MenuItem>
-        <MenuSeparator />
-        {/* One entry, one dialog, two audiences (ADR-0057): share by link, and
-            share with the team. The glyph names the scope in play when only
-            one is: a chat shared with the team but not by link gets the team
-            mark, everything else the link mark (the dialog holds both). */}
-        <MenuItem
-          icon={
-            !isShared && conversation.team_visible ? (
-              <TeamGlyph className="size-4" />
-            ) : (
-              <ShareGlyph className="size-4" />
-            )
-          }
-          onClick={item(onShare)}
-        >
-          {tr("Share…")}
-        </MenuItem>
+        {readOnly ? null : (
+          <>
+            {onPatrol && !conversation.lockdown ? (
+              <MenuItem icon={<Icon name="activity" className="size-4" />} testId="chat-menu-patrol" onClick={item(onPatrol)}>
+                {hasPatrol ? tr("Patrols…") : tr("Add a patrol…")}
+              </MenuItem>
+            ) : null}
+            <MenuItem icon={<Icon name="grid" className="size-4" />} onClick={item(onPromote)}>
+              {tr("Make a background task…")}
+            </MenuItem>
+            <MenuItem icon={<Icon name="book" className="size-4" />} onClick={item(onSavePrompt)}>
+              {tr("Save as workflow…")}
+            </MenuItem>
+            <MenuSeparator />
+            {/* One entry, one dialog, two audiences (ADR-0057): share by link, and
+                share with the team. The glyph names the scope in play when only
+                one is: a chat shared with the team but not by link gets the team
+                mark, everything else the link mark (the dialog holds both). */}
+            <MenuItem
+              icon={
+                !isShared && conversation.team_visible ? (
+                  <TeamGlyph className="size-4" />
+                ) : (
+                  <ShareGlyph className="size-4" />
+                )
+              }
+              onClick={item(onShare)}
+            >
+              {tr("Share…")}
+            </MenuItem>
+          </>
+        )}
         {/* Was "Download as JSON" — a label that named a file format instead
             of an outcome. The dialog it opens picks the artifact. */}
         <MenuItem icon={<Icon name="download" className="size-4" />} onClick={item(onDownload)}>
           {tr("Download chat…")}
         </MenuItem>
-        {/* An archived or Lockdown chat cannot change hands (the server
-            refuses it), so the item is not offered on one. */}
-        {conversation.lockdown || conversation.archived_at ? null : (
-          <MenuItem icon={<Icon name="arrow-right" className="size-4" />} onClick={item(onTransfer)}>
-            {tr("Transfer ownership…")}
-          </MenuItem>
+        {readOnly ? null : (
+          <>
+            {/* An archived or Lockdown chat cannot change hands (the server
+                refuses it), so the item is not offered on one. */}
+            {conversation.lockdown || conversation.archived_at ? null : (
+              <MenuItem icon={<Icon name="arrow-right" className="size-4" />} onClick={item(onTransfer)}>
+                {tr("Transfer ownership…")}
+              </MenuItem>
+            )}
+            <MenuSeparator />
+            <MenuItem icon={<Icon name="archive" className="size-4" />} onClick={item(onArchive)}>
+              {tr("Archive")}
+            </MenuItem>
+            <MenuItem danger icon={<Icon name="trash" className="size-4" />} onClick={item(onDelete)}>
+              {tr("Delete…")}
+            </MenuItem>
+          </>
         )}
-        <MenuSeparator />
-        <MenuItem icon={<Icon name="archive" className="size-4" />} onClick={item(onArchive)}>
-          {tr("Archive")}
-        </MenuItem>
-        <MenuItem danger icon={<Icon name="trash" className="size-4" />} onClick={item(onDelete)}>
-          {tr("Delete…")}
-        </MenuItem>
       </Menu>
     </>
   );
@@ -1563,6 +1590,7 @@ export function ConversationSidebar({
   openTransferDialog,
   canTransferTeamChats,
   canPinTeamChats = false,
+  readOnly = false,
   archivedConversations,
   showArchived,
   setShowArchived,
@@ -1677,6 +1705,12 @@ export function ConversationSidebar({
   // the account is known not to be a Viewer (whose writes the API refuses),
   // the rule reordering uses.
   canPinTeamChats?: boolean;
+  // A read-only (Viewer) account, whose every change the API refuses
+  // (rejectViewerWrites): the sidebar offers no change at all — no new chat,
+  // patrol, task or project, no pin, rename, label, move, share, transfer,
+  // archive or delete, no selecting, and nothing to drag. It still lists,
+  // searches and opens everything the account can read.
+  readOnly?: boolean;
   archivedConversations: ConversationSummary[];
   showArchived: boolean;
   setShowArchived: Dispatch<SetStateAction<boolean>>;
@@ -1863,7 +1897,7 @@ export function ConversationSidebar({
   const [seenRenameNonce, setSeenRenameNonce] = useState<number | null>(renameSignal?.nonce ?? null);
   if (renameSignal && renameSignal.nonce !== seenRenameNonce) {
     setSeenRenameNonce(renameSignal.nonce);
-    setEditingId(renameSignal.id);
+    if (!readOnly) setEditingId(renameSignal.id);
   }
 
   const onChat = activeView === "chat";
@@ -2126,6 +2160,7 @@ export function ConversationSidebar({
       allLabelNames={allLabelNames}
       projects={projects}
       hasPatrol={isPatrol(conversation.id)}
+      readOnly={readOnly}
       onPin={() => void togglePin(conversation)}
       onRename={() => setEditingId(conversation.id)}
       onDownload={() => void downloadConversation(conversation)}
@@ -2187,7 +2222,7 @@ export function ConversationSidebar({
       onCancelRename={() => setEditingId(null)}
       kebab={rowKebab(conversation)}
       onDragStart={
-        selecting
+        selecting || readOnly
           ? undefined
           : (e) => {
               e.dataTransfer.setData(CONV_DRAG_MIME, conversation.id);
@@ -2261,7 +2296,7 @@ export function ConversationSidebar({
       setSidebarOpen(false);
       onOpenProjectHome(project.id);
     };
-    const newChatHere = onNewChatInProject ? (
+    const newChatHere = onNewChatInProject && !readOnly ? (
       <>
         {" · "}
         <button
@@ -2282,7 +2317,7 @@ export function ConversationSidebar({
         key={project.id}
         data-project-id={project.id}
         onDragOver={(e) => {
-          if (!e.dataTransfer.types.includes(CONV_DRAG_MIME)) return;
+          if (readOnly || !e.dataTransfer.types.includes(CONV_DRAG_MIME)) return;
           e.preventDefault();
           e.dataTransfer.dropEffect = "move";
           setDragOverProject(project.id);
@@ -2394,6 +2429,7 @@ export function ConversationSidebar({
                 projectName={project.name}
                 pinned={Boolean(project.pinned)}
                 isOwner={project.owner_email === userEmail}
+                readOnly={readOnly}
                 onOpen={() => {
                   expandProject(project.id);
                   openHome();
@@ -2537,6 +2573,9 @@ export function ConversationSidebar({
         showChevron
       />
       {!projectsSectionOpen ? null : projectTree.length === 0 ? (
+        readOnly ? (
+          <p className="m-0 px-2.5 py-1 text-[length:var(--rail-row-text)] text-[var(--color-text-muted)]">{tr("Nothing here yet.")}</p>
+        ) : (
         <button
           type="button"
           className="flex min-h-[var(--rail-row-h)] w-full items-center gap-2.5 rounded-[var(--radius-md)] px-2.5 text-left text-[length:var(--rail-row-text)] text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] any-pointer-coarse:min-h-11"
@@ -2545,6 +2584,7 @@ export function ConversationSidebar({
           <Icon name="plus" className="size-[1.05rem] shrink-0" />
           {pinnedProjects.length + topProjectIds.size > 0 ? tr("New project") : tr("New project…")}
         </button>
+        )
       ) : (
         <>
           {shownProjectTree.map(renderProject)}
@@ -2586,31 +2626,33 @@ export function ConversationSidebar({
           {inResults ? markMatches(conversation.title, tokens) : conversation.title}
         </span>
       </button>
-      <div className={`absolute inset-y-0 right-1 flex items-center gap-1 transition any-pointer-coarse:gap-4 ${ROW_ACTIONS_REVEAL}`}>
-        <button
-          type="button"
-          aria-label={tr("Unarchive {0}", [conversation.title])}
-          data-tip-top="Unarchive"
-          className="hit-area-touch inline-flex size-10 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-strong)] hover:text-[var(--color-text-primary)] sm:size-7"
-          onClick={() => void toggleArchive(conversation, false)}
-        >
-          <Icon name="unarchive" className="size-3.5" />
-        </button>
-        <button
-          type="button"
-          aria-label={tr("Delete {0}", [conversation.title])}
-          data-tip-top="Delete"
-          className="hit-area-touch inline-flex size-10 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-status-error-bg)] hover:text-[var(--color-status-error-fg)] sm:size-7"
-          onClick={() =>
-            setPendingDeleteConversation({
-              id: conversation.id,
-              title: conversation.title,
-            })
-          }
-        >
-          <Icon name="trash" className="size-3.5" />
-        </button>
-      </div>
+      {readOnly ? null : (
+        <div className={`absolute inset-y-0 right-1 flex items-center gap-1 transition any-pointer-coarse:gap-4 ${ROW_ACTIONS_REVEAL}`}>
+          <button
+            type="button"
+            aria-label={tr("Unarchive {0}", [conversation.title])}
+            data-tip-top="Unarchive"
+            className="hit-area-touch inline-flex size-10 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-strong)] hover:text-[var(--color-text-primary)] sm:size-7"
+            onClick={() => void toggleArchive(conversation, false)}
+          >
+            <Icon name="unarchive" className="size-3.5" />
+          </button>
+          <button
+            type="button"
+            aria-label={tr("Delete {0}", [conversation.title])}
+            data-tip-top="Delete"
+            className="hit-area-touch inline-flex size-10 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-status-error-bg)] hover:text-[var(--color-status-error-fg)] sm:size-7"
+            onClick={() =>
+              setPendingDeleteConversation({
+                id: conversation.id,
+                title: conversation.title,
+              })
+            }
+          >
+            <Icon name="trash" className="size-3.5" />
+          </button>
+        </div>
+      )}
     </div>
   );
   const archivedFold =
@@ -2676,8 +2718,8 @@ export function ConversationSidebar({
             labels={labelSummaries}
             filterLabels={filterLabels}
             onToggleLabel={toggleLabelFilter}
-            onSelect={recentOwn.length + pinnedChats.length > 0 ? () => onEnterSelectMode() : undefined}
-            onDeleteTemporary={hasTemporary ? () => setConfirmBulkDelete(true) : undefined}
+            onSelect={!readOnly && recentOwn.length + pinnedChats.length > 0 ? () => onEnterSelectMode() : undefined}
+            onDeleteTemporary={!readOnly && hasTemporary ? () => setConfirmBulkDelete(true) : undefined}
             ttlDays={retention.ttlDays}
           />
         ) : null}
@@ -2783,17 +2825,18 @@ export function ConversationSidebar({
   const sidebarPins: SidebarPins = {
     entries: pinned.map((e) =>
       e.kind === "chat"
-        ? { id: e.id, kind: "chat", ref: e.chat.id, title: e.chat.title, canUnpin: !teamRowIds.has(e.chat.id) || canPinTeamChats }
+        ? { id: e.id, kind: "chat", ref: e.chat.id, title: e.chat.title, canUnpin: !readOnly && (!teamRowIds.has(e.chat.id) || canPinTeamChats) }
         : {
             id: e.id,
             kind: "project",
             ref: e.project.id,
             title: e.project.name,
-            canUnpin: (e.project.owner_email ?? "").trim().toLowerCase() === mineEmail,
+            canUnpin: !readOnly && (e.project.owner_email ?? "").trim().toLowerCase() === mineEmail,
           },
     ),
     reorder: canReorderPinned && onReorderChats ? (ids) => onReorderChats(PINNED_ORDER_SCOPE, ids) : undefined,
     unpin: (entry) => {
+      if (readOnly) return;
       if (entry.kind === "project") {
         onPinProject(entry.ref, false);
         return;
@@ -2802,6 +2845,7 @@ export function ConversationSidebar({
       if (chat) void togglePin(chat);
     },
     pin: (kind, ref) => {
+      if (readOnly) return false;
       if (kind === "project") {
         const project = projects.find((p) => p.id === ref);
         if (!project || project.pinned || (project.owner_email ?? "").trim().toLowerCase() !== mineEmail) return false;
@@ -3138,46 +3182,50 @@ export function ConversationSidebar({
       </div>
       {/* The icon strip keeps only the + (its menu starts a chat too) and
           the top items: search and the pen come back with the sidebar. */}
-      <button
-        type="button"
-        aria-label={tr("New chat")}
-        data-testid="new-chat-button"
-        title={tr("New chat")}
-        className={[
-          "inline-flex size-9 shrink-0 items-center justify-center rounded-[var(--radius-md)] bg-[var(--color-primary-fill)] text-[var(--color-on-primary-fill)] transition hover:bg-[var(--color-primary-fill-hover)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] any-pointer-coarse:size-11",
-          railCollapsed ? "sm:hidden" : "",
-        ].join(" ")}
-        onClick={newChat}
-      >
-        <Icon name={serverConfig.lockdownOnly ? "lock" : "edit"} className="size-[1.05rem]" />
-      </button>
-      <NewMenu
-        collapsed={railCollapsed}
-        newChatShortcut={newChatShortcut ? newChatChord(searchShortcut) : undefined}
-        sealedAvailable={serverConfig.lockdownAvailable && !serverConfig.lockdownOnly}
-        onNewChat={newChat}
-        onNewPatrol={(returnFocusTo) => {
-          setSidebarOpen(false);
-          openPatrolWizard(returnFocusTo);
-        }}
-        onNewTask={
-          onNewTask === null
-            ? undefined
-            : () => {
-                setSidebarOpen(false);
-                if (onNewTask) onNewTask();
-                else navigate("/orchestrator?new=1");
-              }
-        }
-        onNewProject={() => {
-          setSidebarOpen(false);
-          onCreateProject();
-        }}
-        onNewSealedChat={() => {
-          setSidebarOpen(false);
-          clearConversation({ lockdown: true });
-        }}
-      />
+      {readOnly ? null : (
+        <>
+          <button
+            type="button"
+            aria-label={tr("New chat")}
+            data-testid="new-chat-button"
+            title={tr("New chat")}
+            className={[
+              "inline-flex size-9 shrink-0 items-center justify-center rounded-[var(--radius-md)] bg-[var(--color-primary-fill)] text-[var(--color-on-primary-fill)] transition hover:bg-[var(--color-primary-fill-hover)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] any-pointer-coarse:size-11",
+              railCollapsed ? "sm:hidden" : "",
+            ].join(" ")}
+            onClick={newChat}
+          >
+            <Icon name={serverConfig.lockdownOnly ? "lock" : "edit"} className="size-[1.05rem]" />
+          </button>
+          <NewMenu
+            collapsed={railCollapsed}
+            newChatShortcut={newChatShortcut ? newChatChord(searchShortcut) : undefined}
+            sealedAvailable={serverConfig.lockdownAvailable && !serverConfig.lockdownOnly}
+            onNewChat={newChat}
+            onNewPatrol={(returnFocusTo) => {
+              setSidebarOpen(false);
+              openPatrolWizard(returnFocusTo);
+            }}
+            onNewTask={
+              onNewTask === null
+                ? undefined
+                : () => {
+                    setSidebarOpen(false);
+                    if (onNewTask) onNewTask();
+                    else navigate("/orchestrator?new=1");
+                  }
+            }
+            onNewProject={() => {
+              setSidebarOpen(false);
+              onCreateProject();
+            }}
+            onNewSealedChat={() => {
+              setSidebarOpen(false);
+              clearConversation({ lockdown: true });
+            }}
+          />
+        </>
+      )}
     </div>
   );
 

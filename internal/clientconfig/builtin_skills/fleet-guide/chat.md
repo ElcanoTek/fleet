@@ -527,7 +527,7 @@ you next open Fleet in it, which renews them by itself; if the switch then says
 they could not be renewed, reload the page.
 
 Administrators manage account access under **Settings → Admin → Users**. Chat
-defaults to **Contributor**; **Viewer** is read-only. **Fleet Admin** grants full
+defaults to **Contributor**; **Viewer** is read-only: a Viewer's sidebar lists, searches and opens chats and projects but offers nothing to create, pin, rename, label, move, share, archive or delete. **Fleet Admin** grants full
 Chat and Background tasks permissions and highlights the included Contributor choices.
 Selecting Fleet Admin again turns it off and safely defaults to Chat Contributor
 with no Background tasks access. A person has one Fleet account: Chat and

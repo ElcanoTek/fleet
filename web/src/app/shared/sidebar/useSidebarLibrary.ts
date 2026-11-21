@@ -360,6 +360,10 @@ export function useSidebarLibrary(userEmail: string, onError: (message: string) 
     // account is known not to be a read-only Viewer (the API refuses its
     // writes), the rule Chat follows.
     canWrite: role !== undefined && role !== "viewer",
+    // A read-only Viewer: the sidebar offers no change at all (every write
+    // is refused). Known only once the role is, so a member never loses
+    // their controls while /api/me is in flight.
+    readOnly: role === "viewer",
     admin,
     togglePin,
     renameConversation,

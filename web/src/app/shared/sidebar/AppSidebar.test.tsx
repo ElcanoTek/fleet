@@ -17,8 +17,9 @@ vi.mock("@/app/lib/navigation", async (original) => ({
   ...(await original<typeof import("@/app/lib/navigation")>()),
   navigate,
 }));
+const account = vi.hoisted(() => ({ role: "member" }));
 vi.mock("@/app/shared/lib/account", () => ({
-  fetchMe: () => Promise.resolve({ email: "me@example.com", role: "member", team_id: "", admin: false }),
+  fetchMe: () => Promise.resolve({ email: "me@example.com", role: account.role, team_id: "", admin: false }),
 }));
 vi.mock("@/app/lib/useClientConfig", async (original) => {
   const real = await original<typeof import("@/app/lib/useClientConfig")>();
@@ -91,6 +92,7 @@ beforeEach(() => {
   navigate.mockClear();
   openPatrolWizard.mockClear();
   takeChatHandoff();
+  account.role = "member";
   stubApi();
 });
 afterEach(() => {
@@ -167,6 +169,31 @@ describe("AppSidebar — the sidebar on a page that is not Chat", () => {
     fireEvent.click(screen.getByTestId("new-menu-button"));
     await screen.findByTestId("new-menu-chat");
     expect(screen.queryByTestId("new-menu-task")).toBeNull();
+  });
+
+  it("offers a read-only Viewer no change the API would refuse", async () => {
+    account.role = "viewer";
+    renderSidebar();
+    await waitFor(() => expect(row("own-1")).toBeTruthy());
+    // Nothing to create: no pen, no + menu.
+    await waitFor(() => expect(screen.queryByTestId("new-menu-button")).toBeNull());
+    expect(screen.queryByTestId("new-chat-button")).toBeNull();
+    // An own chat's menu keeps only what changes nothing on the server.
+    fireEvent.click(within(row("own-1").closest("[data-conversation-id]") as HTMLElement).getByRole("button", { name: /Conversation options/ }));
+    await screen.findByRole("menuitem", { name: /Download chat/ });
+    for (const name of [/^Pin/, /^Rename/, /^Labels/, /^Share/, /^Transfer/, /^Archive/, /^Delete/, /background task/, /workflow/, /patrol/i]) {
+      expect(screen.queryByRole("menuitem", { name })).toBeNull();
+    }
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+    // A project the Viewer owns: no New chat, pin, rename, share, settings or delete.
+    fireEvent.click(screen.getByRole("button", { name: "Project options for Playbook" }));
+    await screen.findByRole("menuitem", { name: "Open project" });
+    for (const name of [/^New chat/, /^Pin/, /^Rename/, /^Share/, /Project settings/, /Delete project/]) {
+      expect(screen.queryByRole("menuitem", { name })).toBeNull();
+    }
+    expect(screen.queryByRole("button", { name: "New chat in Playbook" })).toBeNull();
+    // Nothing is draggable into a project.
+    expect(row("own-1").closest("[draggable=true]")).toBeNull();
   });
 
   it("says so in the sidebar when a change did not save", async () => {

@@ -110,6 +110,7 @@ export function AppSidebar({
       chatOrders={lib.chatOrders}
       onReorderChats={lib.canWrite ? lib.reorderChats : undefined}
       canPinTeamChats={lib.canWrite}
+      readOnly={lib.readOnly}
       recentSort={lib.recentSort}
       onRecentSortChange={lib.setRecentSort}
       toggleArchive={async (c, archived) => inChat(archived ? "archive" : "unarchive")(c)}

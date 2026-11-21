@@ -283,7 +283,13 @@ the redesign needed.
   panel, the editor, **Reset**, **Move to the top** and **Set as start page**
   are offered only once `GET /api/me` has confirmed another role (the rule
   chat reordering uses). A Viewer can open both panels and see their sidebar,
-  with every control disabled and the reason said.
+  with every control disabled and the reason said. The rows follow the same
+  rule (`ConversationSidebar`'s `readOnly`, set on Chat and on every other
+  page once the role is known to be Viewer): no pen or **+** menu, no
+  **New project**, no **New chat here**, nothing to drag into a project, no
+  **Select chats…** or **Delete temporary chats…**, no unarchive or delete on
+  an archived row, nothing to unpin in Customize, and a row or project menu
+  keeps only what writes nothing (Open project, Download chat…).
 - **The workspace default** is edited in **Settings → Admin → Sidebar** with
   the same editor, on a draft, saved with **Save for everyone**. It is stored
   on the server, not in the client-config bundle, so it changes without a

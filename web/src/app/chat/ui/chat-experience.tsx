@@ -7903,6 +7903,7 @@ export function ChatExperience({
           chatOrders={chatOrders}
           onReorderChats={accountRole !== undefined && accountRole !== "viewer" ? reorderChats : undefined}
           canPinTeamChats={accountRole !== undefined && accountRole !== "viewer"}
+          readOnly={accountRole === "viewer"}
           recentSort={recentSort}
           onRecentSortChange={setRecentSort}
           toggleArchive={requestArchive}
