@@ -198,6 +198,44 @@ describe("useSidebarLibrary", () => {
     await waitFor(() => expect(reads()).toBe(2));
   });
 
+  it("a read started from outside (or on coming back to the tab) is not overwritten by an older one still out", async () => {
+    let release: () => void = () => {};
+    let n = 0;
+    stubApi({
+      "GET /api/conversations": () => {
+        n++;
+        return new Response(JSON.stringify({ conversations: [conv({ id: "patrol-chat", title: "New patrol" })] }), { status: 200 });
+      },
+    });
+    // The first (pre-launch) read is slow and answers last.
+    const base = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      if (String(input) === "/api/conversations" && n === 0) {
+        n++;
+        await new Promise<void>((resolve) => (release = resolve));
+        return new Response(JSON.stringify({ conversations: [conv({ id: "old", title: "Before" })] }), { status: 200 });
+      }
+      return base(input as string, init);
+    });
+    const { result } = renderHook(() => useSidebarLibrary("me@example.com", () => {}));
+    await waitFor(() => expect(n).toBe(1));
+    act(() => sidebarListsChanged());
+    await waitFor(() => expect(result.current.conversations.map((c) => c.id)).toEqual(["patrol-chat"]));
+    await act(async () => {
+      release();
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    await waitFor(() => expect(result.current.conversations.map((c) => c.id)).toEqual(["patrol-chat"]));
+
+    // Coming back to the tab reads again.
+    const reads = n;
+    Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "visible" });
+    act(() => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await waitFor(() => expect(n).toBeGreaterThan(reads));
+  });
+
   it("a first read overtaken by a quick pin is read again, so no list is left unread", async () => {
     // The last page's chats are on screen while the first read is out.
     let release: () => void = () => {};

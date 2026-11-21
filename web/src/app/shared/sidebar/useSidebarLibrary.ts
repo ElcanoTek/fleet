@@ -224,11 +224,24 @@ export function useSidebarLibrary(userEmail: string, onError: (message: string) 
     };
   }, [load, loadArchived]);
 
+  // A read started by something outside the sidebar (a chat the patrol
+  // wizard created; the person coming back from another tab, where they may
+  // have changed anything) supersedes any read already out: the generation
+  // moves on, so an older answer is dropped (and read again) rather than
+  // landing over the newer one.
   useEffect(() => {
-    const onChanged = () => void load();
-    listsChangedListeners.add(onChanged);
+    const reread = () => {
+      gen.current++;
+      void load();
+    };
+    const onVisible = () => {
+      if (document.visibilityState === "visible") reread();
+    };
+    listsChangedListeners.add(reread);
+    document.addEventListener("visibilitychange", onVisible);
     return () => {
-      listsChangedListeners.delete(onChanged);
+      listsChangedListeners.delete(reread);
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, [load]);
 

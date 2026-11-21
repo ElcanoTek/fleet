@@ -821,13 +821,17 @@ export function PatrolsView({
       window.removeEventListener("focus", onFocus);
     };
   }, []);
-  // The wizard may have launched one: read again when it closes.
+  // The wizard may have launched one. Closing it already reads the patrols
+  // again (PatrolWizardHost): this page shares that read rather than start
+  // a second one that would drop its answer.
   const wizardOpen = usePatrolWizardOpen();
   const wasWizardOpen = useRef(wizardOpen);
   useEffect(() => {
-    if (wasWizardOpen.current && !wizardOpen) void reload();
+    if (wasWizardOpen.current && !wizardOpen) {
+      void freshPatrols().then((list) => setState(list ? "ready" : "failed"));
+    }
     wasWizardOpen.current = wizardOpen;
-  }, [wizardOpen, reload]);
+  }, [wizardOpen]);
 
   const tokens = useMemo(() => searchTokens(query), [query]);
   const shown = useMemo(

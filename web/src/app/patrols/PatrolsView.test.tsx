@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useState } from "react";
 import { PatrolsView } from "./PatrolsView";
-import { resetPatrolCacheForTests, type PatrolBrief } from "@/app/shared/sidebar/targets";
+import { refreshPatrols, resetPatrolCacheForTests, type PatrolBrief } from "@/app/shared/sidebar/targets";
 
 // The Patrols page (docs/SIDEBAR.md): the person's patrols and the ones
 // teammates run in chats shared with them, steered and started from one
@@ -27,8 +27,10 @@ vi.mock("@/app/shared/lib/patrolApi", async (original) => ({
 }));
 
 const openPatrolWizard = vi.hoisted(() => vi.fn());
+const wizard = vi.hoisted(() => ({ open: false }));
 vi.mock("@/app/launchpad/patrolWizard", async (original) => ({
   ...(await original<typeof import("@/app/launchpad/patrolWizard")>()),
+  usePatrolWizardOpen: () => wizard.open,
   openPatrolWizard,
 }));
 
@@ -85,6 +87,7 @@ beforeEach(() => {
   for (const fn of Object.values(api)) fn.mockReset().mockResolvedValue({ schedule: { id: "pt-new" } });
   navigate.mockClear();
   openPatrolWizard.mockClear();
+  wizard.open = false;
   resetPatrolCacheForTests();
   vi.stubGlobal(
     "fetch",
@@ -265,6 +268,26 @@ describe("the Patrols page", () => {
       window.dispatchEvent(new Event("focus"));
     });
     await waitFor(() => expect(calls.filter((c) => c.url === "/api/patrols/pt-1")).toHaveLength(2));
+  });
+
+  it("closing the wizard shares the read its host starts, so a launched patrol shows even if a second read would fail", async () => {
+    wizard.open = true;
+    const view = render(<Page />);
+    await waitFor(() => expect(card("pt-1")).toBeTruthy());
+    const launched = patrol({ id: "pt-new", conversation_id: "c-new", title: "Fresh watch" });
+    list = [MINE, PAUSED, THEIRS, launched];
+    const before = calls.filter((c) => c.url === "/api/patrols").length;
+    // The host's close handler reads the patrols again; any read after it fails.
+    const read = refreshPatrols();
+    list = "fail";
+    wizard.open = false;
+    view.rerender(<Page />);
+    await act(async () => {
+      await read;
+    });
+    await waitFor(() => expect(card("pt-new")).toBeTruthy());
+    expect(calls.filter((c) => c.url === "/api/patrols").length - before).toBe(1);
+    expect(screen.queryByTestId("patrols-page-error")).toBeNull();
   });
 
   const modeCalls = () => calls.filter((c) => c.method === "POST" && c.url.endsWith("/auto-approve"));

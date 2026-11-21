@@ -175,9 +175,10 @@ hides the pulsing dot) and that a patrol was launched
 - **Connector setup is not embedded.** Credentials and OAuth stay on Settings →
   Connections, opened in a new tab.
 - **Persona creation is not in the wizard** — it links to Settings → Personas.
-- **The patrol's instructions cannot be edited in a form after launch**; as for
-  any in-chat patrol, the person asks in the chat (`chat_patrol update`) or
-  stops it from the Patrol bar.
+- **The wizard does not edit a patrol after launch.** Its schedule and
+  instructions are changed with **Edit schedule & task** on the Patrols page
+  (its creator only; [SIDEBAR.md](SIDEBAR.md), "Patrols is a page"), by asking
+  in the chat (`chat_patrol update`), or it is stopped from the Patrol bar.
 
 ## Tests
 
