@@ -639,3 +639,33 @@ func TestAdminChats_LatestTurnAfterASweep(t *testing.T) {
 		t.Fatalf("after a successful retry: last turn %q, attention %v", got.LastTurnStatus, got.Attention)
 	}
 }
+
+// The latest turn is the last one created even when the host's clock has
+// stepped backwards and dated it before an earlier turn.
+func TestAdminChats_LatestTurnWhenTheClockStepsBack(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	ctx := context.Background()
+	c := noteChat(t, s)
+	now := time.Now().Unix()
+	if err := s.CreateTurn(ctx, "failed-first", c.ID, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.FinishTurn(ctx, "failed-first", TurnStatusError, now, false); err != nil {
+		t.Fatal(err)
+	}
+	// The retry is created afterwards, with a timestamp five minutes earlier.
+	if err := s.CreateTurn(ctx, "retry-after-clock-step", c.ID, now-300); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.FinishTurn(ctx, "retry-after-clock-step", TurnStatusCompleted, now-299, false); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.AdminGetChat(ctx, c.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.LastTurnStatus != "completed" || len(got.Attention) != 0 {
+		t.Fatalf("last turn %q, attention %v; want the retry (completed)", got.LastTurnStatus, got.Attention)
+	}
+}

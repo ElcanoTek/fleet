@@ -279,12 +279,17 @@ const adminChatSelect = `
 // The SQL behind the states a listing filters and counts on. Each reads the
 // chat as "c"; the attention rule here and in scanAdminChat must agree.
 //
-// A chat's latest turn is the newest by started_at and, for two that started
-// in the same second, the one with the higher turn_index: CreateTurn assigns
-// that serially per chat (one above the highest still stored), which
-// started_at (seconds) and turn_id (random) cannot order.
+// A chat's latest turn is the one with the highest turn_index: CreateTurn
+// assigns it in creation order per chat (one above the highest still stored).
+// started_at cannot decide it: it is in seconds, so two turns can share one,
+// and it is the host's clock, which can step backwards (a VM resume, a clock
+// correction) and date a newer turn before an older one. turn_id is random.
+//
+// Turns numbered before CreateTurn stopped counting rows can be out of order
+// after a retention sweep; the next turn in such a chat takes an index above
+// all of them, and the sweep removes them within its retention period.
 const (
-	adminChatLastTurnSQL = `COALESCE((SELECT t.status FROM chat.turns t WHERE t.conversation_id = c.id ORDER BY t.started_at DESC, t.turn_index DESC LIMIT 1), '')`
+	adminChatLastTurnSQL = `COALESCE((SELECT t.status FROM chat.turns t WHERE t.conversation_id = c.id ORDER BY t.turn_index DESC, t.started_at DESC LIMIT 1), '')`
 	adminChatCardsSQL    = `EXISTS (SELECT 1 FROM chat.approvals a WHERE a.conversation_id = c.id AND a.status = 'pending')`
 	adminChatAttnSQL     = `(` + adminChatCardsSQL + ` OR ` + adminChatLastTurnSQL + ` = 'error')`
 	adminChatRunningSQL  = `EXISTS (SELECT 1 FROM chat.turns t WHERE t.conversation_id = c.id AND t.status = 'running')`
