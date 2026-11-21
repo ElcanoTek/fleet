@@ -443,28 +443,36 @@ func approvalCardDigest(a *store.Approval) string {
 	return hex.EncodeToString(sum[:])
 }
 
-type approvedCardDigestKey struct{}
+type approvedCardAttestedKey struct{}
 
-// withApprovedCardDigest carries the card digest the approving client echoed
-// (approvalRequest.CardSHA256) to the staged call's run.
-func withApprovedCardDigest(ctx context.Context, digest string) context.Context {
-	if digest == "" {
+// withApprovedCard records, for the staged call's run, that the approving
+// client attested the row's card: it echoed (approvalRequest.CardSHA256) the
+// digest of the card the row holds now. Only that verdict travels on the
+// context, never the echoed string: the context goes on to carry the call's
+// `_meta` and arguments to the MCP transports, and a request-supplied value
+// has no business riding beside them (it also reads to CodeQL as request data
+// reaching the inline HTTP tool's URL, go/request-forgery).
+func withApprovedCard(ctx context.Context, a *store.Approval, echoed string) context.Context {
+	digest := approvalCardDigest(a)
+	if echoed == "" || digest == "" || echoed != digest {
 		return ctx
 	}
-	return context.WithValue(ctx, approvedCardDigestKey{}, digest)
+	return context.WithValue(ctx, approvedCardAttestedKey{}, true)
 }
 
 // approvalCardRequestMeta is the `_meta` entry telling the server which card
 // the person approved, or nil. It is attached only when the approving client
 // attested that it rendered the row's card, by echoing the digest fleet sent
-// with it, and the echo equals the digest of the card the row holds now.
-// Every other surface echoes nothing, so its approval reports no card. The
-// server can then bind the call to what the person saw, not to an argument
-// the agent wrote.
+// with it, and the echo equals the digest of the card the row holds now
+// (withApprovedCard). Every other surface echoes nothing, so its approval
+// reports no card. The server can then bind the call to what the person saw,
+// not to an argument the agent wrote.
 func approvalCardRequestMeta(ctx context.Context, a *store.Approval) map[string]any {
-	echoed, _ := ctx.Value(approvedCardDigestKey{}).(string)
+	if attested, _ := ctx.Value(approvedCardAttestedKey{}).(bool); !attested {
+		return nil
+	}
 	digest := approvalCardDigest(a)
-	if echoed == "" || digest == "" || echoed != digest {
+	if digest == "" {
 		return nil
 	}
 	var card ApprovalCard
