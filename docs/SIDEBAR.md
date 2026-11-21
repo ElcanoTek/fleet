@@ -43,6 +43,14 @@ the redesign needed.
   shown only when there is something in it; until it lands, search says it
   has not looked there. Page changes are client-side
   navigations, so the lists survive them.
+- **Where the code is.** `ConversationSidebar.tsx` holds the sidebar itself
+  (its state, the lists, search results and the layout). Its parts live
+  beside it in `web/src/app/chat/ui/sidebar/`: `ChatRow` (a chat's row),
+  `rowMenus` (the project, own-chat and teammate-chat ⋯ menus), `panels`
+  (Move to project and the labels editor), `railMenus` (section headings, the
+  Chats menu, the + menu), `searchParts`, `RetentionNotices`, `usePortalTip`,
+  the shared `classes`, and `BulkBar`, Chat's select mode (only Chat draws
+  it: on any other page "Select chats…" hands over to Chat).
 - **What happens where.** On a page that is not Chat, opening a chat or a
   project navigates to Chat (`/chat?c=`, `/chat?team=`, `/chat?project=`). A
   change that is one request is made in place, optimistically, and read again
