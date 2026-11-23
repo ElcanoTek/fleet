@@ -164,40 +164,27 @@ func importMessagesTx(ctx context.Context, tx *sql.Tx, convID string, msgs []Imp
 	if len(msgs) == 0 {
 		return nil
 	}
+	// Ids drawn first and written explicitly, so ids[i] is msgs[i]'s message
+	// by construction and each upload reference lands on the message that
+	// names it (reserveMessageIDs, migration 0211).
+	ids, err := reserveMessageIDs(ctx, tx, len(msgs))
+	if err != nil {
+		return err
+	}
 	var b strings.Builder
-	b.WriteString(`INSERT INTO messages (conversation_id, role, type, content, created_at) VALUES `)
-	args := make([]any, 0, len(msgs)*5)
+	b.WriteString(`INSERT INTO messages (id, conversation_id, role, type, content, created_at) VALUES `)
+	const cols = 6
+	args := make([]any, 0, len(msgs)*cols)
 	for i, m := range msgs {
 		if i > 0 {
 			b.WriteString(", ")
 		}
-		base := i*5 + 1
-		fmt.Fprintf(&b, "($%d, $%d, $%d, $%d, $%d)", base, base+1, base+2, base+3, base+4)
-		args = append(args, convID, m.Role, m.Type, string(m.Content), m.CreatedAt)
+		base := i*cols + 1
+		fmt.Fprintf(&b, "($%d, $%d, $%d, $%d, $%d, $%d)", base, base+1, base+2, base+3, base+4, base+5)
+		args = append(args, ids[i], convID, m.Role, m.Type, string(m.Content), m.CreatedAt)
 	}
-	// RETURNING id (in VALUES order) so the uploads an imported message refers
-	// to are recorded like any other message's (migration 0211).
-	b.WriteString(" RETURNING id")
-	rows, err := tx.QueryContext(ctx, b.String(), args...)
-	if err != nil {
+	if _, err := tx.ExecContext(ctx, b.String(), args...); err != nil {
 		return err
-	}
-	ids := make([]int64, 0, len(msgs))
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
-			_ = rows.Close()
-			return err
-		}
-		ids = append(ids, id)
-	}
-	if err := rows.Err(); err != nil {
-		_ = rows.Close()
-		return err
-	}
-	_ = rows.Close()
-	if len(ids) != len(msgs) {
-		return fmt.Errorf("inserted %d messages but got %d ids", len(msgs), len(ids))
 	}
 	return insertMessageUploads(ctx, tx, messageUploadRefs(ids, func(i int) (string, []byte) { return msgs[i].Type, msgs[i].Content }))
 }

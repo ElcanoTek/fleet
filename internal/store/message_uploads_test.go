@@ -869,3 +869,98 @@ func TestDeleteUnpinnedOlderThanSparesAChatWithAPatrol(t *testing.T) {
 		t.Error("the stale temporary chat survived the cleanup")
 	}
 }
+
+// TestUploadReferencesLandOnTheMessageThatNamesThem: in a multi-message write
+// — a legacy import, an append, a turn's projection — each upload reference is
+// attached to the very message that names its path, the returned ids are the
+// inputs' own in input order, and history reads back in that order.
+func TestUploadReferencesLandOnTheMessageThatNamesThem(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	ctx := context.Background()
+	const user = "order@x.com"
+	path := func(kind string, i int) string {
+		return fmt.Sprintf("/data/attachments/uploads/u/%s%03d/img.png", kind, i)
+	}
+	// Images on every third message, plain text in between, so a shifted
+	// pairing would move a reference onto a message that names nothing.
+	batch := func(kind string, n int) []agent.HistoryEntry {
+		out := make([]agent.HistoryEntry, n)
+		for i := range out {
+			if i%3 == 0 {
+				out[i] = imageEntry(t, path(kind, i))
+			} else {
+				out[i] = userEntryWithInjected(t, fmt.Sprintf("%s plain %d", kind, i), "")
+			}
+		}
+		return out
+	}
+
+	now := time.Now().Unix()
+	importedID := uuid.NewString()
+	imported := batch("imp", 300)
+	msgs := make([]ImportedMessage, len(imported))
+	for i, e := range imported {
+		msgs[i] = ImportedMessage{Role: e.Role, Type: e.Type, Content: e.Content, CreatedAt: now}
+	}
+	if _, err := s.ImportConversation(ctx, ImportedConversation{
+		ID: importedID, UserEmail: user, Title: "imported", Persona: "victoria", CreatedAt: now, UpdatedAt: now, Messages: msgs,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	appended, err := s.CreateConversation(ctx, user, "appended", "victoria", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendedEntries := batch("app", 60)
+	ids, err := s.AppendHistory(ctx, appended.ID, appendedEntries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i < len(ids); i++ {
+		if ids[i] <= ids[i-1] {
+			t.Fatalf("AppendHistory ids not rising in input order: %v", ids)
+		}
+	}
+
+	turnConv, err := s.CreateConversation(ctx, user, "turn", "victoria", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateTurn(ctx, "order-turn", turnConv.ID, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CommitUserMessage(ctx, turnConv.ID, "order-turn", userEntryWithInjected(t, "go", "")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CommitTurnHistory(ctx, turnConv.ID, "order-turn", batch("turn", 30)); err != nil {
+		t.Fatal(err)
+	}
+
+	// Every reference sits on a message whose content names its path.
+	var misplaced, total int
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT count(*) FILTER (WHERE position(mu.upload_path IN m.content) = 0), count(*)
+		  FROM message_uploads mu JOIN messages m ON m.id = mu.message_id`,
+	).Scan(&misplaced, &total); err != nil {
+		t.Fatal(err)
+	}
+	if want := 100 + 20 + 10; total != want || misplaced != 0 {
+		t.Errorf("references: %d total (want %d), %d on a message that does not name their path", total, want, misplaced)
+	}
+
+	// History reads back in input order, ids included.
+	hist, err := s.LoadHistory(ctx, appended.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hist) != len(appendedEntries) {
+		t.Fatalf("history has %d entries, want %d", len(hist), len(appendedEntries))
+	}
+	for i, e := range hist {
+		if e.ID != ids[i] || string(e.Content) != string(appendedEntries[i].Content) {
+			t.Fatalf("history entry %d = id %d %s; want id %d %s", i, e.ID, e.Content, ids[i], appendedEntries[i].Content)
+		}
+	}
+}
