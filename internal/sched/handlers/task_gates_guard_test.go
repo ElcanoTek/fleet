@@ -89,12 +89,13 @@ var storageReadPrefixes = []string{"Get", "List", "Find", "Count", "ForEach"}
 
 // storageReads are the other storage methods handlers use that write nothing.
 var storageReads = map[string]string{
-	"Location":           "returns the scheduler's default time zone",
-	"Identity":           "returns the account store; an account is not a task",
-	"TaskUsage":          "reads spend",
-	"TaskUsageByUserDay": "reads spend",
-	"PendingQueueStats":  "reads queue depth",
-	"MigrationStatus":    "reads the schema version",
+	"Location":              "returns the scheduler's default time zone",
+	"Identity":              "returns the account store; an account is not a task",
+	"TaskUsage":             "reads spend",
+	"TaskUsageByUserDay":    "reads spend",
+	"PendingQueueStats":     "reads queue depth",
+	"MigrationStatus":       "reads the schema version",
+	"TaskWithFileCreatedBy": "reads whether a task the caller created names an upload (checkCallerFiles)",
 }
 
 // storageForbidden are storage methods no handler may use, whatever the gate.

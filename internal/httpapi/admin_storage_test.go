@@ -104,3 +104,29 @@ func TestWorkspaceUsage_ExcludesNonConversationSubdirsFromLargestWorkspaces(t *t
 		t.Fatalf("largest_workspaces must only include UUID conversation directories, got %+v", rows)
 	}
 }
+
+// TestDuUploadsTree_LeavesOutBookkeeping: the temp_uploads panel counts the
+// uploads, not their ".checksums" and ".uploaders" sidecars.
+func TestDuUploadsTree_LeavesOutBookkeeping(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "brief_ab12cd34.txt"), make([]byte, 40), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, side := range []string{".checksums", ".uploaders"} {
+		if err := os.Mkdir(filepath.Join(dir, side), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, side, "brief_ab12cd34.txt"), make([]byte, 64), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if got := duUploadsTree(context.Background(), dir); got.Files != 1 || got.Bytes != 40 {
+		t.Errorf("duUploadsTree = %d files / %d bytes, want 1 / 40", got.Files, got.Bytes)
+	}
+	if got := duTree(context.Background(), dir); got.Files != 3 {
+		t.Errorf("duTree = %d files, want 3 (it sizes every file)", got.Files)
+	}
+}

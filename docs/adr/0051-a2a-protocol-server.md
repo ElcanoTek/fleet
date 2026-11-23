@@ -46,11 +46,12 @@ inter-task state or channels.
    credential the Agent Card declares. Authorization is per JSON-RPC method
    in the dispatcher (HTTP-verb scoping cannot see a multiplexed method).
    Invisible tasks answer `-32001 TaskNotFound`, never 403 (spec §3.3.2 and
-   ADR-0043 agree). **One deliberate extension, scoped to this surface:** a
-   key may cancel and answer tasks it created — on A2A, the creating key is
-   the only credential the caller has, and a cancel method it can never pass
-   would be dead protocol surface. The REST surface's rule (keys never gain
-   cancel through ownership) is unchanged.
+   ADR-0043 agree). A key may cancel and answer tasks it created — on A2A,
+   the creating key is the only credential the caller has, and a cancel
+   method it can never pass would be dead protocol surface. The REST surface
+   lets the creating key cancel too, and answering, push configs and
+   permanent delete are limited to the task's creator or an admin on both
+   surfaces (ADR-0043, amendment of 2026-11-19).
 4. **Task configuration is operator policy.** `FLEET_A2A_PERSONA` /
    `FLEET_A2A_MODEL` pin what A2A tasks run with (webhook-trigger posture);
    callers send messages only.

@@ -315,7 +315,9 @@ var Operations = map[string]apispec.Operation{
 			"key's priority ceiling and the connector check. The two admin-only " +
 			"rules are checked for those records before any write, dry runs " +
 			"included: one offending record refuses the whole import with 403 " +
-			"naming it. The budget is checked once when the import creates at least " +
+			"naming it. The uploads each record to create names are checked " +
+			"before any write too, dry runs included: a record naming an upload " +
+			"the caller may not name errors with file not found. The budget is checked once when the import creates at least " +
 			"one task (402). A record conflict=skip leaves alone is neither checked " +
 			"nor charged. Same auth + rate limiter as POST /tasks; the scoped API " +
 			"key's hourly cap is charged at least one token: one per record the " +
@@ -383,12 +385,16 @@ var Operations = map[string]apispec.Operation{
 			"priority, max_total_tokens) preserves the task's stored values; pass " +
 			"an explicit null for max_total_tokens to clear a task-specific token " +
 			"ceiling back to inheriting the deployment ceiling, or 0 for priority " +
-			"to reset it to normal (50).",
+			"to reset it to normal (50). Allowed for the task's creator (the user " +
+			"or API key that created it) or an admin; view_all_logs reads a task " +
+			"but does not edit it.",
 		Security:    adminScopedOrSession,
 		Permission:  "create_task",
 		RequestBody: &apispec.RequestBody{Content: []apispec.Media{apispec.JSON(apispec.Ref("TaskCreate"))}},
 		Responses: []apispec.Response{
 			apispec.OK("200", "Updated", apispec.JSON(apispec.Ref("Task"))),
+			apispec.RefResponse("400", "Error"),
+			apispec.RefResponse("403", "Error"),
 		},
 	},
 	"DELETE /tasks/{task_id}": {
@@ -422,9 +428,11 @@ var Operations = map[string]apispec.Operation{
 			" reuse.\n" +
 			"Refuses with 409 while the task is leased or running: the worker still" +
 			" holds the lease and is writing to the row. Stop it first, then " +
-			"delete. Same authorization as cancelling — cancel permission on a task" +
-			" the caller can see, or the task's creator (user or API key); 404 for " +
-			"a task outside the caller's scope.",
+			"delete. Allowed for the task's creator (the user or API key that " +
+			"created it) or an admin. Cancel permission does not reach it: a key " +
+			"holding view_all_logs and cancel_task cancels any task it can read " +
+			"but deletes only tasks it created (403 on another principal's). 404 " +
+			"for a task outside the caller's scope.",
 		Security:   adminScopedOrSession,
 		Permission: "view_tasks",
 		Responses: []apispec.Response{
@@ -432,8 +440,8 @@ var Operations = map[string]apispec.Operation{
 				apispec.Prop("deleted", apispec.Typed("boolean")),
 				apispec.Prop("id", apispec.Typed("string")),
 			))),
-			apispec.OK("403", "Not the task's creator and lacking cancel permission, or a readonly "+
-				"user (refused on every mutating route)."),
+			apispec.OK("403", "Not the task's creator or an admin, or a readonly user (refused on "+
+				"every mutating route)."),
 			apispec.OK("404", "No such task."),
 			apispec.OK("409", "The task is running; stop it before deleting."),
 		},
@@ -519,7 +527,9 @@ var Operations = map[string]apispec.Operation{
 		},
 	},
 	"POST /tasks/{task_id}/tags": {
-		Summary:    "Atomically add and/or remove tags on a task.",
+		Summary: "Atomically add and/or remove tags on a task.",
+		Description: "Allowed for the task's creator (the user or API key that created " +
+			"it) or an admin, like PUT /tasks/{task_id}.",
 		Security:   adminScopedOrSession,
 		Permission: "create_task",
 		RequestBody: &apispec.RequestBody{Content: []apispec.Media{apispec.JSON(apispec.Object(
@@ -529,6 +539,7 @@ var Operations = map[string]apispec.Operation{
 		Responses: []apispec.Response{
 			apispec.OK("200", "OK", apispec.JSON(apispec.Ref("Task"))),
 			apispec.RefResponse("400", "Error"),
+			apispec.RefResponse("403", "Error"),
 			apispec.RefResponse("404", "Error"),
 		},
 	},
@@ -545,7 +556,10 @@ var Operations = map[string]apispec.Operation{
 			"of its own. The copy's effective mcp_selection must resolve: a server " +
 			"that is neither in the active bundle catalog nor among the copy " +
 			"owner's hosted connections is a 400 carrying the message its run would" +
-			" have dead-lettered with.",
+			" have dead-lettered with. Allowed for the task's creator (the user or " +
+			"API key that created it) or an admin, because a copy made by a key " +
+			"runs as the source's owner; view_all_logs reads a task but does not " +
+			"copy it (403).",
 		Security:   adminScopedOrSession,
 		Permission: "create_task",
 		RequestBody: &apispec.RequestBody{Content: []apispec.Media{apispec.JSON(apispec.Object(
@@ -629,16 +643,18 @@ var Operations = map[string]apispec.Operation{
 		Responses: []apispec.Response{
 			apispec.OK("201", "Created", apispec.JSON(apispec.Ref("Task"))),
 			apispec.RefResponse("400", "Error"),
+			apispec.RefResponse("403", "Error"),
 			apispec.RefResponse("404", "Error"),
 		},
 	},
 	"POST /tasks/{task_id}/clone": {
 		Summary: "Clone a task (a new task copied from this one, preserving recurrence; " +
 			"optional overrides).",
-		Description: "Same ownership, lineage and mcp_selection rules as POST " +
-			"/tasks/{task_id}/rerun: an admin-key or scoped-key clone keeps the " +
-			"source's owner, overrides.new_lineage starts a job of its own, and an " +
-			"unresolvable mcp_selection is a 400.",
+		Description: "Same ownership, lineage, authorization and mcp_selection rules as " +
+			"POST /tasks/{task_id}/rerun: only the task's creator or an admin may " +
+			"clone it, an admin-key or scoped-key clone keeps the source's owner, " +
+			"overrides.new_lineage starts a job of its own, and an unresolvable " +
+			"mcp_selection is a 400.",
 		Security:   adminScopedOrSession,
 		Permission: "create_task",
 		RequestBody: &apispec.RequestBody{Content: []apispec.Media{apispec.JSON(apispec.Object(
@@ -651,6 +667,7 @@ var Operations = map[string]apispec.Operation{
 		Responses: []apispec.Response{
 			apispec.OK("201", "Created", apispec.JSON(apispec.Ref("Task"))),
 			apispec.RefResponse("400", "Error"),
+			apispec.RefResponse("403", "Error"),
 			apispec.RefResponse("404", "Error"),
 		},
 	},
@@ -669,7 +686,11 @@ var Operations = map[string]apispec.Operation{
 			"row otherwise, with the message its run would fail with; nothing is " +
 			"written). Admin-only, enforced in-handler on the admin permission (the" +
 			" admin API key, a scoped key carrying admin, or an admin-role " +
-			"session). CLI twin: fleet sched task set-owner <task_id> <username>.",
+			"session). The API key that created the task (created_by_key_id, " +
+			"which this does not change) keeps acting on it afterwards: its " +
+			"edits and its re-runs and clones run as the new owner, and may name " +
+			"the new owner's hosted connections in mcp_selection. CLI twin: fleet " +
+			"sched task set-owner <task_id> <username>.",
 		Security:   adminScopedOrSession,
 		Permission: "admin",
 		RequestBody: &apispec.RequestBody{Required: true, Content: []apispec.Media{apispec.JSON(&apispec.Schema{
@@ -858,9 +879,11 @@ var Operations = map[string]apispec.Operation{
 			" event key must match the one the task is waiting for, so a caller can" +
 			" never wake an arbitrary sleeping task. The next run is told the event" +
 			" fired (with the optional note). 409 when the task is not awaiting a " +
-			"wake or waits for a different event. Requires operator (cancel) " +
-			"permission; a readonly user is " +
-			"refused with 403. See docs/SELF-WAKE.md.",
+			"wake or waits for a different event. Allowed for a caller with " +
+			"operator (cancel) permission on a task it created (an admin: on any " +
+			"task), and for the user who created the task; view_all_logs reads a " +
+			"task but does not wake it, and a readonly user is refused with 403. " +
+			"See docs/SELF-WAKE.md.",
 		Security:   adminScopedOrSession,
 		Permission: "cancel_task",
 		RequestBody: &apispec.RequestBody{Required: true, Content: []apispec.Media{apispec.JSON(&apispec.Schema{
@@ -1536,7 +1559,10 @@ var Operations = map[string]apispec.Operation{
 			" via a subsequent task create, so the same keys that may create tasks " +
 			"may stage uploads; a valid readonly/webhook key gets a definitive " +
 			"403), or a signed-in session (the Elcano cookie). A readonly user gets" +
-			" the same 403.",
+			" the same 403. The upload is recorded as the caller's. In a task's " +
+			"files a non-admin caller names only its own uploads, uploads on a " +
+			"task it created, or files already on the task it acts on; any other " +
+			"name is a 400, as for a missing upload.",
 		Security:   adminScopedOrSession,
 		Permission: "create_task",
 		RequestBody: &apispec.RequestBody{Content: []apispec.Media{{Type: "multipart/form-data", Schema: apispec.Object(

@@ -829,6 +829,10 @@ const (
 	// view_logs. PermissionAdmin implies it (see APIKey.hasPermission /
 	// userHasPermission); no role grants it, so an operator who wants a
 	// non-admin fleet-wide auditor mints a key with it explicitly.
+	//
+	// It grants reading (task rows and transcripts), not acting: editing,
+	// re-running, cloning, waking or answering another principal's task needs
+	// PermissionAdmin (docs/TASK-OWNERSHIP.md, "Reading is not acting").
 	PermissionViewAllLogs Permission = "view_all_logs"
 	PermissionManageKeys  Permission = "manage_keys"
 	PermissionAdmin       Permission = "admin"

@@ -45,7 +45,10 @@ cycles as across any runs.
 - `POST /tasks/{task_id}/wake {event, note?}` wakes an event-parked task
   early. The key must match the one the task waits for — a caller can never
   wake an arbitrary sleeping task — and the endpoint requires operator
-  (cancel) permission, mirroring `POST /tasks/{id}/resume`. The Operations
+  (cancel) permission on a task the caller created (an admin: any task), or
+  being the user who created the task. The note reaches the resumed run, so
+  `view_all_logs`, which reads every task, wakes none
+  ([TASK-OWNERSHIP.md](TASK-OWNERSHIP.md#5-reading-is-not-acting)). The Operations
   Center log viewer offers **Fire event** on a `paused_awaiting_wake` task
   that is waiting for a named event (timer-only sleeps have no key to
   fire). A thin **Sleeping** list on the tasks tab surfaces parked work

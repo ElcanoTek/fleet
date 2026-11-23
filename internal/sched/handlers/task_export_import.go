@@ -4,6 +4,7 @@
 package handlers
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -218,6 +219,16 @@ func (h *Handlers) HandleTaskImport(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, err.Error())
 		return
 	}
+	// The uploads each record to create names (importFileRefusals), checked
+	// before any write, dry runs included: a refused name fails that record,
+	// and a failed lookup fails the import, like the name lookup above.
+	fileRefusals, err := h.importFileRefusals(r.Context(), gates.caller, envelope.Tasks, plan)
+	if err != nil {
+		logging.From(r.Context()).Error("handleTaskImport: upload lookup failed", "err", err)
+		writeError(w, http.StatusInternalServerError, "import failed")
+		return
+	}
+	gates.uploadsChecked = true
 
 	// The per-principal gates, once for the import. The rolling budget
 	// (#601 part 2) bounds the principal's new tasks, not any one record, so it
@@ -247,7 +258,7 @@ func (h *Handlers) HandleTaskImport(w http.ResponseWriter, r *http.Request) {
 
 	resp := models.TaskImportResponse{DryRun: dryRun, Total: len(envelope.Tasks), Results: []models.TaskImportResult{}}
 	for i, rec := range envelope.Tasks {
-		result := h.importRecord(r, rec, plan.actions[i], conflict, gates, dryRun)
+		result := h.importRecord(r, rec, plan.actions[i], conflict, gates, dryRun, fileRefusals[i])
 		switch result.Status {
 		case models.TaskImportSkipped:
 			resp.Skipped++
@@ -311,9 +322,13 @@ func planImport(records []models.TaskExportRecord, existing map[string]uuid.UUID
 // importRecord carries out one record's planned action (nothing on a dry
 // run) and reports it. A planned create whose name another request took after
 // the plan was made answers like the plan would have: skipped under
-// conflict=skip, otherwise an error naming the conflict.
-func (h *Handlers) importRecord(r *http.Request, rec models.TaskExportRecord, action importAction, conflict models.TaskImportConflict, gates *taskGates, dryRun bool) models.TaskImportResult {
+// conflict=skip, otherwise an error naming the conflict. filesRefused is the
+// record's upload refusal (importFileRefusals): a dry run reports it for a
+// planned create, and a write hands it to admitCreate (taskGates
+// uploadRefusal), which answers it after validation, as POST /tasks does.
+func (h *Handlers) importRecord(r *http.Request, rec models.TaskExportRecord, action importAction, conflict models.TaskImportConflict, gates *taskGates, dryRun bool, filesRefused error) models.TaskImportResult {
 	result := models.TaskImportResult{Name: rec.Name}
+	gates.uploadRefusal = filesRefused
 	skipped := func() models.TaskImportResult {
 		result.Status = models.TaskImportSkipped
 		result.Reason = "conflict=skip"
@@ -335,6 +350,10 @@ func (h *Handlers) importRecord(r *http.Request, rec models.TaskExportRecord, ac
 		result.ID = &id
 		return result
 	default:
+		if dryRun && filesRefused != nil {
+			result.Status, result.Error = models.TaskImportErrored, filesRefused.Error()
+			return result
+		}
 		result.Status = models.TaskImportCreated
 		if dryRun {
 			return result
@@ -351,6 +370,21 @@ func (h *Handlers) importRecord(r *http.Request, rec models.TaskExportRecord, ac
 		result.ID = &id
 		return result
 	}
+}
+
+// importFileRefusals looks up the uploads each record the import writes names
+// (uploadRefusals), before any write, dry runs included: the check only
+// reads, so a dry run reports the refusal the import would. A replace is
+// checked too, since it creates the task when its row is gone. A skipped
+// record is not checked.
+func (h *Handlers) importFileRefusals(ctx context.Context, caller taskCreator, records []models.TaskExportRecord, plan importPlan) (map[int]error, error) {
+	files := make([][]string, len(records))
+	for i, rec := range records {
+		if plan.actions[i] != importSkip {
+			files[i] = rec.Files
+		}
+	}
+	return h.uploadRefusals(ctx, caller, files)
 }
 
 // importContentRefusal checks the two admin-only rules on a record's content

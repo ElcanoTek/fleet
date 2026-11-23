@@ -141,8 +141,9 @@ there) and [`../.agents/skills/steward/SKILL.md`](../.agents/skills/steward/SKIL
   unique import/export `name` column): [`docs/TASK-TITLES.md`](TASK-TITLES.md)
 - **Task ownership and copy lineage** (who owns a re-run or clone made with an
   API key, `new_lineage`, the create-time check that refuses a connector the
-  owner cannot resolve, and `PUT /tasks/{id}/owner` /
-  `fleet sched task set-owner`): [`docs/TASK-OWNERSHIP.md`](TASK-OWNERSHIP.md)
+  owner cannot resolve, `PUT /tasks/{id}/owner` /
+  `fleet sched task set-owner`, and which tasks each route reads or acts on:
+  `view_all_logs` reads, it does not act): [`docs/TASK-OWNERSHIP.md`](TASK-OWNERSHIP.md)
 - **Chat administration** (finding, reading, messaging, stopping,
   transferring and changing any chat, and editing or pausing its patrols, from
   `fleet chats` / `fleet patrol` or Settings → Admin → Chats; every change
