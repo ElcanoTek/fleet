@@ -443,7 +443,7 @@ var table = []Entry{
 	{Name: "FLEET_SCHEDULED_SHARED_WORKSPACE", Group: GroupScheduler, Scope: ScopeServer, Type: TypeBool, Default: "false", Knob: loader,
 		Description: "Kill switch for per-job workspaces: scheduled runs share the workspace root (ADR-0097)."},
 	{Name: "FLEET_RUN_LOG_RETENTION_DAYS", Group: GroupScheduler, Scope: ScopeServer, Type: TypeInt, Default: "90", Knob: loader,
-		Description: "Days run logs are kept."},
+		Description: "Days run logs are kept: older finished task runs are pruned with their logs, but their recorded spend still counts in usage reports and budgets."},
 	{Name: "FLEET_KEEP_RUNS_PER_TASK", Group: GroupScheduler, Scope: ScopeServer, Type: TypeInt, Default: "10", Knob: loader,
 		Description: "Superseded run logs kept per scheduled task before the retention sweep prunes the oldest."},
 	{Name: "FLEET_CLEANUP_HOUR", Group: GroupScheduler, Scope: ScopeServer, Type: TypeInt, Default: "4", Knob: loader,

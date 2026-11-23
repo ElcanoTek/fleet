@@ -136,7 +136,7 @@ On the right of every row sit four actions:
 | **Run now** | Queue an immediate run, on top of whatever schedule exists. Offered on a task that is waiting or finished — not on one that is in flight or paused (see below). |
 | **Edit task** | Open the task for changes. See [Everyday actions](#5-everyday-actions) for what editing means on a finished task. |
 | **Stop** | A one-time task that has not started yet is cancelled and never runs; one that is already running stops at its next checkpoint and keeps what it has done so far. On a repeating task, Stop ends the schedule for good: the confirmation reads **Stop this schedule for good?** and the task will not run again, so create a new task to bring it back. Either way its history stays on the board. A deliberate stop is not treated as a failure: nothing retries, nothing alerts. |
-| **Delete** | Removes the task **and its run history** permanently. Prefer Stop when you simply want something to cease running; delete only what should leave the record — you never have to delete a task to reuse its title, since titles are labels and need not be unique. |
+| **Delete** | Removes the task **and its run history** permanently. What its runs already spent still counts in **Spend & Budgets** and toward budgets. Prefer Stop when you simply want something to cease running; delete only what should leave the record — you never have to delete a task to reuse its title, since titles are labels and need not be unique. |
 
 A **Viewer** (read-only) sees no row actions at all: viewers can open and read
 the tasks visible to them (as for any non-admin, the tasks they created unless
@@ -234,7 +234,9 @@ API key (by its key ID) per **day**, **week** or **month**. Windows are UTC
 calendar windows; weeks start on Monday. A budget has a soft bound, a hard
 bound or both, in credits, tokens or both. A user budget counts that person's
 chats and tasks; a key budget counts only the tasks created with that key,
-because chat turns are not recorded against an API key. Saving is refused,
+because chat turns are not recorded against an API key. Spend keeps counting
+after the task or chat that incurred it is deleted, including by the routine
+cleanup of old runs and chats. Saving is refused,
 with a message saying why, when no account has that email, or when the key
 does not exist, is revoked or expired, or cannot create tasks. There is no edit button: saving a budget for
 the same person or key and window replaces the old one and re-arms its alert.

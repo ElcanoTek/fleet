@@ -246,7 +246,7 @@ client bundle's manifest names them, and fleet admits them at startup ([MCP-BUND
 | `FLEET_TASK_WALL_TIMEOUT` | duration | `4h` | server | Wall-clock limit of one scheduled run; 0 disables. *Validated at boot* (≥ 0). |
 | `FLEET_SCHED_TICK_SECONDS` | int | `30` | server | Interval of the due-task scan. *Validated at boot* (≥ 1). |
 | `FLEET_SCHEDULED_SHARED_WORKSPACE` | bool | `false` | server | Kill switch for per-job workspaces: scheduled runs share the workspace root (ADR-0097). *Validated at boot*. |
-| `FLEET_RUN_LOG_RETENTION_DAYS` | int | `90` | server | Days run logs are kept. *Validated at boot*. |
+| `FLEET_RUN_LOG_RETENTION_DAYS` | int | `90` | server | Days run logs are kept: older finished task runs are pruned with their logs, but their recorded spend still counts in usage reports and budgets. *Validated at boot*. |
 | `FLEET_KEEP_RUNS_PER_TASK` | int | `10` | server | Superseded run logs kept per scheduled task before the retention sweep prunes the oldest. *Validated at boot*. |
 | `FLEET_CLEANUP_HOUR` | int | `4` | server | Hour of day (server time) of the retention cleanup. *Validated at boot*. |
 | `FLEET_TASK_STARVATION_WINDOW_MINUTES` | int | `30` | server | Anti-starvation window of the priority queue; 0 disables. *Validated at boot*. |

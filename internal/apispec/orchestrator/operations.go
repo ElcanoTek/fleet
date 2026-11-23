@@ -413,8 +413,10 @@ var Operations = map[string]apispec.Operation{
 	"DELETE /tasks/{task_id}/permanent": {
 		Summary: "Permanently delete a task and its transcripts.",
 		Description: "Removes the task row, its run transcripts, and every cascading child " +
-			"(webhook triggers, loop config, task memory, feedback, learned " +
-			"instructions). Distinct from cancelling: a cancelled task keeps its " +
+			"(webhook triggers, task memory, feedback, learned instructions, A2A " +
+			"push configs). The task's recorded spend (its task_iterations rows) " +
+			"is kept, so it still counts toward budgets and the usage report. " +
+			"Distinct from cancelling: a cancelled task keeps its " +
 			"row, and with it its name — which carries a partial unique index, so a" +
 			" broken job could never be replaced under the same name and could not " +
 			"be renamed either (PUT /tasks/{task_id} only edits pending or " +
@@ -1116,9 +1118,10 @@ var Operations = map[string]apispec.Operation{
 		Summary: "Usage analytics — cost/token roll-up by principal, project, model, or " +
 			"time bucket (#601 part 1).",
 		Description: "Aggregates the already-persisted metering over a window: task-side " +
-			"from task_iterations joined to tasks (cost_usd, prompt/completion " +
-			"tokens per iteration, keyed by created_by / created_by_key_id / " +
-			"model), chat-side from the turn_metrics session log (keyed by user " +
+			"from task_iterations (cost_usd, prompt/completion tokens per " +
+			"iteration, keyed by the created_by / created_by_key_id / model each " +
+			"row carries, so a deleted or pruned task's spend still counts), " +
+			"chat-side from the turn_metrics session log (keyed by user " +
 			"email, project, conversation model). Admin-only — spend data is global" +
 			" across all principals. Like /sla-report, the gate is enforced " +
 			"in-handler on the admin permission so both the admin API key and an " +

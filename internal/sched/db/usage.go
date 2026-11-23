@@ -1,9 +1,18 @@
 // Usage-analytics read model (#601 part 1): aggregation over the metering the
 // run loop ALREADY persists — task_iterations (cost_usd, prompt_tokens,
-// completion_tokens per iteration) joined to tasks for provenance (created_by,
-// created_by_key_id, model). This is strictly a read model: no new table, no
-// second accounting path, and nothing here can drift from what the governed
-// core recorded.
+// completion_tokens per iteration), which also carries the provenance the
+// report groups by (created_by, created_by_key_id, model: copied from the task
+// when the iteration is written, migration 0210). This is strictly a read
+// model: no second accounting path, and nothing here can drift from what the
+// governed core recorded.
+//
+// The spend aggregations (TaskUsage, TaskUsageByUserDay — and through them
+// the budgets) read task_iterations alone and never join tasks: an iteration
+// outlives its task (no foreign key since 0210), so spend recorded for a task
+// counts after the task is deleted or pruned by retention, under the same
+// creator, key and model. TopTaskOutliers lists only tasks that still exist,
+// like the chat side's top conversations, but labels each with the same
+// iteration attribution.
 
 package db
 
@@ -16,7 +25,7 @@ import (
 )
 
 // taskUsageGroupExpr maps a validated group_by value to the SQL grouping
-// expression for the task_iterations ⋈ tasks aggregation. The map is the
+// expression for the task_iterations aggregation. The map is the
 // injection guard: only these fixed expressions ever reach the query, and an
 // unknown group_by errors instead of interpolating caller input.
 //
@@ -25,28 +34,26 @@ import (
 // project-aware meter today); group_by=user resolves created_by → username via
 // a LEFT JOIN so deleted users degrade to their UUID rather than vanishing
 // from the spend report. Day/week bucket on the iteration's started_at in UTC
-// and key the bucket by its start date (ISO weeks for 'week').
+// and key the bucket by its start date (ISO weeks for 'week'). Every
+// expression reads the iteration's own columns (ti) or the account (u), never
+// tasks: see the file comment.
 var taskUsageGroupExpr = map[string]string{
-	"user":    "COALESCE(u.email, COALESCE(t.created_by::text, ''))",
-	"key":     "COALESCE(t.created_by_key_id, '')",
+	"user":    "COALESCE(u.email, COALESCE(ti.created_by::text, ''))",
+	"key":     "COALESCE(ti.created_by_key_id, '')",
 	"project": "''",
-	"model":   "COALESCE(t.model, '')",
+	"model":   "COALESCE(ti.model, '')",
 	"day":     "to_char(date_trunc('day', ti.started_at AT TIME ZONE 'UTC'), 'YYYY-MM-DD')",
 	"week":    "to_char(date_trunc('week', ti.started_at AT TIME ZONE 'UTC'), 'YYYY-MM-DD')",
 }
 
-// TaskUsage aggregates the persisted per-iteration metering over [from, to)
-// (filtered on the iteration's started_at) grouped by groupBy — one of
-// user|key|project|model|day|week. Every iteration in range counts, including
-// failed/cancelled ones: their cost was still spent. NULL metering columns
-// (older rows) sum as 0.
-// TaskUsageByUserDay aggregates the same per-iteration metering over
-// [from, to) on BOTH the user and UTC-day dimensions at once — the adoption
-// report needs per-user daily series (active days, sparklines), which the
-// one-dimensional TaskUsage grouping can't express. Same provenance rules:
+// TaskUsageByUserDay aggregates the same per-iteration metering as TaskUsage
+// over [from, to) on BOTH the user and UTC-day dimensions at once — the
+// adoption report needs per-user daily series (active days, sparklines), which
+// the one-dimensional TaskUsage grouping can't express. Same provenance rules:
 // created_by resolves to the username with a UUID fallback for deleted users,
-// every iteration counts (failed/cancelled cost was still spent), and the
-// grouping expressions are fixed strings so no caller input reaches SQL.
+// every iteration counts (failed/cancelled cost was still spent, and so was a
+// deleted task's), and the grouping expressions are fixed strings so no caller
+// input reaches SQL.
 func (db *Database) TaskUsageByUserDay(ctx context.Context, from, to time.Time) ([]models.UserDayUsage, error) {
 	rows, err := db.conn.QueryContext(ctx, `
 		SELECT
@@ -57,8 +64,7 @@ func (db *Database) TaskUsageByUserDay(ctx context.Context, from, to time.Time) 
 			COALESCE(SUM(ti.completion_tokens), 0),
 			COUNT(*)
 		FROM task_iterations ti
-		JOIN tasks t ON t.id = ti.task_id
-		LEFT JOIN core.users u ON u.id = t.created_by
+		LEFT JOIN core.users u ON u.id = ti.created_by
 		WHERE ti.started_at >= $1 AND ti.started_at < $2
 		GROUP BY 1, 2
 		ORDER BY 1, 2`,
@@ -79,6 +85,11 @@ func (db *Database) TaskUsageByUserDay(ctx context.Context, from, to time.Time) 
 	return out, rows.Err()
 }
 
+// TaskUsage aggregates the persisted per-iteration metering over [from, to)
+// (filtered on the iteration's started_at) grouped by groupBy — one of
+// user|key|project|model|day|week. Every iteration in range counts, including
+// failed/cancelled ones and those of deleted or pruned tasks: their cost was
+// still spent. NULL metering columns (older rows) sum as 0.
 func (db *Database) TaskUsage(ctx context.Context, from, to time.Time, groupBy string) ([]models.UsageBucket, error) {
 	expr, ok := taskUsageGroupExpr[groupBy]
 	if !ok {
@@ -92,8 +103,7 @@ func (db *Database) TaskUsage(ctx context.Context, from, to time.Time, groupBy s
 			COALESCE(SUM(ti.completion_tokens), 0),
 			COUNT(*)
 		FROM task_iterations ti
-		JOIN tasks t ON t.id = ti.task_id
-		LEFT JOIN core.users u ON u.id = t.created_by
+		LEFT JOIN core.users u ON u.id = ti.created_by
 		WHERE ti.started_at >= $1 AND ti.started_at < $2
 		GROUP BY 1
 		ORDER BY 1`,
@@ -132,7 +142,13 @@ type TaskOutlierRow struct {
 }
 
 // TopTaskOutliers returns top background tasks ranked across cost, token
-// volume, iteration count, and failure states over the last 30 days.
+// volume, iteration count, and failure states over the last 30 days. It lists
+// tasks that still exist — each row links to the task — so a deleted task's
+// iterations are left out here while TaskUsage keeps counting them (the chat
+// side's top conversations likewise list live chats only). A row's owner and
+// model are those its spend is attributed to in TaskUsage — the latest
+// iteration's copy — and the task row's own only for a task with no iteration
+// in the window (a failure that never ran).
 func (db *Database) TopTaskOutliers(ctx context.Context, limit int) ([]TaskOutlierRow, error) {
 	if limit <= 0 {
 		limit = 25
@@ -145,7 +161,9 @@ func (db *Database) TopTaskOutliers(ctx context.Context, limit int) ([]TaskOutli
 			       COUNT(*) AS iterations,
 			       COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
 			       COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
-			       COALESCE(SUM(cost_usd), 0)::float8 AS cost_usd
+			       COALESCE(SUM(cost_usd), 0)::float8 AS cost_usd,
+			       (array_agg(created_by ORDER BY started_at DESC))[1] AS created_by,
+			       (array_agg(model ORDER BY started_at DESC))[1] AS model
 			FROM task_iterations
 			WHERE started_at >= $1
 			GROUP BY task_id
@@ -156,7 +174,7 @@ func (db *Database) TopTaskOutliers(ctx context.Context, limit int) ([]TaskOutli
 				COALESCE(NULLIF(BTRIM(t.title), ''), LEFT(BTRIM(t.prompt), 80)) AS title,
 				COALESCE(u.email, '') AS owner_email,
 				t.status::text AS status,
-				COALESCE(t.model, '') AS model,
+				COALESCE(CASE WHEN ti_agg.task_id IS NOT NULL THEN ti_agg.model ELSE t.model END, '') AS model,
 				COALESCE(t.recurrence, '') AS recurrence,
 				COALESCE(ti_agg.iterations, 0) AS iterations,
 				COALESCE(ti_agg.prompt_tokens, 0) AS prompt_tokens,
@@ -165,7 +183,8 @@ func (db *Database) TopTaskOutliers(ctx context.Context, limit int) ([]TaskOutli
 				COALESCE(t.error_message, COALESCE(t.dead_letter_reason, '')) AS error_message
 			FROM tasks t
 			LEFT JOIN ti_agg ON ti_agg.task_id = t.id
-			LEFT JOIN core.users u ON u.id = t.created_by
+			LEFT JOIN core.users u
+			       ON u.id = CASE WHEN ti_agg.task_id IS NOT NULL THEN ti_agg.created_by ELSE t.created_by END
 			WHERE ti_agg.task_id IS NOT NULL
 			   OR (COALESCE(t.completed_at, t.dead_lettered_at, t.created_at) >= $1 AND t.status IN ('error', 'dead_lettered'))
 		),

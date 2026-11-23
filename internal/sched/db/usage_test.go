@@ -1,8 +1,9 @@
 package db
 
 // DB-backed tests for the usage-analytics read model (#601 part 1): the
-// task_iterations ⋈ tasks roll-up. Gated on DATABASE_URL like the rest of the
-// package (setupTestDB skips without it).
+// task_iterations roll-up, grouped by the attribution each iteration carries.
+// Gated on FLEET_TEST_DATABASE_URL like the rest of the package (setupTestDB
+// skips without it).
 
 import (
 	"context"

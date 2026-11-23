@@ -297,7 +297,7 @@
             "FLEET_RECURRING_TASK_MODEL": { "type": ["string", "number", "boolean"], "description": "Model that drafts recurring tasks. Default: inherited from FLEET_METADATA_MODEL." },
             "FLEET_REMOTE_MCP_ALLOW_INSECURE_HTTP": { "type": ["string", "number", "boolean"], "description": "Allow remote MCP servers over plain http (development only). Default: false." },
             "FLEET_RETRY_MAX_ATTEMPTS": { "type": ["string", "number", "boolean"], "description": "Retries of a failed provider call. Default: 5." },
-            "FLEET_RUN_LOG_RETENTION_DAYS": { "type": ["string", "number", "boolean"], "description": "Days run logs are kept. Default: 90." },
+            "FLEET_RUN_LOG_RETENTION_DAYS": { "type": ["string", "number", "boolean"], "description": "Days run logs are kept: older finished task runs are pruned with their logs, but their recorded spend still counts in usage reports and budgets. Default: 90." },
             "FLEET_SANDBOX_BACKEND": { "type": ["string", "number", "boolean"], "description": "Sandbox backend (ADR-0049). Validated fail-closed at boot against the bundle. The chart sets it from sandbox.backend; set that value instead. Default: podman." },
             "FLEET_SANDBOX_CPUS": { "type": ["string", "number", "boolean"], "description": "Per-sandbox CPU limit (e.g. 1.0). The chart sets it from sandbox.cpus; set that value instead." },
             "FLEET_SANDBOX_CPUS_MAX": { "type": ["string", "number", "boolean"], "description": "Ceiling a task may raise its sandbox CPUs to. Default: 16." },

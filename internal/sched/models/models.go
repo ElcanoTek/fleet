@@ -533,6 +533,16 @@ type TaskIteration struct {
 	PromptTokens        int64      `json:"prompt_tokens"`
 	CompletionTokens    int64      `json:"completion_tokens"`
 	Status              string     `json:"status"`
+
+	// CreatedBy, CreatedByKeyID and Model are the runner's copy of the task's
+	// attribution (the task it is running). db.AddTaskIteration records the
+	// task row's own values when the row is there and these only when it is
+	// already gone — a task stopped and deleted while its last run was still
+	// finishing — so that run's spend keeps its creator, key and model. Never
+	// serialized, and not read back by ListTaskIterations.
+	CreatedBy      *uuid.UUID `json:"-"`
+	CreatedByKeyID *string    `json:"-"`
+	Model          *string    `json:"-"`
 }
 
 // User is an account with Operations Center access as this plane sees it: a

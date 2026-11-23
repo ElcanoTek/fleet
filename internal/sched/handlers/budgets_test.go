@@ -116,6 +116,9 @@ func setupBudgetEnv(t *testing.T) (*budgetTestEnv, func()) {
 	// this handler reads the principal from the CONTEXT, so it needs the same
 	// auth middleware the real router puts in front of it.
 	r.With(h.AdminOrUserAuthMiddleware).Post("/tasks/import", h.HandleTaskImport)
+	// Deleting a finished task must leave its spend counting toward the
+	// creator's budgets (TestBudgetCountsSpendOfDeletedTasks).
+	r.With(h.AdminOrUserAuthMiddleware).Delete("/tasks/{task_id}/permanent", h.DeleteTask)
 	// The CRUD endpoints gate in-handler on PermissionAdmin (like
 	// /admin/usage), so the test router registers them bare and calls them
 	// with the admin API key.
