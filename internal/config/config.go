@@ -567,9 +567,9 @@ type Config struct {
 	WorktreePruneAge time.Duration
 	// DiskMinFreePercent is the free-space floor, as a percentage of the
 	// filesystem holding the data dir, below which the box sheds BACKGROUND
-	// load: scheduled tasks stop being claimed and /healthz reports degraded,
-	// while interactive chat keeps working (FLEET_DISK_MIN_FREE_PERCENT,
-	// default 5; 0 disables the check).
+	// load: scheduled tasks stop being claimed and /readyz reports the disk
+	// check degraded (207), while interactive chat keeps working
+	// (FLEET_DISK_MIN_FREE_PERCENT, default 5; 0 disables the check).
 	//
 	// Shedding scheduled work rather than everything is the point: a full disk
 	// is usually produced by unattended runs, and stopping them is what gives

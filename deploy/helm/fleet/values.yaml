@@ -295,7 +295,8 @@ podLabels: {}
 # teardown; raise both together for long turns.
 terminationGracePeriodSeconds: 330
 
-# startupProbe budget, in 10s periods, before liveness takes over. 60 = 10
-# minutes, sized for a first boot that has to run migrations against an
-# existing database.
+# startupProbe budget, in 10s periods, before the liveness and readiness probes
+# take over. The startup probe asks /livez, which answers once boot (migrations
+# included) has finished. 60 = 10 minutes, sized for a first boot that has to
+# run migrations against an existing database.
 startupProbeFailureThreshold: 60

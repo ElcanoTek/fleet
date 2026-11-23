@@ -343,6 +343,45 @@ func TestClientPingRejectsNonSuccess(t *testing.T) {
 	}
 }
 
+// A model's open circuit makes /healthz answer 503 degraded while turns still
+// run on a fallback model: Ping must not refuse a working server over it. A
+// draining server's 503 still fails, and so does a degraded-looking 503
+// without fleet's work-counter headers (some other server in the way).
+func TestClientPingAcceptsAProviderDegradedServer(t *testing.T) {
+	const degraded = `{"model":"vendor/delisted","reason":"llm provider circuit open","status":"degraded"}`
+	for _, tc := range []struct {
+		body        string
+		fleetHeader bool
+		wantErr     bool
+	}{
+		{degraded, true, false},
+		{degraded, false, true},
+		{`{"status":"shutting_down"}`, true, true},
+		{`Service Unavailable`, false, true},
+	} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/healthz" {
+				http.NotFound(w, r)
+				return
+			}
+			if tc.fleetHeader {
+				w.Header().Set("X-Fleet-Active-Turns", "0")
+				w.Header().Set("X-Fleet-Active-Approvals", "0")
+			}
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = io.WriteString(w, tc.body)
+		}))
+		err := NewClient(Config{ServerURL: srv.URL}).Ping(context.Background())
+		srv.Close()
+		if tc.wantErr && (err == nil || !strings.Contains(err.Error(), "503")) {
+			t.Errorf("body %s (fleet headers %v): Ping error = %v, want the 503", tc.body, tc.fleetHeader, err)
+		}
+		if !tc.wantErr && err != nil {
+			t.Errorf("body %s (fleet headers %v): Ping error = %v, want nil", tc.body, tc.fleetHeader, err)
+		}
+	}
+}
+
 func TestClientStream_PropagatesInFlightCancellation(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")

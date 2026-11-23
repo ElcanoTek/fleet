@@ -217,6 +217,105 @@ func TestHTTPProber(t *testing.T) {
 	}
 }
 
+// degraded207 is fleet's /readyz answer when only non-critical checks fail.
+const degraded207 = `{"status":"degraded","checks":{"chat_db":{"status":"ok"},"sched_db":{"status":"ok"},` +
+	`"sandbox":{"status":"error","detail":"podman: exec: \"podman\": executable file not found in $PATH"},` +
+	`"disk":{"status":"degraded","detail":"3.1% free on /var/lib/fleet is below the 5% floor"}}}`
+
+// readyzServer answers every request with code and body.
+func readyzServer(t *testing.T, code int, body string) string {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(code)
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL + "/readyz"
+}
+
+// TestHTTPProberCountsA207AsReady — /readyz answers 207 when only a
+// non-critical check (sandbox, disk) fails: the process serves, so it is
+// ready, and the degraded checks are printed as a warning. 503 is still not
+// ready.
+func TestHTTPProberCountsA207AsReady(t *testing.T) {
+	var log strings.Builder
+	p := HTTPProber{Interval: 10 * time.Millisecond, Log: &log}
+	if err := p.WaitReady(context.Background(), readyzServer(t, http.StatusMultiStatus, degraded207), time.Second); err != nil {
+		t.Fatalf("a 207 was not ready: %v", err)
+	}
+	got := log.String()
+	for _, want := range []string{"warning:", "207", "disk: degraded (3.1% free", "sandbox: error (podman:"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("warning %q lacks %q", got, want)
+		}
+	}
+	if strings.Contains(got, "chat_db") {
+		t.Errorf("warning names a check that is ok: %q", got)
+	}
+	if strings.Index(got, "disk:") > strings.Index(got, "sandbox:") {
+		t.Errorf("degraded checks not in name order: %q", got)
+	}
+
+	notReady := `{"status":"not_ready","checks":{"chat_db":{"status":"error","detail":"connection refused"}}}`
+	if err := p.WaitReady(context.Background(), readyzServer(t, http.StatusServiceUnavailable, notReady), 300*time.Millisecond); err == nil || !strings.Contains(err.Error(), "HTTP 503") {
+		t.Fatalf("a 503 was ready, or the error does not say so: %v", err)
+	}
+}
+
+// TestDegradedChecksPrintsOnlyPrintableText — the 207 warning quotes the
+// server's check names and details; an escape sequence (here, clear screen)
+// or a bidirectional override (U+202E) in them must not reach the terminal.
+func TestDegradedChecksPrintsOnlyPrintableText(t *testing.T) {
+	body := `{"status":"degraded","checks":{"disk\u202e":{"status":"degraded","detail":"\u001b[2Jfull\u202e\u0000 disk"}}}`
+	got := degradedChecks([]byte(body))
+	if strings.ContainsAny(got, "\x1b\u202e\x00") {
+		t.Errorf("warning %q carries a control or format character", got)
+	}
+	if !strings.Contains(got, "[2Jfull") || !strings.Contains(got, "disk") {
+		t.Errorf("warning %q lost the printable text", got)
+	}
+}
+
+// TestInstallKeepsAReleaseThatAnswers207 — end to end with the real prober: a
+// new binary whose /readyz answers 207 stays installed (no rollback), and one
+// whose /readyz answers 503 is rolled back.
+func TestInstallKeepsAReleaseThatAnswers207(t *testing.T) {
+	for _, tc := range []struct {
+		code         int
+		body         string
+		wantRollback bool
+	}{
+		{http.StatusMultiStatus, degraded207, false},
+		{http.StatusServiceUnavailable, `{"status":"not_ready","checks":{"draining":{"status":"error","detail":"shutting_down"}}}`, true},
+	} {
+		dir, bin, svc, _ := setup(t, "OLD")
+		var log strings.Builder
+		o := opts(dir, bin, svc, HTTPProber{Interval: 10 * time.Millisecond, Log: &log})
+		o.HealthURL = readyzServer(t, tc.code, tc.body)
+		o.HealthTimeout = 300 * time.Millisecond
+		o.RollbackTimeout = 300 * time.Millisecond
+		o.Log = &log
+		_, err := Install(context.Background(), o)
+		live := read(t, filepath.Join(dir, "fleet"))
+		if tc.wantRollback {
+			// The fake old binary answers the same 503, so the rollback's
+			// own wait fails too; what matters is that the old binary is
+			// back in place.
+			if err == nil || live != "OLD" {
+				t.Errorf("HTTP %d: err %v, live %q; want the install rolled back to OLD", tc.code, err, live)
+			}
+			continue
+		}
+		if err != nil || live != "NEW" {
+			t.Errorf("HTTP %d: err %v, live %q; want NEW kept", tc.code, err, live)
+		}
+		if !strings.Contains(log.String(), "answered 207") {
+			t.Errorf("HTTP %d: install log lacks the 207 warning:\n%s", tc.code, log.String())
+		}
+	}
+}
+
 // TestHTTPProberKeepsTheLastRealAnswer — an attempt cut off by the overall
 // deadline must not replace an earlier HTTP status with "context deadline
 // exceeded": the operator needs to see what the server last said.

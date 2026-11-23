@@ -53,11 +53,13 @@ func Router(inner http.Handler) http.Handler {
 }
 
 // unversionedForever reports whether a bare path is deliberately not versioned
-// (and so must NOT carry a deprecation signal): liveness/readiness probes and
-// the version-discovery endpoint.
+// (and so must NOT carry a deprecation signal): the health endpoints and the
+// version-discovery endpoint. fleet answers /livez and /readyz in front of
+// this router, so they never reach it there; they are listed so the set
+// matches docs/api-versioning.md wherever the router is used.
 func unversionedForever(path string) bool {
 	switch path {
-	case "/healthz", "/health", "/readyz", "/api-info":
+	case "/healthz", "/health", "/livez", "/readyz", "/api-info":
 		return true
 	// Well-known discovery documents are unversioned by RFC 8615 construction:
 	// the A2A Agent Card's path is fixed by that protocol's spec (#1279), so a

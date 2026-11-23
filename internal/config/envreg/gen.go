@@ -237,7 +237,14 @@ func HelmEnvSchema() HelmSchema {
 			d += " Secret: set it through config.existingSecret, not config.env."
 		}
 		if e.Helm != "" {
-			d += " The chart sets it from " + strings.Trim(e.Helm, "()") + "; set that value instead."
+			src := strings.Trim(e.Helm, "()")
+			if fixed, ok := strings.CutPrefix(src, "fixed: "); ok {
+				// The chart's Service and probes depend on a fixed value: there
+				// is no chart value to set instead, only that one to keep.
+				d += " The chart sets it to " + fixed + "; leave it unset here, or set exactly that."
+			} else {
+				d += " The chart sets it from " + src + "; set that value instead."
+			}
 		}
 		switch {
 		case e.DefaultFrom != "":

@@ -51,8 +51,8 @@
 #   # defaults; set them only to change the posture:
 #   # FLEET_DISK_MIN_FREE_PERCENT=5     # below this much free space on the data
 #   #                                   # dir, SCHEDULED tasks stop being claimed
-#   #                                   # and /healthz reports degraded. Chat is
-#   #                                   # never gated. 0 disables the check.
+#   #                                   # and /readyz reports disk degraded (207).
+#   #                                   # Chat is never gated. 0 disables it.
 #   # FLEET_WORKTREE_PRUNE_AGE=24h      # reclaim orphaned per-run git worktrees
 #   #                                   # older than this. 0 disables.
 #   # FLEET_MAINTENANCE_MIN_INTERVAL=5m # rate limit for the OPPORTUNISTIC
@@ -162,12 +162,13 @@ ExecStartPre=-+/usr/bin/chown -R fleet:fleet /opt/fleet/client
 ExecStart=/opt/fleet/fleet
 Restart=always
 RestartSec=5s
-# Graceful shutdown: on SIGTERM cmd/fleet stops admitting new work (/healthz → 503
-# so a load balancer drains it), then drains in-flight chat turns AND scheduled
-# tasks within FLEET_SHUTDOWN_GRACE_SECONDS (default 300) before force-cancelling
-# the stragglers and exiting 0. TimeoutStopSec MUST exceed that grace + listener
-# close so systemd sends SIGKILL only after fleet's own budget is spent; bump both
-# together for longer-running tasks. SIGINT (dev Ctrl-C) is the immediate path.
+# Graceful shutdown: on SIGTERM cmd/fleet stops admitting new work (/readyz and
+# /healthz → 503 so a load balancer drains it), then drains in-flight chat
+# turns AND scheduled tasks within FLEET_SHUTDOWN_GRACE_SECONDS (default 300)
+# before force-cancelling the stragglers and exiting 0. TimeoutStopSec MUST
+# exceed that grace + listener close so systemd sends SIGKILL only after fleet's
+# own budget is spent; bump both together for longer-running tasks. SIGINT (dev
+# Ctrl-C) is the immediate path.
 KillSignal=SIGTERM
 TimeoutStopSec=330s
 
