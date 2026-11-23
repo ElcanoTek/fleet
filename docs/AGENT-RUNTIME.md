@@ -1739,7 +1739,11 @@ most ref updates and still succeeds; deleting or renaming any branch,
 `git gc` / `pack-refs` and `git config` writes fail, so `git push -u` cannot
 record an upstream, a branch made from a remote-tracking ref needs
 `--no-track`, and submodules cannot be initialised (`.git/config` and
-`.git/modules` are read-only). The run's task prompt says so. Worktree runs share the repository's refs: a run can move or
+`.git/modules` are read-only). In a shallow clone, ordinary fetches work but
+fetches that change its depth (`--depth`, `--deepen`, `--shallow-since`,
+`--shallow-exclude`, `--unshallow`) fail creating `.git/shallow.lock`;
+unshallow the repository on the host for full history (`fleet doctor` notes
+a shallow repository). The run's task prompt says so. Worktree runs share the repository's refs: a run can move or
 delete `main` or another run's branch, which changes the next run's base.
 In a whole-root chat sandbox, git commands that write to the root
 repository (commit, stash, switch, branch) fail; the root's files are not

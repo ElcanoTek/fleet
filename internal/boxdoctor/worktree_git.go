@@ -17,7 +17,9 @@ import (
 // or this process cannot look into the root, a warning when the repository
 // was not recorded at startup, its .git was replaced or is a gitfile or a
 // symlink, a directory inside it is a link (or missing, other than those the
-// server creates), it points at another repository, or it uses reftable. It reads the record this
+// server creates), it points at another repository, or it uses reftable. An
+// ok for a shallow clone says that fetches changing its depth fail in
+// worktree runs (ShallowNote). It reads the record this
 // process made (worktree.Pin): the server's from its own startup; a one-off
 // CLI process records the root before calling it.
 func CheckWorktreeGit(ctx context.Context, workspaceRoot string) Check {
@@ -46,5 +48,12 @@ func CheckWorktreeGit(ctx context.Context, workspaceRoot string) Check {
 		return c
 	}
 	c.Status, c.Detail = StatusOK, "worktree tasks can run against the workspace repository"
+	if worktree.IsShallow(ctx, workspaceRoot) {
+		c.Detail += ShallowNote
+	}
 	return c
 }
+
+// ShallowNote is what CheckWorktreeGit adds for a shallow workspace
+// repository.
+const ShallowNote = "; it is a shallow clone, so fetches that change its depth (--depth, --deepen, --shallow-since, --shallow-exclude, --unshallow) fail in worktree runs — unshallow it on the host for full history"

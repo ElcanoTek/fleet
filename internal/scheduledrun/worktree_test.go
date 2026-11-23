@@ -391,3 +391,18 @@ func TestPrepareWorktree_CleanupKeepsAWorktreeItCannotRemove(t *testing.T) {
 		t.Errorf("a later cleanup kept the branch %s", wt.branch)
 	}
 }
+
+// TestWorktreeNoticeShallow: the notice says what fails in a shallow clone
+// only when the repository is one.
+func TestWorktreeNoticeShallow(t *testing.T) {
+	plain := withWorktreeNotice("do it", &runWorktree{path: "/ws/.fleet-worktrees/t-r", branch: "fleet/task-t-r"})
+	if strings.Contains(plain, "shallow") {
+		t.Errorf("notice for a full clone mentions shallow clones:\n%s", plain)
+	}
+	shallow := withWorktreeNotice("do it", &runWorktree{path: "/ws/.fleet-worktrees/t-r", branch: "fleet/task-t-r", shallow: true})
+	for _, want := range []string{"shallow clone", "ordinary fetches work", "--deepen", "--unshallow", "shallow.lock", "do it"} {
+		if !strings.Contains(shallow, want) {
+			t.Errorf("shallow notice lacks %q:\n%s", want, shallow)
+		}
+	}
+}

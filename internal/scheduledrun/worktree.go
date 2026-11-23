@@ -76,6 +76,7 @@ type runWorktree struct {
 	adminDir   string
 	branch     string
 	base       string // what the branch starts from, resolved by the sandbox's git
+	shallow    bool   // the repository is a shallow clone (worktree.IsShallow)
 	checkedOut atomic.Bool
 }
 
@@ -155,7 +156,7 @@ func prepareWorktree(ctx context.Context, workspaceRoot string, task *models.Tas
 	// The base is resolved by the run's sandbox, not here.
 	base := worktreeBase(cfg.BaseBranch)
 
-	run := &runWorktree{path: wtPath, branch: branch, base: base}
+	run := &runWorktree{path: wtPath, branch: branch, base: base, shallow: worktree.IsShallow(ctx, workspaceRoot)}
 	cleanup = func() {
 		// Detached, bounded context: cleanup runs after the run's ctx is
 		// cancelled (and possibly on a delay timer), so it must not inherit that
@@ -320,9 +321,10 @@ func checkoutResult(exit int, output, branch, base string) error {
 // except the run's own checkout and record, the object store, refs, reflogs
 // and Git LFS store (sandbox.WorktreeMount), so git prints a packed-refs.lock error
 // after most ref updates while the command itself succeeds, and anything
-// that rewrites packed-refs, the config (an upstream, a submodule) or
-// another worktree fails. Appended
-// to the task prompt, never the cached system prefix.
+// that rewrites packed-refs, the config (an upstream, a submodule),
+// .git/shallow (a fetch that changes a shallow clone's depth) or another
+// worktree fails; the shallow sentence is added only for a shallow clone.
+// Appended to the task prompt, never the cached system prefix.
 func withWorktreeNotice(prompt string, wt *runWorktree) string {
 	if wt == nil {
 		return prompt
@@ -334,8 +336,18 @@ func withWorktreeNotice(prompt string, wt *runWorktree) string {
 		"an upstream: create a branch from a remote-tracking ref (origin/...) with --no-track, and push with "+
 		"`git push <remote> <branch>`, not `git push -u` / `--set-upstream`. Deleting or renaming a branch, "+
 		"`git gc` / `git pack-refs`, `git config` writes (including `branch --set-upstream-to`), initialising "+
-		"submodules and changes to other worktrees fail here.\n\n%s",
-		wt.path, wt.branch, prompt)
+		"submodules and changes to other worktrees fail here.%s\n\n%s",
+		wt.path, wt.branch, shallowNotice(wt), prompt)
+}
+
+// shallowNotice is the worktree notice's sentence for a shallow repository.
+func shallowNotice(wt *runWorktree) string {
+	if !wt.shallow {
+		return ""
+	}
+	return " The repository is a shallow clone: ordinary fetches work, but fetches that change its depth " +
+		"(`--depth`, `--deepen`, `--shallow-since`, `--shallow-exclude`, `--unshallow`) fail here with " +
+		"`Unable to create '.../shallow.lock'`; full history has to be fetched on the host."
 }
 
 // shellQuote quotes s as one POSIX shell word.

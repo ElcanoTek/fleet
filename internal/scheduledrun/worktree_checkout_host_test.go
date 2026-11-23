@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ElcanoTek/fleet/internal/sandbox"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
@@ -215,5 +216,63 @@ func TestCheckoutInSandboxBaseHEADIsTheRepositorys(t *testing.T) {
 			t.Errorf("base %q: branch at %s, want the repository's HEAD %s", base, got, head)
 		}
 		cleanup()
+	}
+}
+
+// TestShallowCloneInAWorktreeRun: in a shallow workspace repository, with
+// .git's own entries read-only as a worktree run's sandbox mounts them,
+// commits and ordinary fetches work while a fetch that deepens history
+// fails creating .git/shallow.lock; the run's notice says so.
+func TestShallowCloneInAWorktreeRun(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root writes a read-only directory")
+	}
+	upstream := initGitRepo(t)
+	for i := 0; i < 3; i++ {
+		gitOut(t, upstream, "commit", "--allow-empty", "-q", "-m", "more")
+	}
+	repo := filepath.Join(t.TempDir(), "clone")
+	gitOut(t, filepath.Dir(repo), "clone", "-q", "--depth", "1", "file://"+upstream, repo)
+	gitOut(t, repo, "config", "user.email", "t@t.t")
+	gitOut(t, repo, "config", "user.name", "t")
+	worktree.PinAtStartup(repo)
+	if err := worktree.PrepareRepoAtStartup(context.Background(), repo); err != nil {
+		t.Fatal(err)
+	}
+	wt, cleanup, err := prepareWorktree(context.Background(), repo, worktreeTask(&models.WorktreeConfig{Enabled: true}), "run1")
+	if err != nil {
+		t.Fatalf("prepareWorktree: %v", err)
+	}
+	defer cleanup()
+	if !wt.shallow || !strings.Contains(withWorktreeNotice("x", wt), "shallow clone") {
+		t.Fatal("the run does not know its repository is a shallow clone")
+	}
+	sb := sandbox.NewHost(nil)
+	defer sb.Close()
+	if err := checkoutInSandbox(context.Background(), sb, wt.path, wt.branch, wt.base); err != nil {
+		t.Fatalf("checkoutInSandbox: %v", err)
+	}
+	gitOut(t, upstream, "commit", "--allow-empty", "-q", "-m", "new upstream")
+	gitDir := filepath.Join(repo, ".git")
+	if err := os.Chmod(gitDir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(gitDir, 0o755) })
+	run := func(command string) (int, string) {
+		t.Helper()
+		res, err := sb.RunBash(context.Background(), sandbox.BashRequest{Command: "cd " + shellQuote(wt.path) + " && " + command, Timeout: time.Minute})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res.ExitCode, string(res.Stdout) + string(res.Stderr)
+	}
+	if code, out := run("git commit --allow-empty -q -m work"); code != 0 {
+		t.Errorf("commit: exit %d, %s", code, out)
+	}
+	if code, out := run("git fetch -q origin"); code != 0 {
+		t.Errorf("ordinary fetch: exit %d, %s", code, out)
+	}
+	if code, out := run("git fetch -q --deepen=1 origin"); code == 0 || !strings.Contains(out, "shallow.lock") {
+		t.Errorf("fetch --deepen: exit %d, %s; want a failure creating shallow.lock", code, out)
 	}
 }

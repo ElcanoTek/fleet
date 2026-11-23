@@ -106,3 +106,26 @@ func TestCheckWorktreeGitAcceptsAFreshRepository(t *testing.T) {
 		t.Errorf("without refs/: status=%v, want a warning", c.Status)
 	}
 }
+
+// TestCheckWorktreeGitNotesAShallowClone: a usable shallow repository is
+// ok, with the note that fetches changing its depth fail in worktree runs.
+func TestCheckWorktreeGitNotesAShallowClone(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	root := t.TempDir()
+	if out, err := exec.Command("git", "init", "-q", root).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v %s", err, out)
+	}
+	worktree.PinAtStartup(root)
+	if c := CheckWorktreeGit(context.Background(), root); c.Status != StatusOK || strings.Contains(c.Detail, "shallow") {
+		t.Fatalf("full clone: status=%v detail=%q", c.Status, c.Detail)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".git", "shallow"), []byte("0000000000000000000000000000000000000000\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c := CheckWorktreeGit(context.Background(), root)
+	if c.Status != StatusOK || !strings.HasSuffix(c.Detail, ShallowNote) {
+		t.Errorf("shallow clone: status=%v detail=%q, want ok with the shallow note", c.Status, c.Detail)
+	}
+}

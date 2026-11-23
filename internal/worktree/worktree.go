@@ -500,6 +500,23 @@ func takePackedRefsLock(ctx context.Context, gitDir *os.Root) (*os.File, error) 
 	}
 }
 
+// IsShallow reports whether root's repository is a shallow clone: its .git,
+// opened without following a link, holds a regular `shallow` file (Lstat
+// only; nothing is read). A worktree run's sandbox mounts .git's own
+// entries read-only, so fetches that change the shallow boundary
+// (--depth, --deepen, --shallow-since, --shallow-exclude, --unshallow) fail
+// there when git creates .git/shallow.lock; ordinary fetches do not write
+// it.
+func IsShallow(ctx context.Context, root string) bool {
+	gitDir, err := tools.OpenWorkspaceDir(ctx, root, filepath.Join(root, ".git"))
+	if err != nil {
+		return false
+	}
+	defer gitDir.Close()
+	info, err := gitDir.Lstat("shallow")
+	return err == nil && info.Mode().IsRegular()
+}
+
 // statNoFollow opens rel beneath root without following a link at any level
 // and returns what it opened.
 func statNoFollow(ctx context.Context, root, rel string) (os.FileInfo, error) {

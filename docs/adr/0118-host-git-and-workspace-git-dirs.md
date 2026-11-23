@@ -261,6 +261,14 @@ the regular-file check of decision 3.
   whole-root sandbox). The default image does not include git-lfs.
 - Submodules cannot be initialised in a worktree run: `git submodule update
   --init` writes `.git/config` and `.git/modules`, which are read-only there.
+- In a shallow workspace repository, ordinary fetches work in a worktree run
+  (they do not write `.git/shallow`, including a branch whose history
+  reaches behind the boundary), but fetches that change the depth —
+  `--depth`, `--deepen`, `--shallow-since`, `--shallow-exclude`,
+  `--unshallow` — fail creating `.git/shallow.lock` in the read-only `.git`.
+  `.git` itself stays read-only; an operator who needs full history
+  unshallows the repository on the host. The run's task prompt says so when
+  the repository is shallow, and `fleet doctor` notes it.
 - A branch a run creates from a remote-tracking ref needs `--no-track`, and
   `git push -u` / `--set-upstream` cannot record an upstream: both write
   `.git/config`. The run's task prompt says so.
