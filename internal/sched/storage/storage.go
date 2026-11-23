@@ -784,9 +784,11 @@ func (s *Storage) GetScheduledTasksCtx(ctx context.Context, cutoff time.Time, af
 //
 // logs and run_logs carry a plain task_id with no foreign key (see migrations
 // 001 and 058), so they are removed explicitly and in the same transaction —
-// exactly what CleanupOldRuns does for the retention sweep. Every other child
-// (webhook triggers, loop config, task memory, feedback, learned instructions)
-// declares ON DELETE CASCADE and goes with the row.
+// exactly what CleanupOldRuns does for the retention sweep. The other content
+// children (webhook triggers, task memory, feedback, learned instructions, A2A
+// push configs) declare ON DELETE CASCADE and go with the row. The task's
+// iterations stay: they are its spend record (migration 0210), so what the
+// task spent keeps counting toward budgets and usage after it is deleted.
 //
 // Returns false when no row matched, so a double-click reports "already gone"
 // rather than an error.
@@ -1403,22 +1405,47 @@ func (s *Storage) SetTaskOwner(ctx context.Context, taskID, ownerID uuid.UUID, c
 	if _, err := tx.ExecContext(ctx, `UPDATE tasks SET created_by = $2 WHERE id = ANY($1::uuid[])`, ids, ownerID); err != nil {
 		return nil, err
 	}
+	// The rows' recorded spend follows the new owner in the usage report and
+	// the budgets, as it did when those read the owner off the task row: each
+	// iteration carries its own copy of created_by (migration 0210) so that it
+	// keeps counting after the task is deleted. The task rows have been locked
+	// since the top of this transaction, so this statement's snapshot holds
+	// every iteration first written before then, and one written from now on
+	// waits for the commit (db.AddTaskIteration reads the task FOR SHARE).
+	if err := reattributeIterations(ctx, tx, ids, ownerID); err != nil {
+		return nil, err
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
 	return rows, nil
 }
 
+// reattributeIterations sets created_by on the recorded iterations of the
+// given tasks — the attribution copy the spend readers group by (see
+// db.AddTaskIteration) — so an owner reassignment moves their spend with
+// them.
+func reattributeIterations(ctx context.Context, tx *sql.Tx, taskIDs []string, ownerID uuid.UUID) error {
+	_, err := tx.ExecContext(ctx, `UPDATE task_iterations SET created_by = $2 WHERE task_id = ANY($1::uuid[])`, taskIDs, ownerID)
+	return err
+}
+
 // SetTaskLineageOwner reassigns taskID and its forward recurrence chain via
 // SetTaskOwner, and additionally attributes any unowned (created_by IS NULL)
 // historical occurrences in the same lineage or backward previous_occurrence_id
-// chain.
+// chain — their recorded iterations included, in the same transaction, so the
+// usage report and the budgets count that spend for the owner.
 func (s *Storage) SetTaskLineageOwner(ctx context.Context, taskID, ownerID uuid.UUID) ([]uuid.UUID, error) {
 	updated, err := s.SetTaskOwner(ctx, taskID, ownerID, nil)
 	if err != nil {
 		return nil, err
 	}
-	rows, err := s.db.Conn().QueryContext(ctx, `
+	tx, err := s.db.BeginTx(ctx)
+	if err != nil {
+		return updated, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	rows, err := tx.QueryContext(ctx, `
 		WITH RECURSIVE target AS (
 			SELECT id, COALESCE(NULLIF(lineage_id::text, ''), id::text) AS lin, previous_occurrence_id
 			FROM tasks WHERE id = $1
@@ -1443,22 +1470,42 @@ func (s *Storage) SetTaskLineageOwner(ctx context.Context, taskID, ownerID uuid.
 	if err != nil {
 		return updated, err
 	}
-	defer rows.Close()
+	var owned []string
+	for rows.Next() {
+		var idStr string
+		if err := rows.Scan(&idStr); err != nil {
+			_ = rows.Close()
+			return updated, err
+		}
+		owned = append(owned, idStr)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return updated, err
+	}
+	_ = rows.Close()
+	// A statement of its own, after the UPDATE above locked the rows, for the
+	// reason SetTaskOwner gives: its snapshot holds every iteration written
+	// before the lock, and later first writes wait for the commit.
+	if len(owned) > 0 {
+		if err := reattributeIterations(ctx, tx, owned, ownerID); err != nil {
+			return updated, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return updated, err
+	}
 	seen := make(map[uuid.UUID]bool, len(updated))
 	for _, id := range updated {
 		seen[id] = true
 	}
-	for rows.Next() {
-		var idStr string
-		if err := rows.Scan(&idStr); err != nil {
-			return updated, err
-		}
+	for _, idStr := range owned {
 		if id, perr := uuid.Parse(idStr); perr == nil && !seen[id] {
 			seen[id] = true
 			updated = append(updated, id)
 		}
 	}
-	return updated, rows.Err()
+	return updated, nil
 }
 
 // taskOwnerChainRows returns the rows SetTaskOwner rewrites for taskID — the
