@@ -168,49 +168,39 @@ func (s *Store) appendHistoryProvenanceTx(ctx context.Context, tx *sql.Tx, convI
 		return nil, err
 	}
 
+	// Ids drawn first and written explicitly, so ids[i] is entries[i]'s
+	// message by construction (reserveMessageIDs).
+	ids, err := reserveMessageIDs(ctx, tx, len(entries))
+	if err != nil {
+		return nil, err
+	}
 	var b strings.Builder
-	b.WriteString(`INSERT INTO messages (conversation_id, role, type, content, created_at, turn_id, turn_seq, injected_context) VALUES `)
-	const cols = 8
+	b.WriteString(`INSERT INTO messages (id, conversation_id, role, type, content, created_at, turn_id, turn_seq, injected_context) VALUES `)
+	const cols = 9
 	args := make([]any, 0, len(entries)*cols)
 	for i, e := range entries {
 		if i > 0 {
 			b.WriteString(", ")
 		}
 		base := i*cols + 1
-		fmt.Fprintf(&b, "($%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d)",
-			base, base+1, base+2, base+3, base+4, base+5, base+6, base+7)
+		fmt.Fprintf(&b, "($%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d)",
+			base, base+1, base+2, base+3, base+4, base+5, base+6, base+7, base+8)
 		// This is the write that matters for injected_context: the turn's user
 		// entry (turn_seq 1) carries the server-derived suffix the model was
 		// shown, stored beside the user's own text rather than inside it
 		// (migration 056 / ADR-0058).
-		args = append(args, convID, e.Role, e.Type, string(e.Content), now, turnID, startSeq+int64(i), e.InjectedContext)
+		args = append(args, ids[i], convID, e.Role, e.Type, string(e.Content), now, turnID, startSeq+int64(i), e.InjectedContext)
 	}
-	b.WriteString(" RETURNING id")
-	ids := make([]int64, 0, len(entries))
-	rows, err := tx.QueryContext(ctx, b.String(), args...)
-	if err != nil {
+	if _, err := tx.ExecContext(ctx, b.String(), args...); err != nil {
 		return nil, err
-	}
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
-			_ = rows.Close()
-			return nil, err
-		}
-		ids = append(ids, id)
-	}
-	if err := rows.Err(); err != nil {
-		_ = rows.Close()
-		return nil, err
-	}
-	_ = rows.Close()
-	if len(ids) != len(entries) {
-		return nil, fmt.Errorf("turn projection: inserted %d messages but got %d ids", len(entries), len(ids))
 	}
 	if s.searchEnabled {
 		if err := insertSearchContent(ctx, tx, convID, now, entries, ids); err != nil {
 			return nil, err
 		}
+	}
+	if err := insertMessageUploads(ctx, tx, historyUploadRefs(entries, ids)); err != nil {
+		return nil, err
 	}
 	return ids, nil
 }

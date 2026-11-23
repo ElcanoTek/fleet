@@ -97,14 +97,22 @@ func (s *Server) RunMaintenance(ctx context.Context) {
 func (s *Server) maintenancePass(ctx context.Context, hourly bool) {
 	s.sweepRetention(ctx)
 
-	// Attachment files whose conversation TTL has elapsed. Walks the tree, so
-	// this is the expensive step and the main reason the per-turn cadence was
-	// worth removing.
-	if removed, err := store.SweepAttachments(s.cfg.EmailAttachmentDir,
-		time.Duration(s.cfg.ConversationTTL)*24*time.Hour); err != nil {
+	// Attachment files older than the conversation window that nothing kept
+	// still uses: an upload stays while a conversation that still exists
+	// refers to it, and the Multiplayer private stash goes with its
+	// conversation (store.AttachmentKeeper). Ordered after sweepRetention so
+	// the uploads of chats that expired on THIS pass go on the same pass.
+	// Walks the tree, so this is the expensive step and the main reason the
+	// per-turn cadence was worth removing.
+	// A partial failure still reports what WAS removed.
+	removedFiles, err := store.SweepAttachments(s.cfg.EmailAttachmentDir,
+		time.Duration(s.cfg.ConversationTTL)*24*time.Hour,
+		store.AttachmentKeeper(ctx, s.store, s.cfg.EmailAttachmentDir))
+	if err != nil {
 		logging.From(ctx).Error("maintenance: attachment sweep failed", "err", err)
-	} else if removed > 0 {
-		logging.From(ctx).Info("maintenance: attachment sweep removed files", "removed", removed)
+	}
+	if removedFiles > 0 {
+		logging.From(ctx).Info("maintenance: attachment sweep removed files", "removed", removedFiles)
 	}
 
 	// Per-conversation workspace dirs whose conversation row is gone (TTL,

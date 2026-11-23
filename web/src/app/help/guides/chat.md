@@ -1524,8 +1524,10 @@ them keep their copies.
 > a per-person cap on how many temporary conversations are kept at all (500 by
 > default): past it the least recently active go first, and the sidebar tells
 > you when you are close. Pinning, archiving, filing into a project, or
-> sharing exempts a conversation from both. Nothing is sent by email, and a
-> deleted conversation cannot be brought back.
+> sharing exempts a conversation from both. The files and images you send in
+> a conversation are kept for as long as the conversation is; a file you
+> attach but never send is removed after the same period. Nothing is sent by
+> email, and a deleted conversation cannot be brought back.
 
 ### Ordering your chats
 

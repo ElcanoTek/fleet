@@ -8,9 +8,16 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 )
+
+// liveTaskStatuses are the statuses that keep a task's job live: it may still
+// run (or be replayed, for dead_lettered), so the job's workspace
+// (SweepTaskWorkspaces) and the files it names in temp_uploads
+// (TempUploadKeeper) are kept.
+var liveTaskStatuses = []string{"pending", "scheduled", "leased", "running", "paused_awaiting_input", "paused_awaiting_wake", "dead_lettered"}
 
 const (
 	// taskWorkspaceDefaultRetention caps how long finished task lineage
@@ -144,8 +151,8 @@ func (s *Storage) loadTaskWorkspaceState(ctx context.Context) (
 		}
 		id = strings.ToLower(strings.TrimSpace(id))
 		lineage = strings.ToLower(strings.TrimSpace(lineage))
-		switch status {
-		case "pending", "scheduled", "leased", "running", "paused_awaiting_input", "paused_awaiting_wake", "dead_lettered":
+		switch {
+		case slices.Contains(liveTaskStatuses, status):
 			activeTasks[id] = true
 			activeLineages[lineage] = true
 			activeLineages[id] = true

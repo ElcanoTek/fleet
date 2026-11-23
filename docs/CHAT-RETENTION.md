@@ -87,15 +87,38 @@ The orchestrator's upload staging sweep (`temp_uploads`) borrowed the
 conversation window as its age limit. Left alone, raising the chat window to
 90 days would have kept six times as many staging files on disk, which is the
 opposite of the goal. It now reads `FLEET_SCRATCH_RETENTION_DAYS` (default 14,
-its old effective value).
+its old effective value). The clock applies only to files no kept job names:
+a task copies its attached files from `temp_uploads` at the start of every
+run, so a file stays while a task of a kept job names it in `tasks.files`
+(`storage.TempUploadKeeper`):
+
+- a job that can still run — a pending, scheduled, leased, running, paused or
+  dead-lettered task, the same bound `storage.SweepTaskWorkspaces` keeps a
+  job's workspace by. That covers a task scheduled further out than the window
+  and a dead-lettered task awaiting replay;
+- a recurring job whose finished occurrence has not spawned its next one yet;
+- a job one of whose tasks finished within the window (14 days by default),
+  so a run that failed can be fixed and rerun with its files.
+
+Before, a weekly task lost its attachment after 14 days and every later run
+failed to stage its inputs. A job that finished longer ago than the window
+keeps nothing: rerunning or cloning it then may find its input gone and need
+the file attached again.
 
 Finished task and mcp-run workspaces are unaffected either way: their sweep is
 handed the conversation window but has a fixed seven-day ceiling of its own
 (`storage.SweepTaskWorkspaces`), so they are removed after seven days as
 before.
 
-Chat attachment uploads (`EMAIL_ATTACHMENT_DIR`) still follow the conversation
-window, deliberately: an upload has to outlive the chat that refers to it.
+Chat attachment uploads (`EMAIL_ATTACHMENT_DIR`) follow the chats that refer
+to them, not the age of the file: an image stays while a conversation that
+still exists names it in a message, so a pinned, archived, project, shared or
+otherwise kept chat — or a temporary chat still in use — keeps its images, and
+a chat that is deleted releases them. Only an upload never sent is removed by
+age, after the conversation window. The rule and its table are in
+[ATTACHMENT-SCOPING.md](ATTACHMENT-SCOPING.md#how-long-an-upload-lives). Before,
+every upload was removed once it was older than the window, so a kept chat
+silently stopped showing the model its images.
 
 ## What this costs
 

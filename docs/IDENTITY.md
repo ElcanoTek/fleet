@@ -181,7 +181,13 @@ advises on each demoted split admin, unknown role and duplicate username in it.
     [PRINCIPAL.md](PRINCIPAL.md));
   - on disk, under `EMAIL_ATTACHMENT_DIR`: its uploads and its private
     workspace files in multiplayer chats. Its chats' workspace directories are
-    reaped by the orphan-workspace sweep.
+    reaped by the orphan-workspace sweep. Its uploads go even where a kept
+    chat still refers to them (the references the hourly cleanup keeps
+    uploads by, `chat.message_uploads`, see
+    [UPLOADS-AND-STORAGE.md](UPLOADS-AND-STORAGE.md)): its own chats go with
+    it, and an image it sent in someone else's multiplayer chat was its own
+    upload, so that chat keeps the message without the image — later turns
+    replay the chat without it, as they do for an upload the cleanup removed.
 
   **Work in flight.** The web route first refuses what the deletion would
   refuse (no such account: 404; a team-shared project still owned: 409),

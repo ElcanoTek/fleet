@@ -454,6 +454,9 @@ func httpErrorForSharedFile(w http.ResponseWriter, err error) {
 // staged root exists when kubernetes pods mount its subPath) and the hourly
 // maintenance pass keeps calling it. Exported for exactly those two drivers.
 func (s *Server) SyncSharedFiles(ctx context.Context) error {
+	if s.beforeSharedFilesSync != nil {
+		s.beforeSharedFilesSync()
+	}
 	s.sharedFilesMu.Lock()
 	defer s.sharedFilesMu.Unlock()
 	// The manifest read and the reconciliation run under the store's namespace

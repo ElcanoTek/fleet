@@ -554,3 +554,51 @@ func TestSharedFilesBatchUploadRollsBackOnMidLoopFailure(t *testing.T) {
 		}
 	}
 }
+
+// TestSharedFilesSyncKeepsAFileAddedWhileItWaited: the maintenance pass waits
+// for an upload in progress (sharedFilesMu) and must not then remove the
+// staged copy of the file that upload added.
+func TestSharedFilesSyncKeepsAFileAddedWhileItWaited(t *testing.T) {
+	t.Parallel()
+
+	srv, _ := sharedFilesFixture(t)
+	ctx := context.Background()
+	lib := srv.sharedFilesLibrary()
+	if err := lib.EnsureStagedRoot(); err != nil {
+		t.Fatal(err)
+	}
+
+	// An upload holds the lock while it writes the row and stages the file;
+	// the pass reaches the lock while it is held.
+	srv.sharedFilesMu.Lock()
+	reached := make(chan struct{})
+	srv.beforeSharedFilesSync = func() { close(reached) }
+	done := make(chan error, 1)
+	go func() { done <- srv.SyncSharedFiles(ctx) }()
+	<-reached
+	size, sha, err := lib.SaveCanonical("addedwhilewaiting", strings.NewReader("fresh"))
+	if err != nil {
+		srv.sharedFilesMu.Unlock()
+		t.Fatal(err)
+	}
+	row, err := srv.store.CreateSharedFile(ctx, store.SharedFile{
+		ID: "addedwhilewaiting", Name: "fresh.txt", SizeBytes: size, SHA256: sha, UploadedBy: "admin@x",
+	})
+	if err == nil {
+		err = lib.Stage(row)
+	}
+	srv.sharedFilesMu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	staged, err := lib.StagedPath(row)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(staged); err != nil {
+		t.Errorf("the staged copy of a file added while the sync waited was removed: %v", err)
+	}
+}

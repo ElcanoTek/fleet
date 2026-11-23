@@ -189,6 +189,9 @@ type Server struct {
 	// never observe — and "repair" — a mutation's intermediate on-disk state.
 	// See internal/httpapi/shared_files.go.
 	sharedFilesMu sync.Mutex
+	// beforeSharedFilesSync is a test seam run in SyncSharedFiles just before
+	// it takes sharedFilesMu; nil in production.
+	beforeSharedFilesSync func()
 	// stopEpochs records the last Stop scope=all boundary per conversation
 	// (#785): the input-queue acceptance counter's value when the Stop began
 	// (#1477), so it compares exactly with each row's AcceptedSeq and is
@@ -285,6 +288,13 @@ type Server struct {
 	// sweepTaskWorkspaces (optional) sweeps completed/orphaned task and mcp-run
 	// workspace directories under the workspace root.
 	sweepTaskWorkspaces func(ctx context.Context, workspaceRoot string, olderThan time.Duration) (int, error)
+	// tempUploadSweeper (optional) is the scheduler's sweep of the
+	// orchestrator's temp_uploads (storage.SweepTempUploadsWith with
+	// storage.TempUploadKeeper): uploads older than window that no kept job
+	// names go, each with its sidecars. It returns how many uploads it
+	// removed. Unset, the admin cleanup leaves temp_uploads alone, since it
+	// cannot tell which files a job still needs.
+	tempUploadSweeper func(ctx context.Context, tempDir string, window time.Duration) int
 	// taskOutliers (optional) returns top background tasks by cost, tokens,
 	// iterations, and failure state for /analytics.
 	taskOutliers func(ctx context.Context, limit int) ([]TaskOutlierStat, error)
@@ -648,6 +658,13 @@ func WithSchedPing(fn func(context.Context) error) Option {
 // MCP-run workspace directories alongside conversation workspaces.
 func WithTaskWorkspaceSweeper(fn func(ctx context.Context, workspaceRoot string, olderThan time.Duration) (int, error)) Option {
 	return func(s *Server) { s.sweepTaskWorkspaces = fn }
+}
+
+// WithTempUploadSweeper injects the scheduler's sweep of temp_uploads so the
+// admin storage cleanup applies the same rule as the hourly one: the input
+// files of kept jobs stay, and an upload goes with its sidecars.
+func WithTempUploadSweeper(fn func(ctx context.Context, tempDir string, window time.Duration) int) Option {
+	return func(s *Server) { s.tempUploadSweeper = fn }
 }
 
 // WithTaskOutlierProvider injects the scheduler store's task outlier query into

@@ -22,13 +22,15 @@ import (
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/safe"
+	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/tools"
 )
 
 // Per-file size cap fallback, used only if the config carries no value.
 // The real limit is cfg.UploadMaxBytes (FLEET_UPLOAD_MAX_BYTES, default
 // 1 GiB) — generous on purpose, since the SweepAttachments TTL reclaims
-// unused uploads and the only real constraint is disk pressure on the host.
+// uploads no message refers to (and those of chats that are gone) and the
+// only real constraint is disk pressure on the host.
 const defaultMaxUploadBytes int64 = 1 << 30 // 1 GiB
 
 // uploadedAttachment is the per-file metadata we return to the caller
@@ -67,7 +69,7 @@ type uploadedAttachment struct {
 // The segment is accountdelete.Digest, the one digest account deletion and its
 // maintenance sweep remove by.
 func userUploadsRoot(baseDir, userEmail string) string {
-	return filepath.Join(baseDir, "uploads", accountdelete.Digest(userEmail))
+	return filepath.Join(baseDir, store.AttachmentUploadsDir, accountdelete.Digest(userEmail))
 }
 
 // postAttachments accepts one-or-more files via multipart/form-data under the
