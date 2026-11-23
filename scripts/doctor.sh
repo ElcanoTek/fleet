@@ -105,7 +105,8 @@ deploy/, the 0600 env files, the fleet-managed /etc/caddy/Caddyfile's layout
 as 127.0.0.1,::1 when absent and the backends are on loopback; an operator's
 value is left alone), APP_SESSION_SECRET for the web UI fleet serves, the
 retired Next.js fleet-web tier (retired when still installed), service health
-(postgresql, fleet, caddy), the /healthz + /readyz probes and https://<domain>/api-info THROUGH
+(postgresql, fleet, caddy), the /livez + /readyz probes (a model whose circuit
+breaker is open, read from /healthz, is advised) and https://<domain>/api-info THROUGH
 caddy, the scheduled-backup and host-maintenance
 timers, free disk on the data dir + image store, and a sandbox smoke (podman run
 as the fleet user). Reports when the source checkout is behind upstream but never
@@ -235,7 +236,7 @@ if [[ "$DRY_RUN" == "1" ]]; then
   info "[dry-run] 3/9 Rootless podman: ${SERVICE_USER} user + subuid/subgid ranges, ${SERVICE_HOME} + ~/.config/containers ownership, the client bundle service-owned and outside the checkout (a bare install runs on the staged copy under ${SERVICE_HOME}/bundle), containers.conf (cgroupfs), /run/${SERVICE_USER}, podman info as ${SERVICE_USER} (a stale pause process is reported with what to do — doctor never runs podman system migrate, which deletes a live fleet's sandbox pool)"
   info "[dry-run] 4/9 Installed artifacts: ${SERVICE_NAME}.service + the fleet-backup and fleet-maintenance service/timer pairs' functional drift vs ${SRC_DIR}/deploy (reinstall + daemon-reload), the retired Next.js tier (fleet-web.service, its drop-in, start shim and /opt/fleet/web — stopped, disabled and removed when present; ADR-0091), /etc/profile.d/fleet-motd.sh (login banner hook), removal of the retired fleet-admin shim, /usr/local/bin/fleet symlink → ${INSTALL_DIR}/fleet, the binary present with no host executor and a web bundle (fleet version --build-info), fleet.prev kept for \`fleet release rollback\`"
   info "[dry-run] 5/9 Configuration: ${ENV_FILE} exists root-owned 0600 with OPENROUTER_API_KEY + DB DSNs; APP_SESSION_SECRET set (carried over from ${WEB_ENV_FILE}, else generated, when absent and the web UI is on); ${FLEET_CADDYFILE:-/etc/caddy/Caddyfile} (when fleet-managed) matches scripts/lib/caddyfile.sh — /v1/*, /api-info, agent card, /triggers/* → orchestrator, /webhooks/* → chat (rewrite from the renderer, backup kept, caddy reload) and FLEET_TRUSTED_PROXIES in ${ENV_FILE} (added as ${CADDY_TRUSTED_PROXIES} when absent behind that front and both backends are on loopback; an advisory otherwise; an operator's value is left alone); an operator-managed Caddyfile only gets an advisory when it routes no /v1; an advisory when sshd -T says passwordauthentication/permitrootlogin yes (never edits sshd)"
-  info "[dry-run] 6/9 Services: ${SERVICE_NAME} active; postgresql/caddy active when enabled (systemctl start), then /healthz + /readyz respond, then https://<caddy domain>/api-info answers THROUGH caddy (--resolve pinned to 127.0.0.1) when caddy is active, then the running server's record of MCP tool schema findings (fleet mcp schema-issues: invalid = withheld from the model, rewritten = older JSON Schema draft translated) is read and each finding advised"
+  info "[dry-run] 6/9 Services: ${SERVICE_NAME} active; postgresql/caddy active when enabled (systemctl start), then /livez + /readyz respond (a model with an open circuit breaker on /healthz is advised, not failed), then https://<caddy domain>/api-info answers THROUGH caddy (--resolve pinned to 127.0.0.1) when caddy is active, then the running server's record of MCP tool schema findings (fleet mcp schema-issues: invalid = withheld from the model, rewritten = older JSON Schema draft translated) is read and each finding advised"
   info "[dry-run] 7/9 Scheduled maintenance: ${BACKUP_TIMER} installed + enabled + active (advisory when absent) and ${BACKUP_SERVICE}'s last run succeeded; ${MAINT_TIMER} likewise; free space on the data dir + the podman image store above the disk floor; disk hygiene: the root package cache (dnf — filled as root, never reached by the maintenance timer) reclaimed above 1 GiB, the journal capped at 1G via journald.conf.d/60-fleet-journal-cap.conf (persistent + volatile) unless the operator set a limit in journald's merged config, and images left in root's podman store reported"
   info "[dry-run] 8/9 Sandbox smoke: podman run --rm --network=none <sandbox image> true as ${SERVICE_USER}"
   info "[dry-run] 9/9 Release + checkout: the installed release vs the newest published one (fleet release latest), the checkout's release vs the installed binary's, and the paths that make the checkout read '.dirty' (fix stays 'fleet update' — doctor never pulls or installs)"
@@ -918,11 +919,14 @@ else
   fi
 fi
 
-# /healthz answers on the chat listener; /readyz (the deep probe: DBs + sandbox)
-# is intercepted on the same server. FLEET_SERVER_ADDR defaults to 127.0.0.1:8080.
+# The probes answer on the chat listener: /livez (the process serves HTTP) and
+# /readyz (the deep probe: DBs + sandbox + disk). Not /healthz: it answers 503
+# while any model's circuit breaker is open, which is a provider problem, not
+# this box's, and would read here as "not responding". FLEET_SERVER_ADDR
+# defaults to 127.0.0.1:8080.
 server_addr="$(env_get FLEET_SERVER_ADDR)"
 server_addr="${server_addr:-127.0.0.1:8080}"
-for probe in healthz readyz; do
+for probe in livez readyz; do
   probe_ok=0
   # Give a just-(re)started server time: readyz gates on DB migration + sandbox
   # pool warm-up (the unit's TimeoutStartSec is 120s; 30s covers the common case).
@@ -940,7 +944,17 @@ for probe in healthz readyz; do
   fi
 done
 
-# The public API THROUGH the TLS front. /healthz above proves the backend is up
+# /healthz names a model whose circuit breaker is open (five provider errors in
+# five minutes): a provider incident, or a delisted model a task keeps calling.
+# Runs fall back to another model meanwhile and doctor cannot repair a
+# provider, so this is advice, not a failure.
+healthz_body="$(curl -sS --max-time 10 "http://${server_addr}/healthz" 2>/dev/null || true)"
+if [[ "$healthz_body" == *'"status":"degraded"'* ]]; then
+  open_model="$(sed -n 's/.*"model":"\([^"]*\)".*/\1/p' <<<"$healthz_body")"
+  advise "model ${open_model:-?} has an open circuit breaker (repeated provider errors); runs fall back to another model meanwhile — check the provider, or the model a recurring task names (fleet logs: circuit_open)"
+fi
+
+# The public API THROUGH the TLS front. /livez above proves the backend is up
 # on loopback; this proves caddy routes to it: /api-info is unauthenticated,
 # unversioned-forever and answered by the orchestrator only, so anything but
 # its JSON here is the web tier catching a path that should never have reached

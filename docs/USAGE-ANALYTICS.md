@@ -22,7 +22,7 @@ Aggregation happens strictly over rows the governed core already writes:
 
 | Source | Table | Meters | Dimensions |
 |---|---|---|---|
-| Scheduled tasks (sched DB) | `task_iterations` ⋈ `tasks` (⟕ `users`) | `cost_usd`, `prompt_tokens`, `completion_tokens` per iteration | creator (`created_by` → username, UUID fallback for deleted users), API key (`created_by_key_id`), model, iteration `started_at` |
+| Scheduled tasks (sched DB) | `task_iterations` (⟕ `users`) | `cost_usd`, `prompt_tokens`, `completion_tokens` per iteration | creator (`created_by` → username, UUID fallback for deleted users), API key (`created_by_key_id`), model — all three carried on the iteration row (below) — and iteration `started_at` |
 | Interactive chat (chat store DB) | `turn_metrics` (⟕ `conversations` ⟕ `projects`) | `cost_usd`, `prompt_tokens`, `completion_tokens`, `cached_tokens` per turn | user email, project (id + name), conversation model, turn `completed_at` |
 
 - `internal/sched/db/usage.go` — `Database.TaskUsage(ctx, from, to, groupBy)`.
@@ -41,6 +41,40 @@ Aggregation happens strictly over rows the governed core already writes:
   expiring transcript content must not erase already-incurred accounting.
   Model/project attribution falls into the documented empty bucket once the
   joined conversation is gone; user, cost, token, and time meters remain.
+- Task usage survives task deletion and retention the same way (migration
+  0210). Spend recorded for a task counts toward budgets and usage after the
+  task is deleted — by whoever may delete it
+  (`DELETE /tasks/{id}/permanent`), by `POST /tasks/cleanup`, or by the daily
+  retention sweep (`FLEET_RUN_LOG_RETENTION_DAYS`, which can be shorter than a
+  monthly budget window). `task_iterations` has no foreign key to `tasks`; `task_id`
+  stays as provenance, and the row carries the attribution the readers group
+  by — the task's `created_by`, `created_by_key_id` and `model` — copied from
+  the task row by the insert that first writes the iteration
+  (`db.AddTaskIteration`), so while the task row exists no caller of
+  `AddTaskIteration` can leave it out; for a task already deleted, both
+  production callers (the single-pass and the looped run in
+  `internal/scheduledrun`) pass the runner's copy of it (below). The readers
+  (`TaskUsage`, `TaskUsageByUserDay`, and through them the budgets, the CSV
+  exports and the adoption report) read the iteration row alone and never join
+  `tasks`. Unlike chat, nothing degrades to the empty bucket: user, key and
+  model stay. The task's logs, transcripts and other content still go; the
+  iteration row holds only meters, timestamps, a session id and an
+  exit-condition label (`regex:matched`, `shell:exit_1`, …).
+  `TestSpendRecordsOutliveTheirParents` and `TestNoCodeDeletesSpendRecords`
+  (`internal/migrations`) fail if a foreign key on `task_iterations` or
+  `turn_metrics` cascades (or sets NULL) on delete, if a database function
+  deletes from either, or if Go code, a new migration, a script or a deploy
+  manifest does (`DELETE FROM` one, or a `TRUNCATE` naming one; SQL assembled
+  at run time from pieces is not caught by the source scan).
+  `TestSpendRecordDeletePattern` pins what counts. Two kinds of work go
+  through the guard as follows. Erasing personal data from these records
+  rewrites the identifying column (`turn_metrics.user_email`,
+  `task_iterations.created_by`) with an `UPDATE`, which the guard allows, and
+  keeps the meters. Pruning spend old enough that no budget window or report
+  range reaches it is a reviewed exception: an entry with its written reason
+  in the test's allowlist (`spendRecordDeleteAllowedFiles` /
+  `spendRecordDeleteAllowedFunctions`) and a line here saying what is pruned
+  and when.
 
 The two sources live in **separate stores** (schemas `chat` and `sched`, ADR-0098), so the merge happens in the
 handler (`internal/sched/handlers/usage.go`), keyed on the bucket key, with
@@ -105,11 +139,58 @@ reduced opacity.
   `group_by=key` puts all chat spend under the empty key (chat has no API-key
   dimension); `cached_tokens` is chat-only (`task_iterations` does not persist
   a cached-token count).
-- **No index was added** for the `task_iterations.started_at` /
-  `turn_metrics.completed_at` range scans. At the platform's stated scale
-  (10–20 users on one box) the aggregations return in milliseconds;
-  `turn_metrics` already has `(user_email, completed_at)`. Revisit if the
-  tables grow past that envelope.
+- **Attribution is the task's at the time the iteration was first written.**
+  An admin owner reassignment (`PUT /tasks/{id}/owner`, `fleet sched task
+  set-owner`, with `--lineage` for unowned history) moves the reassigned
+  rows' recorded spend with them, as it did when the readers joined `tasks`;
+  occurrences it leaves alone keep their owner's spend. An iteration first
+  written while a reassignment is in flight waits for it and records the new
+  owner (the insert reads the task row `FOR SHARE`). Other edits — a model
+  change on a task that has already run, `fleet import --overwrite` restoring
+  a different creator onto a row — leave spend already recorded where it is,
+  with the model and creator it ran under. A reassignment counts by when the
+  spend was incurred, not when it moved: reassigning a task that ran inside
+  the current window puts that spend in the new owner's current budget
+  window. The top tasks list labels each task with the same attribution (the
+  latest iteration's owner and model).
+- **Account deletion is keyed differently on the two sides.** Chat spend is
+  keyed by email, so an account deleted and re-created under the same email
+  counts the deleted account's chat spend in its window. Task spend is keyed
+  by account id (shown under that id once the account is gone), so a
+  re-created account, with its new id, does not count the deleted one's task
+  spend.
+- **A task deleted while its last run is still finishing** keeps that run's
+  attribution. Stop marks a task `cancelled` at once while the run tears
+  down, and deleting refuses only a leased or running task, so a task can be
+  stopped and deleted before its last run has recorded its iteration. The
+  iteration then finds no task row and takes the runner's copy of the task's
+  creator, key and model (carried on `models.TaskIteration`; a task row that
+  is still there always wins), so the spend counts for them. The same holds
+  for a run whose task is deleted as it is claimed.
+- **The legacy importer keeps task ids** (`fleet import`, docs/LEGACY-IMPORT.md).
+  Re-importing a task that was deleted brings back the same id, and its old
+  iterations — never deleted — attach to it again: they show in its iteration
+  list and in the top tasks list, under the attribution they were recorded
+  with.
+- **Rolling 0210 back** restores the cascading key as `NOT VALID`: the
+  iterations of tasks deleted in between stay in the table, but the previous
+  release joins `tasks` and does not count them, and their attribution is not
+  recovered if 0210 is applied again.
+- **The top tasks list on the Analytics page lists tasks that still exist**
+  (each row links to the task), like its top conversations list; a deleted
+  task's spend is in the usage report and the budgets, not in that list.
+- **Iteration rows are never pruned**, like `turn_metrics`: both tables grow
+  with all history (a few small rows per run or turn).
+- **Indexes for the window scans.** Migration 0210 adds
+  `idx_task_iterations_started_at`: every report and every budget check on
+  task create aggregates a `started_at` window of a table that now keeps all
+  history, and the index keeps that a range scan (on 200,000 seeded rows, a
+  day window read 216 rows in 0.1 ms and a month 8,927 rows in under 2 ms,
+  both by index). The attribution columns are grouped by, not filtered on, so
+  they carry no index. No index was added for `turn_metrics.completed_at`:
+  `turn_metrics` has `(user_email, completed_at)`, and at the platform's
+  stated scale (10–20 users on one box) its aggregations return in
+  milliseconds. Revisit if it grows past that envelope.
 
 ## Deviations from the issue
 
@@ -180,9 +261,11 @@ curl -X POST "$FLEET/admin/budgets" -H "X-API-Key: $ADMIN_KEY" \
 - Spend is **never accumulated on the budget row**. Every check recomputes the
   principal's current-window spend from the part-1 aggregations
   (`Storage.TaskUsage` + the chat `turn_metrics` seam) — no second accounting
-  path exists to drift. Budget principals are the part-1 bucket keys: the
-  account's email (user) and the API key id (key); there is no project scope
-  (see the honest scope below).
+  path exists to drift. Both meters outlive what they describe, so deleting a
+  task or a chat, or a retention sweep, never lowers a principal's window
+  spend (part 1, "Task usage survives task deletion"). Budget principals are
+  the part-1 bucket keys: the account's email (user) and the API key id
+  (key); there is no project scope (see the honest scope below).
 
 ### Enforcement — one gate, every create path
 
@@ -321,7 +404,7 @@ is why it is a separate read model rather than a seventh `group_by`.
 The same two meters as part 1, aggregated on **(user, UTC day)** at once:
 
 - `internal/sched/db/usage.go` — `Database.TaskUsageByUserDay(ctx, from, to)`
-  over `task_iterations ⋈ tasks ⟕ users` (same provenance rules as
+  over `task_iterations ⟕ users` (same provenance rules as
   `TaskUsage`: deleted creators degrade to their UUID, orphan rows land under
   the empty user, every iteration counts).
 - `internal/store/usage.go` — `Store.UsageByUserDay(ctx, from, to)` over

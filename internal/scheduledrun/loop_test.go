@@ -257,14 +257,21 @@ func TestRunLoop_CancelledBeforeStart(t *testing.T) {
 // task-side ledger the usage read model and budget enforcer aggregate, so a
 // plain task that wrote no row accrued $0 against every budget.
 func TestSinglePassIteration(t *testing.T) {
-	taskID := uuid.New()
+	taskID, owner := uuid.New(), uuid.New()
+	key, model := "key-1", "model-a"
+	task := &models.Task{ID: taskID, CreatedBy: &owner, CreatedByKeyID: &key, Model: &model}
 	start := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
 	end := start.Add(90 * time.Second)
 	sess := &models.LogSession{ID: "s-1", Cost: 0.42, PromptTokens: 1200, CompletionTokens: 300}
 
-	ok := singlePassIteration(taskID, start, end, sess, nil)
+	ok := singlePassIteration(task, start, end, sess, nil)
 	if ok.TaskID != taskID || ok.IterationNumber != 1 || ok.Status != models.IterationStatusPassed {
 		t.Fatalf("passed row = %+v", ok)
+	}
+	// The runner's copy of the attribution travels with the row, for a task
+	// row that is gone by the time it is written.
+	if ok.CreatedBy != &owner || ok.CreatedByKeyID != &key || ok.Model != &model {
+		t.Fatalf("attribution not carried: %v %v %v", ok.CreatedBy, ok.CreatedByKeyID, ok.Model)
 	}
 	if ok.WorkerSessionID != "s-1" || ok.CostUSD != 0.42 || ok.PromptTokens != 1200 || ok.CompletionTokens != 300 {
 		t.Fatalf("spend not carried: %+v", ok)
@@ -273,13 +280,32 @@ func TestSinglePassIteration(t *testing.T) {
 		t.Fatalf("timestamps: started=%v completed=%v", ok.StartedAt, ok.CompletedAt)
 	}
 
-	failed := singlePassIteration(taskID, start, end, sess, errors.New("boom"))
+	failed := singlePassIteration(task, start, end, sess, errors.New("boom"))
 	if failed.Status != models.IterationStatusFailed || failed.CostUSD != 0.42 {
 		t.Fatalf("failed row = %+v (spend must still count — it was spent)", failed)
 	}
 
-	none := singlePassIteration(taskID, start, end, nil, errors.New("sandbox never started"))
+	none := singlePassIteration(task, start, end, nil, errors.New("sandbox never started"))
 	if none.Status != models.IterationStatusFailed || none.CostUSD != 0 || none.WorkerSessionID != "" {
 		t.Fatalf("nil-session row = %+v", none)
+	}
+	if none.CreatedBy != &owner {
+		t.Fatalf("nil-session row lost the attribution: %+v", none)
+	}
+}
+
+// TestWithTaskAttribution: the looped run's record closure stamps every
+// iteration it records with the runner's copy of the task's attribution.
+func TestWithTaskAttribution(t *testing.T) {
+	owner := uuid.New()
+	key, model := "key-2", "model-b"
+	task := &models.Task{ID: uuid.New(), CreatedBy: &owner, CreatedByKeyID: &key, Model: &model}
+	it := withTaskAttribution(&models.TaskIteration{TaskID: task.ID, IterationNumber: 3}, task)
+	if it.CreatedBy != &owner || it.CreatedByKeyID != &key || it.Model != &model || it.IterationNumber != 3 {
+		t.Fatalf("withTaskAttribution = %+v", it)
+	}
+	keyless := withTaskAttribution(&models.TaskIteration{}, &models.Task{ID: uuid.New()})
+	if keyless.CreatedBy != nil || keyless.CreatedByKeyID != nil || keyless.Model != nil {
+		t.Fatalf("a task without attribution must stamp none: %+v", keyless)
 	}
 }

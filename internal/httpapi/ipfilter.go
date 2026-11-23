@@ -22,8 +22,9 @@ import (
 // This is deliberately the OUTERMOST application-layer filter (it sits just
 // inside recoverMiddleware, before body parsing in Routes) so a blocked request
 // is dropped before any handler, body read, or auth comparison runs. /healthz is
-// exempt so load-balancer / uptime probes from outside the allowlist keep
-// working.
+// exempt so uptime monitors from outside the allowlist keep working; the probe
+// endpoints /livez and /readyz are answered in front of this router
+// (cmd/fleet's withHealthProbes) and never reach the filter.
 //
 // X-Forwarded-For is honored ONLY when the immediate TCP peer is a configured
 // trusted proxy (FLEET_TRUSTED_PROXIES). The chain is then walked from the
@@ -73,8 +74,8 @@ func (s *Server) ipFilterMiddleware(next http.Handler) http.Handler {
 	}
 	trust := httpmw.NewTrustedProxies(cfg.trustedProxies)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// /healthz is exempt: probes from a load balancer / uptime monitor may
-		// originate outside the operator's allowlist.
+		// /healthz is exempt: an uptime monitor may originate outside the
+		// operator's allowlist.
 		if r.URL.Path == "/healthz" {
 			next.ServeHTTP(w, r)
 			return

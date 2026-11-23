@@ -639,7 +639,7 @@ export interface paths {
         };
         /**
          * Usage analytics — cost/token roll-up by principal, project, model, or time bucket (#601 part 1).
-         * @description Aggregates the already-persisted metering over a window: task-side from task_iterations joined to tasks (cost_usd, prompt/completion tokens per iteration, keyed by created_by / created_by_key_id / model), chat-side from the turn_metrics session log (keyed by user email, project, conversation model). Admin-only — spend data is global across all principals. Like /sla-report, the gate is enforced in-handler on the admin permission so both the admin API key and an admin-role dashboard session are accepted (#458). group_by defaults to user; from/to default to the trailing 30 days (to is exclusive; the window is clamped to 366 days). Dollar figures depend on pricing configuration (#289): native- provider runs accrue $0 unless a pricing override is set — token totals are complete regardless.
+         * @description Aggregates the already-persisted metering over a window: task-side from task_iterations (cost_usd, prompt/completion tokens per iteration, keyed by the created_by / created_by_key_id / model each row carries, so a deleted or pruned task's spend still counts), chat-side from the turn_metrics session log (keyed by user email, project, conversation model). Admin-only — spend data is global across all principals. Like /sla-report, the gate is enforced in-handler on the admin permission so both the admin API key and an admin-role dashboard session are accepted (#458). group_by defaults to user; from/to default to the trailing 30 days (to is exclusive; the window is clamped to 366 days). Dollar figures depend on pricing configuration (#289): native- provider runs accrue $0 unless a pricing override is set — token totals are complete regardless.
          */
         get: {
             parameters: {
@@ -2131,7 +2131,7 @@ export interface paths {
         put?: never;
         /**
          * Import task definitions from a previously exported envelope; creates tasks in a single batch with per-task conflict handling (#238).
-         * @description Every record the import creates or replaces runs the same checks as POST /tasks: validation, the admin-only rules for run_if and for a max_cost_usd / max_total_tokens above the deployment ceiling, the key's priority ceiling and the connector check. The two admin-only rules are checked for those records before any write, dry runs included: one offending record refuses the whole import with 403 naming it. The budget is checked once when the import creates at least one task (402). A record conflict=skip leaves alone is neither checked nor charged. Same auth + rate limiter as POST /tasks; the scoped API key's hourly cap is charged at least one token: one per record the import creates or replaces (one by the auth check, the rest by the handler), so a dry run or an import that only skips costs one.
+         * @description Every record the import creates or replaces runs the same checks as POST /tasks: validation, the admin-only rules for run_if and for a max_cost_usd / max_total_tokens above the deployment ceiling, the key's priority ceiling and the connector check. The two admin-only rules are checked for those records before any write, dry runs included: one offending record refuses the whole import with 403 naming it. The uploads each record to create names are checked before any write too, dry runs included: a record naming an upload the caller may not name errors with file not found. The budget is checked once when the import creates at least one task (402). A record conflict=skip leaves alone is neither checked nor charged. Same auth + rate limiter as POST /tasks; the scoped API key's hourly cap is charged at least one token: one per record the import creates or replaces (one by the auth check, the rest by the handler), so a dry run or an import that only skips costs one.
          */
         post: {
             parameters: {
@@ -2436,7 +2436,7 @@ export interface paths {
         };
         /**
          * Update a task.
-         * @description Updates a pending or scheduled task's definition. Omitting optional collection/ceiling/priority fields (mcp_selection, tags, files, credential_allowlist, loop_config, worktree_config, retry_policy, priority, max_total_tokens) preserves the task's stored values; pass an explicit null for max_total_tokens to clear a task-specific token ceiling back to inheriting the deployment ceiling, or 0 for priority to reset it to normal (50).
+         * @description Updates a pending or scheduled task's definition. Omitting optional collection/ceiling/priority fields (mcp_selection, tags, files, credential_allowlist, loop_config, worktree_config, retry_policy, priority, max_total_tokens) preserves the task's stored values; pass an explicit null for max_total_tokens to clear a task-specific token ceiling back to inheriting the deployment ceiling, or 0 for priority to reset it to normal (50). Allowed for the task's creator (the user or API key that created it) or an admin; view_all_logs reads a task but does not edit it.
          */
         put: {
             parameters: {
@@ -2462,6 +2462,8 @@ export interface paths {
                         "application/json": components["schemas"]["Task"];
                     };
                 };
+                400: components["responses"]["Error"];
+                403: components["responses"]["Error"];
             };
         };
         post?: never;
@@ -2559,7 +2561,7 @@ export interface paths {
         put?: never;
         /**
          * Clone a task (a new task copied from this one, preserving recurrence; optional overrides).
-         * @description Same ownership, lineage and mcp_selection rules as POST /tasks/{task_id}/rerun: an admin-key or scoped-key clone keeps the source's owner, overrides.new_lineage starts a job of its own, and an unresolvable mcp_selection is a 400.
+         * @description Same ownership, lineage, authorization and mcp_selection rules as POST /tasks/{task_id}/rerun: only the task's creator or an admin may clone it, an admin-key or scoped-key clone keeps the source's owner, overrides.new_lineage starts a job of its own, and an unresolvable mcp_selection is a 400.
          */
         post: {
             parameters: {
@@ -2589,6 +2591,7 @@ export interface paths {
                     };
                 };
                 400: components["responses"]["Error"];
+                403: components["responses"]["Error"];
                 404: components["responses"]["Error"];
             };
         };
@@ -2707,7 +2710,7 @@ export interface paths {
         get?: never;
         /**
          * Set the user who owns a task (admin).
-         * @description Sets created_by — whose hosted connections the task's runs resolve, who receives its owner digest, and who may read and edit it as its creator — on the task, on every unfinished later occurrence of its recurrence chain, and on the chain's last occurrence (the chain continues from it: a pending spawn or a replay of a parked dead-letter). The chain is followed through previous_occurrence_id, not lineage_id, so other jobs copied from the same source keep their owner; occurrences spawned afterwards inherit the new owner, and finished occurrences in between keep theirs. The mcp_selection of every row it rewrites must resolve for the new owner (400 naming the row otherwise, with the message its run would fail with; nothing is written). Admin-only, enforced in-handler on the admin permission (the admin API key, a scoped key carrying admin, or an admin-role session). CLI twin: fleet sched task set-owner <task_id> <username>.
+         * @description Sets created_by — whose hosted connections the task's runs resolve, who receives its owner digest, and who may read and edit it as its creator — on the task, on every unfinished later occurrence of its recurrence chain, and on the chain's last occurrence (the chain continues from it: a pending spawn or a replay of a parked dead-letter). The chain is followed through previous_occurrence_id, not lineage_id, so other jobs copied from the same source keep their owner; occurrences spawned afterwards inherit the new owner, and finished occurrences in between keep theirs. The mcp_selection of every row it rewrites must resolve for the new owner (400 naming the row otherwise, with the message its run would fail with; nothing is written). Admin-only, enforced in-handler on the admin permission (the admin API key, a scoped key carrying admin, or an admin-role session). The API key that created the task (created_by_key_id, which this does not change) keeps acting on it afterwards: its edits and its re-runs and clones run as the new owner, and may name the new owner's hosted connections in mcp_selection. CLI twin: fleet sched task set-owner <task_id> <username>.
          */
         put: {
             parameters: {
@@ -2766,8 +2769,8 @@ export interface paths {
         post?: never;
         /**
          * Permanently delete a task and its transcripts.
-         * @description Removes the task row, its run transcripts, and every cascading child (webhook triggers, loop config, task memory, feedback, learned instructions). Distinct from cancelling: a cancelled task keeps its row, and with it its name — which carries a partial unique index, so a broken job could never be replaced under the same name and could not be renamed either (PUT /tasks/{task_id} only edits pending or scheduled tasks). Deleting is the only operation that frees a name for reuse.
-         *     Refuses with 409 while the task is leased or running: the worker still holds the lease and is writing to the row. Stop it first, then delete. Same authorization as cancelling — cancel permission on a task the caller can see, or the task's creator (user or API key); 404 for a task outside the caller's scope.
+         * @description Removes the task row, its run transcripts, and every cascading child (webhook triggers, task memory, feedback, learned instructions, A2A push configs). The task's recorded spend (its task_iterations rows) is kept, so it still counts toward budgets and the usage report. Distinct from cancelling: a cancelled task keeps its row, and with it its name — which carries a partial unique index, so a broken job could never be replaced under the same name and could not be renamed either (PUT /tasks/{task_id} only edits pending or scheduled tasks). Deleting is the only operation that frees a name for reuse.
+         *     Refuses with 409 while the task is leased or running: the worker still holds the lease and is writing to the row. Stop it first, then delete. Allowed for the task's creator (the user or API key that created it) or an admin. Cancel permission does not reach it: a key holding view_all_logs and cancel_task cancels any task it can read but deletes only tasks it created (403 on another principal's). 404 for a task outside the caller's scope.
          */
         delete: {
             parameters: {
@@ -2792,7 +2795,7 @@ export interface paths {
                         };
                     };
                 };
-                /** @description Not the task's creator and lacking cancel permission, or a readonly user (refused on every mutating route). */
+                /** @description Not the task's creator or an admin, or a readonly user (refused on every mutating route). */
                 403: {
                     headers: {
                         [name: string]: unknown;
@@ -2833,7 +2836,7 @@ export interface paths {
         put?: never;
         /**
          * Re-run a task once now (a new task copied from this one, optional overrides).
-         * @description The copy belongs to the calling user. A caller with no user behind it (the admin API key or a scoped API key) gives the copy the source's owner (created_by) instead — and, for the admin key, the source's authorizing key — so the copy resolves the same hosted connections and reaches the same owner digest as the task it was copied from. By default the copy joins the source's lineage (its per-job workspace directory and owner-digest entry); overrides.new_lineage starts a job of its own. The copy's effective mcp_selection must resolve: a server that is neither in the active bundle catalog nor among the copy owner's hosted connections is a 400 carrying the message its run would have dead-lettered with.
+         * @description The copy belongs to the calling user. A caller with no user behind it (the admin API key or a scoped API key) gives the copy the source's owner (created_by) instead — and, for the admin key, the source's authorizing key — so the copy resolves the same hosted connections and reaches the same owner digest as the task it was copied from. By default the copy joins the source's lineage (its per-job workspace directory and owner-digest entry); overrides.new_lineage starts a job of its own. The copy's effective mcp_selection must resolve: a server that is neither in the active bundle catalog nor among the copy owner's hosted connections is a 400 carrying the message its run would have dead-lettered with. Allowed for the task's creator (the user or API key that created it) or an admin, because a copy made by a key runs as the source's owner; view_all_logs reads a task but does not copy it (403).
          */
         post: {
             parameters: {
@@ -2903,6 +2906,7 @@ export interface paths {
                     };
                 };
                 400: components["responses"]["Error"];
+                403: components["responses"]["Error"];
                 404: components["responses"]["Error"];
             };
         };
@@ -2968,7 +2972,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Atomically add and/or remove tags on a task. */
+        /**
+         * Atomically add and/or remove tags on a task.
+         * @description Allowed for the task's creator (the user or API key that created it) or an admin, like PUT /tasks/{task_id}.
+         */
         post: {
             parameters: {
                 query?: never;
@@ -2997,6 +3004,7 @@ export interface paths {
                     };
                 };
                 400: components["responses"]["Error"];
+                403: components["responses"]["Error"];
                 404: components["responses"]["Error"];
             };
         };
@@ -3019,7 +3027,7 @@ export interface paths {
         put?: never;
         /**
          * Fire a named event at a task parked by wake_on_event (self-wake).
-         * @description Re-queues a task in paused_awaiting_wake early (status → pending); the event key must match the one the task is waiting for, so a caller can never wake an arbitrary sleeping task. The next run is told the event fired (with the optional note). 409 when the task is not awaiting a wake or waits for a different event. Requires operator (cancel) permission; a readonly user is refused with 403. See docs/SELF-WAKE.md.
+         * @description Re-queues a task in paused_awaiting_wake early (status → pending); the event key must match the one the task is waiting for, so a caller can never wake an arbitrary sleeping task. The next run is told the event fired (with the optional note). 409 when the task is not awaiting a wake or waits for a different event. Allowed for a caller with operator (cancel) permission on a task it created (an admin: on any task), and for the user who created the task; view_all_logs reads a task but does not wake it, and a readonly user is refused with 403. See docs/SELF-WAKE.md.
          */
         post: {
             parameters: {
@@ -3291,7 +3299,7 @@ export interface paths {
         put?: never;
         /**
          * Upload a file for a task's workspace.
-         * @description Authenticated in-handler — accepts an admin key, a scoped API key carrying create_task permission (#719: an uploaded file is only usable via a subsequent task create, so the same keys that may create tasks may stage uploads; a valid readonly/webhook key gets a definitive 403), or a signed-in session (the Elcano cookie). A readonly user gets the same 403.
+         * @description Authenticated in-handler — accepts an admin key, a scoped API key carrying create_task permission (#719: an uploaded file is only usable via a subsequent task create, so the same keys that may create tasks may stage uploads; a valid readonly/webhook key gets a definitive 403), or a signed-in session (the Elcano cookie). A readonly user gets the same 403. The upload is recorded as the caller's. In a task's files a non-admin caller names only its own uploads, uploads on a task it created, or files already on the task it acts on; any other name is a 400, as for a missing upload.
          */
         post: {
             parameters: {

@@ -83,7 +83,7 @@ type turnEngine interface {
 	// by agent.Manager).
 	ListPersonas() ([]string, error)
 	// ProviderHealth returns a snapshot of per-model circuit-breaker state for
-	// the LLM provider health endpoint + degraded /healthz (#267).
+	// /healthz, which answers 503 degraded while any circuit is open (#267).
 	ProviderHealth() []agentcore.ModelHealth
 }
 

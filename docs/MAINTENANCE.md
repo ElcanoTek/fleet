@@ -139,10 +139,12 @@ different filesystem.
 Set `FLEET_DISK_MIN_FREE_PERCENT=0` to disable the decision. The guard still
 samples, so the metrics and the admin panel keep working.
 
-### Why `/healthz` stays 200
+### Why shedding never answers 503
 
-`/healthz` is the load-balancer gate: a 503 there drains chat traffic off the
-box. A shedding box is precisely one whose chat is fine — so draining it would
+`/readyz` is the readiness gate (the Helm chart's readiness probe, and what a
+load balancer should watch): a 503 there drains chat traffic off the box.
+`/healthz` stays 200 for disk too, since a load balancer may still point at it.
+A shedding box is precisely one whose chat is fine — so draining it would
 remove the interface an operator needs to reclaim the space, which is the
 opposite of the guard's purpose. The signal therefore lives where a
 non-critical degradation belongs:
@@ -254,7 +256,7 @@ rarely reach their cap — it just makes the number visible at boot rather than 
 | `FLEET_WORKTREE_PRUNE_AGE` | `24h` | Age before an orphaned worktree dir is reclaimed. `0` disables. |
 | `FLEET_MAINTENANCE_MIN_INTERVAL` | `5m` | Rate limit on the opportunistic post-turn pass. `0` = every turn. |
 | `FLEET_CLEANUP_HOUR` | `4` | UTC hour of the scheduler's daily run-history retention sweep. |
-| `FLEET_RUN_LOG_RETENTION_DAYS` | `90` | Age before terminal task runs are pruned. `0` disables. |
+| `FLEET_RUN_LOG_RETENTION_DAYS` | `90` | Age before terminal task runs are pruned. Their recorded spend stays in usage reports and budgets. `0` disables. |
 | `CONVERSATION_TTL_DAYS` | `90` | Days without activity before a temporary chat is deleted. |
 | `CONVERSATION_UNPINNED_CAP` | `500` | Most temporary chats one person keeps; the least recently active go first. |
 | `FLEET_CONVERSATION_EXPIRY_WARNING_DAYS` | `14` | How long before deletion a chat is flagged in the interface. `0` turns the warning off. |

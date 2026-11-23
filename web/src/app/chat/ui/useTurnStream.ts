@@ -2796,14 +2796,17 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     }
 
     if (event.event === "tool.approval_superseded") {
-      const p = payload as { tool: string };
+      const p = payload as { tool: string; kept_approval_ids?: string[] };
+      // kept_approval_ids: the batch the same turn staged for this tool stays
+      // pending server-side; only the tool's other pending cards were voided.
+      const kept = new Set(Array.isArray(p.kept_approval_ids) ? p.kept_approval_ids : []);
       setMessagesByConv((prev) => {
         const existing = prev.get(ctx.target);
         if (!existing) return prev;
         const next = existing.map((msg) => {
           if (!msg.approvals?.length) return msg;
           const touched = msg.approvals.map((ap) =>
-            ap.tool === p.tool && ap.status === "pending" && !ap.executing
+            ap.tool === p.tool && ap.status === "pending" && !ap.executing && !kept.has(ap.id)
               ? {
                   ...ap,
                   status: "rejected" as ApprovalStatus,

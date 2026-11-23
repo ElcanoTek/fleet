@@ -59,8 +59,8 @@ type UsageBucket struct {
 
 // UsageReport is the GET /admin/usage response (#601 part 1): cost + token
 // totals over [From, To) grouped by GroupBy (user|key|project|model|day|week),
-// sourced from the already-persisted metering (task_iterations ⋈ tasks, and
-// the chat turn_metrics log) — never a parallel accounting path. Sources lists
+// sourced from the already-persisted metering (task_iterations, and the chat
+// turn_metrics log) — never a parallel accounting path. Sources lists
 // which meters contributed ("tasks" always; "chat" only when the chat store is
 // wired). Note carries the honest-scope caveat that dollar figures depend on
 // pricing config (#289): native-provider runs accrue $0 unless a pricing
@@ -77,7 +77,7 @@ type UsageReport struct {
 
 // UserDayUsage is one meter's per-user-per-day aggregation row, the raw
 // material of the adoption report (GET /admin/usage/adoption). Both meters
-// return this shape — task-side from task_iterations ⋈ tasks, chat-side
+// return this shape — task-side from task_iterations, chat-side
 // through the ChatUserDayUsageProvider seam — and Units means "that meter's
 // work unit" (task iterations or chat turns respectively; the handler knows
 // which source a slice came from). Never serialized: the wire types below
@@ -161,7 +161,7 @@ type AdoptionTotals struct {
 // AdoptionReport is the GET /admin/usage/adoption response: the per-user
 // AI-adoption read model for the executive audit view. Like UsageReport it is
 // strictly an aggregation of the already-persisted metering (task_iterations
-// ⋈ tasks plus the chat turn_metrics log) — no new accounting path. Days is
+// plus the chat turn_metrics log) — no new accounting path. Days is
 // the full UTC day axis of [From, To) so per-user DailyTokens series and the
 // Daily trend need no client-side date math; PrevFrom marks the start of the
 // equal-length comparison window feeding the Prev* fields. Sources lists the

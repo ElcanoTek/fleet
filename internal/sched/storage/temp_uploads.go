@@ -2,7 +2,10 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -10,9 +13,23 @@ import (
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
 
-// tempUploadChecksumsDir is where POST /upload writes each file's checksum
-// sidecar, <name>.sha256 (handlers.HandleUpload).
-const tempUploadChecksumsDir = ".checksums"
+// The bookkeeping directories under temp_uploads, one sidecar per upload,
+// written by POST /upload (handlers.HandleUpload): the checksum
+// (".checksums/<name>.sha256") and who staged it (".uploaders/<name>",
+// handlers.recordUploader). A sidecar belongs to its upload: it is removed
+// with it and kept while it is.
+const (
+	tempUploadChecksumsDir = ".checksums"
+	tempUploadUploadersDir = ".uploaders"
+)
+
+// tempUploadSidecars are the sidecar paths of the upload name under tempDir.
+func tempUploadSidecars(tempDir, name string) []string {
+	return []string{
+		filepath.Join(tempDir, tempUploadChecksumsDir, name+".sha256"),
+		filepath.Join(tempDir, tempUploadUploadersDir, name),
+	}
+}
 
 // keptJobLineagesSQL selects the jobs (lineages) whose temp_uploads files are
 // kept: a job with a task in one of liveTaskStatuses ($1) — pending,
@@ -105,7 +122,7 @@ func newTempUploadKeeper(tempDir string, snapshot func() (map[string]struct{}, e
 }
 
 // tempUploadName is the task file name a path under tempDir stands for: the
-// file's own name, or for a checksum sidecar the file it describes.
+// file's own name, or for a sidecar the upload it belongs to.
 func tempUploadName(tempDir, path string) (string, bool) {
 	rel, err := filepath.Rel(tempDir, path)
 	if err != nil || !filepath.IsLocal(rel) {
@@ -114,8 +131,112 @@ func tempUploadName(tempDir, path string) (string, bool) {
 	name := filepath.ToSlash(rel)
 	if sidecar, ok := strings.CutPrefix(name, tempUploadChecksumsDir+"/"); ok {
 		name = strings.TrimSuffix(sidecar, ".sha256")
+	} else if sidecar, ok := strings.CutPrefix(name, tempUploadUploadersDir+"/"); ok {
+		name = sidecar
 	}
 	return name, true
+}
+
+// TempUploadSweep is what one sweep of temp_uploads did.
+type TempUploadSweep struct {
+	// Removed counts uploads; the sidecars removed with them are not counted,
+	// as the admin storage panel does not count sidecars as files.
+	Removed int
+	// Unchecked counts aged uploads kept because keep could not answer.
+	Unchecked         int
+	FirstUncheckedErr error
+}
+
+// SweepTempUploadsWith removes from tempDir each upload older than maxAge that
+// keep does not claim, and its sidecars with it (tempUploadSidecars). A
+// sidecar is never decided on its own age while its upload exists: the
+// sidecars of a kept upload, or of one not yet aged, stay. A sidecar whose
+// upload is already gone is removed once it is older than maxAge. Other
+// dot-directories under tempDir are not walked. keep reporting an error keeps
+// the upload; a nil keep decides by age alone. report, when set, is told each
+// removal (err nil) and each failure. handlers.CleanupTempFiles and the admin
+// storage cleanup both sweep through it.
+func SweepTempUploadsWith(tempDir string, maxAge time.Duration, keep func(path string) (bool, error), report func(path string, err error)) TempUploadSweep {
+	var out TempUploadSweep
+	if report == nil {
+		report = func(string, error) {}
+	}
+	cutoff := time.Now().Add(-maxAge)
+	removeSidecar := func(p string) {
+		if err := os.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			report(p, err)
+		}
+	}
+	_ = filepath.WalkDir(tempDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			if path != tempDir {
+				report(path, err) // an unreadable entry is skipped, the sweep goes on
+			}
+			return nil
+		}
+		if d.IsDir() {
+			if path != tempDir && strings.HasPrefix(d.Name(), ".") {
+				return fs.SkipDir // sidecars and other bookkeeping: decided by their upload
+			}
+			return nil
+		}
+		if !d.Type().IsRegular() {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil || !info.ModTime().Before(cutoff) {
+			return nil //nolint:nilerr // a file that vanished or is fresh is simply not swept
+		}
+		if keep != nil {
+			inUse, kerr := keep(path)
+			if kerr != nil {
+				out.Unchecked++
+				if out.FirstUncheckedErr == nil {
+					out.FirstUncheckedErr = kerr
+				}
+				return nil
+			}
+			if inUse {
+				return nil
+			}
+		}
+		if err := os.Remove(path); err != nil { //nolint:gosec // walks the server's own temp_uploads tree
+			report(path, err)
+			return nil
+		}
+		out.Removed++
+		report(path, nil)
+		if name, ok := tempUploadName(tempDir, path); ok {
+			for _, sc := range tempUploadSidecars(tempDir, name) {
+				removeSidecar(sc)
+			}
+		}
+		return nil
+	})
+	// Sidecars left by an upload removed earlier (or by hand).
+	for _, dir := range []string{tempUploadChecksumsDir, tempUploadUploadersDir} {
+		entries, err := os.ReadDir(filepath.Join(tempDir, dir))
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if !e.Type().IsRegular() {
+				continue
+			}
+			sidecar := filepath.Join(tempDir, dir, e.Name())
+			name, ok := tempUploadName(tempDir, sidecar)
+			if !ok {
+				continue
+			}
+			if _, err := os.Lstat(filepath.Join(tempDir, filepath.FromSlash(name))); !errors.Is(err, fs.ErrNotExist) {
+				continue // its upload is still there (or cannot be checked): it decides
+			}
+			if info, err := e.Info(); err == nil && info.ModTime().Before(cutoff) {
+				removeSidecar(sidecar)
+			}
+		}
+	}
+	return out
 }
 
 // keptTaskFiles is every temp_uploads name a task of a kept job names.

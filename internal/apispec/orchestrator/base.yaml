@@ -58,10 +58,22 @@ info:
       deliberately a single value, not an any-of list: no operation is
       admitted by one of several permissions.
       What it does NOT capture, so read it as "necessary, and sufficient up to
-      these rules": (1) per-row rules applied after admission — own-rows task
-      visibility, creator-only transcripts and workspaces (`view_all_logs`
-      widens those), creator-or-`cancel_task` for stop/delete; a request that
-      clears the permission can still get a 403 for a row it may not touch.
+      these rules": (1) per-row rules applied after admission — task rows and
+      transcripts are the caller's own, or every task with `view_all_logs`
+      (which reads, and does not act); workspace files and the artifact
+      manifest are the task's creator or the bootstrap `ADMIN_API_KEY` only
+      (`view_all_logs` does not widen them); edit, retag, re-run, clone, wake,
+      permanent delete and an A2A answer or push config need the task's
+      creator or `admin` (wake also `cancel_task`, unless the caller is the
+      user who created the task); cancel needs the creator, or `cancel_task`
+      on a task the caller can read, so a key holding `view_all_logs` and
+      `cancel_task` cancels any task it can read but permanently deletes only
+      the tasks it created; files named in a task must be the caller's
+      own uploads, on a task it created, or already on the task it acts on
+      (`admin` names any; any other name is a 400, as for a missing upload);
+      a request that clears the permission can still get
+      a 403 for a row it may not touch. docs/TASK-OWNERSHIP.md lists every
+      route.
       (2) Key TYPE rules, in `x-fleet-key-types`: a typed key holds its type's
       fixed permission set, a `readonly` key is refused (403) on any non-safe
       method even where it holds the permission, and the admin-only routes

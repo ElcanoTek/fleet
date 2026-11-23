@@ -22,6 +22,11 @@ package handlers
 // keys, admin-role users). The designated transcript auditor (#980) is
 // included on purpose: an auditor who may read every transcript must be able
 // to find the tasks those transcripts belong to.
+//
+// Fleet-wide visibility is reading only. Acting on a task (edit, retag,
+// re-run, clone, wake, permanent delete, an A2A answer or push config) is
+// taskActableByPrincipal: the task's creator, or admin. view_all_logs never
+// reaches it.
 
 import "github.com/ElcanoTek/fleet/internal/sched/models"
 
@@ -61,46 +66,69 @@ func visibleTasks(p principal, tasks []*models.Task) []*models.Task {
 	return out
 }
 
-// taskWritableByPrincipal reports whether the principal may MUTATE the given
-// task's definition (edit, retag). The mutating permission (PermissionCreateTask,
-// checked by the caller) admits it to the surface; this decides WHICH task.
+// taskActableByPrincipal reports whether the principal may ACT on the given
+// task: change its definition (edit, retag), start a new run from it (re-run,
+// clone), feed its parked run (wake, an A2A answer), manage its A2A push
+// configs, or permanently delete it. The acting permission (checked by the caller) admits the principal
+// to the surface; this decides WHICH task: one it created
+// (taskCreatedByPrincipal: the creating user or the creating API key), or any
+// task for a principal holding PermissionAdmin (the admin API key, typed admin
+// keys, admin-role users).
 //
-// Same own-rows model as taskVisibleToPrincipal, and deliberately the same
-// helper pair: a write surface must be no looser than the read surface guarding
-// the same row. Before this existed, PUT /tasks/{id} and POST /tasks/{id}/tags
-// authorized on PermissionCreateTask alone, so any client-role user or scoped
-// task key could rewrite ANY task on the box — prompt, model, mcp_selection and
-// credential_allowlist included — while the read path had already been narrowed
-// to own rows by #1082. That asymmetry was the hole.
+// It is deliberately NOT taskVisibleToPrincipal. A task runs as its owner
+// (created_by): the owner's hosted connections, budgets, lineage and per-job
+// workspace. A re-run or clone by an API key keeps the source's owner
+// (rerunCreator, docs/TASK-OWNERSHIP.md), and an edit or answer changes what the
+// owner's next run does, so each of these acts for the owner. Reading a task is
+// not acting for its owner: PermissionViewAllLogs (#980) grants reading every
+// task's row and transcript, not acting on it, so it never widens this check.
+//
+// A write surface is still no looser than the read surface guarding the same
+// row: every task this admits, taskVisibleToPrincipal admits too.
 //
 // Note this is NOT principal.ownsTask, which resolves ownership through
 // ownerID() and therefore returns false for every API-key principal. Using it
 // here would deny a scoped intake-app key the right to edit the task it just
 // created. taskCreatedByPrincipal matches a creating user OR a creating key
 // (task.CreatedByKeyID), which is the model #980/#1082 established.
-func taskWritableByPrincipal(p principal, task *models.Task) bool {
-	if p.fleetWideTaskVisibility() {
+func taskActableByPrincipal(p principal, task *models.Task) bool {
+	if p.hasPermission(models.PermissionAdmin) {
 		return true
 	}
 	return taskCreatedByPrincipal(p, task)
 }
 
-// taskStoppableByPrincipal reports whether the principal may stop (cancel) or
-// permanently delete the given task. Two ways in:
+// taskStoppableByPrincipal reports whether the principal may stop (cancel)
+// the given task. Two ways in:
 //
 //   - PermissionCancelTask for a task the principal can see
 //     (taskVisibleToPrincipal) — so the operator grant reaches the same rows
 //     the principal can read: its own, or every task for the fleet-wide grant
 //     (admin, view_all_logs);
 //   - having created the task (taskCreatedByPrincipal), as a user or as an API
-//     key, so a job author — including a scoped task key — can stop and clean
-//     up its own run without the operator grant.
+//     key, so a job author — including a scoped task key — can stop its own
+//     run without the operator grant.
+//
+// Stopping is the one non-read that view_all_logs widens, and only together
+// with the separately granted PermissionCancelTask: a stop ends the task and
+// runs nothing as its owner. Everything that runs as the owner, feeds the
+// owner's run, or permanently deletes the task is taskActableByPrincipal.
 //
 // This is the REST form of the rule A2A CancelTask already applies
-// (a2aCancelTask) and the same shape as taskResumableByPrincipal.
+// (a2aCancelTask).
 func taskStoppableByPrincipal(p principal, task *models.Task) bool {
 	if p.hasPermission(models.PermissionCancelTask) && taskVisibleToPrincipal(p, task) {
 		return true
 	}
 	return taskCreatedByPrincipal(p, task)
+}
+
+// taskDeletableByPrincipal reports whether the principal may permanently
+// delete the given task (DELETE /tasks/{id}/permanent): the task's creator or
+// admin (taskActableByPrincipal). Deleting removes the owner's task row, its
+// transcripts and its history for good, so it is the owner's decision, not an
+// operator's: cancel_task stops any task the caller can read
+// (taskStoppableByPrincipal) but deletes none it did not create.
+func taskDeletableByPrincipal(p principal, task *models.Task) bool {
+	return taskActableByPrincipal(p, task)
 }

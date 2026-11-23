@@ -90,7 +90,7 @@ func TestRunReadiness_Parallel(t *testing.T) {
 
 func TestRunReadiness_TimeoutBecomesError(t *testing.T) {
 	// The probe deliberately IGNORES ctx and overruns. The parent deadline
-	// (50ms) is shorter than perCheckTimeout (5s), so the only way to a fast
+	// (50ms) is shorter than PerCheckTimeout (5s), so the only way to a fast
 	// result is runOne's deadline branch — which must produce an error result
 	// with Detail "timeout". Asserting that discriminating detail exercises the
 	// timeout MECHANISM rather than the probe's own (uncooperative) return.

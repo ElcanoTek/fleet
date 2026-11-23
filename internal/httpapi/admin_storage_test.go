@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 )
 
 func TestDuTree_SumsRegularFilesRecursively(t *testing.T) {
@@ -42,35 +41,6 @@ func TestDuTree_MissingDirIsZeroNotError(t *testing.T) {
 	}
 }
 
-func TestSweepTempUploads_RemovesOldKeepsFresh(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	stale := filepath.Join(dir, "old.bin")
-	if err := os.WriteFile(stale, []byte("x"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	past := time.Now().Add(-48 * time.Hour)
-	if err := os.Chtimes(stale, past, past); err != nil {
-		t.Fatal(err)
-	}
-	fresh := filepath.Join(dir, "new.bin")
-	if err := os.WriteFile(fresh, []byte("x"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	removed := sweepTempUploads(dir, 24*time.Hour, nil)
-	if removed != 1 {
-		t.Errorf("removed = %d, want 1", removed)
-	}
-	if _, err := os.Stat(stale); !os.IsNotExist(err) {
-		t.Error("stale file must be gone")
-	}
-	if _, err := os.Stat(fresh); err != nil {
-		t.Error("fresh file must survive")
-	}
-}
-
 func TestWorkspaceUsage_ExcludesNonConversationSubdirsFromLargestWorkspaces(t *testing.T) {
 	t.Parallel()
 
@@ -102,5 +72,31 @@ func TestWorkspaceUsage_ExcludesNonConversationSubdirsFromLargestWorkspaces(t *t
 	}
 	if len(rows) != 1 || rows[0].ConversationID != convID {
 		t.Fatalf("largest_workspaces must only include UUID conversation directories, got %+v", rows)
+	}
+}
+
+// TestDuUploadsTree_LeavesOutBookkeeping: the temp_uploads panel counts the
+// uploads, not their ".checksums" and ".uploaders" sidecars.
+func TestDuUploadsTree_LeavesOutBookkeeping(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "brief_ab12cd34.txt"), make([]byte, 40), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, side := range []string{".checksums", ".uploaders"} {
+		if err := os.Mkdir(filepath.Join(dir, side), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, side, "brief_ab12cd34.txt"), make([]byte, 64), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if got := duUploadsTree(context.Background(), dir); got.Files != 1 || got.Bytes != 40 {
+		t.Errorf("duUploadsTree = %d files / %d bytes, want 1 / 40", got.Files, got.Bytes)
+	}
+	if got := duTree(context.Background(), dir); got.Files != 3 {
+		t.Errorf("duTree = %d files, want 3 (it sizes every file)", got.Files)
 	}
 }

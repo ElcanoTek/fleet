@@ -75,8 +75,9 @@ func performShutdown(graceful bool, grace time.Duration, cancel context.CancelFu
 	// listener close even if /etc/systemd/system/fleet.service still has an
 	// older TimeoutStopSec=60s or a smaller value than FLEET_SHUTDOWN_GRACE_SECONDS.
 	sdNotify(stopNotifyPayload(graceful, grace))
-	// Stop admitting new chat turns + flip /healthz to 503 (load balancers stop
-	// routing here) and notify attached SSE clients to reconnect elsewhere.
+	// Stop admitting new chat turns + flip /readyz and /healthz to 503 (load
+	// balancers stop routing here) and notify attached SSE clients to reconnect
+	// elsewhere.
 	chatSrv.BeginShutdown()
 
 	deadline := time.Now().Add(grace)

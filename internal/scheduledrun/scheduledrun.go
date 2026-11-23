@@ -600,15 +600,16 @@ func (r *Runner) Run(ctx context.Context, task *models.Task) (*models.LogSession
 	// at zero spend.
 	startedAt := time.Now().UTC()
 	session, _, _, err := r.runWorker(ctx, task, "", nil, wtPath)
-	r.recordIteration(ctx, singlePassIteration(task.ID, startedAt, time.Now().UTC(), session, err))
+	r.recordIteration(ctx, singlePassIteration(task, startedAt, time.Now().UTC(), session, err))
 	return session, err
 }
 
 // singlePassIteration is the telemetry row for a non-looped run: iteration 1,
-// passed on a clean return and failed otherwise, carrying the session's spend.
-func singlePassIteration(taskID uuid.UUID, startedAt, completedAt time.Time, session *models.LogSession, runErr error) *models.TaskIteration {
+// passed on a clean return and failed otherwise, carrying the session's spend
+// and the runner's copy of the task's attribution (withTaskAttribution).
+func singlePassIteration(task *models.Task, startedAt, completedAt time.Time, session *models.LogSession, runErr error) *models.TaskIteration {
 	it := &models.TaskIteration{
-		TaskID:          taskID,
+		TaskID:          task.ID,
 		IterationNumber: 1,
 		StartedAt:       startedAt,
 		CompletedAt:     &completedAt,
@@ -623,6 +624,7 @@ func singlePassIteration(taskID uuid.UUID, startedAt, completedAt time.Time, ses
 		it.PromptTokens = int64(session.PromptTokens)
 		it.CompletionTokens = int64(session.CompletionTokens)
 	}
+	withTaskAttribution(it, task)
 	return it
 }
 

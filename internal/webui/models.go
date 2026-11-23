@@ -51,6 +51,9 @@ type modelCatalogs struct {
 	// catwalkErrAt+catwalkFailureTTL.
 	catwalkErr   error
 	catwalkErrAt time.Time
+	// fetchTimeout bounds the shared fetch; zero means catwalkFetchTimeout
+	// (a test that holds the fetch open sets it longer).
+	fetchTimeout time.Duration
 	// catwalkCall is the in-flight fetch every concurrent caller waits on.
 	catwalkCall *catwalkCall
 }
@@ -429,7 +432,7 @@ func (m *modelCatalogs) loadCatwalk(ctx context.Context) ([]catwalkProvider, err
 // runCatwalkFetch performs the shared fetch, records the outcome in the
 // cache, and releases every waiter.
 func (m *modelCatalogs) runCatwalkFetch(parent context.Context, call *catwalkCall) {
-	ctx, cancel := context.WithTimeout(parent, catwalkFetchTimeout)
+	ctx, cancel := context.WithTimeout(parent, m.catwalkFetchTimeout())
 	defer cancel()
 	call.providers, call.err = m.fetchCatwalk(ctx)
 	m.mu.Lock()
@@ -445,6 +448,13 @@ func (m *modelCatalogs) runCatwalkFetch(parent context.Context, call *catwalkCal
 	close(call.done)
 }
 
+func (m *modelCatalogs) catwalkFetchTimeout() time.Duration {
+	if m.fetchTimeout > 0 {
+		return m.fetchTimeout
+	}
+	return catwalkFetchTimeout
+}
+
 func (m *modelCatalogs) fetchCatwalk(ctx context.Context) ([]catwalkProvider, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, m.catwalkProvidersURL(), nil)
 	if err != nil {
@@ -452,7 +462,7 @@ func (m *modelCatalogs) fetchCatwalk(ctx context.Context) ([]catwalkProvider, er
 	}
 	req.Header.Set("Accept", "application/json")
 	client := *m.http
-	client.Timeout = catwalkFetchTimeout
+	client.Timeout = m.catwalkFetchTimeout()
 	res, err := client.Do(req)
 	if err != nil {
 		return nil, err

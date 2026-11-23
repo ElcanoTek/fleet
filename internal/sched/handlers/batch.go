@@ -237,10 +237,26 @@ func (h *Handlers) CreateTaskBatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The uploads each task names are looked up once, here, before the budget
+	// and the key's counter (uploadRefusals): a failed lookup fails the
+	// request before the key is charged. A refused name is that task's
+	// failure, which admitCreate reports at its place in the gate order,
+	// after validation, as POST /tasks does (taskGates.uploadsChecked).
+	files := make([][]string, len(req.Tasks))
+	for i := range req.Tasks {
+		files[i] = req.Tasks[i].Files
+	}
+	fileRefusals, err := h.uploadRefusals(r.Context(), creator, files)
+	if err != nil {
+		writeCallerFilesRefusal(w, err)
+		return
+	}
+	gates := taskGatesFor(creator)
+	gates.uploadsChecked = true
+
 	// Per-principal rolling budget (#601 part 2): checked up front for the
 	// whole batch — the budget bounds the principal, not any one task, so an
 	// exhausted window refuses the request before any row is created.
-	gates := taskGatesFor(creator)
 	if err := h.checkBudget(r.Context(), gates); err != nil {
 		writeBudgetRefusal(w, err)
 		return
@@ -261,12 +277,13 @@ func (h *Handlers) CreateTaskBatch(w http.ResponseWriter, r *http.Request) {
 	)
 
 	// Every record runs the SAME gates as POST /tasks (Handlers.admitCreate):
-	// validation, the ceiling and run_if admin rules, the mcp_selection check
-	// and the key's priority ceiling. A refusal is a per-task failure carrying
-	// POST /tasks's message (atomic → the whole batch aborts; non-atomic →
-	// just this one is skipped), so a task /tasks/batch accepts is one
-	// POST /tasks would accept from the same caller.
+	// validation, the uploads check, the ceiling and run_if admin rules, the
+	// mcp_selection check and the key's priority ceiling. A refusal is a
+	// per-task failure carrying POST /tasks's message (atomic → the whole batch
+	// aborts; non-atomic → just this one is skipped), so a task /tasks/batch
+	// accepts is one POST /tasks would accept from the same caller.
 	for i := range req.Tasks {
+		gates.uploadRefusal = fileRefusals[i]
 		t, err := h.admitCreate(r.Context(), gates, &req.Tasks[i], nil)
 		if err != nil {
 			failedList = append(failedList, models.BatchFailed{Index: i, Error: err.Error()})

@@ -16,6 +16,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/sched/storage"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/testdb/fleetdb"
 )
@@ -199,8 +200,9 @@ func TestRunMaintenanceKeepsUploadsOfKeptConversations(t *testing.T) {
 }
 
 // TestAdminStorageCleanupKeepsFilesStillInUse: "Clean up now" with a one-day
-// cutoff removes the uploads and task files nothing uses, and leaves an image
-// sent in a pinned chat and a file a task still names.
+// cutoff removes the uploads and task files nothing uses (a task file with
+// its .checksums and .uploaders sidecars, counted once), and leaves an image
+// sent in a pinned chat and a file a task still names, sidecars included.
 func TestAdminStorageCleanupKeepsFilesStillInUse(t *testing.T) {
 	t.Setenv("FLEET_WORKSPACE_ROOT", t.TempDir())
 	srv, st, _, attachDir := maintenanceUploadsFixture(t)
@@ -226,7 +228,13 @@ func TestAdminStorageCleanupKeepsFilesStillInUse(t *testing.T) {
 		t.Fatal(err)
 	}
 	taskFile, unusedTemp := filepath.Join(tempDir, "brief_1a2b3c4d.txt"), filepath.Join(tempDir, "draft_5e6f7a8b.txt")
-	for _, p := range []string{taskFile, unusedTemp} {
+	sidecars := func(name string) []string {
+		return []string{filepath.Join(tempDir, ".checksums", name+".sha256"), filepath.Join(tempDir, ".uploaders", name)}
+	}
+	for _, p := range append(append([]string{taskFile, unusedTemp}, sidecars("brief_1a2b3c4d.txt")...), sidecars("draft_5e6f7a8b.txt")...) {
+		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+			t.Fatal(err)
+		}
 		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -235,8 +243,9 @@ func TestAdminStorageCleanupKeepsFilesStillInUse(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	srv.tempUploadKeeper = func(context.Context, string, time.Duration) func(string) (bool, error) {
-		return func(path string) (bool, error) { return path == taskFile, nil }
+	// The scheduler's sweep, with a keep rule that names the task file.
+	srv.tempUploadSweeper = func(_ context.Context, dir string, window time.Duration) int {
+		return storage.SweepTempUploadsWith(dir, window, func(path string) (bool, error) { return path == taskFile, nil }, nil).Removed
 	}
 
 	rec := httptest.NewRecorder()
@@ -257,5 +266,22 @@ func TestAdminStorageCleanupKeepsFilesStillInUse(t *testing.T) {
 	}
 	if exists(t, unusedTemp) {
 		t.Error("the admin cleanup kept a temp upload no task names")
+	}
+	for _, p := range sidecars("brief_1a2b3c4d.txt") {
+		if !exists(t, p) {
+			t.Errorf("the admin cleanup removed %s, a sidecar of a file a task still names", p)
+		}
+	}
+	for _, p := range sidecars("draft_5e6f7a8b.txt") {
+		if exists(t, p) {
+			t.Errorf("the admin cleanup left %s behind after removing its upload", p)
+		}
+	}
+	var got storageCleanupResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.RemovedTempFiles != 1 {
+		t.Errorf("removed_temp_files = %d, want 1 (sidecars are not counted)", got.RemovedTempFiles)
 	}
 }

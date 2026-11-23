@@ -77,8 +77,8 @@ Failure artifacts contain the Playwright HTML report, not backend logs.
 ## Determinism measures
 
 - Fixed ports; no `reuseExistingServer` in CI.
-- Health-gated boot (poll `/healthz`, `/health`, the web listener's `/login`, the fake's
-  `/healthz`) — never a fixed sleep.
+- Health-gated boot (poll the chat listener's `/readyz`, the orchestrator's `/health`, the
+  web listener's `/login`, the fake's `/healthz`) — never a fixed sleep.
 - A `sandbox-probe` gate fails the boot early if the container can't run bash +
   python (normal + lockdown) before any spec runs.
 - Web-first assertions; bounded `expect.poll`/`toPass` for the worker-pool task

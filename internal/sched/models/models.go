@@ -533,6 +533,16 @@ type TaskIteration struct {
 	PromptTokens        int64      `json:"prompt_tokens"`
 	CompletionTokens    int64      `json:"completion_tokens"`
 	Status              string     `json:"status"`
+
+	// CreatedBy, CreatedByKeyID and Model are the runner's copy of the task's
+	// attribution (the task it is running). db.AddTaskIteration records the
+	// task row's own values when the row is there and these only when it is
+	// already gone — a task stopped and deleted while its last run was still
+	// finishing — so that run's spend keeps its creator, key and model. Never
+	// serialized, and not read back by ListTaskIterations.
+	CreatedBy      *uuid.UUID `json:"-"`
+	CreatedByKeyID *string    `json:"-"`
+	Model          *string    `json:"-"`
 }
 
 // User is an account with Operations Center access as this plane sees it: a
@@ -829,6 +839,10 @@ const (
 	// view_logs. PermissionAdmin implies it (see APIKey.hasPermission /
 	// userHasPermission); no role grants it, so an operator who wants a
 	// non-admin fleet-wide auditor mints a key with it explicitly.
+	//
+	// It grants reading (task rows and transcripts), not acting: editing,
+	// re-running, cloning, waking or answering another principal's task needs
+	// PermissionAdmin (docs/TASK-OWNERSHIP.md, "Reading is not acting").
 	PermissionViewAllLogs Permission = "view_all_logs"
 	PermissionManageKeys  Permission = "manage_keys"
 	PermissionAdmin       Permission = "admin"
