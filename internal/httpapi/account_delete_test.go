@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -486,6 +487,64 @@ func TestWriteForAnAccountDeletedMidRequestIsNotAMember(t *testing.T) {
 		if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "not_a_member") {
 			t.Errorf("POST %s: status %d body %q, want 403 not_a_member", c.path, w.Code, w.Body.String())
 		}
+	}
+}
+
+// A deletion that begins while one of the account's /chat requests is past
+// its access check but has not registered its turn yet: the turn is refused
+// (the account's gate is closed), so when the account's work is reported
+// stopped no turn runs for it. Not parallel: it waits on timing.
+func TestTurnRegisteringWhileItsAccountIsDeletedNeverRuns(t *testing.T) {
+	s := memberFixture(t, "u@x.com")
+	s.cfg.MockMode = true
+	type stopResult struct {
+		stopped bool
+		err     error
+		running []string
+	}
+	result := make(chan stopResult, 1)
+	var reopen func()
+	s.beforeTurnRegister = func() {
+		s.beforeTurnRegister = nil
+		// The deletion begins: it closes the gate (cancelling this request)
+		// and stops the account's work while this request still holds its
+		// place in the gate.
+		reopen = s.accounts.close("u@x.com")
+		go func() {
+			stopped, err := s.stopAccountWork(context.Background(), "u@x.com")
+			result <- stopResult{stopped, err, s.runningTurnConvIDs()}
+		}()
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Cleanup(func() {
+		if reopen != nil {
+			reopen()
+		}
+	})
+	body, _ := json.Marshal(map[string]any{"message": "hello", "persona": "generic"})
+	req := httptest.NewRequestWithContext(gatewayContext("/chat", "u@x.com"), http.MethodPost, "/chat", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	s.Routes().ServeHTTP(w, req)
+	var res stopResult
+	select {
+	case res = <-result:
+	case <-time.After(20 * time.Second):
+		t.Fatal("stopping the account's work did not return")
+	}
+	if res.err != nil || !res.stopped {
+		t.Fatalf("stopAccountWork = %v, %v; want stopped", res.stopped, res.err)
+	}
+	if len(res.running) != 0 {
+		t.Fatalf("turns %v were running for the account when its work was reported stopped", res.running)
+	}
+	if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "not_a_member") {
+		t.Errorf("the request: status %d body %q, want 403 not_a_member", w.Code, w.Body.String())
+	}
+	// Nothing starts afterwards either.
+	time.Sleep(200 * time.Millisecond)
+	if running := s.runningTurnConvIDs(); len(running) != 0 {
+		t.Fatalf("turns %v started for the account after its work was stopped", running)
 	}
 }
 

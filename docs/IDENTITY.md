@@ -189,7 +189,10 @@ advises on each demoted split admin, unknown role and duplicate username in it.
   process before the rows go: its requests are cancelled and new ones
   refused (`not_a_member`) until the deletion is over, and the turns it runs
   — in its own chats and as a multiplayer participant — are cancelled; it
-  waits up to 15 seconds for both. It answers 503 and deletes nothing if its
+  waits up to 15 seconds for both. No turn starts for the account once this
+  begins: a request about to start one is refused (`not_a_member`), and the
+  running turns are cancelled after the account's requests have ended, then
+  looked for once more. It answers 503 and deletes nothing if its
   own request ends first (the client left, or the administrator deleting is
   being deleted) — though by then the account's requests in flight and its
   turns have already been cancelled. Once the work is stopped the deletion

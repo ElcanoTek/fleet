@@ -276,7 +276,7 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 	// runs fire-and-forget in a goroutine and the conversation surfaces in the
 	// notify_user's list the next time they open Fleet.
 	turnCtx, turnCancel := context.WithTimeout(context.Background(), s.turnTimeout())
-	buf, turnID, turnToken, ok := s.registerTurn(conv.ID, turnCancel)
+	buf, turnID, turnToken, ok := s.registerTurnFor(conv.ID, conv.UserEmail, turnCancel)
 	// The turn carries the webhook request's ids and continues its trace,
 	// like a /chat turn (turnContext, #2052).
 	turnCtx = turnContext(turnCtx, r.Context(), conv.ID, turnID, user)

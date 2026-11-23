@@ -46,7 +46,11 @@ type steerMailbox struct {
 	// says it was read. A transfer in between refuses the registration.
 	ownerChecked bool
 	ownerEpoch   uint64
-	slot         chan agentcore.SteerMessage
+	// owner is the conversation's owner when the submission was admitted:
+	// the turn is refused while a deletion of the sender's or the owner's
+	// account is under way (registerTurnGated, accountGate).
+	owner string
+	slot  chan agentcore.SteerMessage
 }
 
 func newSteerMailbox(st chatStore, user, convID, turnID string, buf *turnBuffer) *steerMailbox {

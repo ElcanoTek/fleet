@@ -47,33 +47,55 @@ func (s *Server) accountDrainTimeout() time.Duration {
 
 // stopAccountWork stops what the account has running in this process before
 // it is deleted: its requests in flight (s.accounts, already closed by the
-// caller) and the turns it runs — in its own chats, and as a participant in
-// other people's. It waits for them up to accountDrainTimeout and reports
-// whether everything stopped in time. It returns early with ctx's error when
-// ctx ends — the deleting request was cancelled (its client went away, or the
-// account deleting is itself being deleted) — and the caller then deletes
-// nothing, though the requests and turns it already cancelled stay cancelled.
+// caller, which cancelled them) and the turns it runs — in its own chats, and
+// as a participant in other people's. In that order: it waits for the
+// requests to end first, so none is still between its access check and its
+// turn's registration, then cancels the account's running turns and waits for
+// them, then looks once more. No turn can start for the account meanwhile
+// (registerTurnChecked refuses one while the gate is closed, under the lock
+// the turns are read under), so the second look is a backstop. Everything
+// shares one deadline, accountDrainTimeout; it reports whether everything
+// stopped in time. It returns early with ctx's error when ctx ends — the
+// deleting request was cancelled (its client went away, or the account
+// deleting is itself being deleted) — and the caller then deletes nothing,
+// though the requests and turns it already cancelled stay cancelled.
 func (s *Server) stopAccountWork(ctx context.Context, email string) (stopped bool, err error) {
 	email = identity.NormalizeEmail(email)
 	deadline := time.Now().Add(s.accountDrainTimeout())
+	drained, err := s.accounts.wait(ctx, email, time.Until(deadline))
+	if err != nil {
+		return false, err
+	}
+	stopped = drained
+	for range 2 {
+		ok, err := s.stopAccountTurns(ctx, email, deadline)
+		if err != nil {
+			return false, err
+		}
+		stopped = stopped && ok
+	}
+	return stopped, nil
+}
+
+// stopAccountTurns cancels the running turns that are email's (turnBelongsTo)
+// and waits for them until deadline, reporting whether they all ended.
+func (s *Server) stopAccountTurns(ctx context.Context, email string, deadline time.Time) (bool, error) {
 	var turns []string
 	for _, convID := range s.runningTurnConvIDs() {
 		if s.turnBelongsTo(ctx, convID, email) && s.cancelInflight(convID) {
 			turns = append(turns, convID)
 		}
 	}
-	stopped = true
 	tick := time.NewTicker(25 * time.Millisecond)
 	defer tick.Stop()
 	for _, convID := range turns {
-		for stopped {
+		for {
 			entry, ok := s.getInflight(convID)
 			if !ok || !entry.IsRunning() {
 				break
 			}
 			if !time.Now().Before(deadline) {
-				stopped = false
-				break
+				return false, nil
 			}
 			select {
 			case <-ctx.Done():
@@ -82,11 +104,7 @@ func (s *Server) stopAccountWork(ctx context.Context, email string) (stopped boo
 			}
 		}
 	}
-	drained, err := s.accounts.wait(ctx, email, time.Until(deadline))
-	if err != nil {
-		return false, err
-	}
-	return stopped && drained, nil
+	return true, nil
 }
 
 // runningTurnConvIDs lists the conversations with a turn running now.
