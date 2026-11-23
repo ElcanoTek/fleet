@@ -434,8 +434,8 @@ func (s *Sandbox) checkReplacement(check func(ctx context.Context, fresh *Sandbo
 //
 // It fails closed. With no way to build a replacement, past
 // maxBackendReplacements, when the caller's context is already done, or when
-// the replacement cannot be started, checked or bound to the very directory
-// the original was bound to, the call gets ErrPoisoned exactly as before.
+// the replacement cannot be started, cannot pass the take path's checks or
+// cannot bind the file root, the call gets ErrPoisoned exactly as before.
 func (s *Sandbox) backend(ctx context.Context) (impl, error) {
 	cur := s.currentImpl()
 	if !cur.poisoned() {
@@ -452,7 +452,7 @@ func (s *Sandbox) backend(ctx context.Context) (impl, error) {
 	cur = s.impl
 	build := s.replace
 	replaced := s.replacements
-	root, identity := s.fileOpRoot, s.fileOpRootIdentity
+	root := s.fileOpRoot
 	s.mu.Unlock()
 	if !cur.poisoned() {
 		// A parallel call replaced it while this one waited on replaceMu.
@@ -471,13 +471,23 @@ func (s *Sandbox) backend(ctx context.Context) (impl, error) {
 		return nil, fmt.Errorf("%w; a replacement could not be started", ErrPoisoned)
 	}
 	next := fresh.impl
+	// The file root is bound again inside the replacement, exactly as it was
+	// bound inside the original, and the identity it reports is the one file
+	// calls are checked against from here on. It is not compared with the
+	// original's: the identity is whatever the runtime's own kernel reports,
+	// and a replacement pod on another node, or a fresh VM guest (kata,
+	// libkrun), numbers the same directory differently. What makes the
+	// directory the right one is what made it right the first time — the
+	// take path's mount checks, which build has just run again.
+	var identity FileOpRootIdentity
 	if root != "" {
 		got, err := next.bindFileOpRoot(ctx, root)
-		if err != nil || got != identity {
+		if err != nil || (got.Dev == 0 && got.Ino == 0) {
 			next.close()
-			logging.From(ctx).Warn("sandbox: a replacement sandbox did not mount the bound file root; refusing it", "err", err)
+			logging.From(ctx).Warn("sandbox: a replacement sandbox could not bind the file root; refusing it", "err", err)
 			return nil, fmt.Errorf("%w; a replacement could not be bound to the workspace", ErrPoisoned)
 		}
+		identity = got
 	}
 	s.mu.Lock()
 	if s.closed {
@@ -487,6 +497,9 @@ func (s *Sandbox) backend(ctx context.Context) (impl, error) {
 	}
 	s.impl = next
 	s.replacements++
+	if root != "" {
+		s.fileOpRootIdentity = identity
+	}
 	s.mu.Unlock()
 	logging.From(ctx).Info("sandbox: replaced a poisoned sandbox within the run", "replacement", replaced+1)
 	return next, nil

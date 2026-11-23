@@ -136,6 +136,9 @@ func isSafeConversationDirSegment(convID string) bool {
 // never mounts sibling users' or conversations' directories.
 func (p *Pool) newPersistentSandbox(ctx context.Context, convID string) (*Sandbox, func(), error) {
 	if p.cfg.Mode == ModeContainer && p.cfg.Container.WorkspaceHostDir != "" && isSafeConversationDirSegment(convID) {
+		if ctx == nil {
+			ctx = context.Background()
+		}
 		build := func(ctx context.Context) (*Sandbox, error) {
 			return p.buildConversationSandbox(ctx, convID)
 		}
@@ -156,9 +159,6 @@ func (p *Pool) newPersistentSandbox(ctx context.Context, convID string) (*Sandbo
 func (p *Pool) buildConversationSandbox(ctx context.Context, convID string) (*Sandbox, error) {
 	if p.isClosed() {
 		return nil, ErrClosed
-	}
-	if ctx == nil {
-		ctx = context.Background()
 	}
 	root := p.cfg.Container.WorkspaceHostDir
 	convDir := filepath.Join(root, convID)

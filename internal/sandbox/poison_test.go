@@ -194,21 +194,21 @@ func TestSandbox_ReplacementFailsClosed(t *testing.T) {
 		}
 	})
 
-	t.Run("replacement mounts a different directory", func(t *testing.T) {
+	t.Run("replacement cannot bind the file root", func(t *testing.T) {
 		old := &poisonableImpl{}
-		other := &otherRootImpl{}
+		unbound := &unboundRootImpl{}
 		sb := &Sandbox{mode: ModeContainer, impl: old}
 		sb.setReplace(func(context.Context) (*Sandbox, error) {
-			return &Sandbox{mode: ModeContainer, impl: other}, nil
+			return &Sandbox{mode: ModeContainer, impl: unbound}, nil
 		})
 		if err := sb.BindFileOpRoot(ctx, "/workspace/conv"); err != nil {
 			t.Fatalf("BindFileOpRoot: %v", err)
 		}
 		old.poison.Store(true)
 		if _, err := sb.RunBash(ctx, BashRequest{Command: "true"}); !errors.Is(err, ErrPoisoned) {
-			t.Fatalf("RunBash = %v, want ErrPoisoned when the replacement's root identity differs", err)
+			t.Fatalf("RunBash = %v, want ErrPoisoned when the replacement reports no root identity", err)
 		}
-		if !other.closed.Load() {
+		if !unbound.closed.Load() {
 			t.Fatal("a refused replacement must be closed")
 		}
 	})
@@ -265,10 +265,52 @@ func TestSandbox_ReplacementFailsClosed(t *testing.T) {
 	})
 }
 
-// otherRootImpl is a healthy backend whose bound root is a different
-// directory than poisonableImpl's.
-type otherRootImpl struct{ poisonableImpl }
+// unboundRootImpl is a healthy backend that reports no identity for the file
+// root it was asked to bind.
+type unboundRootImpl struct{ poisonableImpl }
 
-func (o *otherRootImpl) bindFileOpRoot(context.Context, string) (FileOpRootIdentity, error) {
+func (u *unboundRootImpl) bindFileOpRoot(context.Context, string) (FileOpRootIdentity, error) {
+	return FileOpRootIdentity{}, nil
+}
+
+// movedRootImpl is a healthy backend whose kernel numbers the bound root
+// differently, as a pod on another node or a fresh VM guest does, and that
+// records the identity each file call is checked against.
+type movedRootImpl struct {
+	poisonableImpl
+	gotDev, gotIno atomic.Uint64
+}
+
+func (m *movedRootImpl) bindFileOpRoot(context.Context, string) (FileOpRootIdentity, error) {
 	return FileOpRootIdentity{Dev: 9, Ino: 9}, nil
+}
+
+func (m *movedRootImpl) runFileOp(_ context.Context, req FileOpRequest) (FileOpResult, error) {
+	m.gotDev.Store(req.expectedDev)
+	m.gotIno.Store(req.expectedIno)
+	return FileOpResult{}, nil
+}
+
+// A replacement is bound inside its own runtime, and file calls are checked
+// against the identity IT reports: a pod on another node or a new VM guest
+// numbers the same directory differently, and holding it to the original's
+// numbers would refuse every valid replacement there.
+func TestSandbox_ReplacementRebindsTheFileRoot(t *testing.T) {
+	ctx := context.Background()
+	old := &poisonableImpl{}
+	moved := &movedRootImpl{}
+	sb := &Sandbox{mode: ModeKubernetes, impl: old}
+	sb.setReplace(func(context.Context) (*Sandbox, error) {
+		return &Sandbox{mode: ModeKubernetes, impl: moved}, nil
+	})
+	if err := sb.BindFileOpRoot(ctx, "/workspace/conv"); err != nil {
+		t.Fatalf("BindFileOpRoot: %v", err)
+	}
+	old.poison.Store(true)
+	if _, err := sb.RunFileOp(ctx, FileOpRequest{Op: FileOpRead, Root: "/workspace/conv", Path: "/workspace/conv/a.csv"}); err != nil {
+		t.Fatalf("RunFileOp on a replacement with its own root identity: %v", err)
+	}
+	if moved.gotDev.Load() != 9 || moved.gotIno.Load() != 9 {
+		t.Fatalf("file call checked against dev=%d ino=%d, want the replacement's own identity (9, 9)", moved.gotDev.Load(), moved.gotIno.Load())
+	}
 }
