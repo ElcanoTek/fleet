@@ -3,6 +3,7 @@ package boxdoctor
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -19,7 +20,8 @@ import (
 // symlink, a directory inside it is a link (or missing, other than those the
 // server creates), it points at another repository, or it uses reftable. An
 // ok for a shallow clone says that fetches changing its depth fail in
-// worktree runs (ShallowNote). It reads the record this
+// worktree runs (ShallowNote), and one whose config sets a non-default
+// lfs.storage says that Git LFS cannot store objects in worktree runs. It reads the record this
 // process made (worktree.Pin): the server's from its own startup; a one-off
 // CLI process records the root before calling it.
 func CheckWorktreeGit(ctx context.Context, workspaceRoot string) Check {
@@ -47,12 +49,23 @@ func CheckWorktreeGit(ctx context.Context, workspaceRoot string) Check {
 		c.Fix = "restart fleet once the workspace repository's .git is a plain directory with nothing inside it replaced by a link"
 		return c
 	}
-	c.Status, c.Detail = StatusOK, "worktree tasks can run against the workspace repository"
+	c.Status, c.Detail = StatusOK, OKDetail
 	if worktree.IsShallow(ctx, workspaceRoot) {
 		c.Detail += ShallowNote
 	}
+	if storage, set := worktree.LFSStorage(ctx, workspaceRoot); set {
+		c.Detail += fmt.Sprintf(lfsStorageNote, worktree.SanitizeForTerminal(storage))
+	}
 	return c
 }
+
+// OKDetail is CheckWorktreeGit's detail for a usable repository, before any
+// notes.
+const OKDetail = "worktree tasks can run against the workspace repository"
+
+// lfsStorageNote is what CheckWorktreeGit adds when the repository's config
+// sets lfs.storage to anything but .git/lfs.
+const lfsStorageNote = "; its lfs.storage is %q, but only .git/lfs is writable in worktree runs, so Git LFS cannot fetch or check out objects there — keep the default storage"
 
 // ShallowNote is what CheckWorktreeGit adds for a shallow workspace
 // repository.

@@ -258,7 +258,12 @@ the regular-file check of decision 3.
   holds LFS pointer files until the run fetches the objects itself
   (`git lfs pull`), which works when git-lfs is in the sandbox image:
   `.git/lfs` is writable in worktree runs (and read-only in every other
-  whole-root sandbox). The default image does not include git-lfs.
+  whole-root sandbox). The default image does not include git-lfs. Only
+  the default LFS storage, `.git/lfs`, is writable: a repository whose
+  `lfs.storage` points elsewhere inside `.git` cannot fetch or check out
+  LFS objects in a run, and one pointing outside `.git` and the workspace
+  is not mounted at all. Keep the default; `fleet doctor` notes a
+  non-default `lfs.storage` set in the repository's own `.git/config`.
 - Submodules cannot be initialised in a worktree run: `git submodule update
   --init` writes `.git/config` and `.git/modules`, which are read-only there.
 - In a shallow workspace repository, ordinary fetches work in a worktree run

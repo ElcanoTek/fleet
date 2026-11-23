@@ -1732,7 +1732,9 @@ bind mounts in every whole-root sandbox; a worktree run's sandbox
 checkout and record and `.git/objects`, `.git/refs`, `.git/logs` and
 `.git/lfs` writable, with `objects/info` read-only — enough for commits,
 creating branches, fetches, pushes and, when git-lfs is in the sandbox
-image, downloading LFS objects (`git lfs pull`), while config, hooks, `HEAD`, `packed-refs` and other
+image, downloading LFS objects into the default `.git/lfs` storage
+(`git lfs pull`; a repository whose `lfs.storage` points elsewhere cannot
+store LFS objects in a run, and `fleet doctor` notes it), while config, hooks, `HEAD`, `packed-refs` and other
 worktrees stay read-only. Git in the run prints
 `error: Unable to create '…/packed-refs.lock': Read-only file system` after
 most ref updates and still succeeds; deleting or renaming any branch,

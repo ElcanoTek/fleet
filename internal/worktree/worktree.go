@@ -517,6 +517,72 @@ func IsShallow(ctx context.Context, root string) bool {
 	return err == nil && info.Mode().IsRegular()
 }
 
+// LFSStorage returns the lfs.storage value root's repository sets in its own
+// .git/config, when that names anything other than the default .git/lfs, and
+// true; otherwise "" and false. Only .git/config is read (a regular file,
+// opened without following a link, at most 1 MiB; no sandbox can write it),
+// and only an `[lfs]` section's `storage` key counts: includes, and global
+// or system configuration, are not consulted. A worktree run's sandbox can
+// write only .git/lfs, so Git LFS cannot store objects anywhere else.
+func LFSStorage(ctx context.Context, root string) (string, bool) {
+	gitDir, err := openUnder(ctx, root, ".git")
+	if err != nil {
+		return "", false
+	}
+	defer gitDir.Close()
+	data, err := readRegularNoFollow(gitDir, "config", 1<<20)
+	if err != nil {
+		return "", false
+	}
+	storage := lfsStorageIn(string(data))
+	if storage == "" {
+		return "", false
+	}
+	if p := filepath.Clean(storage); p == "lfs" || p == filepath.Join(pinKey(root), ".git", "lfs") {
+		return "", false
+	}
+	return storage, true
+}
+
+// lfsStorageIn returns the last `storage` value in an `[lfs]` section of a
+// git config file's text (section and key names compared case-insensitively,
+// a quoted value unquoted, a trailing comment dropped), or "".
+func lfsStorageIn(config string) string {
+	inLFS, value := false, ""
+	for _, line := range strings.Split(config, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || line[0] == '#' || line[0] == ';' {
+			continue
+		}
+		if strings.HasPrefix(line, "[") {
+			end := strings.IndexByte(line, ']')
+			if end < 0 {
+				inLFS = false
+				continue
+			}
+			inLFS = strings.EqualFold(strings.TrimSpace(line[1:end]), "lfs")
+			continue
+		}
+		if !inLFS {
+			continue
+		}
+		key, val, found := strings.Cut(line, "=")
+		if !found || !strings.EqualFold(strings.TrimSpace(key), "storage") {
+			continue
+		}
+		val = strings.TrimSpace(val)
+		if strings.HasPrefix(val, `"`) {
+			if end := strings.IndexByte(val[1:], '"'); end >= 0 {
+				val = val[1 : 1+end]
+			}
+		} else if i := strings.IndexAny(val, "#;"); i >= 0 {
+			val = strings.TrimSpace(val[:i])
+		}
+		value = val
+	}
+	return value
+}
+
 // statNoFollow opens rel beneath root without following a link at any level
 // and returns what it opened.
 func statNoFollow(ctx context.Context, root, rel string) (os.FileInfo, error) {

@@ -1346,3 +1346,49 @@ func TestDeleteBranchWithPackedAndLooseValues(t *testing.T) {
 		t.Errorf("packed-refs.lock left behind (stat err %v)", err)
 	}
 }
+
+// TestLFSStorage: only a non-default lfs.storage in the repository's own
+// .git/config is reported; the default (unset, "lfs", or the absolute
+// .git/lfs) is not.
+func TestLFSStorage(t *testing.T) {
+	for in, want := range map[string]string{
+		"[core]\n\tbare = false\n":                     "",
+		"[lfs]\n\tstorage = alt-lfs\n":                 "alt-lfs",
+		"[LFS]\n\tStorage = \"with space\" # note\n":   "with space",
+		"[lfs]\n\tstorage = one\n[lfs]\nstorage=two\n": "two",
+		"[lfs \"https://x\"]\n\tstorage = scoped\n":    "",
+		"[lfs]\n\t; storage = commented\n":             "",
+		"[remote \"origin\"]\n\tstorage = other\n":     "",
+	} {
+		if got := lfsStorageIn(in); got != want {
+			t.Errorf("lfsStorageIn(%q) = %q, want %q", in, got, want)
+		}
+	}
+	ctx := context.Background()
+	root := t.TempDir()
+	gitRepo(t, root)
+	config := filepath.Join(root, ".git", "config")
+	base, err := os.ReadFile(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for value, wantSet := range map[string]bool{
+		"":                                    false,
+		"lfs":                                 false,
+		filepath.Join(root, ".git", "lfs"):    false,
+		"alt-lfs":                             true,
+		filepath.Join(t.TempDir(), "lfs-out"): true,
+	} {
+		body := string(base)
+		if value != "" {
+			body += "[lfs]\n\tstorage = " + value + "\n"
+		}
+		if err := os.WriteFile(config, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		got, set := LFSStorage(ctx, root)
+		if set != wantSet || (set && got != value) {
+			t.Errorf("lfs.storage %q: LFSStorage = %q, %v; want set=%v", value, got, set, wantSet)
+		}
+	}
+}

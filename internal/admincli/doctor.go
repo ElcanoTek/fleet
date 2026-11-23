@@ -109,19 +109,21 @@ func warnWorktreeGit(w io.Writer) {
 	case boxdoctor.StatusWarn:
 		fmt.Fprintf(w, "WARN  %s (%s): %s\n", c.Name, root, c.Detail)
 	case boxdoctor.StatusOK:
-		fmt.Fprintf(w, "ok    %s (%s): usable as found now; the server records the repository at its own start, so a .git created or replaced after it started takes a restart%s\n", c.Name, root, shallowSuffix(c.Detail))
+		fmt.Fprintf(w, "ok    %s (%s): usable as found now; the server records the repository at its own start, so a .git created or replaced after it started takes a restart%s\n", c.Name, root, doctorNotes(c.Detail))
 	case boxdoctor.StatusSkip, boxdoctor.StatusFail:
 		// Skip: the root is not a repository, the case on most boxes.
 		// CheckWorktreeGit never fails.
 	}
 }
 
-// shallowSuffix is boxdoctor.ShallowNote when detail carries it.
-func shallowSuffix(detail string) string {
-	if strings.HasSuffix(detail, boxdoctor.ShallowNote) {
-		return boxdoctor.ShallowNote
+// doctorNotes is the notes boxdoctor.CheckWorktreeGit added after its ok
+// detail (a shallow clone, a non-default lfs.storage), or "".
+func doctorNotes(detail string) string {
+	notes, _ := strings.CutPrefix(detail, boxdoctor.OKDetail)
+	if notes == detail {
+		return ""
 	}
-	return ""
+	return notes
 }
 
 // cmdDoctorChecks runs doctor.sh, or the status fallback without it.

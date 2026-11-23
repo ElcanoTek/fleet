@@ -129,3 +129,24 @@ func TestCheckWorktreeGitNotesAShallowClone(t *testing.T) {
 		t.Errorf("shallow clone: status=%v detail=%q, want ok with the shallow note", c.Status, c.Detail)
 	}
 }
+
+// TestCheckWorktreeGitNotesANonDefaultLFSStorage: a repository whose config
+// sets lfs.storage elsewhere is ok, with the note that Git LFS cannot store
+// objects in worktree runs.
+func TestCheckWorktreeGitNotesANonDefaultLFSStorage(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	root := t.TempDir()
+	if out, err := exec.Command("git", "init", "-q", root).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v %s", err, out)
+	}
+	if out, err := exec.Command("git", "-C", root, "config", "lfs.storage", "alt-lfs").CombinedOutput(); err != nil {
+		t.Fatalf("git config: %v %s", err, out)
+	}
+	worktree.PinAtStartup(root)
+	c := CheckWorktreeGit(context.Background(), root)
+	if c.Status != StatusOK || !strings.Contains(c.Detail, `lfs.storage is "alt-lfs"`) || !strings.HasPrefix(c.Detail, OKDetail) {
+		t.Errorf("status=%v detail=%q, want ok with the lfs.storage note", c.Status, c.Detail)
+	}
+}
