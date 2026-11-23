@@ -175,8 +175,31 @@ func importMessagesTx(ctx context.Context, tx *sql.Tx, convID string, msgs []Imp
 		fmt.Fprintf(&b, "($%d, $%d, $%d, $%d, $%d)", base, base+1, base+2, base+3, base+4)
 		args = append(args, convID, m.Role, m.Type, string(m.Content), m.CreatedAt)
 	}
-	_, err := tx.ExecContext(ctx, b.String(), args...)
-	return err
+	// RETURNING id (in VALUES order) so the uploads an imported message refers
+	// to are recorded like any other message's (migration 0211).
+	b.WriteString(" RETURNING id")
+	rows, err := tx.QueryContext(ctx, b.String(), args...)
+	if err != nil {
+		return err
+	}
+	ids := make([]int64, 0, len(msgs))
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	_ = rows.Close()
+	if len(ids) != len(msgs) {
+		return fmt.Errorf("inserted %d messages but got %d ids", len(msgs), len(ids))
+	}
+	return insertMessageUploads(ctx, tx, messageUploadRefs(ids, func(i int) (string, []byte) { return msgs[i].Type, msgs[i].Content }))
 }
 
 // ImportMemory inserts a legacy memory, insert-if-absent by id. learned_at is

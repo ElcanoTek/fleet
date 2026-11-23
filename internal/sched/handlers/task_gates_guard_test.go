@@ -95,6 +95,7 @@ var storageReads = map[string]string{
 	"TaskUsageByUserDay": "reads spend",
 	"PendingQueueStats":  "reads queue depth",
 	"MigrationStatus":    "reads the schema version",
+	"TempUploadKeeper":   "reads which staged upload files a live or recently finished task still names",
 }
 
 // storageForbidden are storage methods no handler may use, whatever the gate.

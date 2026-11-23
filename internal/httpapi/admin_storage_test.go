@@ -59,7 +59,7 @@ func TestSweepTempUploads_RemovesOldKeepsFresh(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	removed := sweepTempUploads(dir, 24*time.Hour)
+	removed := sweepTempUploads(dir, 24*time.Hour, nil)
 	if removed != 1 {
 		t.Errorf("removed = %d, want 1", removed)
 	}

@@ -218,7 +218,7 @@ func (s *Server) privateWorkspaceStashRoot() (string, error) {
 			if err != nil {
 				return "", err
 			}
-			return filepath.Join(filepath.Clean(abs), "multiplayer-private"), nil
+			return filepath.Join(filepath.Clean(abs), store.AttachmentPrivateStashDir), nil
 		}
 	}
 	wsRoot, err := filepath.Abs(tools.WorkspaceDirForConversation(""))

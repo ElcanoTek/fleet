@@ -59,6 +59,82 @@ Images are exempt from staging: their bytes reach the model host-side as vision
 input (`agent.loadImageAttachments`) and never through a sandbox read. The
 prompt block tells the agent not to `view_file` them.
 
+## How long an upload lives
+
+An image is read from `uploads/` again on every later turn of its
+conversation: the user message records its path (`content.images[].path`) and
+replay re-reads the file (`agent.loadHistoryImageParts`), dropping it silently
+if it is gone. So an image is in use for as long as a message naming it exists.
+
+The hourly maintenance pass walks all of `EMAIL_ATTACHMENT_DIR` and removes
+files older than the conversation window; the admin **Clean up now** action
+walks only `uploads/` and uses the operator's cutoff instead. Both spare what
+`store.AttachmentKeeper` says is still in use:
+
+| Where | Kept while |
+| --- | --- |
+| `uploads/<user>/<token>/<name>` | a message of a conversation that still exists refers to it (`chat.message_uploads`, migration 0211) |
+| `multiplayer-private/<conversation>/…` | always: the stash goes with its conversation (`SweepOrphanWorkspaces`) |
+| anything else (`outbound/` copies a crash left, files a connector wrote) | never: age alone decides, as before |
+
+`chat.message_uploads` holds one row per (message, upload), written in the
+same transaction as the message by every insert path (a turn's user message,
+a plain append, a branch copy, the legacy importer). Its rows go with their
+message (`ON DELETE CASCADE`), so the cleanup never evaluates the retention
+rules itself; it follows whatever they decided:
+
+- a chat the retention sweep keeps — pinned, archived, in a project, shared,
+  Multiplayer, with a patrol or timer, or a temporary chat still inside its
+  window — keeps its images however old the files are;
+- a chat that expires, is evicted by the per-user cap, is deleted, or is purged
+  from the soft-delete window releases them, and they go on the next pass (on
+  the same pass for an expiry, which runs first). A soft-deleted chat
+  (`FLEET_CONVERSATION_SOFT_DELETE`) keeps them until the 30-day purge, like
+  its workspace, so its rows and its files stay together;
+- rewinding a chat (`TruncateAfter`) releases the images of the messages it
+  removed;
+- an upload never sent in any message is removed once it is older than the
+  window, as before.
+
+A lookup that fails keeps the file and the pass reports the failure (with the
+count of what it did remove). The non-image original under `uploads/` is not
+named by any message (the message names the staged copy), so it is still
+removed after the window; the staged copy lives with the conversation's
+workspace.
+
+**Cost.** A pass loads every referenced path once, on its first aged upload,
+and looks a file up on its own only when it is about to remove it — so the
+work does not grow with the number of images kept chats hold, only with what
+is actually removed.
+
+**After the upgrade.** Migration 0211 only creates the table. The messages
+written before it are recorded by the server once it is running
+(`store.BackfillMessageUploads`, started at boot in the background): one
+transaction per range of message ids, its position saved after each, so a
+restart resumes instead of starting over. Each time a server starts it, its
+upper bound is raised to the newest message, so messages a server of the
+previous release wrote after a command of this release had migrated the
+database are covered too; a new, empty database is marked complete by its
+first server.
+
+It parses each message with the same code the insert paths use. A message
+whose text holds a `\u0000` escape (which the database's JSON type would
+reject) is read like any other. An image path that holds U+0000 or another
+control character, or is longer than 2048 bytes, cannot name an upload and is
+not recorded — by the backfill or by a live write, so such a path never fails
+a turn, an append or an import. A range Postgres still refuses as data (an
+SQLSTATE of class 22, or 54000) is recorded one message at a time, and a
+message it refuses even then is logged and skipped, so one bad row cannot keep
+the record incomplete. Any other failure — a cancel or a timeout, a full disk,
+a lost connection — rolls the range back without saving its position, and the
+attempt is retried; it never skips a message.
+
+Until it marks itself complete (`chat.message_uploads_backfill.completed_at`),
+the cleanup keeps **every** upload. The admin Storage panel says so, with the
+position (`upload_references` in `GET /admin/storage`). A failed attempt is
+retried every minute and logged as a warning, and from the fifth failure in a
+row as an error.
+
 ## Why uploads are scoped per user
 
 Reachability was only half the hole. `validateAttachments` confined a

@@ -246,7 +246,17 @@ func (h *Handlers) HandleDownload(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, path) //nolint:gosec // G703: path is asserted within uploadsDir via withinDir/filepath.Rel above; filename is IsLocal-gated + sanitized.
 }
 
-// CleanupTempFiles removes files older than the specified duration.
+// tempUploadLookupTimeout bounds CleanupTempFiles's task lookups: one query
+// for every name a live job needs, plus one per file it is about to remove.
+const tempUploadLookupTimeout = time.Minute
+
+// CleanupTempFiles removes files older than maxAge from temp_uploads, except
+// those a kept job still names (storage.TempUploadKeeper): a task copies its
+// input files from here at the start of every run, so a recurring job's next
+// occurrence, a task scheduled further out than maxAge, a paused or
+// dead-lettered task keep theirs, and so does a job that finished within
+// maxAge, so a failed run can be fixed and rerun. A file whose use cannot be
+// checked stays too, reported once per pass.
 func (h *Handlers) CleanupTempFiles(maxAge time.Duration) {
 	tempDir := filepath.Join(h.config.DataDir, "temp_uploads")
 
@@ -263,6 +273,14 @@ func (h *Handlers) CleanupTempFiles(maxAge time.Duration) {
 		return
 	}
 
+	// The maintenance job has no caller context; the lookups get a bounded
+	// one of their own.
+	ctx, cancel := context.WithTimeout(context.Background(), tempUploadLookupTimeout)
+	defer cancel()
+	keep := h.tempUploadKeeper(ctx, tempDir, maxAge)
+	unchecked := 0
+	var firstUncheckedErr error
+
 	err := filepath.Walk(tempDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			// Log but continue walking - we want to clean up as many files as possible
@@ -270,6 +288,19 @@ func (h *Handlers) CleanupTempFiles(maxAge time.Duration) {
 			return nil
 		}
 		if !info.IsDir() && time.Since(info.ModTime()) > maxAge {
+			if keep != nil {
+				inUse, kerr := keep(path)
+				if kerr != nil {
+					unchecked++
+					if firstUncheckedErr == nil {
+						firstUncheckedErr = kerr
+					}
+					return nil
+				}
+				if inUse {
+					return nil
+				}
+			}
 			//nolint:gosec // G122: this walks the server's own DataDir/temp_uploads (operator-owned), removing aged temp files during scheduled cleanup. The path is produced by filepath.Walk over a server-controlled root, not by request input; symlink-TOCTOU is not a meaningful vector here.
 			if err := os.Remove(path); err != nil {
 				slog.Error("Failed to remove old temp file", "path", safe.LogSafe(path), "err", err)
@@ -282,6 +313,19 @@ func (h *Handlers) CleanupTempFiles(maxAge time.Duration) {
 	if err != nil {
 		slog.Error("Error cleaning up temp files", "err", err)
 	}
+	if unchecked > 0 {
+		slog.Error("Kept old temp files whose use could not be checked", "files", unchecked, "err", firstUncheckedErr)
+	}
+}
+
+// tempUploadKeeper is the task store's keep rule for this sweep, or nil — age
+// alone — for a Handlers built without a task store, which only unit tests
+// construct.
+func (h *Handlers) tempUploadKeeper(ctx context.Context, tempDir string, window time.Duration) func(path string) (bool, error) {
+	if h.storage == nil {
+		return nil
+	}
+	return h.storage.TempUploadKeeper(ctx, tempDir, window)
 }
 
 // calculateFileChecksum calculates the SHA-256 checksum of a file. The only

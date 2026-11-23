@@ -226,7 +226,7 @@ var table = []Entry{
 		Description: "Days before its deletion that a temporary chat is flagged in the interface; 0 turns the warning off. Held below CONVERSATION_TTL_DAYS."},
 	{Name: "FLEET_SCRATCH_RETENTION_DAYS", Group: GroupData, Scope: ScopeServer, Type: TypeInt, Default: "14",
 		Knob:        &Knob{Min: b(1)},
-		Description: "Days orchestrator upload staging files (temp_uploads) are kept."},
+		Description: "Days orchestrator upload files (temp_uploads) are kept. A file a task names is kept longer: while its job can still run (a pending, scheduled, running, paused or dead-lettered task, or a recurring job's next occurrence), and for this many days after the job last finished."},
 	{Name: "FLEET_INPUT_QUEUE_RETENTION_DAYS", Group: GroupData, Scope: ScopeServer, Type: TypeInt, Default: "30",
 		Knob:        &Knob{Min: b(0)},
 		Description: "Days finished input-queue rows keep their idempotency keys; 0 disables the purge."},

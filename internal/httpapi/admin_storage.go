@@ -78,6 +78,12 @@ type storageResponse struct {
 	DefaultDays              int `json:"default_days"`
 
 	LargestWorkspaces []storageWorkspaceRow `json:"largest_workspaces"`
+
+	// UploadReferences is how far the record of which chats use which
+	// uploads has got (store.BackfillMessageUploads, after an upgrade). Until
+	// it is complete no upload is removed, by the hourly pass or by a
+	// cleanup, and the panel says so. Absent when it cannot be read.
+	UploadReferences *store.MessageUploadsBackfill `json:"upload_references,omitempty"`
 }
 
 func (s *Server) handleAdminStorage(w http.ResponseWriter, r *http.Request) {
@@ -88,7 +94,7 @@ func (s *Server) handleAdminStorage(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 	resp := storageResponse{DefaultDays: storageCleanupDefaultDays}
-	resp.Uploads = duTree(ctx, filepath.Join(s.cfg.EmailAttachmentDir, "uploads"))
+	resp.Uploads = duTree(ctx, filepath.Join(s.cfg.EmailAttachmentDir, store.AttachmentUploadsDir))
 	resp.TempUploads = duTree(ctx, filepath.Join(s.cfg.DataDir, "temp_uploads"))
 
 	// One walk of the workspace tree, not two: the total and the per-conversation
@@ -96,7 +102,7 @@ func (s *Server) handleAdminStorage(w http.ResponseWriter, r *http.Request) {
 	// workspace twice.
 	workspaceRoot := tools.WorkspaceDirForConversation("")
 	resp.Workspaces, resp.LargestWorkspaces = s.workspaceUsage(r, workspaceRoot, 10)
-	if stashStats := duTree(ctx, filepath.Join(s.cfg.EmailAttachmentDir, "multiplayer-private")); stashStats.Bytes > 0 || stashStats.Files > 0 {
+	if stashStats := duTree(ctx, filepath.Join(s.cfg.EmailAttachmentDir, store.AttachmentPrivateStashDir)); stashStats.Bytes > 0 || stashStats.Files > 0 {
 		resp.Workspaces.Bytes += stashStats.Bytes
 		resp.Workspaces.Files += stashStats.Files
 	}
@@ -104,6 +110,12 @@ func (s *Server) handleAdminStorage(w http.ResponseWriter, r *http.Request) {
 	if total, avail, err := diskUsage(s.cfg.DataDir); err == nil {
 		resp.DiskTotalBytes = total
 		resp.DiskAvailableBytes = avail
+	}
+
+	if state, err := s.store.MessageUploadsBackfillState(ctx); err != nil {
+		logging.From(ctx).Error("admin storage: upload reference state failed", "err", err)
+	} else {
+		resp.UploadReferences = &state
 	}
 
 	cutoff := time.Now().AddDate(0, 0, -storageCleanupDefaultDays)
@@ -162,8 +174,8 @@ func (s *Server) handleAdminStorageCleanup(w http.ResponseWriter, r *http.Reques
 	}
 
 	ctx := r.Context()
-	uploadsDir := filepath.Join(s.cfg.EmailAttachmentDir, "uploads")
-	stashDir := filepath.Join(s.cfg.EmailAttachmentDir, "multiplayer-private")
+	uploadsDir := filepath.Join(s.cfg.EmailAttachmentDir, store.AttachmentUploadsDir)
+	stashDir := filepath.Join(s.cfg.EmailAttachmentDir, store.AttachmentPrivateStashDir)
 	tempDir := filepath.Join(s.cfg.DataDir, "temp_uploads")
 	workspaceRoot := tools.WorkspaceDirForConversation("")
 	before := duTree(ctx, uploadsDir).Bytes + duTree(ctx, tempDir).Bytes + duTree(ctx, workspaceRoot).Bytes + duTree(ctx, stashDir).Bytes
@@ -197,12 +209,15 @@ func (s *Server) handleAdminStorageCleanup(w http.ResponseWriter, r *http.Reques
 	}
 
 	if req.SweepFiles {
-		if n, err := store.SweepAttachments(uploadsDir, age); err != nil {
+		// The operator's cutoff applies to uploads nothing uses any more: an
+		// upload a chat that still exists refers to stays, however old.
+		// A partial failure still counts what WAS removed.
+		n, err := store.SweepAttachments(uploadsDir, age, store.AttachmentKeeper(ctx, s.store, s.cfg.EmailAttachmentDir))
+		if err != nil {
 			logging.From(ctx).Error("admin storage cleanup: attachment sweep failed", "err", err)
-		} else {
-			resp.RemovedUploadFiles = n
 		}
-		resp.RemovedTempFiles = sweepTempUploads(tempDir, age)
+		resp.RemovedUploadFiles = n
+		resp.RemovedTempFiles = sweepTempUploads(tempDir, age, s.tempUploadKeep(ctx, tempDir, age))
 	}
 
 	resp.RemainingUploadsBytes = duTree(ctx, uploadsDir).Bytes
@@ -358,23 +373,42 @@ func (out *storageTreeStats) countingWalk(ctx context.Context) fs.WalkDirFunc {
 	}
 }
 
-// sweepTempUploads removes regular files under dir older than age. Same
-// policy as handlers.CleanupTempFiles (which covers the scheduled path);
-// duplicated here because the chat-plane admin server doesn't hold a
-// reference to the sched handlers.
-func sweepTempUploads(dir string, age time.Duration) int {
+// sweepTempUploads removes regular files under dir older than age that keep
+// does not claim. Same policy as handlers.CleanupTempFiles (which covers the
+// scheduled path); duplicated here because the chat-plane admin server doesn't
+// hold a reference to the sched handlers — the keep rule is the same function
+// (storage.TempUploadKeeper, injected by WithTempUploadKeeper). keep reporting
+// an error keeps the file. A nil keep removes by age alone.
+func sweepTempUploads(dir string, age time.Duration, keep func(path string) (bool, error)) int {
 	removed := 0
 	cutoff := time.Now().Add(-age)
 	_ = filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil || !d.Type().IsRegular() {
 			return nil //nolint:nilerr // per-entry errors must not abort the sweep
 		}
-		if info, err := d.Info(); err == nil && info.ModTime().Before(cutoff) {
-			if err := os.Remove(path); err == nil { //nolint:gosec // walks the server's own temp_uploads tree
-				removed++
+		info, err := d.Info()
+		if err != nil || !info.ModTime().Before(cutoff) {
+			return nil //nolint:nilerr // a file that vanished or is fresh is simply not swept
+		}
+		if keep != nil {
+			if inUse, kerr := keep(path); kerr != nil || inUse {
+				return nil //nolint:nilerr // a file whose use cannot be checked is kept, not an abort
 			}
+		}
+		if err := os.Remove(path); err == nil { //nolint:gosec // walks the server's own temp_uploads tree
+			removed++
 		}
 		return nil
 	})
 	return removed
+}
+
+// tempUploadKeep is the keep rule for the admin sweep of temp_uploads, with
+// the operator's cutoff as its window: a file a kept job names stays. Without
+// the scheduler's rule the server cannot tell, so it keeps every file.
+func (s *Server) tempUploadKeep(ctx context.Context, tempDir string, window time.Duration) func(path string) (bool, error) {
+	if s.tempUploadKeeper == nil {
+		return func(string) (bool, error) { return true, nil }
+	}
+	return s.tempUploadKeeper(ctx, tempDir, window)
 }

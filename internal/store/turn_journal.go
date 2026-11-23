@@ -212,6 +212,9 @@ func (s *Store) appendHistoryProvenanceTx(ctx context.Context, tx *sql.Tx, convI
 			return nil, err
 		}
 	}
+	if err := insertMessageUploads(ctx, tx, historyUploadRefs(entries, ids)); err != nil {
+		return nil, err
+	}
 	return ids, nil
 }
 

@@ -69,8 +69,10 @@ disk usage was invisible to admins.
 
 - **Hourly disk sweep** (`cmd/fleet/main.go`, ctx-bound `safe.Recover`
   goroutine): `store.SweepAttachments` (attachment uploads past the
-  conversation TTL) + `handlers.CleanupTempFiles` (orchestrator
-  `temp_uploads`, which previously had **no caller**; on its own clock,
+  conversation TTL that no message of a still-existing conversation names,
+  [ATTACHMENT-SCOPING.md](ATTACHMENT-SCOPING.md#how-long-an-upload-lives)) +
+  `handlers.CleanupTempFiles` (orchestrator `temp_uploads` no kept job names,
+  which previously had **no caller**; on its own clock,
   `FLEET_SCRATCH_RETENTION_DAYS`, since [CHAT-RETENTION.md](CHAT-RETENTION.md)). The existing
   post-turn sweeps remain; the timer covers idle servers.
 - **Download partials**: the same pass removes `download_url` partial files
@@ -84,10 +86,15 @@ disk usage was invisible to admins.
   a warning banner when chat data exceeds half the disk.
 - **"Clean up now"** (`POST /admin/storage/cleanup`): deletes unpinned
   conversations idle past an operator-chosen cutoff (minimum 1 day;
-  **pinned, archived, shared, and project-bound chats are never touched**
-  — the same exemptions as the TTL sweep, enforced in
-  `store.DeleteUnpinnedOlderThan`), reaps their now-orphaned workspace
-  dirs, and sweeps aged upload/temp files. Returns counts + bytes freed.
+  **pinned, archived, shared, project-bound and Multiplayer chats, and chats
+  with an armed or paused patrol or timer, are never touched** — the TTL
+  sweep's own definition of a temporary chat, `temporaryConversationClause`,
+  enforced in `store.DeleteUnpinnedOlderThan`; a hand-copied list there used
+  to miss the patrol/timer rule), reaps their now-orphaned workspace
+  dirs, and sweeps aged upload/temp files with the same keep rules as the
+  hourly sweep: an upload a remaining chat refers to stays whatever the
+  cutoff, and a task file a kept job names stays (a job that finished within
+  the cutoff is kept). Returns counts + bytes freed.
   The panel previews how many conversations a given cutoff would remove
   before the operator commits.
 

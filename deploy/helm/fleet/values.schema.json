@@ -339,7 +339,7 @@
             "FLEET_SCHED_RATE_LIMIT_PER_DAY": { "type": ["string", "number", "boolean"], "description": "Per-principal task create/upload limit per day; 0 disables. Default: 500." },
             "FLEET_SCHED_RATE_LIMIT_PER_MINUTE": { "type": ["string", "number", "boolean"], "description": "Per-principal task create/upload limit per minute; 0 disables. Default: 60." },
             "FLEET_SCHED_TICK_SECONDS": { "type": ["string", "number", "boolean"], "description": "Interval of the due-task scan. Default: 30." },
-            "FLEET_SCRATCH_RETENTION_DAYS": { "type": ["string", "number", "boolean"], "description": "Days orchestrator upload staging files (temp_uploads) are kept. Default: 14." },
+            "FLEET_SCRATCH_RETENTION_DAYS": { "type": ["string", "number", "boolean"], "description": "Days orchestrator upload files (temp_uploads) are kept. A file a task names is kept longer: while its job can still run (a pending, scheduled, running, paused or dead-lettered task, or a recurring job's next occurrence), and for this many days after the job last finished. Default: 14." },
             "FLEET_SEARCH_ENABLED": { "type": ["string", "number", "boolean"], "description": "Conversation search. Default: true." },
             "FLEET_SENTRY_DSN": { "type": ["string", "number", "boolean"], "description": "Sentry-protocol ingest URL; unset makes Sentry a no-op. A public identifier, not a secret." },
             "FLEET_SERVER_ADDR": { "type": ["string", "number", "boolean"], "description": "Listen address of the chat API (and the webhooks it serves). Bound at startup; a change needs a restart. The chart sets it from fixed: 0.0.0.0:8080; set that value instead. Default: 127.0.0.1:8080." },

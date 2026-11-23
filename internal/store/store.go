@@ -2337,7 +2337,17 @@ func (s *Store) appendHistoryTx(ctx context.Context, tx *sql.Tx, convID string, 
 			return nil, err
 		}
 	}
+	// The uploads these messages refer to, so the attachment cleanup keeps them
+	// while the messages exist (migration 0211).
+	if err := insertMessageUploads(ctx, tx, historyUploadRefs(entries, ids)); err != nil {
+		return nil, err
+	}
 	return ids, nil
+}
+
+// historyUploadRefs is messageUploadRefs for entries inserted as ids.
+func historyUploadRefs(entries []agent.HistoryEntry, ids []int64) []messageUploadRef {
+	return messageUploadRefs(ids, func(i int) (string, []byte) { return entries[i].Type, entries[i].Content })
 }
 
 // lockConversationForAppend bumps the conversation's updated_at at the START

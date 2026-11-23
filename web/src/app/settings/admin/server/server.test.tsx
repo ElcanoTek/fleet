@@ -113,6 +113,29 @@ describe("AdminServerPage", () => {
     expect(screen.getByTestId("storage-cleanup-run")).toBeEnabled();
   });
 
+  it("says uploads are kept while the server is still recording which chats use them", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch(STATS, { ...STORAGE, upload_references: { complete: false, through_id: 4000, upto_id: 9000 } }),
+    );
+    render(<AdminServerPage />);
+
+    const notice = await screen.findByTestId("storage-upload-references-pending");
+    expect(notice).toHaveTextContent("message 4000 of 9000 checked");
+    expect(notice).toHaveTextContent("keep every file uploaded in a chat");
+  });
+
+  it("shows no upload-record notice once the record is complete", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch(STATS, { ...STORAGE, upload_references: { complete: true, through_id: 9000, upto_id: 9000 } }),
+    );
+    render(<AdminServerPage />);
+
+    await screen.findByTestId("storage-panel");
+    expect(screen.queryByTestId("storage-upload-references-pending")).toBeNull();
+  });
+
   it("associates the cleanup controls with their visible labels", async () => {
     vi.stubGlobal("fetch", routedFetch());
     render(<AdminServerPage />);

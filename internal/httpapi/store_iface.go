@@ -408,6 +408,14 @@ type chatStore interface {
 	SweepTurnEvents(ctx context.Context, ttl time.Duration) (int, error)
 	AutoArchiveOlderThan(ctx context.Context, d time.Duration) (int, error)
 	SweepOrphanWorkspaces(ctx context.Context, root string) (int, error)
+	// ReferencedUploads and UploadReferenced report which uploads a message of
+	// a conversation that still exists refers to; the attachment cleanup keeps
+	// those (store.AttachmentKeeper, migration 0211).
+	ReferencedUploads(ctx context.Context) (map[string]struct{}, bool, error)
+	UploadReferenced(ctx context.Context, path string) (bool, error)
+	// MessageUploadsBackfillState is how far the record of earlier messages'
+	// uploads has got; until it is complete no upload is removed.
+	MessageUploadsBackfillState(ctx context.Context) (store.MessageUploadsBackfill, error)
 	// Admin storage panel (disk visibility + reclaim).
 	StorageConversationStats(ctx context.Context, cutoff time.Time) (store.StorageConversationStats, error)
 	DeleteUnpinnedOlderThan(ctx context.Context, cutoff time.Time) (int, error)

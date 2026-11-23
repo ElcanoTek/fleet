@@ -169,6 +169,9 @@ type Server struct {
 	// never observe — and "repair" — a mutation's intermediate on-disk state.
 	// See internal/httpapi/shared_files.go.
 	sharedFilesMu sync.Mutex
+	// beforeSharedFilesSync is a test seam run in SyncSharedFiles just before
+	// it takes sharedFilesMu; nil in production.
+	beforeSharedFilesSync func()
 	// stopEpochs records the last Stop scope=all boundary per conversation
 	// (#785): the input-queue acceptance counter's value when the Stop began
 	// (#1477), so it compares exactly with each row's AcceptedSeq and is
@@ -264,6 +267,11 @@ type Server struct {
 	// sweepTaskWorkspaces (optional) sweeps completed/orphaned task and mcp-run
 	// workspace directories under the workspace root.
 	sweepTaskWorkspaces func(ctx context.Context, workspaceRoot string, olderThan time.Duration) (int, error)
+	// tempUploadKeeper (optional) builds the scheduler's keep rule for a sweep
+	// of the orchestrator's temp_uploads (storage.TempUploadKeeper): files a
+	// live job names stay. Unset, the admin cleanup keeps every temp_uploads
+	// file, since it cannot tell.
+	tempUploadKeeper func(ctx context.Context, tempDir string, window time.Duration) func(path string) (bool, error)
 	// taskOutliers (optional) returns top background tasks by cost, tokens,
 	// iterations, and failure state for /analytics.
 	taskOutliers func(ctx context.Context, limit int) ([]TaskOutlierStat, error)
@@ -624,6 +632,13 @@ func WithSchedPing(fn func(context.Context) error) Option {
 // MCP-run workspace directories alongside conversation workspaces.
 func WithTaskWorkspaceSweeper(fn func(ctx context.Context, workspaceRoot string, olderThan time.Duration) (int, error)) Option {
 	return func(s *Server) { s.sweepTaskWorkspaces = fn }
+}
+
+// WithTempUploadKeeper injects the scheduler store's keep rule for
+// temp_uploads so the admin storage cleanup leaves the input files of live
+// jobs, the same rule the hourly cleanup applies.
+func WithTempUploadKeeper(fn func(ctx context.Context, tempDir string, window time.Duration) func(path string) (bool, error)) Option {
+	return func(s *Server) { s.tempUploadKeeper = fn }
 }
 
 // WithTaskOutlierProvider injects the scheduler store's task outlier query into

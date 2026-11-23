@@ -37,7 +37,7 @@ func TestSweepAttachments_RemovesOldKeepsFresh(t *testing.T) {
 	}
 	mustTouch(t, filepath.Join(sub, "report.pdf"), "x", now.Add(-30*24*time.Hour))
 
-	removed, err := SweepAttachments(dir, 14*24*time.Hour)
+	removed, err := SweepAttachments(dir, 14*24*time.Hour, nil)
 	if err != nil {
 		t.Fatalf("SweepAttachments: %v", err)
 	}
@@ -62,7 +62,7 @@ func TestSweepAttachments_RemovesOldKeepsFresh(t *testing.T) {
 func TestSweepAttachments_MissingDirIsNoOp(t *testing.T) {
 	t.Parallel()
 
-	removed, err := SweepAttachments(filepath.Join(t.TempDir(), "does-not-exist"), 14*24*time.Hour)
+	removed, err := SweepAttachments(filepath.Join(t.TempDir(), "does-not-exist"), 14*24*time.Hour, nil)
 	if err != nil {
 		t.Fatalf("missing dir should not error, got: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestSweepAttachments_NotADirIsError(t *testing.T) {
 	notDir := filepath.Join(dir, "regular.file")
 	mustTouch(t, notDir, "x", time.Now())
 
-	_, err := SweepAttachments(notDir, 14*24*time.Hour)
+	_, err := SweepAttachments(notDir, 14*24*time.Hour, nil)
 	if err == nil {
 		t.Fatal("expected error for non-directory path")
 	}
