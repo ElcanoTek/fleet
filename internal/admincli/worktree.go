@@ -6,8 +6,11 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"syscall"
 
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/ElcanoTek/fleet/internal/worktree"
 )
 
@@ -43,7 +46,7 @@ func cmdWorktree(argv []string) int {
 // printed through worktree.SanitizeForTerminal.
 func worktreeList(argv []string) int {
 	fs := flag.NewFlagSet("worktree list", flag.ContinueOnError)
-	ws := fs.String("workspace", "", "workspace repo root (default: $FLEET_WORKSPACE_ROOT, else ./workspace)")
+	ws := fs.String("workspace", "", "workspace repo root (default: FLEET_WORKSPACE_ROOT from the environment or the server env file, else ./workspace, relative to the service home when it exists)")
 	if err := fs.Parse(argv); err != nil {
 		return 1
 	}
@@ -83,7 +86,7 @@ func worktreeList(argv []string) int {
 // human-readable output, an exit code).
 func worktreePrune(argv []string) int {
 	fs := flag.NewFlagSet("worktree prune", flag.ContinueOnError)
-	ws := fs.String("workspace", "", "workspace repo root (default: $FLEET_WORKSPACE_ROOT, else ./workspace)")
+	ws := fs.String("workspace", "", "workspace repo root (default: FLEET_WORKSPACE_ROOT from the environment or the server env file, else ./workspace, relative to the service home when it exists)")
 	olderThan := fs.Duration("older-than", worktree.DefaultPruneAge, "only remove worktree dirs older than this (e.g. 24h; Go has no day unit — use hours)")
 	dryRun := fs.Bool("dry-run", false, "list what would be removed without removing it")
 	if err := fs.Parse(argv); err != nil {
@@ -119,9 +122,46 @@ func worktreePrune(argv []string) int {
 	return 0
 }
 
-// resolveWorkspaceRoot resolves the --workspace flag the way the running server
-// resolves its workspace root, so the CLI and the server's in-process sweep can
-// never disagree about which tree they are reclaiming.
+// resolveWorkspaceRoot is the --workspace flag when given, else the root the
+// server uses as far as an operator command can tell, so the CLI and the
+// server's in-process sweep agree about which tree they act on. A login shell
+// does not carry the service's environment or working directory, so
+// FLEET_WORKSPACE_ROOT comes from this process, else from the deployment env
+// file (envOrFile; an unreadable file is skipped), else it is ./workspace; a
+// relative value is taken against the service's working directory
+// (serviceWorkDir).
 func resolveWorkspaceRoot(flagVal string) string {
-	return worktree.ResolveWorkspaceRoot(flagVal)
+	if strings.TrimSpace(flagVal) != "" {
+		return worktree.ResolveWorkspaceRoot(flagVal)
+	}
+	root := strings.TrimSpace(envOrFile("FLEET_WORKSPACE_ROOT"))
+	if root == "" {
+		root = "workspace"
+	}
+	if filepath.IsAbs(root) {
+		return filepath.Clean(root)
+	}
+	return filepath.Join(serviceWorkDir(), root)
+}
+
+// defaultServiceHome is the WorkingDirectory deploy/fleet.service gives the
+// server.
+const defaultServiceHome = "/var/lib/fleet"
+
+// serviceWorkDir is the directory the server resolves a relative workspace
+// root against: the service home (FLEET_SERVICE_HOME, else /var/lib/fleet)
+// when it exists, else this process's working directory (a development
+// server started from here).
+func serviceWorkDir() string {
+	home := strings.TrimSpace(envreg.Get("FLEET_SERVICE_HOME"))
+	if home == "" {
+		home = defaultServiceHome
+	}
+	if info, err := os.Stat(home); err == nil && info.IsDir() {
+		return home
+	}
+	if cwd, err := os.Getwd(); err == nil {
+		return cwd
+	}
+	return "."
 }

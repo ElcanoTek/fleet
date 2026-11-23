@@ -176,7 +176,10 @@ running keep that process's mounts (a writable `.git` on the first start
 after an upgrade), so on the podman backend they are reclaimed before the
 repository is recorded and prepared. `fleet doctor` and the server's boot
 log run the same check (`boxdoctor.CheckWorktreeGit`) and name the root they
-checked; the doctor's "ok" says what it found now (the server decides from
+checked (the CLI, which does not carry the service's environment, takes
+`FLEET_WORKSPACE_ROOT` from its own environment or the server env file, else
+`./workspace`, relative to the service home `/var/lib/fleet` when that
+exists, as do `fleet worktree list|prune` without `--workspace`); the doctor's "ok" says what it found now (the server decides from
 its own startup record, so a `.git` created later takes a restart), and a
 root the doctor cannot look into (not root, `/var/lib/fleet` 0700) is
 skipped, not reported as refused.

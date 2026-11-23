@@ -51,3 +51,74 @@ func TestWorktreePrunePrintsALockReasonSafely(t *testing.T) {
 		t.Errorf("prune output %q: want the lock reason with control characters replaced", out)
 	}
 }
+
+// TestResolveWorkspaceRootLikeTheService: without --workspace, the root is
+// FLEET_WORKSPACE_ROOT from the environment, else from the deployment env
+// file, else ./workspace; a relative value is taken against the service home
+// when it exists, else the working directory. An unreadable env file is
+// skipped.
+func TestResolveWorkspaceRootLikeTheService(t *testing.T) {
+	t.Setenv("FLEET_WORKSPACE_ROOT", "")
+	home := t.TempDir()
+	cwd := t.TempDir()
+	t.Chdir(cwd)
+	resolve := func(t *testing.T, envFile, body string, mode os.FileMode) string {
+		t.Helper()
+		if body != "" {
+			if err := os.WriteFile(envFile, []byte(body), mode); err != nil {
+				t.Fatal(err)
+			}
+		}
+		t.Setenv("FLEET_ENV_FILE", envFile)
+		resetEnvFileCache()
+		t.Cleanup(resetEnvFileCache)
+		return resolveWorkspaceRoot("")
+	}
+
+	t.Run("env file readable", func(t *testing.T) {
+		t.Setenv("FLEET_SERVICE_HOME", home)
+		dir := t.TempDir()
+		if got := resolve(t, filepath.Join(dir, "abs.env"), "FLEET_WORKSPACE_ROOT=/srv/fleet-ws\n", 0o600); got != "/srv/fleet-ws" {
+			t.Errorf("absolute value from the env file = %q", got)
+		}
+		if got, want := resolve(t, filepath.Join(dir, "rel.env"), "FLEET_WORKSPACE_ROOT=ws\n", 0o600), filepath.Join(home, "ws"); got != want {
+			t.Errorf("relative value from the env file = %q, want %q", got, want)
+		}
+	})
+	t.Run("env file unreadable", func(t *testing.T) {
+		if os.Geteuid() == 0 {
+			t.Skip("root reads a mode-000 file")
+		}
+		t.Setenv("FLEET_SERVICE_HOME", home)
+		if got, want := resolve(t, filepath.Join(t.TempDir(), "fleet.env"), "FLEET_WORKSPACE_ROOT=/srv/fleet-ws\n", 0o000), filepath.Join(home, "workspace"); got != want {
+			t.Errorf("unreadable env file = %q, want the service home's %q", got, want)
+		}
+	})
+	t.Run("neither", func(t *testing.T) {
+		t.Setenv("FLEET_SERVICE_HOME", filepath.Join(t.TempDir(), "absent"))
+		got := resolve(t, filepath.Join(t.TempDir(), "absent.env"), "", 0)
+		if filepath.Base(got) != "workspace" || mustEvalPath(t, filepath.Dir(got)) != mustEvalPath(t, cwd) {
+			t.Errorf("no env file, no service home = %q, want ./workspace under %q", got, cwd)
+		}
+	})
+	t.Run("environment wins", func(t *testing.T) {
+		t.Setenv("FLEET_SERVICE_HOME", home)
+		t.Setenv("FLEET_WORKSPACE_ROOT", "/from/env")
+		if got := resolve(t, filepath.Join(t.TempDir(), "fleet.env"), "FLEET_WORKSPACE_ROOT=/srv/fleet-ws\n", 0o600); got != "/from/env" {
+			t.Errorf("process env = %q, want /from/env", got)
+		}
+	})
+	if got := resolveWorkspaceRoot("/explicit"); got != "/explicit" {
+		t.Errorf("--workspace = %q", got)
+	}
+}
+
+// mustEvalPath is filepath.EvalSymlinks or a fatal error.
+func mustEvalPath(t *testing.T, p string) string {
+	t.Helper()
+	r, err := filepath.EvalSymlinks(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
