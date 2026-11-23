@@ -122,3 +122,17 @@ fleet.elcanotek.com/unpinned-images annotation, so `kubectl describe` shows it.
 {{- end -}}
 {{- join "," $out -}}
 {{- end -}}
+
+{{/*
+fleet.stripEnvQuotes — a config.env value with one pair of quotes removed
+exactly as fleet's creds.StripEnvQuotes removes it: only when the first and
+last characters are the same quote, and nothing else trimmed. Each check then
+applies the rest of what fleet does to that key.
+*/}}
+{{- define "fleet.stripEnvQuotes" -}}
+{{- $v := toString . -}}
+{{- if and (ge (len $v) 2) (or (and (hasPrefix "\"" $v) (hasSuffix "\"" $v)) (and (hasPrefix "'" $v) (hasSuffix "'" $v))) -}}
+{{- $v = substr 1 (int (sub (len $v) 1)) $v -}}
+{{- end -}}
+{{- $v -}}
+{{- end -}}

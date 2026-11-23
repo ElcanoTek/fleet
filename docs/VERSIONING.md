@@ -107,7 +107,7 @@ which one you are reading:
 | `GET /admin/health-summary` → `fleet_version` | the same full string (admin-gated) |
 | `GET /api-info` → `fleet_version` | the **version only** — no `(<revision>)` |
 | the A2A agent card → `version` | the **version only** |
-| `GET /healthz` | **no version at all** — it is a liveness probe (`status`, and a 503 while draining or provider-degraded) |
+| `GET /healthz` | **no version at all** — it is a status endpoint for monitors (`ok`, or a 503 while draining or while a model's circuit breaker is open), not a probe; the probes `/livez` and `/readyz` carry no version either ([OPERATORS.md](OPERATORS.md#health-endpoints--which-one-answers-what)) |
 
 When you need the revision — a support ticket, a "which build is this?" — use
 `fleet version` or the admin health summary. `/api-info` is a machine

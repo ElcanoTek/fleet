@@ -20,7 +20,7 @@
 //
 // # Endpoints
 //
-//   - GET    /healthz                           — liveness probe
+//   - GET    /healthz                           — status for monitors: 503 while draining or while a model's circuit is open; not a probe (the probes are /livez and /readyz, cmd/fleet/health.go)
 //   - GET    /personas                          — list persona YAMLs
 //   - GET    /conversations                     — list user's conversations
 //   - POST   /conversations                     — create empty conversation (optional seed message, docs/DISCUSS-RUN.md)

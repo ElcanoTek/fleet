@@ -30,7 +30,7 @@ Open the web UI (served by the fleet binary itself on its web port):
 Reach the chat API:
 
   kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "fleet.fullname" . }} 8080:8080
-  curl -s localhost:8080/healthz
+  curl -s localhost:8080/readyz    # what the readiness probe sees: databases, sandbox, disk
 
 Verify a turn executes in a sandbox pod:
 

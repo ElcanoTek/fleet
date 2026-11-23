@@ -352,7 +352,8 @@ Quote it verbatim in an issue or a security report; do not parse it. The same
 full string appears in the login banner and in `fleet_version` on the admin
 health summary (`GET /admin/health-summary`). `/api-info`'s `fleet_version`
 carries the **version only**, without the revision, and `/healthz` carries no
-version at all — it is a liveness probe. Full contract:
+version at all — it is a status endpoint (see
+[health endpoints](#health-endpoints--which-one-answers-what)). Full contract:
 [`VERSIONING.md`](VERSIONING.md).
 
 ## update — install a new release in place
@@ -474,6 +475,57 @@ DSN passwords are redacted in the output.
 > not have this false negative — it runs its sandbox smoke *as the service
 > user*.)
 
+## health endpoints — which one answers what
+
+Four unauthenticated `GET` endpoints report health, and they answer different
+questions. Point each consumer at the one whose question it asks.
+
+| Endpoint | Served on | Answers | Depends on |
+| --- | --- | --- | --- |
+| `/livez` | chat (`FLEET_SERVER_ADDR`) and orchestrator listeners | `200 {"status":"ok","uptime_seconds":N}` whenever the process serves HTTP, draining included | nothing else: no database, no model provider |
+| `/readyz` | chat and orchestrator listeners | `200 ready`; `207 degraded` when only the `sandbox` or `disk` check fails (still serving); `503 not_ready` when a database ping fails, or while draining | `chat_db` and `sched_db` (critical; each pings over a connection of its own, so a busy pool does not fail it), `sandbox`, `disk`; the body reports each check |
+| `/healthz` | chat listener | `200 ok`; `503 {"status":"shutting_down"}` while draining; `503 {"status":"degraded","model":…}` while any model's circuit breaker is open | draining and the model circuits, **not** the databases; carries `X-Fleet-Active-Turns` and `X-Fleet-Active-Approvals` |
+| `/health`, `/v1/health` | orchestrator listener; `/v1/health` also on the web listener | always `200 {"status":"healthy",…}` | nothing: it answers when the orchestrator router does |
+
+**Point probes and monitors at the chat listener, never at the public
+address.** `/livez`, `/readyz` and `/healthz` are not served on the web
+listener (`FLEET_WEB_ADDR`), which is what Caddy and an Ingress send the site
+to: there the web UI answers those paths, so a monitor on
+`https://<domain>/healthz` sees the web UI and never alerts. On a box the chat
+listener is `127.0.0.1:8080` (`FLEET_SERVER_ADDR`, loopback by default), so run
+the monitor or its agent on the box; in a cluster it is the Service's `chat`
+port (`<release>.<namespace>.svc:8080`), not the Ingress host.
+
+- **Liveness** (restart the process when it fails): `/livez`. A restart fixes
+  neither a database outage nor a provider incident, and it kills every
+  in-flight turn and task.
+- **Readiness, or a load balancer's gate** (stop sending traffic when it
+  fails): `/readyz`. Treat `207` as ready, as Kubernetes (any 200–399
+  passes) and `fleet release install` do. Its database checks each hold one
+  connection to Postgres outside the stores' pools (replaced on the pool's
+  `FLEET_*_DB_MAX_CONN_LIFETIME`), so `/readyz` does not report pool
+  saturation: alert on `fleet_db_pool_saturated` and
+  `fleet_db_pool_wait_total` on the orchestrator's `/metrics` (admin API key)
+  for that. Behind a PgBouncer in
+  transaction mode a ping still needs a server connection, so a saturated
+  PgBouncer server pool can fail the checks.
+- **Monitoring a degraded model**: `/healthz`. A model's circuit opens after
+  five provider errors in five minutes — a provider incident, or a delisted
+  model a recurring task keeps calling — and while it is open runs fall back
+  to another model, so chat keeps working. That deserves an alert, not a
+  restart or a drain, so never gate traffic on `/healthz`. The opening is
+  also logged (`event=circuit_open`).
+
+What fleet's own tooling uses: the Helm chart's startup and liveness probes
+`/livez` and its readiness probe `/readyz`
+([DEPLOYMENT-KUBERNETES.md](DEPLOYMENT-KUBERNETES.md#health-probes));
+`fleet release install` and `fleet release rollback` wait for `/readyz` to
+answer `200` or `207` (a `207` is printed as a warning naming the degraded
+checks); `fleet doctor` checks `/livez` and `/readyz` and advises when
+`/healthz` names a model with an open circuit; the update idle gate reads the
+`/healthz` work counters; `fleet chat` and `fleet acp` ping `/healthz` and
+count the open-circuit `503` as reachable.
+
 ## doctor — diagnose AND repair box-level drift
 
 ```
@@ -524,7 +576,8 @@ production-only bug. The pass covers, in order:
    caddy`); `--check` reports it; a Caddyfile fleet did not write is never
    touched (advisory only when it routes no `/v1`).
 6. **Services** — `postgresql` (when a local unit exists), `fleet`,
-   `caddy` active; then the `/healthz` + `/readyz` probes, and
+   `caddy` active; then the `/livez` + `/readyz` probes (a model whose
+   circuit breaker is open, read from `/healthz`, is advised, not failed), and
    `https://<domain>/api-info` fetched **through** Caddy (pinned to this box
    with `--resolve`) — the proof that the API is routed, not just that the
    process is up.

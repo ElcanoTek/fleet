@@ -371,18 +371,28 @@ func (p *Pool) coldContainer(ctx context.Context, ov ResourceOverride, noNetwork
 		})
 	}
 	cfg = ov.applyTo(cfg)
-	// See newSandbox below for why we resolve the start timeout here
-	// rather than reading it raw from cfg.
-	startCtx, cancel := context.WithTimeout(ctx, p.startTimeoutFor(cfg)+5*time.Second)
-	defer cancel()
-	sb, err := p.newBackendSandbox(startCtx, cfg)
+	build := func(ctx context.Context) (*Sandbox, error) {
+		// See newSandbox below for why we resolve the start timeout here
+		// rather than reading it raw from cfg.
+		startCtx, cancel := context.WithTimeout(ctx, p.startTimeoutFor(cfg)+5*time.Second)
+		defer cancel()
+		sb, err := p.newBackendSandbox(startCtx, cfg)
+		if err != nil {
+			return nil, err
+		}
+		if p.isClosed() {
+			sb.Close()
+			return nil, ErrClosed
+		}
+		return sb, nil
+	}
+	sb, err := build(ctx)
 	if err != nil {
 		return nil, func() {}, err
 	}
-	if p.isClosed() {
-		sb.Close()
-		return nil, func() {}, ErrClosed
-	}
+	// The same cfg builds the replacement for a poisoned backend
+	// (Sandbox.backend), so it keeps this take's seal, scope and limits.
+	sb.setReplace(build)
 	return sb, sb.Close, nil
 }
 
@@ -472,19 +482,29 @@ func (p *Pool) egressContainer(ctx context.Context, ov ResourceOverride, allowli
 	cfg.NoNetwork = false
 	cfg.ProxyURL = p.cfg.EgressProxy.ProxyURLForToken(token)
 	cfg = ov.applyTo(cfg)
-	startCtx, cancel := context.WithTimeout(ctx, resolveStartTimeout(cfg)+5*time.Second)
-	defer cancel()
-	sb, err := NewContainer(startCtx, cfg)
+	build := func(ctx context.Context) (*Sandbox, error) {
+		startCtx, cancel := context.WithTimeout(ctx, resolveStartTimeout(cfg)+5*time.Second)
+		defer cancel()
+		sb, err := NewContainer(startCtx, cfg)
+		if err != nil {
+			return nil, err
+		}
+		if p.isClosed() {
+			sb.Close()
+			return nil, ErrClosed
+		}
+		sb.SetPythonCellTimeout(p.cfg.PythonCellTimeout)
+		return sb, nil
+	}
+	sb, err := build(ctx)
 	if err != nil {
 		release()
 		return nil, func() {}, err
 	}
-	if p.isClosed() {
-		sb.Close()
-		release()
-		return nil, func() {}, ErrClosed
-	}
-	sb.SetPythonCellTimeout(p.cfg.PythonCellTimeout)
+	// A replacement for a poisoned backend (Sandbox.backend) reuses this
+	// take's proxy token: the grant is the turn's, and it is released once,
+	// by the cleanup below, whichever container is live by then.
+	sb.setReplace(build)
 	return sb, func() { sb.Close(); release() }, nil
 }
 
@@ -556,6 +576,11 @@ func (p *Pool) TakeScoped(ctx context.Context, req ScopedTake) (*Sandbox, func()
 			cleanup()
 			return nil, func() {}, verr
 		}
+		// A replacement mounts the scope again, so it passes the same check
+		// against the same pinned directory or is refused.
+		sb.checkReplacement(func(ctx context.Context, fresh *Sandbox) error {
+			return verifyScopedMount(ctx, fresh, scope.Dir, dirID)
+		})
 	}
 	return sb, cleanup, nil
 }
@@ -771,6 +796,7 @@ func (p *Pool) Take(ctx context.Context) (*Sandbox, func(), error) {
 				ps.sb.Close()
 				return nil, func() {}, ErrClosed
 			}
+			p.replaceWithCold(ps.sb)
 			return ps.sb, ps.sb.Close, nil
 		default:
 			// Pool empty (or only-stale just drained) — cold-start.
@@ -805,7 +831,29 @@ func (p *Pool) coldStart(ctx context.Context) (*Sandbox, func(), error) {
 		sb.Close()
 		return nil, func() {}, ErrClosed
 	}
+	p.replaceWithCold(sb)
 	return sb, sb.Close, nil
+}
+
+// replaceWithCold lets a sandbox handed out by Take replace a poisoned
+// backend (Sandbox.backend) with a cold start of the same warm configuration.
+// Container backends only: the test-only host executor has no container to
+// replace, and a poisoned host sandbox stays poisoned.
+func (p *Pool) replaceWithCold(sb *Sandbox) {
+	if p.cfg.Mode != ModeContainer && p.cfg.Mode != ModeKubernetes {
+		return
+	}
+	sb.setReplace(func(ctx context.Context) (*Sandbox, error) {
+		fresh, err := p.newSandbox(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if p.isClosed() {
+			fresh.Close()
+			return nil, ErrClosed
+		}
+		return fresh, nil
+	})
 }
 
 // isClosed is the common lifecycle gate for every take path. A successful take

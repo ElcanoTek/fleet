@@ -241,6 +241,59 @@ podman backend guarantees (#796).
     fleet validate-config`) after any config change: it runs the same
     fail-closed preflight boot does, plus everything else the verb checks.
 
+## Health probes
+
+The chart runs one replica, so a probe failure is never contained: a failing
+readiness probe takes the whole UI and API out of the Service, and a failing
+liveness probe restarts the pod, killing every in-flight turn and task. Each
+probe therefore asks the endpoint that answers its own question, on the chat
+port (8080):
+
+| Probe | Path | Fails when | Timing |
+| --- | --- | --- | --- |
+| startup | `/livez` | the listener is not up yet; it comes up last, after migrations and the sandbox preflight | every 10s, `startupProbeFailureThreshold` × 10s budget (default 10 minutes) |
+| readiness | `/readyz` | a database ping fails, or the pod is draining on SIGTERM (`207` — only the sandbox or disk check degraded — still passes) | every 10s, 10s timeout, 6 failures (a minute) |
+| liveness | `/livez` | the process stops answering HTTP; never because of a database, a model provider, or a drain | every 30s, 5s timeout, 3 failures |
+
+The readiness timeout is above `/readyz`'s own 5s per-check limit: under this
+backend the sandbox check calls the apiserver, and at the kubelet's 1s default
+a slow apiserver would fail the probe although `/readyz` reports ready.
+
+The two database checks each ping over a connection of its own, outside the
+stores' pools (25 connections each by default), so a busy box whose pools are
+fully checked out still passes readiness; a database that stops answering, or
+refuses connections, fails it. That holds one extra idle connection per store
+open to Postgres, replaced on the store pool's own lifetime
+(`FLEET_*_DB_MAX_CONN_LIFETIME`), so a rotated password or a revoked login
+fails the check within that time as it fails the stores. Behind a PgBouncer in
+transaction mode the check's connection is a client connection that still
+needs a server connection for each ping, so when PgBouncer's server pool is
+the bottleneck the ping queues there and readiness can fail on a busy box
+after all. Six failed probes in a row, a minute, take the pod out of the
+Service, which rides out a managed database's failover or a network blip
+without dropping the only replica.
+
+`/readyz` therefore does not report pool saturation. Watch it on the pool
+metrics instead: `fleet_db_pool_saturated{db}` (1 while every connection is
+checked out) and `fleet_db_pool_wait_total` /
+`fleet_db_pool_wait_duration_seconds` (requests that waited for one), on the
+orchestrator port's `/metrics`, which needs the admin API key (`X-API-Key`; see
+the Grafana row under Day-2 operations).
+
+None of the probes uses `/healthz`. It answers `503` while any model's circuit
+breaker is open (five provider errors in five minutes), which a provider
+incident or a delisted model a recurring task keeps calling produces while runs
+fall back to another model and chat keeps working; and it does not check the
+databases. Earlier versions of the chart probed it, so one failing model could
+take the install offline.
+
+To monitor from outside the pod, point at the Service's `chat` port
+(`<release>.<namespace>.svc:8080`): `/healthz` to be alerted to a degraded
+model, `/readyz` for the control plane itself. Never use the Ingress host: the
+Ingress routes to the web port, where the web UI answers `/healthz`, `/livez`
+and `/readyz`, so a monitor there never alerts. The full endpoint list is in
+[OPERATORS.md](OPERATORS.md#health-endpoints--which-one-answers-what).
+
 ## Day-2 operations
 
 The systemd timers and host scripts (`bootstrap.sh`, `fleet update`,
@@ -489,6 +542,10 @@ pods), and the python REPL knobs.
   exact missing piece (RBAC verb, claim, NetworkPolicy, RuntimeClass). The
   chart's `fleet-runner` Role carries every needed verb; if you wrote your own
   RBAC, diff it against `deploy/helm/fleet/templates/rbac.yaml`.
+- **The pod runs but is not Ready** — its readiness probe asks `/readyz`, whose
+  body names the failing check (`chat_db`, `sched_db`, or `draining`):
+  `kubectl -n fleet port-forward deploy/fleet 8080:8080`, then
+  `curl -s localhost:8080/readyz`.
 - **First turn fails with `ErrImagePull` / `ImagePullBackOff`** — the sandbox
   image ref isn't pullable *from the nodes* (fleet fails the pod fast with the
   kubelet's reason instead of burning the start timeout). Check the ref and

@@ -206,6 +206,12 @@ one copied chain must not reassign another.
 - **Finished occurrences in between** keep their owner. They are history.
 - **Future occurrences** inherit the new owner, because a recurrence spawn copies
   `created_by` from the completing row.
+- **Recorded spend** follows the rows that change owner: the same transaction
+  sets `created_by` on their `task_iterations`, which carry their own copy of
+  the attribution so spend keeps counting after a task is deleted
+  ([USAGE-ANALYTICS.md](USAGE-ANALYTICS.md), migration 0210). The usage report
+  and the user budgets then count it for the new owner. `--lineage` (CLI only)
+  does the same for the unowned historical occurrences it attributes.
 - **The connector check** runs on every row in the set, each as it would read
   afterwards (owner = the new owner), while the rows are locked. A next
   occurrence edited to a different selection is checked on its own selection.

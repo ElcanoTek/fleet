@@ -10,9 +10,9 @@ package handlers
 // answer.
 //
 // Like usage.go this is STRICTLY a read model over the metering the governed
-// core already persists — task-side from task_iterations ⋈ tasks (sched DB),
-// chat-side and the account roster through seams into the chat store. No new
-// accounting path is introduced anywhere in this file.
+// core already persists — task-side from task_iterations (sched DB, deleted
+// tasks' spend included), chat-side and the account roster through seams into
+// the chat store. No new accounting path is introduced anywhere in this file.
 
 import (
 	"context"

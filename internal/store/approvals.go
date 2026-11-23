@@ -1168,7 +1168,16 @@ func (s *Store) CountUserMessagesAfterResolution(ctx context.Context, convID, ca
 // stacked cards and the user has to dismiss each one manually.
 // Returns the number of rows updated so the caller can decide
 // whether to log or inject a history entry.
-func (s *Store) SupersedePendingApprovals(ctx context.Context, userEmail, convID, toolName string) (int64, error) {
+//
+// keepIDs are pending cards that must stay pending: a batch the same turn
+// staged over one tool (one card per deal) is several decisions, not a retry,
+// so the stager passes the cards it staged itself this turn (live 2026-11-23:
+// four rule updates staged together, three rejected as "superseded" while the
+// agent told the user all four were waiting).
+func (s *Store) SupersedePendingApprovals(ctx context.Context, userEmail, convID, toolName string, keepIDs ...string) (int64, error) {
+	if keepIDs == nil {
+		keepIDs = []string{}
+	}
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE approvals
 		   SET status = 'rejected',
@@ -1181,8 +1190,9 @@ func (s *Store) SupersedePendingApprovals(ctx context.Context, userEmail, convID
 		 WHERE conversation_id = $2
 		   AND tool_name = $3
 		   AND ($4 = '' OR LOWER(user_email) = LOWER($4))
-		   AND status = 'pending'`,
-		time.Now().Unix(), convID, toolName, strings.TrimSpace(userEmail),
+		   AND status = 'pending'
+		   AND NOT (id = ANY($5::text[]))`,
+		time.Now().Unix(), convID, toolName, strings.TrimSpace(userEmail), keepIDs,
 	)
 	if err != nil {
 		return 0, err

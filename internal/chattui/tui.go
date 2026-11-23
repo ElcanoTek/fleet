@@ -489,10 +489,12 @@ func (m *model) applyEvent(ev Event) {
 	case "tool.approval_superseded":
 		// The agent re-staged the same tool; the server voided the older card.
 		// Drop it so /approve can never settle a dead approval.
-		tool := ev.Str("tool")
+		// kept_approval_ids: the batch the same turn staged for this tool,
+		// still pending server-side; only the other cards were voided.
+		tool, keep := ev.Str("tool"), ev.Strs("kept_approval_ids")
 		kept := m.pending[:0]
 		for _, ap := range m.pending {
-			if ap.tool != tool || ap.executing {
+			if ap.tool != tool || ap.executing || keep[ap.id] {
 				kept = append(kept, ap)
 			}
 		}

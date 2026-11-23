@@ -60,7 +60,7 @@ func (s *enableMCPTestStore) ListConnectorPrefs(_ context.Context, _ string) (ma
 	return s.prefs, nil
 }
 
-func (s *enableMCPTestStore) SupersedePendingApprovals(_ context.Context, userEmail, convID, toolName string) (int64, error) {
+func (s *enableMCPTestStore) SupersedePendingApprovals(_ context.Context, userEmail, convID, toolName string, _ ...string) (int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var n int64

@@ -13,9 +13,13 @@
 //
 //   - No second accounting path. The principal's current-window spend is
 //     recomputed from the metering the governed core already persists — the
-//     #601 part-1 usage read model (task_iterations ⋈ tasks via Store.TaskUsage,
-//     chat turn_metrics via the ChatUsage seam). The budgets table stores only
-//     configuration + the soft-alert dedup marker.
+//     #601 part-1 usage read model (task_iterations via Store.TaskUsage, chat
+//     turn_metrics via the ChatUsage seam). The budgets table stores only
+//     configuration + the soft-alert dedup marker. Both meters outlive what
+//     they describe: spend recorded for a task or a chat turn keeps counting
+//     after the task or conversation is deleted or pruned by retention
+//     (task_iterations carries its own creator/key attribution, migration
+//     0210; turn_metrics its user, chat migration 038).
 //   - Budgets only NARROW. The gate can only refuse work the global ceilings
 //     would have allowed, never permit more: a budget's hard bounds are clamped
 //     at check time against the LIVE global ceilings (Ceilings reads
@@ -54,7 +58,8 @@ type Store interface {
 	BudgetsFor(ctx context.Context, user, key string) ([]models.Budget, error)
 	// ListBudgets returns every configured budget (for GET /admin/budgets).
 	ListBudgets(ctx context.Context) ([]models.Budget, error)
-	// TaskUsage is the part-1 aggregation over task_iterations ⋈ tasks.
+	// TaskUsage is the part-1 aggregation over task_iterations (which keep
+	// counting after their task is deleted).
 	TaskUsage(ctx context.Context, from, to time.Time, groupBy string) ([]models.UsageBucket, error)
 	// MarkBudgetSoftAlert claims the once-per-window soft alert.
 	MarkBudgetSoftAlert(ctx context.Context, id uuid.UUID, windowStart time.Time) (bool, error)

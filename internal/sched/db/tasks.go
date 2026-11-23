@@ -413,9 +413,12 @@ func (db *Database) SetErrorAnalysis(ctx context.Context, taskID uuid.UUID, raw 
 // only thing that frees a task's name.
 //
 // The two log tables are deleted explicitly because they hold a bare task_id
-// with no foreign key (migrations 001 and 058); every other child table
-// declares ON DELETE CASCADE. Ordered children-first so the task row is never
-// orphaned mid-transaction.
+// with no foreign key (migrations 001 and 058); the content-bearing child
+// tables declare ON DELETE CASCADE. Ordered children-first so the task row is
+// never orphaned mid-transaction. task_iterations is deliberately left in
+// place: it is the task's spend record (no foreign key since migration 0210,
+// attribution on the row), so spend recorded for the task keeps counting
+// toward budgets and usage after the task is deleted.
 func (db *Database) DeleteTask(ctx context.Context, taskID uuid.UUID) (bool, error) {
 	tx, err := db.conn.BeginTx(ctx, nil)
 	if err != nil {

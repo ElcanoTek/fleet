@@ -60,7 +60,7 @@ func TestRouter_LegacyTaggedDeprecated(t *testing.T) {
 // TestRouter_HealthAndInfoNotDeprecated: unversioned-forever paths (health
 // probes + api-info) are served without a deprecation signal.
 func TestRouter_HealthAndInfoNotDeprecated(t *testing.T) {
-	for _, path := range []string{"/healthz", "/health", "/readyz", "/api-info"} {
+	for _, path := range []string{"/healthz", "/health", "/livez", "/readyz", "/api-info"} {
 		var seen string
 		h := Router(echoPath(&seen))
 		rec := httptest.NewRecorder()
