@@ -158,9 +158,9 @@ func (s *Store) UploadReferenced(ctx context.Context, path string) (bool, error)
 
 // ReferencedUploads returns every upload path a message of an existing
 // conversation refers to, in one query, and whether that record is complete.
-// It is incomplete until BackfillMessageUploads has recorded the messages
-// written before migration 0211; until then a caller must treat every upload
-// as in use. A nil store answers incomplete.
+// It is incomplete until BackfillMessageUploads has run to the end in this
+// process (MessageUploadsBackfillState); until then a caller must treat every
+// upload as in use. A nil store answers incomplete.
 //
 // The set is held in memory for one pass (about 150 MB per million referenced
 // paths). Past that size, page it by uploads subdirectory (one owner's
@@ -196,7 +196,9 @@ func (s *Store) ReferencedUploads(ctx context.Context) (map[string]struct{}, boo
 }
 
 // MessageUploadsBackfill is how far BackfillMessageUploads has got. Until it
-// is Complete, the attachment cleanup keeps every upload.
+// is Complete, the attachment cleanup keeps every upload. Complete means the
+// record was completed once and this process has scanned the messages added
+// since its last start.
 type MessageUploadsBackfill struct {
 	Complete  bool  `json:"complete"`
 	ThroughID int64 `json:"through_id"` // the last message id it has read
@@ -217,7 +219,7 @@ func (s *Store) MessageUploadsBackfillState(ctx context.Context) (MessageUploads
 	if err != nil {
 		return MessageUploadsBackfill{}, fmt.Errorf("message uploads backfill state: %w", err)
 	}
-	st.Complete = completed.Valid
+	st.Complete = completed.Valid && s.uploadRefsScanned.Load()
 	return st, nil
 }
 
@@ -226,23 +228,28 @@ func (s *Store) MessageUploadsBackfillState(ctx context.Context) (MessageUploads
 // primary key however rare images are.
 const messageUploadsBackfillBatch int64 = 10000
 
-// BackfillMessageUploads records the uploads of the messages written before
-// migration 0211 (every later message written by this release is recorded as
-// it is written), then marks the record complete; until then AttachmentKeeper
-// keeps every upload.
+// BackfillMessageUploads records the uploads of messages no write of this
+// release recorded, then marks the record complete for this process; until
+// then AttachmentKeeper keeps every upload.
 //
-// Its upper bound is raised to the newest message id each time it starts, so
-// messages a server of the previous release wrote after a command-line run of
-// this release had already migrated the database are recorded too. It walks
-// message ids in ranges of messageUploadsBackfillBatch, one transaction each,
-// and saves its position after each, so a stop (shutdown, an error, ctx)
-// resumes where it left off on the next call. It parses with the same
-// uploadPathsOf the insert paths use. A range that Postgres refuses as data
-// is recorded one message at a time, and a message it still refuses as data
-// (isRowDataError) is logged and skipped, so one bad row cannot hold the
-// record incomplete; any other failure (a cancel, a timeout, a full disk)
+// Every server start runs it. The first time, it records the messages written
+// before migration 0211. Each start raises its upper bound to the newest
+// message id and scans from where the previous start stopped, so a message a
+// writer that does not record references added since then — a server of the
+// previous release still running while a command of this release migrated the
+// database — is recorded before this process removes any upload. Messages this
+// release wrote are scanned again and skipped (ON CONFLICT DO NOTHING), which
+// costs one pass over the messages added since the last start.
+//
+// It walks message ids in ranges of messageUploadsBackfillBatch, one
+// transaction each, and saves its position after each, so a stop (shutdown,
+// an error, ctx) resumes where it left off on the next call. It parses with
+// the same uploadPathsOf the insert paths use. A range that Postgres refuses
+// as data is recorded one message at a time, and a message it still refuses
+// as data (isRowDataError) is logged and skipped, so one bad row cannot hold
+// the record incomplete; any other failure (a cancel, a timeout, a full disk)
 // rolls the range back and is returned, to be retried. Returns the number of
-// references recorded; a no-op once complete.
+// references recorded.
 func (s *Store) BackfillMessageUploads(ctx context.Context) (int, error) {
 	return s.backfillMessageUploads(ctx, messageUploadsBackfillBatch)
 }
@@ -252,12 +259,9 @@ func (s *Store) backfillMessageUploads(ctx context.Context, batch int64) (int, e
 	err := s.db.QueryRowContext(ctx,
 		`UPDATE message_uploads_backfill
 		    SET upto_id = GREATEST(upto_id, (SELECT COALESCE(MAX(id), 0) FROM messages))
-		  WHERE id = 1 AND completed_at IS NULL
+		  WHERE id = 1
 		  RETURNING through_id, upto_id`,
 	).Scan(&through, &upto)
-	if errors.Is(err, sql.ErrNoRows) {
-		return 0, nil // complete
-	}
 	if err != nil {
 		return 0, fmt.Errorf("message uploads backfill state: %w", err)
 	}
@@ -275,10 +279,11 @@ func (s *Store) backfillMessageUploads(ctx context.Context, batch int64) (int, e
 		through = end
 	}
 	if _, err := s.db.ExecContext(ctx,
-		`UPDATE message_uploads_backfill SET completed_at = $1 WHERE id = 1 AND completed_at IS NULL`,
+		`UPDATE message_uploads_backfill SET completed_at = COALESCE(completed_at, $1) WHERE id = 1`,
 		time.Now().Unix()); err != nil {
 		return recorded, fmt.Errorf("message uploads backfill: mark complete: %w", err)
 	}
+	s.uploadRefsScanned.Store(true)
 	return recorded, nil
 }
 

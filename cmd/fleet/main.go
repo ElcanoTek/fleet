@@ -1068,9 +1068,11 @@ func run() error {
 	// orphaned in between — retried with backoff for the life of the process
 	// if it fails, so a boot-time error cannot leave it missing.
 	go keepChatScheduleCascade(ctx, schedStorage)
-	// Record the uploads of messages written before migration 0211, in the
-	// background so the boot never waits on it; until it completes the
-	// attachment cleanup keeps every upload.
+	// Record the uploads of messages no write of this release recorded —
+	// those written before migration 0211, then on each start those added
+	// since the last one — in the background so the boot never waits on it;
+	// until it has run to the end in this process, the attachment cleanup
+	// keeps every upload.
 	go keepMessageUploadsBackfill(ctx, chatStore.BackfillMessageUploads, messageUploadsBackfillRetry)
 	defer cancel()
 

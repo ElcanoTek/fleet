@@ -66,6 +66,11 @@ type Store struct {
 	// (hard delete — no behavior change for existing deployments). Set via
 	// SetSoftDelete from FLEET_CONVERSATION_SOFT_DELETE.
 	softDelete bool
+	// uploadRefsScanned is set once this process has run
+	// BackfillMessageUploads to the end. Until then the attachment cleanup
+	// keeps every chat upload, even when an earlier start completed the
+	// record: each start first records messages added since the last one.
+	uploadRefsScanned atomic.Bool
 	// tokenCipher encrypts the per-user remote-MCP OAuth secrets at rest (#443).
 	// nil = the remote-MCP-OAuth feature is disabled (no FLEET_MCP_OAUTH_ENCRYPTION_KEY);
 	// the token CRUD then fails closed via secretbox.ErrNoCipher rather than

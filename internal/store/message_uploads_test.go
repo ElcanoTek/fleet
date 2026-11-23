@@ -350,7 +350,7 @@ func TestMessageUploadsBackfillRecordsEarlierMessages(t *testing.T) {
 		}
 	}
 	if n, err := s.BackfillMessageUploads(ctx); err != nil || n != 0 {
-		t.Errorf("a completed backfill ran again: %d, %v", n, err)
+		t.Errorf("a later start recorded %d references again (%v); want 0", n, err)
 	}
 
 	sweepAttachmentTree(t, s, attachDir)
@@ -384,6 +384,58 @@ func versionBeforeMessageUploads(t *testing.T) int {
 	}
 	t.Fatal("no message_uploads migration in the embedded set")
 	return 0
+}
+
+// TestEachStartRecordsMessagesWrittenWithoutReferences: after the record is
+// complete, a writer that does not record references — a server of an earlier
+// release still running against the same database — can add a message naming
+// an image. The next server start keeps every upload until it has scanned the
+// messages added since the previous start, records that one, and only then
+// lets the cleanup remove what nothing refers to.
+func TestEachStartRecordsMessagesWrittenWithoutReferences(t *testing.T) {
+	t.Parallel()
+	s, dsn := newTestStoreDSN(t)
+	ctx := context.Background()
+	completeUploadsBackfill(t, s)
+	conv, err := s.CreateConversation(ctx, "earlier@x.com", "t", "victoria", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attachDir := t.TempDir()
+	img := agedFile(t, filepath.Join(attachDir, AttachmentUploadsDir, "u", "earlier", "a.png"))
+	unsent := agedFile(t, filepath.Join(attachDir, AttachmentUploadsDir, "u", "unsent", "b.png"))
+	// The way a writer of an earlier release stores it: no reference row.
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT INTO messages (conversation_id, role, type, content, created_at) VALUES ($1, 'user', 'text', $2, $3)`,
+		conv.ID, string(imageEntry(t, img).Content), time.Now().Unix()); err != nil {
+		t.Fatal(err)
+	}
+
+	// The next start: a new process on the same database.
+	next, err := Open(dsn, testPool())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = next.Close() })
+	if st, err := next.MessageUploadsBackfillState(ctx); err != nil || st.Complete {
+		t.Fatalf("state at the next start before its scan = %+v, %v; want not complete", st, err)
+	}
+	sweepAttachmentTree(t, next, attachDir)
+	if !onDisk(t, img) || !onDisk(t, unsent) {
+		t.Fatal("an upload was removed before this start had scanned the messages added since the last one")
+	}
+
+	n, err := next.BackfillMessageUploads(ctx)
+	if err != nil || n != 1 {
+		t.Fatalf("the next start's scan recorded %d, %v; want 1", n, err)
+	}
+	sweepAttachmentTree(t, next, attachDir)
+	if !onDisk(t, img) {
+		t.Error("the image of a message written without a reference was removed after the next start's scan")
+	}
+	if onDisk(t, unsent) {
+		t.Error("an upload no message names was kept after the next start's scan")
+	}
 }
 
 // countingReferences is an UploadReferences that counts its lookups.

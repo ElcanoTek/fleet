@@ -111,11 +111,24 @@ is actually removed.
 written before it are recorded by the server once it is running
 (`store.BackfillMessageUploads`, started at boot in the background): one
 transaction per range of message ids, its position saved after each, so a
-restart resumes instead of starting over. Each time a server starts it, its
-upper bound is raised to the newest message, so messages a server of the
-previous release wrote after a command of this release had migrated the
-database are covered too; a new, empty database is marked complete by its
-first server.
+restart resumes instead of starting over. A new, empty database is marked
+complete by its first server.
+
+**Every start scans again.** Each server start raises the upper bound to the
+newest message and scans from where the previous start stopped, before this
+process removes any upload. Messages this release wrote are already recorded
+and are skipped; the scan exists for messages written by something that does
+not record references, such as a server of the previous release still
+running after a command of this release had migrated the database. The cost
+is one pass over the messages added since the last start.
+
+**One server per database.** A server of an earlier release must not run
+alongside this one on the same database; that is not a supported shape
+anyway (the Helm chart runs one replica with a Recreate rollout, and the
+systemd unit stops the old process before starting the new one). If it does,
+messages it writes while this server runs are recorded only at this server's
+next start, and until then an image only they name can be removed once the
+file is older than the window.
 
 It parses each message with the same code the insert paths use. A message
 whose text holds a `\u0000` escape (which the database's JSON type would
@@ -129,8 +142,9 @@ the record incomplete. Any other failure — a cancel or a timeout, a full disk,
 a lost connection — rolls the range back without saving its position, and the
 attempt is retried; it never skips a message.
 
-Until it marks itself complete (`chat.message_uploads_backfill.completed_at`),
-the cleanup keeps **every** upload. The admin Storage panel says so, with the
+Until it has completed once (`chat.message_uploads_backfill.completed_at`) and
+this process's own start scan has finished, the cleanup keeps **every**
+upload. The admin Storage panel says so, with the
 position (`upload_references` in `GET /admin/storage`). A failed attempt is
 retried every minute and logged as a warning, and from the fifth failure in a
 row as an error.
