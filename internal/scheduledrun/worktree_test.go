@@ -340,3 +340,54 @@ func TestPrepareWorktree_CleanupKeepsALockedWorktree(t *testing.T) {
 		t.Errorf("the locked worktree's branch is at %q, want %q", got, tip)
 	}
 }
+
+// TestPrepareWorktree_CleanupKeepsAWorktreeItCannotRemove: when the run's
+// checkout cannot be removed completely (a directory inside it the service
+// user cannot search), cleanup keeps the record and the branch, so the
+// run's commit keeps its ref; once the checkout can go, a later cleanup
+// finishes.
+func TestPrepareWorktree_CleanupKeepsAWorktreeItCannotRemove(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root searches a mode-000 directory")
+	}
+	repo := initGitRepo(t)
+	wt, cleanup, err := prepareWorktree(context.Background(), repo, worktreeTask(&models.WorktreeConfig{Enabled: true}), "run1")
+	if err != nil {
+		t.Fatalf("prepareWorktree: %v", err)
+	}
+	sandboxCheckout(t, wt)
+	gitOut(t, wt.path, "commit", "--allow-empty", "-q", "-m", "work")
+	tip := strings.TrimSpace(gitOut(t, repo, "rev-parse", wt.branch))
+	stuck := filepath.Join(wt.path, "out", "stuck")
+	if err := os.MkdirAll(stuck, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stuck, "f"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(stuck, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(stuck, 0o755) })
+
+	cleanup()
+	if _, err := os.Lstat(wt.adminDir); err != nil {
+		t.Errorf("cleanup removed the record of a checkout it could not remove: %v", err)
+	}
+	if got := strings.TrimSpace(gitOut(t, repo, "rev-parse", wt.branch)); got != tip {
+		t.Errorf("the branch is at %q, want %q", got, tip)
+	}
+
+	if err := os.Chmod(stuck, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cleanup()
+	for _, p := range []string{wt.path, wt.adminDir} {
+		if _, err := os.Lstat(p); !os.IsNotExist(err) {
+			t.Errorf("a later cleanup left %s (lstat err %v)", p, err)
+		}
+	}
+	if out := gitOut(t, repo, "branch", "--list", wt.branch); strings.Contains(out, wt.branch) {
+		t.Errorf("a later cleanup kept the branch %s", wt.branch)
+	}
+}

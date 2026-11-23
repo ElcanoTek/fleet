@@ -167,16 +167,25 @@ func prepareWorktree(ctx context.Context, workspaceRoot string, task *models.Tas
 		// setup gave it); a leftover is reclaimed later by the server's
 		// maintenance loop (or `fleet worktree prune`).
 		//
-		// A worktree the run locked (`git worktree lock`) is kept whole: its
-		// checkout, its record and its branch stay, as `git worktree remove`
-		// and the sweep leave a locked worktree alone, so its commits are not
-		// left without a ref. Unlock it and prune to reclaim it.
+		// The record and the branch go only once the checkout is gone. A
+		// worktree the run locked (`git worktree lock`) is kept whole, as
+		// `git worktree remove` and the sweep leave a locked worktree alone;
+		// so is one whose checkout could not be fully removed (a directory
+		// inside it the service user cannot search): its record and branch
+		// stay, so its commits keep a ref and a later cleanup or the sweep
+		// can finish once the checkout can go. Only when the checkout is gone
+		// and just its record could not be removed does cleanup go on.
 		if rErr := worktree.RemoveWorktree(cctx, workspaceRoot, name); rErr != nil {
-			if errors.Is(rErr, worktree.ErrLocked) {
+			switch {
+			case errors.Is(rErr, worktree.ErrLocked):
 				logging.From(ctx).Info("scheduled worktree: kept, the run locked it", "path", wtPath, "branch", branch)
 				return
+			case errors.Is(rErr, worktree.ErrRecordNotRemoved):
+				logging.From(ctx).Error("scheduled worktree: checkout removed, record removal failed", "path", wtPath, "err", rErr)
+			default:
+				logging.From(ctx).Warn("scheduled worktree: kept its record and branch, the checkout could not be removed", "path", wtPath, "branch", branch, "err", rErr)
+				return
 			}
-			logging.From(ctx).Error("scheduled worktree: remove failed", "path", wtPath, "err", rErr)
 		}
 		if rErr := worktree.RemoveRecord(cctx, workspaceRoot, name); rErr != nil {
 			logging.From(ctx).Error("scheduled worktree: remove record failed", "record", name, "err", rErr)

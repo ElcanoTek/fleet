@@ -1710,8 +1710,10 @@ commit fails the run with the base named ("the workspace repository has no
 commits" for the default base on an empty repository). The sandbox image
 needs git 2.23 or later (`git switch`); the version is checked first and an
 older one is named in the run's error. The run's cleanup deletes the branch
-only when this checkout created it, and keeps a worktree the run locked
-(`git worktree lock`) whole: checkout, record and branch. A `base_branch`
+only when this checkout created it, and removes the record and branch only
+after the checkout is fully gone: a worktree the run locked
+(`git worktree lock`), or whose checkout cannot be removed completely,
+keeps its record and branch. A `base_branch`
 of `HEAD`, `@` or a pseudo-ref such as `FETCH_HEAD` means the repository's. Listing, removing and reclaiming
 worktrees and deleting the run's branch also run no git: `internal/worktree`
 deletes the checkout, its record (by the id the run's setup gave it, or, in

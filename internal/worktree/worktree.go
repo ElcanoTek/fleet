@@ -768,12 +768,21 @@ func closeRoots(roots ...*os.Root) {
 // proven record is locked.
 var ErrLocked = errors.New("worktree is locked")
 
+// ErrRecordNotRemoved is returned (wrapped) by RemoveWorktree when the
+// checkout is gone but its record could not be removed. Every other error
+// from RemoveWorktree means the checkout may still be there.
+var ErrRecordNotRemoved = errors.New("worktree record not removed")
+
 // RemoveWorktree removes the worktree at <root>/.fleet-worktrees/<name> and
 // the repository's record of it, without running git. The directory is
 // deleted through a Root on .fleet-worktrees and the record through a Root on
 // .git/worktrees, both opened without following a symlink at any level. A
 // locked worktree is refused (ErrLocked), as `git worktree remove --force`
-// refuses it, and nothing is removed.
+// refuses it, and nothing is removed. The record goes only once the
+// checkout is fully gone: a checkout that cannot be removed completely (a
+// directory inside it this process cannot search) keeps its record, and the
+// error says so; only a failure to remove the record after the checkout is
+// gone is ErrRecordNotRemoved.
 // The record is touched only when root's .git is the repository recorded at
 // startup and the record is proven to be this worktree's (fleetRecords).
 func RemoveWorktree(ctx context.Context, root, name string) error {
@@ -795,12 +804,12 @@ func RemoveWorktree(ctx context.Context, root, name string) error {
 	}
 	if sub != nil {
 		if err := sub.RemoveAll(name); err != nil {
-			return fmt.Errorf("worktree remove: %w", err)
+			return fmt.Errorf("worktree remove: %s was not fully removed, its record is kept: %w", filepath.Join(root, Subdir, name), err)
 		}
 	}
 	if known {
 		if err := admin.RemoveAll(rec.id); err != nil {
-			return fmt.Errorf("worktree remove: record %s: %w", rec.id, err)
+			return fmt.Errorf("worktree remove: record %s: %w: %w", rec.id, ErrRecordNotRemoved, err)
 		}
 	}
 	return nil

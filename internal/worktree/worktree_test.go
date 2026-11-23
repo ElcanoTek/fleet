@@ -1230,3 +1230,37 @@ func TestRemoveWorktreeRefusesALockedOne(t *testing.T) {
 		}
 	}
 }
+
+// TestRemoveWorktreeKeepsTheRecordOfACheckoutItCannotRemove: the record goes
+// only once the checkout is gone; a checkout with a directory this process
+// cannot search keeps its record, and the error is not ErrRecordNotRemoved.
+func TestRemoveWorktreeKeepsTheRecordOfACheckoutItCannotRemove(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root searches a mode-000 directory")
+	}
+	ctx := context.Background()
+	root := t.TempDir()
+	gitRepo(t, root)
+	if err := os.Mkdir(filepath.Join(root, Subdir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	record, err := CreateWorktree(ctx, root, "task-run", "fleet/task-run")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stuck := filepath.Join(root, Subdir, "task-run", "stuck")
+	if err := os.MkdirAll(filepath.Join(stuck, "inner"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(stuck, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(stuck, 0o755) })
+	err = RemoveWorktree(ctx, root, "task-run")
+	if err == nil || errors.Is(err, ErrRecordNotRemoved) {
+		t.Fatalf("err = %v, want a checkout-removal error", err)
+	}
+	if _, err := os.Lstat(record); err != nil {
+		t.Errorf("the record went while the checkout survived: %v", err)
+	}
+}

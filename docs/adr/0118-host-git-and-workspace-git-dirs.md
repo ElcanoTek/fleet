@@ -135,10 +135,15 @@ nothing but an `initializing` lock older than the prune age (a server
 stopped before it wrote `gitdir`); reading such a record lists at most two
 of its entries, since a run can fill its own record with any number. A
 run's cleanup removes its own record by the id its setup gave it, without
-proof, once `RepoPin.Check` passes — unless the run locked its worktree
-(`git worktree lock`): then the checkout, the record and the branch all
-stay, as `git worktree remove` and the sweep leave a locked worktree, until
-the operator unlocks and prunes it. The run's branch is deleted, only when
+proof, once `RepoPin.Check` passes, and only after its checkout is fully
+gone. If the run locked its worktree (`git worktree lock`), the checkout,
+the record and the branch all stay, as `git worktree remove` and the sweep
+leave a locked worktree, until the operator unlocks and prunes it; if the
+checkout cannot be removed completely (a directory inside it the service
+user cannot search), the record and the branch stay too, so the run's
+commits keep a ref and a later cleanup or the sweep finishes once the
+checkout can go. The sweep likewise removes a record only with, or after,
+its checkout. The run's branch is deleted, only when
 its own sandbox created it, by unlinking `refs/heads/<branch>` and `logs/refs/heads/<branch>`
 relative to directories opened without following a link, and by rewriting
 `packed-refs` (which no sandbox can write) after taking `packed-refs.lock`;
