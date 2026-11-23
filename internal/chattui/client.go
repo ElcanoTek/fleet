@@ -33,6 +33,20 @@ func (e Event) Str(key string) string {
 	return ""
 }
 
+// Strs returns Data[key] as a string set (empty when absent): a JSON array of
+// strings, e.g. tool.approval_superseded's kept_approval_ids.
+func (e Event) Strs(key string) map[string]bool {
+	out := map[string]bool{}
+	if list, ok := e.Data[key].([]any); ok {
+		for _, v := range list {
+			if s, ok := v.(string); ok && s != "" {
+				out[s] = true
+			}
+		}
+	}
+	return out
+}
+
 // Client streams turns from a running fleet server's POST /chat.
 type Client struct {
 	cfg     Config

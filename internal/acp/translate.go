@@ -222,9 +222,11 @@ func (t *translator) handle(ev chattui.Event) {
 			}
 		}
 	case "tool.approval_superseded":
+		// kept_approval_ids: the same turn's batch for the tool stays pending.
+		keep := ev.Strs("kept_approval_ids")
 		kept := t.approvals[:0]
 		for _, a := range t.approvals {
-			if a.tool != ev.Str("tool") {
+			if a.tool != ev.Str("tool") || keep[a.id] {
 				kept = append(kept, a)
 			}
 		}

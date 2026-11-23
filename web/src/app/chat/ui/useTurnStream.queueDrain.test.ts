@@ -207,6 +207,37 @@ describe("followQueueDrain", () => {
     expect(cards.find((card) => card.id === "pending")).toMatchObject({ status: "rejected" });
   });
 
+  it("keeps the same turn's batch named in kept_approval_ids", async () => {
+    const initial = answeredTranscript();
+    initial[1].approvals = [
+      { id: "older", tool: "mcp_mg_update_rtb_rule", status: "pending", summary: {} },
+      { id: "batch-1", tool: "mcp_mg_update_rtb_rule", status: "pending", summary: {} },
+      { id: "batch-2", tool: "mcp_mg_update_rtb_rule", status: "pending", summary: {} },
+    ];
+    const h = makeHarness({
+      initial,
+      persisted: drainedHistory(),
+      queue: [[queuedRow("q1", "running")], []],
+      inflight: [{ inflight: true, turn_id: "t2" }],
+      streamBodies: [() => closedStream([
+        sse(1, "turn.started", { turn_id: "t2", input_id: "q1", queued: true }),
+        sse(2, "user.message", { text: "update the rest" }),
+        sse(3, "tool.approval_superseded", {
+          tool: "mcp_mg_update_rtb_rule",
+          count: 1,
+          kept_approval_ids: ["batch-1", "batch-2"],
+        }),
+        sse(4, "turn.completed", {}),
+      ])],
+    });
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    await result.current.followQueueDrain(CONV);
+    const cards = convSlot(h, CONV).flatMap((message) => message.approvals ?? []);
+    expect(cards.find((card) => card.id === "older")).toMatchObject({ status: "rejected" });
+    expect(cards.find((card) => card.id === "batch-1")).toMatchObject({ status: "pending" });
+    expect(cards.find((card) => card.id === "batch-2")).toMatchObject({ status: "pending" });
+  });
+
   it("streams the drained turn instead of leaving it invisible", async () => {
     const h = makeHarness({
       initial: answeredTranscript(),

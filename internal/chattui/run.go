@@ -204,9 +204,10 @@ func runOneShot(client *Client, convID, message string, in io.Reader, out, errOu
 	newConvID, err := client.Stream(ctx, message, strings.TrimSpace(convID), func(ev Event) {
 		switch ev.Name {
 		case "tool.approval_superseded":
+			keep := ev.Strs("kept_approval_ids")
 			kept := staged[:0]
 			for _, a := range staged {
-				if a.tool != ev.Str("tool") {
+				if a.tool != ev.Str("tool") || keep[a.id] {
 					kept = append(kept, a)
 				}
 			}
