@@ -567,6 +567,30 @@ def cleanup():
         connection_file = None
 
 
+def drop_dead_kernel():
+    """Clears away a kernel that died under a cell, and what it left running.
+
+    The kernel was started as the leader of its own session, so its process
+    group id is its pid, and that group outlives it for as long as any
+    member does: workers a cell started (multiprocessing, a subprocess) keep
+    running after the OOM killer takes the kernel alone. They are killed
+    here, by the group id, before the next cell gets a fresh kernel; left
+    alone they would go on writing files and holding the memory that killed
+    it. os.getpgid cannot be asked for the id any more, because poll() has
+    already reaped the kernel.
+    """
+    global client, _kernel_cwd
+    if kernel_process is not None:
+        with contextlib.suppress(Exception):
+            os.killpg(kernel_process.pid, signal.SIGKILL)
+    if client is not None:
+        with contextlib.suppress(Exception):
+            client.stop_channels()
+    cleanup()  # forgets the process and removes its connection file
+    client = None
+    _kernel_cwd = None
+
+
 class OutputCollector:
     """Bound output capture to avoid unbounded bridge memory growth."""
 
@@ -918,13 +942,9 @@ def execute_code(
         res = run_code_on_kernel(code, client, timeout_seconds=timeout_seconds)
 
         if res.get("kernel_died"):
-            # Drop the dead kernel's client and connection file so the next
-            # request lazy-starts a fresh one (and re-applies the cwd).
-            with contextlib.suppress(Exception):
-                client.stop_channels()
-            cleanup()
-            client = None
-            _kernel_cwd = None
+            # The next request lazy-starts a fresh kernel (and re-applies
+            # the cwd).
+            drop_dead_kernel()
 
         vars_data = {}
         if res["status"] == "success" and return_vars:
@@ -1001,7 +1021,17 @@ def execute_code(
                 )
 
                 var_res = run_code_on_kernel(extract_script, client)
-                if var_res["status"] == "success":
+                if var_res.get("kernel_died"):
+                    # The cell ran, but reading its variables back killed the
+                    # kernel (normalizing a large object can). Say so rather
+                    # than report a success with the variables missing.
+                    drop_dead_kernel()
+                    res["status"] = "error"
+                    res["error"] = (
+                        "The cell finished, but reading back return_vars "
+                        "failed. " + var_res["error"]
+                    )
+                elif var_res["status"] == "success":
                     # malformed/missing file → keep vars_data empty
                     with (
                         contextlib.suppress(Exception),
