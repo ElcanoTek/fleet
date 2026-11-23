@@ -414,7 +414,9 @@ start_fleet() {
   FLEET_TIMEZONE="UTC" \
     "$BIN_DIR/fleet" >"$LOG_DIR/fleet.log" 2>&1 &
   PIDS+=("$!")
-  wait_http "http://127.0.0.1:$CHAT_PORT/healthz" 90 "fleet chat"
+  # /readyz: booted and its databases answer. Not /healthz, which reports
+  # model-provider state (503 while a model's circuit breaker is open).
+  wait_http "http://127.0.0.1:$CHAT_PORT/readyz" 90 "fleet chat"
   wait_http "http://127.0.0.1:$ORCH_PORT/health" 90 "fleet orchestrator"
 }
 

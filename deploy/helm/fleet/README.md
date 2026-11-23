@@ -19,7 +19,7 @@ this chart, and an empty-cluster-to-working-fleet guide — fork
 
 | Piece | Object | Notes |
 | --- | --- | --- |
-| Control plane | Deployment (1 replica, Recreate) | chat :8080 + orchestrator :8000 + the web UI :3000; no replica knob — the scheduler is single-owner |
+| Control plane | Deployment (1 replica, Recreate) | chat :8080 + orchestrator :8000 + the web UI :3000; no replica knob — the scheduler is single-owner. Probes on the chat port: startup and liveness `/livez`, readiness `/readyz` (not `/healthz`, which answers 503 while a model's circuit breaker is open; see the guide's "Health probes") |
 | Sandbox RBAC | Role/RoleBinding | exactly the verbs the boot preflight checks: pods create/get/list/delete, pods/exec create, PVC + NetworkPolicy get |
 | Workspace | RWX PVC | mounted at the SAME path in the control plane and every sandbox pod |
 | Sealed egress | NetworkPolicy `fleet-sandbox-deny-all` | selects pods labeled `fleet.elcanotek.com/egress=none`; the preflight requires it to exist |
@@ -84,6 +84,16 @@ the configuration registry — see docs/CONFIGURATION.md).
   checklist shows how).
 - **One control-plane replica.** No HPA, no `replicas`. Scale work with more
   sandbox capacity, the control plane with bigger requests.
+- **TLS terminates at the Ingress.** The probes and the Service speak plain
+  HTTP to the chat port (8080). The chart refuses to render with
+  `FLEET_TLS_MODE=manual|auto`, or with a `FLEET_SERVER_ADDR` in `config.env`
+  other than port 8080 on every interface (`0.0.0.0:8080`, `:8080`,
+  `[::]:8080`), either of which would fail every probe and restart the pod in
+  a loop. It also refuses a `FLEET_TLS_MODE` fleet would reject at boot: quote
+  `"off"`, since an unquoted `off` is the YAML boolean `false`. It cannot see
+  `config.existingSecret`: do not put `FLEET_TLS_MODE` there either. (A
+  `FLEET_SERVER_ADDR` there is harmless: the chart's own value takes
+  precedence over the Secret's.)
 - The chart is linted in CI but not exercised against a live cluster there;
   the kind walkthrough in the guide is the verified path.
 

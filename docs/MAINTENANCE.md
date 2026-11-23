@@ -139,10 +139,12 @@ different filesystem.
 Set `FLEET_DISK_MIN_FREE_PERCENT=0` to disable the decision. The guard still
 samples, so the metrics and the admin panel keep working.
 
-### Why `/healthz` stays 200
+### Why shedding never answers 503
 
-`/healthz` is the load-balancer gate: a 503 there drains chat traffic off the
-box. A shedding box is precisely one whose chat is fine — so draining it would
+`/readyz` is the readiness gate (the Helm chart's readiness probe, and what a
+load balancer should watch): a 503 there drains chat traffic off the box.
+`/healthz` stays 200 for disk too, since a load balancer may still point at it.
+A shedding box is precisely one whose chat is fine — so draining it would
 remove the interface an operator needs to reclaim the space, which is the
 opposite of the guard's purpose. The signal therefore lives where a
 non-critical degradation belongs:

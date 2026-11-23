@@ -9,6 +9,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -18,9 +19,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
+	"unicode"
 )
 
 // File names inside the install dir. The live binary is always <dir>/fleet so
@@ -631,13 +634,28 @@ func systemctl(ctx context.Context, verb, service string) error {
 	return nil
 }
 
-// HTTPProber polls a readiness URL until it answers 200.
+// HTTPProber polls a readiness URL until it answers 200 or 207.
+//
+// fleet's /readyz answers 207 when only a non-critical check (the sandbox
+// runtime probe, disk headroom) is degraded: the process is up, its databases
+// answer, and it serves. That counts as ready, with the degraded checks
+// written to Log as a warning. Refusing it rolled back every install on a box
+// shedding on disk, or whose sandbox runtime probe guesses the wrong binary,
+// and the previous binary answers 207 there too, so such a box could never
+// update. Both checks report the host (its disk, its container runtime
+// binary), which a release does not change; a configured OCI runtime that
+// cannot be resolved fails boot's sandbox preflight (sandbox.PreflightRuntime)
+// before the listener binds, so that release never answers at all. 503 (a
+// database down, draining), any other status, and no answer within the
+// timeout stay not ready.
 type HTTPProber struct {
 	Client *http.Client
 	// TLS verifies an https readiness URL (see ProbeTLSConfig). Nil uses the
 	// default verification: the system roots and the URL's own host name.
 	TLS      *tls.Config
 	Interval time.Duration
+	// Log receives the warning for a 207 answer. Nil drops it.
+	Log io.Writer
 }
 
 // WaitReady implements Prober.
@@ -663,9 +681,15 @@ func (p HTTPProber) WaitReady(ctx context.Context, url string, timeout time.Dura
 		}
 		resp, err := client.Do(req) // #nosec G704 — the operator-configured loopback readiness URL
 		if err == nil {
-			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 			_ = resp.Body.Close()
-			if resp.StatusCode == http.StatusOK {
+			switch resp.StatusCode {
+			case http.StatusOK:
+				return nil
+			case http.StatusMultiStatus:
+				if p.Log != nil {
+					fmt.Fprintf(p.Log, "warning: %s answered 207 (ready, degraded): %s\n", url, degradedChecks(body))
+				}
 				return nil
 			}
 			last = fmt.Errorf("HTTP %d", resp.StatusCode)
@@ -681,6 +705,53 @@ func (p HTTPProber) WaitReady(ctx context.Context, url string, timeout time.Dura
 		case <-time.After(interval):
 		}
 	}
+}
+
+// degradedChecks names the checks a /readyz body reports as not ok, each with
+// its status and detail, e.g. `disk: degraded (3.1% free on /var/lib/fleet …)`.
+func degradedChecks(body []byte) string {
+	var r struct {
+		Checks map[string]struct {
+			Status string `json:"status"`
+			Detail string `json:"detail"`
+		} `json:"checks"`
+	}
+	if err := json.Unmarshal(body, &r); err != nil {
+		return "the response did not name its checks"
+	}
+	names := make([]string, 0, len(r.Checks))
+	for name, c := range r.Checks {
+		if c.Status != "ok" {
+			names = append(names, name)
+		}
+	}
+	if len(names) == 0 {
+		return "the response named no degraded check"
+	}
+	sort.Strings(names)
+	parts := make([]string, 0, len(names))
+	for _, name := range names {
+		c := r.Checks[name]
+		part := printable(name) + ": " + printable(c.Status)
+		if c.Detail != "" {
+			part += " (" + printable(c.Detail) + ")"
+		}
+		parts = append(parts, part)
+	}
+	return strings.Join(parts, "; ")
+}
+
+// printable replaces control characters (escape sequences start with one) and
+// Unicode format characters (bidirectional overrides such as U+202E reorder
+// what follows them), so a server's text can neither rewrite the terminal it
+// is printed on nor disguise itself there.
+func printable(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+			return ' '
+		}
+		return r
+	}, s)
 }
 
 // HealthURLFromAddr derives the readiness URL from FLEET_SERVER_ADDR the way

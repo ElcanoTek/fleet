@@ -581,7 +581,9 @@ each piece yourself):
      minute per email and 300 a minute in total.
 
    Blocked requests get a uniform `403 Access denied` (plain text, no reason
-   leaked); `/healthz` is exempt so load-balancer probes keep working; a
+   leaked); `/healthz` is exempt and `/livez` and `/readyz` are answered before
+   the filter, so monitors and load-balancer probes keep working (which
+   endpoint to probe: [OPERATORS.md](OPERATORS.md#health-endpoints--which-one-answers-what)); a
    malformed CIDR/IP entry is a **fatal startup error** (a silently-dropped
    allowlist entry could leave the box more open than intended); and the active
    filter state is logged at startup and surfaced in `GET /admin/health-summary`.

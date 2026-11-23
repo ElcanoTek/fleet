@@ -22,7 +22,8 @@ Two halves of one feature, split by privilege:
    when the key is absent and both backends are on loopback, so the
    Caddy-routed API paths see real client IPs; an advisory when a backend
    listens elsewhere; a value the operator set is left alone), service health + the
-   `/healthz` + `/readyz` probes **and** `https://<domain>/api-info` fetched
+   `/livez` + `/readyz` probes (a model whose circuit breaker is open, read
+   from `/healthz`, is advised, not failed) **and** `https://<domain>/api-info` fetched
    *through* Caddy (`--resolve` pinned to this box, so it tests the proxy's
    routing rather than DNS), the scheduled-backup timer, and a sandbox smoke run **as
    the `fleet` user** (fixing

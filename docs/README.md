@@ -218,6 +218,11 @@ there) and [`../.agents/skills/steward/SKILL.md`](../.agents/skills/steward/SKIL
   maintenance loop, the daily `fleet-maintenance.timer`, the free-space floor
   that sheds scheduled work while chat keeps serving, and the terminal backstop
   for every way a task can stall): [`docs/MAINTENANCE.md`](MAINTENANCE.md)
+- **Which health endpoint a probe, load balancer or monitor should use**
+  (`/livez`, `/readyz`, `/healthz`, `/health`: what each checks, and why
+  `/healthz` is for monitors, not probes):
+  [`docs/OPERATORS.md`](OPERATORS.md#health-endpoints--which-one-answers-what);
+  the Helm chart's probes: [`docs/DEPLOYMENT-KUBERNETES.md`](DEPLOYMENT-KUBERNETES.md#health-probes)
 - **Installing the backup/maintenance timers on an existing box**
   (`fleet timers install`, the `fleet update` offer + `--no-timers` opt-out,
   the non-systemd/Kubernetes posture): [`docs/TIMERS.md`](TIMERS.md)

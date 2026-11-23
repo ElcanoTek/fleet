@@ -63,7 +63,7 @@ func warnRetiredEnvAliases(w io.Writer) (bundleFails bool) {
 // reported with its manual repair, never reset — podman system migrate
 // deletes a live fleet's sandbox pool),
 // systemd unit drift vs deploy/, env-file shape/permissions, service health +
-// the /healthz + /readyz probes, a sandbox smoke run as the fleet user, and the
+// the /livez + /readyz probes, a sandbox smoke run as the fleet user, and the
 // installed release (no host executor, web bundle, newest published release).
 //
 // Division of labor: `fleet status` is the quick read-only in-process report

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -10,12 +11,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/apiversion"
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/dbtrace"
 	"github.com/ElcanoTek/fleet/internal/diskguard"
 	"github.com/ElcanoTek/fleet/internal/health"
+	"github.com/ElcanoTek/fleet/internal/httpapi"
 	"github.com/ElcanoTek/fleet/internal/sandbox"
-	scheddb "github.com/ElcanoTek/fleet/internal/sched/db"
-	"github.com/ElcanoTek/fleet/internal/store"
 )
 
 // sandboxProbeTTL caches the sandbox runtime probe so /readyz — which is
@@ -32,18 +34,86 @@ const sandboxProbeTTL = 10 * time.Second
 // the slowest client keeps its request open.
 const k8sSandboxProbeTimeout = 5 * time.Second
 
-// dbPinger is the readiness surface both DB handles satisfy (#215).
+// dbPinger is the readiness surface of a database check (#215).
 type dbPinger interface {
 	Ping(ctx context.Context) error
 }
 
-var (
-	_ dbPinger = (*store.Store)(nil)
-	_ dbPinger = (*scheddb.Database)(nil)
-)
+var _ dbPinger = readinessPinger{}
+
+// readinessPinger pings a database over a connection of its own, outside the
+// store's pool. A ping through the store's pool waits for a free connection:
+// with every connection checked out by real work (25 by default) for longer
+// than health.PerCheckTimeout, the check timed out and /readyz answered 503
+// while the database answered fine, and with one replica that takes the whole
+// service out of its load balancer. A connection kept for the probe answers
+// the question the check asks, whether the database answers, and a database
+// that hangs still fails it.
+//
+// One connection per store, dialled on the first /readyz and kept idle
+// between probes. It is replaced on the store pool's own schedule
+// (ConnMaxLifetime, ConnMaxIdleTime), so it authenticates again as often as
+// the store's connections do: Postgres keeps an existing session after a
+// password change, NOLOGIN or a pg_hba.conf change, and a connection kept
+// forever would go on answering after the stores can no longer connect.
+//
+// A connection the server has dropped: database/sql retries getting a
+// connection, not the ping itself. pgx pings a connection idle for more than
+// a second before handing it out (stdlib.Conn.ResetSession), and a failed
+// ping there is driver.ErrBadConn, so database/sql dials a new one and the
+// check passes. A probe arrives every 10s, so that is the usual case; within a
+// second of the last use the check's own ping fails once and the next check
+// recovers. A connection whose packets are silently dropped costs one failed
+// check (the ping waits out health.PerCheckTimeout).
+type readinessPinger struct{ db *sql.DB }
+
+func newReadinessPinger(dsn string, lifetime, idleTime time.Duration) (readinessPinger, error) {
+	db, err := dbtrace.Open(dsn)
+	if err != nil {
+		return readinessPinger{}, err
+	}
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	db.SetConnMaxLifetime(lifetime)
+	db.SetConnMaxIdleTime(idleTime)
+	return readinessPinger{db: db}, nil
+}
+
+func (p readinessPinger) Ping(ctx context.Context) error { return p.db.PingContext(ctx) }
+
+func (p readinessPinger) Close() error { return p.db.Close() }
+
+// openReadinessPingers opens the chat and sched readiness connections, each
+// with its store pool's lifetime and idle time.
+func openReadinessPingers(cfg *config.Config) (chat, sched readinessPinger, err error) {
+	chat, err = newReadinessPinger(cfg.DatabaseURL, cfg.ChatDBPool.ConnMaxLifetime, cfg.ChatDBPool.ConnMaxIdleTime)
+	if err != nil {
+		return chat, sched, fmt.Errorf("readiness check: chat DB: %w", err)
+	}
+	sched, err = newReadinessPinger(cfg.SchedDatabaseURL, cfg.SchedDBPool.ConnMaxLifetime, cfg.SchedDBPool.ConnMaxIdleTime)
+	if err != nil {
+		_ = chat.Close()
+		return chat, sched, fmt.Errorf("readiness check: sched DB: %w", err)
+	}
+	return chat, sched, nil
+}
+
+// openReadinessChecks is buildReadinessChecks with the two database checks on
+// readinessPinger connections, for both listeners. close releases them.
+func openReadinessChecks(cfg *config.Config, guard *diskguard.Guard, sbPool *sandbox.Pool) (checks []health.Check, closeFn func(), err error) {
+	chatPing, schedPing, err := openReadinessPingers(cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+	closeFn = func() {
+		_ = chatPing.Close()
+		_ = schedPing.Close()
+	}
+	return buildReadinessChecks(cfg, chatPing, schedPing, guard, sbPool), closeFn, nil
+}
 
 // buildReadinessChecks assembles the /readyz probes (#215). The two Postgres
-// pools are CRITICAL — if either is down the box can't serve, so /readyz returns
+// databases are CRITICAL — if either is down the box can't serve, so /readyz returns
 // 503. The sandbox runtime is non-critical (a missing runtime degrades to 207
 // but the process can still answer DB-only requests and surface the problem).
 // Disk headroom is non-critical for the same reason and a stronger one: a box
@@ -55,7 +125,10 @@ var (
 // yet (documented follow-ups): a live LLM completion probe needs the authed
 // client + cost-aware caching, and MCP liveness needs a real broker round-trip —
 // reporting either without actually probing would violate the honesty invariant.
-func buildReadinessChecks(cfg *config.Config, chatDB, schedDB dbPinger, guard *diskguard.Guard, sbPool *sandbox.Pool) []health.Check {
+//
+// The database parameters are readinessPinger, not dbPinger, so a store (whose
+// Ping waits behind its own busy pool) does not compile here.
+func buildReadinessChecks(cfg *config.Config, chatDB, schedDB readinessPinger, guard *diskguard.Guard, sbPool *sandbox.Pool) []health.Check {
 	return []health.Check{
 		{Name: "chat_db", Critical: true, Probe: pingProbe(chatDB)},
 		{Name: "sched_db", Critical: true, Probe: pingProbe(schedDB)},
@@ -216,7 +289,14 @@ func (c *cachedProbe) probe(ctx context.Context) health.Result {
 // watchdog gets identical semantics on either port. The probes are served by
 // this wrapper rather than registered on the underlying mux/chi router, so they
 // are not part of the documented API surface (and don't trip the orchestrator
-// OpenAPI drift test).
+// OpenAPI drift test). They are also served ahead of the chat router's IP
+// filter, like /healthz is exempt from it.
+//
+// These two are the probe endpoints: /livez for liveness and startup (it
+// depends on nothing but the process serving HTTP), /readyz for readiness. The
+// chat router's /healthz is not one: it answers 503 while any model's circuit
+// breaker is open, which says nothing about whether this process can serve
+// (see httpapi's healthz). The Helm chart's probes use /livez and /readyz.
 //
 // draining reports whether graceful shutdown has begun. /livez stays 200 while
 // draining (the process is alive; don't restart it), but /readyz short-circuits
@@ -244,6 +324,14 @@ func withHealthProbes(next http.Handler, startTime time.Time, draining func() bo
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// chatListenerHandler is what the chat listener (FLEET_SERVER_ADDR) serves:
+// the chat routes under the /v1 alias, the health probes in front of them,
+// and the security headers outside. The Helm chart's probes target this
+// listener, so its tests build it through here rather than by hand.
+func chatListenerHandler(chatSrv *httpapi.Server, chatRoutes http.Handler, startTime time.Time, checks []health.Check, hsts bool) http.Handler {
+	return securityHeadersMiddleware(withHealthProbes(apiversion.Router(chatRoutes), startTime, chatSrv.IsDraining, checks), hsts)
 }
 
 func writeHealthJSON(w http.ResponseWriter, code int, body any) {

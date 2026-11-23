@@ -156,7 +156,12 @@ What it does, in order (`scripts/update.sh`):
    running one as `fleet.prev` (hard link), renames the new one over `fleet`
    atomically, restarts the service as `systemctl stop`, remove the update
    drain marker, `systemctl start` (the service migrates on start, as before),
-   waits for `/readyz` (`FLEET_HEALTH_TIMEOUT`, default 90 s), and on failure
+   waits for `/readyz` (`FLEET_HEALTH_TIMEOUT`, default 90 s) to answer `200`,
+   or `207` — serving with only a non-critical check degraded, printed as a
+   warning naming those checks; both of them (disk headroom, the host's
+   container runtime binary) describe the host, which a release does not
+   change, and the previous binary would answer the same `207` — and on a
+   `503`, any other answer or none in time,
    restores `fleet.prev`, restarts and re-checks — the failed binary is kept
    as `fleet.failed` and the update exits non-zero saying it rolled back. The
    rollback runs under its own bounded context, so a Ctrl-C or SIGTERM that cut
