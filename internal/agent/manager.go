@@ -733,7 +733,7 @@ func buildSandboxPool(cfg *config.Config, personasDir, protocolsDir, systemPromp
 	// attached to. The directory is still created here: it is where uploads
 	// land host-side, and the TTL sweep plus the admin storage report both
 	// expect it to exist on a fresh box.
-	uploadsRoot := filepath.Join(cfg.EmailAttachmentDir, "uploads")
+	uploadsRoot := filepath.Join(cfg.EmailAttachmentDir, UploadsDirName)
 	if abs, err := filepath.Abs(uploadsRoot); err == nil {
 		uploadsRoot = abs
 	}
@@ -1213,7 +1213,7 @@ func k8sDocMounts(mounts, bundleDocDirs []string, docsInImage bool) (kept, dropp
 // test on this function exists to catch.
 func sandboxReadOnlyMounts(cfg *config.Config, personasDir, protocolsDir, systemPromptsDir, skillsDir, sharedFilesDir string) []string {
 	mounts := absSupportingDocs(personasDir, protocolsDir, systemPromptsDir, skillsDir, sharedFilesDir)
-	uploads := filepath.Join(cfg.EmailAttachmentDir, "uploads")
+	uploads := filepath.Join(cfg.EmailAttachmentDir, UploadsDirName)
 	if abs, err := filepath.Abs(uploads); err == nil {
 		uploads = abs
 	}

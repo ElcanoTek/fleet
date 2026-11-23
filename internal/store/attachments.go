@@ -9,17 +9,26 @@ import (
 	"path/filepath"
 	"regexp"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/agent"
 )
 
 // SweepAttachments deletes regular files under dir whose mtime is older
-// than ttl. Walks recursively to cover any future per-sender or
-// per-date subfolders the email MCP might introduce, but does NOT
-// remove empty directories — avoids racing with an in-flight download
-// that just mkdir'd a timestamped folder.
+// than ttl, unless keep says the file is still in use. Walks recursively to
+// cover any future per-sender or per-date subfolders the email MCP might
+// introduce, but does NOT remove empty directories — avoids racing with an
+// in-flight download that just mkdir'd a timestamped folder.
+//
+// Age alone cannot tell an abandoned file from one something kept still reads:
+// an image sent in a pinned chat is as old as the chat. So the walk asks keep
+// about every aged file just before removing it; AttachmentKeeper builds the
+// answer for the attachment tree. keep reporting an error keeps the file (a
+// lookup that failed is not a "no"), and the failures come back as the error.
+// A nil keep removes by age alone.
 //
 // Missing dir is not an error: returns (0, nil), since the email MCP
 // may not have run yet on a fresh box.
-func SweepAttachments(dir string, ttl time.Duration) (int, error) {
+func SweepAttachments(dir string, ttl time.Duration, keep func(path string) (bool, error)) (int, error) {
 	info, err := os.Stat(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -33,6 +42,8 @@ func SweepAttachments(dir string, ttl time.Duration) (int, error) {
 
 	cutoff := time.Now().Add(-ttl)
 	removed := 0
+	unchecked := 0
+	var firstKeepErr error
 	walkErr := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		// Per-entry errors (a file disappeared mid-walk, perms, etc.)
 		// shouldn't abort the whole sweep — keep going.
@@ -46,12 +57,121 @@ func SweepAttachments(dir string, ttl time.Duration) (int, error) {
 		if err != nil || fi.ModTime().After(cutoff) {
 			return nil //nolint:nilerr // intentional: an Info() error just means skip this entry; the sweep continues.
 		}
+		if keep != nil {
+			inUse, kerr := keep(path)
+			if kerr != nil {
+				unchecked++
+				if firstKeepErr == nil {
+					firstKeepErr = kerr
+				}
+				return nil
+			}
+			if inUse {
+				return nil
+			}
+		}
 		if err := os.Remove(path); err == nil { //nolint:gosec // sweep operates on our own attachment tree
 			removed++
 		}
 		return nil
 	})
+	if firstKeepErr != nil {
+		walkErr = errors.Join(walkErr, fmt.Errorf("kept %d aged files whose use could not be checked: %w", unchecked, firstKeepErr))
+	}
 	return removed, walkErr
+}
+
+// The subdirectories of EMAIL_ATTACHMENT_DIR whose files can still be in use
+// after they age past the conversation window. Everything that builds these
+// paths uses these names: the chat plane's writers (httpapi.userUploadsRoot,
+// httpapi.privateWorkspaceStashRoot) and the agent's image reader, through
+// agent.UploadsDirName.
+const (
+	// AttachmentUploadsDir holds chat uploads, <user>/<token>/<name>. A sent
+	// image is read again on every later turn of its conversation.
+	AttachmentUploadsDir = agent.UploadsDirName
+	// AttachmentPrivateStashDir holds the Multiplayer private stash, one
+	// directory per conversation: participants' attachments between their
+	// turns, and the owner's during a participant's turn. It goes with its
+	// conversation (SweepOrphanWorkspaces), never by age.
+	AttachmentPrivateStashDir = "multiplayer-private"
+)
+
+// UploadReferences answers whether a kept conversation still refers to an
+// upload. *Store implements it.
+type UploadReferences interface {
+	// ReferencedUploads returns every referenced upload path in one query,
+	// and whether the record is complete (false until the backfill of
+	// messages older than it has finished).
+	ReferencedUploads(ctx context.Context) (map[string]struct{}, bool, error)
+	// UploadReferenced asks about one path.
+	UploadReferenced(ctx context.Context, path string) (bool, error)
+}
+
+// AttachmentKeeper is the keep rule SweepAttachments applies to the
+// attachment tree rooted at attachmentDir (EMAIL_ATTACHMENT_DIR), whichever
+// part of it a caller walks:
+//
+//   - an upload is kept while a message of a conversation that still exists
+//     refers to it. Conversation retention alone decides which conversations
+//     exist, so an upload lives exactly as long as the chats that sent it,
+//     with no second copy of the retention rules; an upload never sent in any
+//     message is removed by age. Until the record of references is complete
+//     (BackfillMessageUploads, after an upgrade), every upload is kept;
+//   - the Multiplayer private stash is always kept: it is removed with its
+//     conversation;
+//   - anything else (outbound email copies left by a crash, files an email
+//     connector wrote) is removed by age, as before.
+//
+// The cost does not grow with the files it keeps: the first aged upload loads
+// every referenced path in one query, and only a file missing from that set —
+// one about to be removed — is asked about again on its own, which also
+// covers a message written after the set was loaded. The returned function
+// serves one walk; it is not safe for concurrent use. A nil refs cannot tell
+// whether an upload is in use, so it keeps them all.
+func AttachmentKeeper(ctx context.Context, refs UploadReferences, attachmentDir string) func(path string) (bool, error) {
+	root := normalizeUploadPath(attachmentDir)
+	uploads := filepath.Join(root, AttachmentUploadsDir)
+	stash := filepath.Join(root, AttachmentPrivateStashDir)
+	var (
+		loaded     bool
+		complete   bool
+		referenced map[string]struct{}
+		loadErr    error
+	)
+	return func(path string) (bool, error) {
+		p := normalizeUploadPath(path)
+		switch {
+		case isWithin(stash, p):
+			return true, nil
+		case isWithin(uploads, p):
+			if refs == nil {
+				return true, nil
+			}
+			if !loaded {
+				loaded = true
+				referenced, complete, loadErr = refs.ReferencedUploads(ctx)
+			}
+			if loadErr != nil {
+				return true, loadErr
+			}
+			if !complete {
+				return true, nil
+			}
+			if _, ok := referenced[p]; ok {
+				return true, nil
+			}
+			return refs.UploadReferenced(ctx, p)
+		default:
+			return false, nil
+		}
+	}
+}
+
+// isWithin reports whether path lies strictly below dir.
+func isWithin(dir, path string) bool {
+	rel, err := filepath.Rel(dir, path)
+	return err == nil && rel != "." && filepath.IsLocal(rel)
 }
 
 // SweepOrphanWorkspaces removes per-conversation workspace directories
@@ -65,7 +185,10 @@ func SweepAttachments(dir string, ttl time.Duration) (int, error) {
 // sweep closes that loop.
 //
 // Live-id lookup happens once up front so we don't query the DB per
-// subdirectory. Non-UUID entries (e.g. stray files or unrelated dirs
+// subdirectory; only a directory missing from that set — a removal candidate
+// — is looked up again on its own just before it is removed, so a
+// conversation created after the set was read keeps its directory. Non-UUID
+// entries (e.g. stray files or unrelated dirs
 // created by hand) are ignored, not deleted — be conservative; the
 // workspace root may be under an operator-managed mount.
 func (s *Store) SweepOrphanWorkspaces(ctx context.Context, root string) (int, error) {
@@ -86,6 +209,9 @@ func (s *Store) SweepOrphanWorkspaces(ctx context.Context, root string) (int, er
 	live, err := s.liveConversationIDs(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("load live ids: %w", err)
+	}
+	if afterLiveSnapshot != nil {
+		afterLiveSnapshot()
 	}
 
 	entries, err := os.ReadDir(root)
@@ -108,6 +234,15 @@ func (s *Store) SweepOrphanWorkspaces(ctx context.Context, root string) (int, er
 		if _, alive := live[name]; alive {
 			continue
 		}
+		// live was read before the directory listing, so a conversation
+		// created since then is missing from it while its directory already
+		// exists. Ask again for this one id right before removing it.
+		if alive, err := s.conversationExists(ctx, name); err != nil || alive {
+			if err != nil {
+				errs = append(errs, fmt.Errorf("recheck workspace %s: %w", name, err))
+			}
+			continue
+		}
 		if err := removeWorkspaceTree(root, name); err != nil {
 			// Reported, not swallowed: a dir that cannot be removed is
 			// retried every pass, so a silent failure pins its bytes
@@ -128,6 +263,9 @@ func (s *Store) SweepOrphanWorkspaces(ctx context.Context, root string) (int, er
 					continue
 				}
 				if _, alive := live[e.Name()]; alive {
+					continue
+				}
+				if alive, err := s.conversationExists(ctx, e.Name()); err != nil || alive {
 					continue
 				}
 				_ = removeWorkspaceTree(siblingStash, e.Name())
@@ -225,6 +363,18 @@ func (s *Store) liveConversationIDs(ctx context.Context) (map[string]struct{}, e
 	return out, rows.Err()
 }
 
+// conversationExists reports whether a conversation row with this id exists
+// (a soft-deleted tombstone counts, as in liveConversationIDs).
+func (s *Store) conversationExists(ctx context.Context, id string) (bool, error) {
+	var exists bool
+	err := s.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM conversations WHERE id = $1)`, id).Scan(&exists)
+	return exists, err
+}
+
+// afterLiveSnapshot is a test seam run in SweepOrphanWorkspaces right after the
+// live-id set is read; nil in production.
+var afterLiveSnapshot func()
+
 // LooksLikeConversationID reports whether name has the shape of a UUID in
 // 8-4-4-4-12 hex form.
 func LooksLikeConversationID(name string) bool {
@@ -257,12 +407,12 @@ func looksLikeConversationID(name string) bool {
 
 // StorageConversationStats is the conversation-side picture the admin
 // Storage panel renders next to the on-disk numbers: how many chats exist,
-// how many are protected from cleanup (pinned/archived/shared/project),
+// how many are protected from cleanup (anything that is not temporary),
 // and how many an admin cleanup at the given idle cutoff would reclaim.
 type StorageConversationStats struct {
 	Total     int
 	Pinned    int
-	Protected int // pinned OR archived OR shared OR project-bound (cleanup-exempt)
+	Protected int // live and not temporary (temporaryConversationClause): cleanup-exempt
 	// ReclaimableAtCutoff counts live, unprotected conversations idle
 	// since before the cutoff — exactly the set DeleteUnpinnedOlderThan
 	// would remove.
@@ -273,12 +423,15 @@ type StorageConversationStats struct {
 // time; conversations with updated_at older than it count as reclaimable.
 func (s *Store) StorageConversationStats(ctx context.Context, cutoff time.Time) (StorageConversationStats, error) {
 	var out StorageConversationStats
+	// Protected and reclaimable are read from temporaryConversationClause, the
+	// one definition the retention sweep and DeleteUnpinnedOlderThan use, so
+	// the preview counts exactly what a cleanup would remove.
 	err := s.db.QueryRowContext(ctx,
 		`SELECT
 		   COUNT(*) FILTER (WHERE deleted_at IS NULL),
 		   COUNT(*) FILTER (WHERE deleted_at IS NULL AND pinned),
-		   COUNT(*) FILTER (WHERE deleted_at IS NULL AND (pinned OR archived_at IS NOT NULL OR share_token IS NOT NULL OR project_id IS NOT NULL OR COALESCE(multiplayer, FALSE) OR COALESCE(team_visible, FALSE))),
-		   COUNT(*) FILTER (WHERE deleted_at IS NULL AND NOT pinned AND archived_at IS NULL AND share_token IS NULL AND project_id IS NULL AND NOT COALESCE(multiplayer, FALSE) AND NOT COALESCE(team_visible, FALSE) AND updated_at < $1)
+		   COUNT(*) FILTER (WHERE deleted_at IS NULL AND NOT (`+temporaryConversationClause+`)),
+		   COUNT(*) FILTER (WHERE `+temporaryConversationClause+` AND updated_at < $1)
 		 FROM conversations`,
 		cutoff.Unix(),
 	).Scan(&out.Total, &out.Pinned, &out.Protected, &out.ReclaimableAtCutoff)
@@ -289,16 +442,18 @@ func (s *Store) StorageConversationStats(ctx context.Context, cutoff time.Time) 
 }
 
 // DeleteUnpinnedOlderThan hard-deletes live conversations idle since before
-// the cutoff, with the same protections as SweepExpired's TTL pass: pinned,
-// archived, shared, and project-bound conversations are never touched. This
-// is the admin "reclaim disk now" action — unlike the TTL sweep it always
+// the cutoff, with the same protections as SweepExpired's TTL pass — the same
+// temporaryConversationClause, not a copy of it: pinned, archived, shared,
+// project-bound, Multiplayer and team-visible chats, and chats with an armed
+// or paused patrol or timer, are never touched. (A hand-copied list here once
+// lacked the patrol/timer rule, so this cleanup deleted chats the retention
+// sweep keeps.) This is the admin "reclaim disk now" action — unlike the TTL sweep it always
 // hard-deletes (the operator asked for space back), and the caller is
 // expected to follow up with SweepOrphanWorkspaces to free the deleted
 // conversations' workspace directories.
 func (s *Store) DeleteUnpinnedOlderThan(ctx context.Context, cutoff time.Time) (int, error) {
 	res, err := s.db.ExecContext(ctx,
-		`DELETE FROM conversations
-		 WHERE pinned = FALSE AND archived_at IS NULL AND deleted_at IS NULL AND share_token IS NULL AND project_id IS NULL AND COALESCE(multiplayer, FALSE) = FALSE AND COALESCE(team_visible, FALSE) = FALSE AND updated_at < $1`,
+		`DELETE FROM conversations WHERE `+temporaryConversationClause+` AND updated_at < $1`,
 		cutoff.Unix(),
 	)
 	if err != nil {

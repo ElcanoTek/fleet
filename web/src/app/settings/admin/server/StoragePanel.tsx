@@ -2,9 +2,10 @@ import { t as tr } from "@/app/lib/i18n";
 // Storage panel for Settings → Admin → Server: byte accounting for the
 // fleet data trees (chat attachment uploads, orchestrator temp uploads,
 // per-conversation workspaces), the largest workspaces with owner/pinned
-// context, and a "clean up now" action that deletes old unpinned chats
-// and sweeps aged files. Pinned, archived, shared, and project chats are
-// never touched — the server enforces that; the copy here just says so.
+// context, and a "clean up now" action that deletes old temporary chats
+// and sweeps aged files nothing still uses. Chats the retention sweep keeps
+// (pinned, archived, project, Multiplayer, shared, with a patrol or timer)
+// are never touched — the server enforces that; the copy here just says so.
 
 import { useEffect, useState } from "react";
 
@@ -43,6 +44,9 @@ type StorageResponse = {
   reclaimable_conversations: number;
   default_days: number;
   largest_workspaces: StorageWorkspaceRow[] | null;
+  // How far the server has got recording which chats use which uploads
+  // after an upgrade. Until it is complete no upload is removed.
+  upload_references?: { complete: boolean; through_id: number; upto_id: number };
 };
 
 type CleanupResponse = {
@@ -192,6 +196,11 @@ export function StoragePanel({ allowCleanup = true }: { allowCleanup?: boolean }
               {tr("Chat data is using")}{" "}{formatBytes(chatDataBytes)}{tr(", more than half of this disk. You can delete old data below.")}
             </NoticeBanner>
           ) : null}
+          {data.upload_references && !data.upload_references.complete ? (
+            <NoticeBanner tone="warning" data-testid="storage-upload-references-pending">
+              {tr("Files uploaded in chats are not being removed yet: the server is still recording which chats use them (message {0} of {1} checked). Until it finishes, the hourly cleanup and the cleanup below keep every file uploaded in a chat.", [data.upload_references.through_id, data.upload_references.upto_id])}
+            </NoticeBanner>
+          ) : null}
           <AdminStats items={items} />
 
           {data.largest_workspaces && data.largest_workspaces.length > 0 ? (
@@ -222,7 +231,7 @@ export function StoragePanel({ allowCleanup = true }: { allowCleanup?: boolean }
               <Separator className="mb-4" />
               <h4 className="m-0 mb-1 text-[0.85rem] font-semibold text-[var(--color-text-primary)]">{tr("Delete old data")}</h4>
               <p className="m-0 mb-3 text-[0.8rem] text-[var(--color-text-muted)]">
-                {tr("Permanently deletes chats with no activity, and uploaded files older than, the number of days below. Pinned, archived, shared, and project chats are always kept.")}{" "}
+                {tr("Permanently deletes chats with no activity for longer than the number of days below, and uploaded files that old that no remaining chat or live task uses. Pinned, archived, project and Multiplayer chats, chats shared by link or with your team, and chats with a patrol or timer are always kept.")}{" "}
                 <span data-testid="storage-cleanup-preview">
                   {previewAtDefault
                     ? tr(data.reclaimable_conversations === 1 ? "A cleanup at {0} days would remove {1} conversation." : "A cleanup at {0} days would remove {1} conversations.", [days, data.reclaimable_conversations])

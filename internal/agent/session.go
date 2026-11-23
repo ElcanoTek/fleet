@@ -697,6 +697,12 @@ func replayHistory(ctx context.Context, entries []HistoryEntry, uploadsRoot stri
 // carry no media type (uploads have historically been PNG-normalized).
 const defaultImageMediaType = "image/png"
 
+// UploadsDirName is the subdirectory of EMAIL_ATTACHMENT_DIR chat uploads land
+// in: <dir>/uploads/<user>/<token>/<name>. The uploads writer and the
+// attachment cleanup use it too (store.AttachmentUploadsDir), so the reader,
+// the writer and the cleanup cannot disagree about where uploads are.
+const UploadsDirName = "uploads"
+
 // confineToUploadsRoot rebuilds path from a trusted root: Rel of the cleaned
 // absolute path, rejected unless filepath.IsLocal, then Join so the Stat/ReadFile
 // sink never sees the raw value. This is the barrier CodeQL's go/path-injection

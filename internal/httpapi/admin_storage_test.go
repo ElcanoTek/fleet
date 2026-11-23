@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 )
 
 func TestDuTree_SumsRegularFilesRecursively(t *testing.T) {
@@ -39,35 +38,6 @@ func TestDuTree_MissingDirIsZeroNotError(t *testing.T) {
 	got := duTree(context.Background(), filepath.Join(t.TempDir(), "does-not-exist"))
 	if got.Bytes != 0 || got.Files != 0 {
 		t.Errorf("missing dir should account as empty, got %+v", got)
-	}
-}
-
-func TestSweepTempUploads_RemovesOldKeepsFresh(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	stale := filepath.Join(dir, "old.bin")
-	if err := os.WriteFile(stale, []byte("x"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	past := time.Now().Add(-48 * time.Hour)
-	if err := os.Chtimes(stale, past, past); err != nil {
-		t.Fatal(err)
-	}
-	fresh := filepath.Join(dir, "new.bin")
-	if err := os.WriteFile(fresh, []byte("x"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	removed := sweepTempUploads(dir, 24*time.Hour)
-	if removed != 1 {
-		t.Errorf("removed = %d, want 1", removed)
-	}
-	if _, err := os.Stat(stale); !os.IsNotExist(err) {
-		t.Error("stale file must be gone")
-	}
-	if _, err := os.Stat(fresh); err != nil {
-		t.Error("fresh file must survive")
 	}
 }
 

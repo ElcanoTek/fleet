@@ -24,6 +24,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/sched/apikeys"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
+	"github.com/ElcanoTek/fleet/internal/sched/storage"
 )
 
 // Fallback per-file cap, used only if the config carries no value. The
@@ -260,7 +261,18 @@ func (h *Handlers) HandleDownload(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, path) //nolint:gosec // G703: path is asserted within uploadsDir via withinDir/filepath.Rel above; filename is IsLocal-gated + sanitized.
 }
 
-// CleanupTempFiles removes files older than the specified duration.
+// tempUploadLookupTimeout bounds CleanupTempFiles's task lookups: one query
+// for every name a live job needs, plus one per file it is about to remove.
+const tempUploadLookupTimeout = time.Minute
+
+// CleanupTempFiles removes uploads older than maxAge from temp_uploads, each
+// with its sidecars, except those a kept job still names
+// (storage.TempUploadKeeper): a task copies its input files from here at the
+// start of every run, so a recurring job's next occurrence, a task scheduled
+// further out than maxAge, a paused or dead-lettered task keep theirs, and so
+// does a job that finished within maxAge, so a failed run can be fixed and
+// rerun. A kept upload keeps its sidecars. A file whose use cannot be checked
+// stays too, reported once per pass.
 func (h *Handlers) CleanupTempFiles(maxAge time.Duration) {
 	tempDir := filepath.Join(h.config.DataDir, "temp_uploads")
 
@@ -277,25 +289,36 @@ func (h *Handlers) CleanupTempFiles(maxAge time.Duration) {
 		return
 	}
 
-	err := filepath.Walk(tempDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			// Log but continue walking - we want to clean up as many files as possible
-			slog.Error("Error accessing temp file", "path", safe.LogSafe(path), "err", err)
-			return nil
-		}
-		if !info.IsDir() && time.Since(info.ModTime()) > maxAge {
-			//nolint:gosec // G122: this walks the server's own DataDir/temp_uploads (operator-owned), removing aged temp files during scheduled cleanup. The path is produced by filepath.Walk over a server-controlled root, not by request input; symlink-TOCTOU is not a meaningful vector here.
-			if err := os.Remove(path); err != nil {
-				slog.Error("Failed to remove old temp file", "path", safe.LogSafe(path), "err", err)
-			} else {
-				slog.Info("Removed old temp file", "path", safe.LogSafe(path))
+	// The maintenance job has no caller context; the lookups get a bounded
+	// one of their own.
+	ctx, cancel := context.WithTimeout(context.Background(), tempUploadLookupTimeout)
+	defer cancel()
+	// One sweep for this pass and the admin cleanup (storage.SweepTempUploadsWith):
+	// an upload goes with its .checksums and .uploaders sidecars, and a kept
+	// upload's sidecars stay.
+	sweep := storage.SweepTempUploadsWith(tempDir, maxAge, h.tempUploadKeeper(ctx, tempDir, maxAge),
+		func(path string, err error) {
+			if err != nil {
+				// An entry that could not be read or removed: log and go on,
+				// we want to clean up as many files as possible.
+				slog.Error("Error cleaning up temp file", "path", safe.LogSafe(path), "err", err)
+				return
 			}
-		}
-		return nil
-	})
-	if err != nil {
-		slog.Error("Error cleaning up temp files", "err", err)
+			slog.Info("Removed old temp file", "path", safe.LogSafe(path))
+		})
+	if sweep.Unchecked > 0 {
+		slog.Error("Kept old temp files whose use could not be checked", "files", sweep.Unchecked, "err", sweep.FirstUncheckedErr)
 	}
+}
+
+// tempUploadKeeper is the task store's keep rule for this sweep, or nil — age
+// alone — for a Handlers built without a task store, which only unit tests
+// construct.
+func (h *Handlers) tempUploadKeeper(ctx context.Context, tempDir string, window time.Duration) func(path string) (bool, error) {
+	if h.storage == nil {
+		return nil
+	}
+	return h.storage.TempUploadKeeper(ctx, tempDir, window)
 }
 
 // calculateFileChecksum calculates the SHA-256 checksum of a file. The only
@@ -362,8 +385,9 @@ func getFileChecksum(ctx context.Context, dataDir, filename string) (string, err
 
 // uploadersDirName is the sidecar directory under temp_uploads that records
 // who staged each upload: ".uploaders/<filename>" holds the uploader's
-// uploaderIdentity. It sits next to ".checksums" and ages out with the
-// uploads (CleanupTempFiles and the admin sweep walk the whole tree).
+// uploaderIdentity. It sits next to ".checksums" and goes with its upload:
+// CleanupTempFiles and the admin sweep remove it when they remove the upload
+// and keep it while the upload is kept (storage.SweepTempUploadsWith).
 const uploadersDirName = ".uploaders"
 
 // uploaderIdentity is the form an upload's principal is recorded and compared

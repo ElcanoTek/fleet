@@ -510,6 +510,17 @@ func (s *fakeChatStore) SweepTurnEvents(context.Context, time.Duration) (int, er
 }
 func (s *fakeChatStore) SweepOrphanWorkspaces(context.Context, string) (int, error) { return 0, nil }
 
+// ReferencedUploads and UploadReferenced answer "in use" for every upload:
+// the fake keeps no messages, and keeping is the answer that never loses a
+// file.
+func (s *fakeChatStore) ReferencedUploads(context.Context) (map[string]struct{}, bool, error) {
+	return nil, false, nil
+}
+func (s *fakeChatStore) UploadReferenced(context.Context, string) (bool, error) { return true, nil }
+func (s *fakeChatStore) MessageUploadsBackfillState(context.Context) (store.MessageUploadsBackfill, error) {
+	return store.MessageUploadsBackfill{Complete: true}, nil
+}
+
 // SetModel records the per-turn model override (#568) so tests can assert that
 // a rejected lockdown override never reaches the store.
 func (s *fakeChatStore) SetModel(_ context.Context, _, convID, model string) error {
