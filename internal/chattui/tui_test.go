@@ -194,6 +194,22 @@ func TestApprovalSupersededDropsPending(t *testing.T) {
 	}
 }
 
+// TestApprovalSupersededKeepsTheTurnsBatch: kept_approval_ids names the cards
+// the same turn staged for the tool; they stay pending server-side, so only
+// the tool's other cards leave the queue (fleet #2231).
+func TestApprovalSupersededKeepsTheTurnsBatch(t *testing.T) {
+	m := newModel(Config{ServerURL: "http://x", Email: "e@x.co"})
+	for _, id := range []string{"older", "b1", "b2"} {
+		m.applyEvent(Event{Name: "tool.approval_required", Data: map[string]any{"approval_id": id, "tool": "mcp_mg_update_rtb_rule", "summary": map[string]any{}}})
+	}
+	m.applyEvent(Event{Name: "tool.approval_superseded", Data: map[string]any{
+		"tool": "mcp_mg_update_rtb_rule", "count": float64(1), "kept_approval_ids": []any{"b1", "b2"},
+	}})
+	if len(m.pending) != 2 || m.pending[0].id != "b1" || m.pending[1].id != "b2" {
+		t.Errorf("pending after supersede = %+v, want the kept batch b1 and b2", m.pending)
+	}
+}
+
 // TestNewConversationDropsPending: /new abandons the thread the cards belong
 // to, so the queue must reset (they stay pending server-side).
 func TestNewConversationDropsPending(t *testing.T) {

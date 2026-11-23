@@ -28,7 +28,10 @@ func TestDoctorDryRunSmoke(t *testing.T) {
 		"subuid/subgid",
 		"functional drift",
 		"OPENROUTER_API_KEY",
-		"/healthz + /readyz",
+		// The process probes, not /healthz: it answers 503 while a model's
+		// circuit breaker is open, which is advised, never failed.
+		"/livez + /readyz",
+		"open circuit breaker on /healthz is advised",
 		"Scheduled maintenance",
 		"fleet-backup.timer",
 		// The maintenance timer is what keeps stale sandbox image layers from

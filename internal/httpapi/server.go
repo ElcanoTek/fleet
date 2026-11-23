@@ -249,9 +249,10 @@ type Server struct {
 	sessionApprovals *SessionApprovalRegistry
 
 	// shuttingDown is set by BeginShutdown when the process starts draining: new
-	// POST /chat are rejected with 503 and /healthz reports 503 so a load balancer
-	// stops routing here. Detached turns already in flight keep running until the
-	// shutdown path drains them (DrainTurns) or force-cancels them.
+	// POST /chat are rejected with 503, and /readyz (the readiness probe and
+	// load-balancer gate, through IsDraining) and /healthz report 503, so a load
+	// balancer stops routing here. Detached turns already in flight keep running
+	// until the shutdown path drains them (DrainTurns) or force-cancels them.
 	shuttingDown atomic.Bool
 
 	// activeTurns tracks detached runTurnAsync goroutines so the shutdown path can
@@ -293,9 +294,10 @@ type Server struct {
 	doctorMu sync.Mutex
 
 	// diskGuard measures free space on the data dir's filesystem and decides
-	// whether the box should shed scheduled work. Read-only here: the guard is
-	// consulted for /healthz and the admin health summary, and it is the
-	// SCHEDULER (internal/runner) that acts on the decision. nil = unwired.
+	// whether the box should shed scheduled work. Read-only here: the admin
+	// health summary reports it (cmd/fleet's /readyz disk check reads the same
+	// guard), and it is the SCHEDULER (internal/runner) that acts on the
+	// decision. nil = unwired.
 	diskGuard *diskguard.Guard
 
 	// lastMaintenance is the UnixNano instant the reclamation pass last ran,
@@ -449,11 +451,12 @@ type TaskScheduleResult struct {
 // ── graceful shutdown (#278) ───────────────────────────────────────────────
 
 // BeginShutdown marks the server as draining: new POST /chat are rejected with
-// 503 and /healthz reports 503 so a load balancer / readiness probe stops
-// routing new requests here. It also sends a one-shot `shutdown` SSE control
-// frame to every live stream subscriber so an attached client reconnects to a
-// healthy instance rather than waiting out the drain. Idempotent — only the
-// first call broadcasts.
+// 503, and /readyz and /healthz report 503 so a load balancer or readiness
+// probe on /readyz stops routing new requests here (/livez stays 200: the
+// process is alive and must not be restarted mid-drain). It also sends a
+// one-shot `shutdown` SSE control frame to every live stream subscriber so an
+// attached client reconnects to a healthy instance rather than waiting out the
+// drain. Idempotent — only the first call broadcasts.
 func (s *Server) BeginShutdown() {
 	if s.shuttingDown.Swap(true) {
 		return
@@ -462,9 +465,9 @@ func (s *Server) BeginShutdown() {
 }
 
 // IsDraining reports whether graceful shutdown or an external update drain has
-// begun (#215/#278). The readiness probe consults this so a draining instance
-// reports not_ready/503 — matching /healthz — and load balancers stop routing
-// new traffic to it.
+// begun (#215/#278). /readyz (cmd/fleet's withHealthProbes) consults this so a
+// draining instance reports not_ready/503 and load balancers and readiness
+// probes stop routing new traffic to it; /healthz reports shutting_down too.
 func (s *Server) IsDraining() bool { return s.shuttingDown.Load() || UpdateDrainActive() }
 
 // UpdateDrainFile returns the canonical path of the external update drain
@@ -617,13 +620,14 @@ func WithVersion(v string) Option {
 }
 
 // WithDiskGuard injects the host disk headroom guard (internal/diskguard) so
-// /healthz can report a box that has started shedding scheduled work and the
-// admin health summary can show the numbers behind that decision.
+// the admin health summary can show a box that has started shedding scheduled
+// work and the numbers behind that decision. /healthz does not report it;
+// cmd/fleet's /readyz reports the disk check degraded (207) from the same
+// guard, and fleet_disk_shedding is the metric to alert on.
 //
 // Interactive chat is deliberately NOT gated on it — a full disk is nearly
 // always produced by unattended runs, and chat is the interface an operator
-// uses to fix it. /healthz reports degraded so a monitor pages someone; it does
-// not stop serving. nil leaves the disk section absent and /healthz unchanged.
+// uses to fix it. nil leaves the disk section of the health summary absent.
 func WithDiskGuard(g *diskguard.Guard) Option {
 	return func(s *Server) { s.diskGuard = g }
 }
@@ -1203,13 +1207,28 @@ func (s *Server) getInflight(convID string) (inflightEntry, bool) {
 	return entry, ok
 }
 
+// healthz serves GET /healthz: the chat listener's status for monitors and
+// operator tooling. It answers 200 "ok", or 503 while the process drains or
+// while any model's circuit breaker is open, and carries the in-memory work
+// counters (X-Fleet-Active-Turns, X-Fleet-Active-Approvals) the update idle
+// gate reads.
+//
+// It is NOT a liveness or readiness probe, and no load balancer or
+// orchestrator should gate traffic on it. A circuit opens after five provider
+// errors in five minutes (agentcore.circuitOpenThreshold), which a provider
+// incident or a delisted model that a recurring task keeps calling produces,
+// while runs fall back to another model and chat keeps working; and it does
+// not check the databases. The probes are /livez (the process serves HTTP)
+// and /readyz (the databases answer; 503 while draining), served in front of
+// this router by cmd/fleet's withHealthProbes, and the Helm chart uses those.
+// The 503 for an open circuit is kept because it is how a monitor watching
+// this endpoint sees a degraded model (#267).
 func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Fleet-Active-Turns", strconv.Itoa(s.ActiveTurns()))
 	w.Header().Set("X-Fleet-Active-Approvals", strconv.Itoa(s.approvalRuns.activeCount()))
-	// Draining (#278): report 503 the moment graceful shutdown begins so a load
-	// balancer / readiness probe stops routing new traffic to this instance while
-	// it drains in-flight work. Checked first — a draining box is unready
-	// regardless of provider health.
+	// Draining (#278): report 503 the moment graceful shutdown begins, as
+	// /readyz does. Checked first, so a draining box reports shutting_down
+	// whatever the provider health.
 	if s.IsDraining() {
 		writeJSONStatus(w, r, http.StatusServiceUnavailable, map[string]any{"status": "shutting_down"})
 		return
@@ -1229,14 +1248,13 @@ func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	// Disk backpressure is deliberately NOT reported here. /healthz is the
-	// load-balancer gate — a 503 drains chat traffic off this box — and a
-	// shedding box is one whose CHAT is fine and whose scheduled queue has
-	// paused. Draining it would remove the very interface an operator needs to
-	// reclaim the space, which is the opposite of what the guard is for. The
+	// Disk backpressure is deliberately NOT reported here. A shedding box's
+	// CHAT is fine and only its scheduled queue has paused, and a 503 here
+	// would drain chat from any load balancer still pointed at this endpoint,
+	// removing the interface an operator needs to reclaim the space. The
 	// signal lives where a non-critical degradation belongs: /readyz reports
-	// `disk` degraded (207, not 503), fleet_disk_shedding is the alert, and the
-	// admin health summary carries the numbers. See internal/diskguard.
+	// `disk` degraded (207, not 503), fleet_disk_shedding is the alert, and
+	// the admin health summary carries the numbers. See internal/diskguard.
 	_, _ = w.Write([]byte("ok"))
 }
 

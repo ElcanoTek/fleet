@@ -141,3 +141,24 @@ account still enqueues, unattributed.
   no fleet-wide grant). Rejected: it leaves a monitoring/auditing key no option
   but the admin credential. The separate permission is what lets an operator
   grant transcript reads without granting everything else admin implies.
+
+## Amendment — `view_all_logs` grants reading, not acting (2026-11-19)
+
+Task-row scoping (#1082) extended this grant from transcripts to task rows.
+It is a fleet-wide **read**: rows, outputs, error analyses and transcripts.
+
+Acting on a task needs the task's creator or `admin`
+(`taskActableByPrincipal`): editing or retagging it, re-running or cloning it,
+waking it, permanently deleting it, answering its question over A2A, and
+managing its A2A push configs. A task runs as its owner, and a key's re-run or clone keeps the
+source's owner ([TASK-OWNERSHIP.md](../TASK-OWNERSHIP.md)), so each of these
+acts for the owner. Workspace bytes stay creator-or-admin-key, as decided
+above. Cancelling reaches any task the caller can read when it also holds
+`cancel_task`, because a cancel runs nothing as the owner. So a key holding
+`view_all_logs` and `cancel_task` can cancel any task it can read, but only
+the task's creator or an admin can permanently delete it. Naming an upload
+in a task's `files` is limited the same way: a non-admin names its own
+uploads, uploads on a task it created, or the files already on the task it
+acts on. TASK-OWNERSHIP.md §5 has the route table, and
+`cmd/fleet/task_route_scope_test.go` fails when any route under `/tasks` or
+`/logs`, or any route with a path parameter naming a task, has no scope.

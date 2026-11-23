@@ -568,7 +568,7 @@ type supersedeOrderStore struct {
 	callsAtSupersede int
 }
 
-func (s *supersedeOrderStore) SupersedePendingApprovals(context.Context, string, string, string) (int64, error) {
+func (s *supersedeOrderStore) SupersedePendingApprovals(context.Context, string, string, string, ...string) (int64, error) {
 	s.callsAtSupersede = len(s.broker.called())
 	return 1, nil
 }

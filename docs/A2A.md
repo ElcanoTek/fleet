@@ -143,8 +143,10 @@ deliberate:
   explicit delete (`ON DELETE CASCADE`), and a repeated create for the same
   client id is an update. A task holds at most 10 configs: creating an 11th
   (new id) answers `-32602` invalid params until one is deleted. Reads/writes require the task's creator or an
-  operator credential; pagination params on List are accepted and ignored
-  (spec MAY — the reference implementation does the same).
+  admin credential: a config carries its creator's token and credentials, so
+  `view_all_logs`, which reads the task, does not reach its configs.
+  Pagination params on List are accepted and ignored (spec MAY — the
+  reference implementation does the same).
 - The dispatcher also accepts the official TCK's snake_case param spellings
   (`task_id`, `page_size`, …) alongside the spec's camelCase — the TCK sends
   snake_case despite the spec's own §5.5.
@@ -152,12 +154,20 @@ Every A2A error carries the spec-required `google.rpc.ErrorInfo` detail
 (`error.data` is an array of `@type`-tagged objects; `domain:
 "a2a-protocol.org"`).
 
-One deliberate authorization extension, scoped to this surface: **an API key
-may cancel (and answer) a task it created.** On the REST surface a key never
-gains cancel through ownership; on A2A, the caller that created the task is
-exactly the credential the card tells integrators to use, and a cancel method
-that credential can never pass would be dead on arrival. Recorded in
-ADR-0051.
+Answering a task's question needs the task's creator or an admin credential,
+like the push-config methods: the answer steers a run that runs as the task's
+owner. Cancelling needs the creator or `cancel_task` on a task the key can
+read.
+
+**An API key may cancel (and answer) a task it created**, without
+`cancel_task`. On A2A, the caller that created the task is exactly the
+credential the card tells integrators to use, and a cancel method that
+credential could never pass would be dead on arrival (ADR-0051). The REST
+surface applies the same rule: `DELETE /tasks/{id}` (cancel) accepts the key
+that created the task, or `cancel_task` on a task the key can read, and
+`DELETE /tasks/{id}/permanent` accepts only the task's creator or an admin. A
+key holding `view_all_logs` and `cancel_task` can cancel any task it can read,
+but only the creator or an admin can permanently delete it.
 
 ### State mapping
 

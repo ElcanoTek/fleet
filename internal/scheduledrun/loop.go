@@ -42,8 +42,17 @@ func (r *Runner) runWithLoop(ctx context.Context, task *models.Task, wtPath stri
 		return r.runWorker(c, task, extra, task.LoopConfig, wtPath)
 	}
 	return runLoop(ctx, task.LoopConfig, task.ID, time.Now, worker, func(it *models.TaskIteration) {
-		r.recordIteration(ctx, it)
+		r.recordIteration(ctx, withTaskAttribution(it, task))
 	})
+}
+
+// withTaskAttribution stamps the runner's copy of the task's creator, key and
+// model on an iteration and returns it. db.AddTaskIteration records them only
+// when the task row is already gone at the first write (a task stopped and
+// deleted while its last run finishes); otherwise the row's own values win.
+func withTaskAttribution(it *models.TaskIteration, task *models.Task) *models.TaskIteration {
+	it.CreatedBy, it.CreatedByKeyID, it.Model = task.CreatedBy, task.CreatedByKeyID, task.Model
+	return it
 }
 
 // runLoop is the loop control, decoupled from model/sandbox setup so it is

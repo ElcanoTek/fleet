@@ -96,7 +96,8 @@ func a2aValidatePushURL(raw string) error {
 
 // a2aPushWireConfig renders a stored config in the spec's wire shape.
 // Token and credentials belong to the creator, who supplied them; the reads
-// are creator-scoped, so echoing them back is returning the caller's own data.
+// are open to the creator and admin only (a2aPushTask), so echoing them back
+// returns the caller's own data, or data an admin may read anyway.
 func a2aPushWireConfig(cfg *models.A2APushConfig) *wire.PushConfig {
 	out := &wire.PushConfig{
 		TaskID: wire.TaskID(cfg.TaskID.String()),
@@ -110,17 +111,20 @@ func a2aPushWireConfig(cfg *models.A2APushConfig) *wire.PushConfig {
 	return out
 }
 
-// a2aPushTask loads the task behind a push-config call and enforces the
-// mutating-surface gate. Invisible (or malformed id) ⇒ -32001; visible but
-// neither creator nor operator ⇒ transport-layer 403, like answer/cancel.
+// a2aPushTask loads the task behind a push-config call and enforces the act
+// scope (taskActableByPrincipal: the task's creator, or admin) for every
+// config method, reads included, since a config carries its creator's token
+// and credentials. Invisible (or malformed id) ⇒ -32001; visible (the
+// view_all_logs reading grant) but neither creator nor admin ⇒ transport-layer
+// 403, like answer/cancel.
 func (h *Handlers) a2aPushTask(w http.ResponseWriter, r *http.Request, p principal, req a2abridge.Request, rawTaskID string) (*models.Task, bool) {
 	task, err := h.a2aVisibleTask(p, wire.TaskID(rawTaskID))
 	if err != nil {
 		a2aWrite(w, r, a2aErrorFrom(req.ID, err))
 		return nil, false
 	}
-	if !taskCreatedByPrincipal(p, task) && !p.hasPermission(models.PermissionCancelTask) {
-		writeError(w, http.StatusForbidden, "push-notification configs are limited to the task's creator or an operator credential")
+	if !taskActableByPrincipal(p, task) {
+		writeError(w, http.StatusForbidden, "push-notification configs are limited to the task's creator or an admin credential")
 		return nil, false
 	}
 	return task, true

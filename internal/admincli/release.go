@@ -338,14 +338,16 @@ func (i *installFlags) options(w io.Writer) (release.InstallOptions, error) {
 	if err != nil {
 		return o, err
 	}
-	o.Prober = newInstallProber(cfg)
+	o.Prober = newInstallProber(cfg, w)
 	return o, nil
 }
 
 // Seams for tests.
 var (
 	installRestarter release.Restarter = release.Systemctl{}
-	newInstallProber                   = func(cfg *tls.Config) release.Prober { return release.HTTPProber{TLS: cfg} }
+	newInstallProber                   = func(cfg *tls.Config, log io.Writer) release.Prober {
+		return release.HTTPProber{TLS: cfg, Log: log}
+	}
 )
 
 func releaseInstall(ctx context.Context, argv []string) int {

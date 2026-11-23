@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -31,6 +32,20 @@ func (e Event) Str(key string) string {
 		return v
 	}
 	return ""
+}
+
+// Strs returns Data[key] as a string set (empty when absent): a JSON array of
+// strings, e.g. tool.approval_superseded's kept_approval_ids.
+func (e Event) Strs(key string) map[string]bool {
+	out := map[string]bool{}
+	if list, ok := e.Data[key].([]any); ok {
+		for _, v := range list {
+			if s, ok := v.(string); ok && s != "" {
+				out[s] = true
+			}
+		}
+	}
+	return out
 }
 
 // Client streams turns from a running fleet server's POST /chat.
@@ -864,6 +879,17 @@ func errString(err error) string {
 // Ping reports whether the server's /healthz answers quickly — a fast, friendly
 // preflight so `fleet chat` can say "server not reachable" instead of hanging on
 // the first turn. Best-effort; never returns the token.
+//
+// /healthz also answers 503 {"status":"degraded"} while one model's circuit
+// breaker is open (a provider incident, a delisted model). Turns still run
+// then, falling back to another model, so that answer counts as reachable:
+// refusing to open a session over it would lock the user out of a working
+// server. The answer counts only with fleet's X-Fleet-Active-Turns and
+// X-Fleet-Active-Approvals headers on it (as the update idle gate requires),
+// so a 503 from some other server in the way is still reported. /healthz
+// rather than /livez because a proxy in front of the chat API
+// (fleet-buzz-gateway, docs/ACP.md) may forward only the paths `fleet acp`
+// has always called; that gateway passes response headers through.
 func (c *Client) Ping(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
@@ -876,10 +902,36 @@ func (c *Client) Ping(ctx context.Context) error {
 		return fmt.Errorf("fleet server not reachable at %s (is it running? `fleet status`): %w", c.cfg.ServerURL, err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusServiceUnavailable && fleetHealthzHeaders(resp.Header) && healthzProviderDegraded(resp.Body) {
+		return nil
+	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		return fmt.Errorf("fleet server health check returned %d", resp.StatusCode)
 	}
 	return nil
+}
+
+// fleetHealthzHeaders reports whether a response carries the work counters
+// fleet's /healthz sets on every answer.
+func fleetHealthzHeaders(h http.Header) bool {
+	for _, name := range []string{"X-Fleet-Active-Turns", "X-Fleet-Active-Approvals"} {
+		if n, err := strconv.Atoi(strings.TrimSpace(h.Get(name))); err != nil || n < 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// healthzProviderDegraded reports whether a /healthz body is the server's
+// open-circuit answer, {"status":"degraded",...}.
+func healthzProviderDegraded(body io.Reader) bool {
+	var v struct {
+		Status string `json:"status"`
+	}
+	if err := json.NewDecoder(io.LimitReader(body, 4<<10)).Decode(&v); err != nil {
+		return false
+	}
+	return v.Status == "degraded"
 }
 
 // roleViewer is the read-only role's name on GET /me (store.RoleViewer: this

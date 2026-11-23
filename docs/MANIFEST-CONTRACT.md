@@ -140,8 +140,11 @@ Three points about the permission facts:
 - **Admission versus row access.** `x-fleet-permission` decides whether a key
   can use the operation. Once a key is admitted, task reads and transcripts
   are still limited to the rows that key created. Reading other keys' rows
-  needs `view_all_logs` or `admin`. Manifest reads only tasks that its own key
-  created, so the permission value is the fact it needs.
+  needs `view_all_logs` or `admin`. Acting on them (edit, re-run, clone,
+  wake, permanent delete) needs `admin`. The one exception is cancelling: a
+  key holding `view_all_logs` and `cancel_task` can cancel any task it can
+  read. Manifest reads only tasks that its own key created, so the permission
+  value is the fact it needs.
 - **The value names the permission, not the gate function.** The grep version
   of `api.estimateTaskGate` pinned the gate *function*: `estimate.go` calls
   `authorizeTaskCreator`. The spec cannot name a function. Instead it states

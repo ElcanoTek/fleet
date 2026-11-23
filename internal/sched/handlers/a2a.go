@@ -639,17 +639,19 @@ func (h *Handlers) a2aAwaitOutcome(ctx context.Context, taskID uuid.UUID, latest
 }
 
 // a2aAnswerTask resumes a paused-awaiting-input task with the message text.
-// Only the task's creator (or a cancel-scoped operator credential) may answer
-// — answering steers the run, so the bar matches the other mutating surface.
+// Only the task's creator (or an admin credential) may answer: the answer
+// steers a run that runs as the task's owner, so the bar is the act scope
+// (taskActableByPrincipal) that edits and re-runs use.
 func (h *Handlers) a2aAnswerTask(w http.ResponseWriter, r *http.Request, p principal, req a2abridge.Request, rawID wire.TaskID, answer string, cfg *wire.SendMessageConfig, streaming bool) {
 	task, err := h.a2aVisibleTask(p, rawID)
 	if err != nil {
 		a2aWrite(w, r, a2aErrorFrom(req.ID, err))
 		return
 	}
-	if !taskCreatedByPrincipal(p, task) && !p.hasPermission(models.PermissionCancelTask) {
-		// Visible (fleet-wide read grant) but not the creator: reads only.
-		writeError(w, http.StatusForbidden, "answering a task is limited to its creator or an operator credential")
+	if !taskActableByPrincipal(p, task) {
+		// Visible (the view_all_logs reading grant) but neither creator nor
+		// admin: reads only.
+		writeError(w, http.StatusForbidden, "answering a task is limited to its creator or an admin credential")
 		return
 	}
 	if task.Status != models.TaskStatusPausedAwaitingInput {
@@ -913,12 +915,12 @@ func (h *Handlers) a2aListTasks(w http.ResponseWriter, r *http.Request, p princi
 	}))
 }
 
-// a2aCancelTask implements CancelTask. Authorization is the creator or a
-// cancel-scoped credential — a DELIBERATE extension over the REST surface,
-// where an API key never gains cancel through ownership: an A2A caller that
+// a2aCancelTask implements CancelTask. Authorization is the creator, or a
+// cancel_task (operator) credential on a task the caller can read — the rule
+// REST stopping applies too (taskStoppableByPrincipal). An A2A caller that
 // created a task must be able to cancel it, or the protocol's cancel method
-// is unusable by exactly the credential the card tells callers to use.
-// Scoped to this surface; recorded in ADR-0051.
+// is unusable by exactly the credential the card tells callers to use
+// (ADR-0051).
 func (h *Handlers) a2aCancelTask(w http.ResponseWriter, r *http.Request, p principal, req a2abridge.Request) {
 	var params wire.CancelTaskRequest
 	if err := json.Unmarshal(req.Params, &params); err != nil {

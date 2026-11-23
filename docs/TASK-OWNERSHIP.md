@@ -9,7 +9,8 @@ names the job it belongs to: its per-job workspace directory and its owner-diges
 entry.
 
 This note records how copies get an owner and a lineage, how an admin changes a
-task's owner, and the check that refuses a task whose connectors cannot resolve.
+task's owner, the check that refuses a task whose connectors cannot resolve,
+and which tasks a caller may read and act on.
 
 ## What went wrong (2026-10-26)
 
@@ -56,6 +57,17 @@ be. Before, an admin-key copy was checked against no budget.
 
 There is no override that makes a copy unowned. An ownerless copy is exactly
 the failure above.
+
+**Who may copy a task.** Because a key's copy runs as the source's owner (that
+owner's hosted connections, budgets, lineage and per-job workspace), only a
+caller that may act on the source can copy it: the source's creator (the user,
+or the API key in `created_by_key_id`) or an admin (the admin API key, a key
+carrying `admin`, an admin-role session). A key that can read the task only
+through `view_all_logs` gets 403 `Only the task creator or an admin can re-run
+or clone this task`. The table above therefore applies to a scoped key copying
+a task it created, and to an admin. `rerunCreator` applies the same rule where
+it picks the owner: a key that may not act on the source never receives its
+owner. See [Reading is not acting](#5-reading-is-not-acting) for every route.
 
 ### 2. `new_lineage`: a copy that is a different job
 
@@ -194,6 +206,12 @@ one copied chain must not reassign another.
 - **Finished occurrences in between** keep their owner. They are history.
 - **Future occurrences** inherit the new owner, because a recurrence spawn copies
   `created_by` from the completing row.
+- **Recorded spend** follows the rows that change owner: the same transaction
+  sets `created_by` on their `task_iterations`, which carry their own copy of
+  the attribution so spend keeps counting after a task is deleted
+  ([USAGE-ANALYTICS.md](USAGE-ANALYTICS.md), migration 0210). The usage report
+  and the user budgets then count it for the new owner. `--lineage` (CLI only)
+  does the same for the unowned historical occurrences it attributes.
 - **The connector check** runs on every row in the set, each as it would read
   afterwards (owner = the new owner), while the rows are locked. A next
   occurrence edited to a different selection is checked on its own selection.
@@ -209,6 +227,92 @@ one copied chain must not reassign another.
 
 `created_by_key_id` is not touched. It stays immutable provenance (#1270).
 
+### 5. Reading is not acting
+
+A route's permission (`x-fleet-permission` in `docs/openapi.yaml`) admits a
+caller to the route. A per-task scope then decides which tasks it reaches:
+
+| Scope | Reaches | Check |
+|---|---|---|
+| read | the caller's own tasks; every task with `view_all_logs` (admin implies it) | `taskVisibleToPrincipal`, `taskLogsReadable` |
+| files | the task's creator, or the bootstrap admin key | `taskWorkspaceOwned` |
+| act | the task's creator (user or API key), or any principal holding `admin` | `taskActableByPrincipal` |
+| stop | the task's creator; or `cancel_task` on a task the caller can read | `taskStoppableByPrincipal` |
+| admin | `admin` only | `PermissionAdmin` in the handler |
+
+`view_all_logs` grants reading: every task's row, output, error analysis and
+run-log transcripts. It does not grant workspace bytes or the artifact
+manifest, and it does not grant acting. A task runs as its owner, so changing
+it, starting a run from it or feeding its run is acting for that owner. The
+one non-read it widens is cancelling, and only together with `cancel_task`:
+a key holding both can cancel any task it can read, but only the task's
+creator or an admin can permanently delete it. A cancel ends the task and
+runs nothing as its owner; a permanent delete removes the owner's record and
+transcripts for good, so it is in the act scope (`taskDeletableByPrincipal`).
+
+| Route or A2A method | Scope |
+|---|---|
+| `GET /tasks/{id}`, `/output`, `/error-analysis`, `/stream`; `GET /logs/{id}`, `/history`, `/history/{entry_id}`; `GET /tasks`, `/tasks/upcoming`, `/tasks/export`, `/tasks/tags`, `/tasks/recipients` | read |
+| `GET /tasks/{id}/artifacts`, `/workspace`, `/workspace/*` | files |
+| `PUT /tasks/{id}`, `POST /tasks/{id}/tags`, `/rerun`, `/clone` | act (plus `create_task`) |
+| `DELETE /tasks/{id}/permanent` | act |
+| `POST /tasks/{id}/wake` | act (plus `cancel_task`), or the user who created the task |
+| `DELETE /tasks/{id}` | stop |
+| `PUT /tasks/{id}/owner`; `POST /tasks/import?conflict=replace` | admin |
+| A2A `GetTask`, `ListTasks`, `SubscribeToTask` | read |
+| A2A `SendMessage` answering a task's question; the four push-config methods (a config carries its creator's token and credentials) | act |
+| A2A `CancelTask` | the task's creator, or `cancel_task` on a task the caller can read |
+
+`cmd/fleet/task_route_scope_test.go` walks the real router: every route under
+`/tasks` and `/logs`, and every route with a path parameter naming a task,
+must have a scope in its table (read, list, files, act, stop, create or
+admin). A task in such a path must be spelled `{task_id}`, and every route
+with a per-task scope must name one, so none escapes the probe. The read
+scopes are GET only (an admin-only GET needs an entry in its allowlist,
+checked against the router), and stop is DELETE only. Each route naming a
+`{task_id}` is driven with a key holding every permission except `admin`
+(against another principal's task and against its own), the bootstrap admin
+key, a typed admin key and an admin-role session. `TestEveryA2AMethodHasAScope` (`internal/sched/handlers`)
+reads the A2A dispatcher's method switch and requires the same for every
+method, and `TestA2AViewAllLogsReachesOnlyReadAndStopMethods` drives them.
+
+**Files a task names.** A run copies each upload in `files` into its
+workspace, where the task's creator can download it, so naming an upload hands
+out its bytes. `POST /upload` is the only way to stage one; it records who
+staged it (`temp_uploads/.uploaders/<name>`, next to the checksum sidecar,
+swept with the upload). A principal holding `admin` may name any upload. Any
+other caller may name an upload it staged itself, one on a task it created,
+or one already on the task it acts on (the task it edits, or the source of a
+re-run or clone). Any other name is refused with `file not found: <name>`, the
+answer a missing upload gets. The check (`checkCallerFiles`) is one of the
+create gates: `admitCreate` and `admitEdit` run it, so it applies to
+`POST /tasks`, `/tasks/batch`, `/tasks/import`, `PUT /tasks/{id}` and the
+`files` override of re-run and clone, and `POST /tasks/estimate` runs it on
+the forecast's body. A re-run or clone checks it against the caller, not the
+copy's owner. In a batch
+or an import a refused name fails that record (an import dry run reports it
+too); both check every record's uploads before the budget, the key's request
+counter and any write, so if the lookup itself fails the whole request fails
+with a server error and nothing is charged or written.
+`POST /upload` stores a run of dots in a file's name as one dot, so every
+stored name is one a task can name. A2A, the chat `schedule_task` tool and
+the in-run `create_task` tool take no `files`. A trigger run and a recurrence
+spawn copy their template's or chain's `files`, which were checked when that
+definition was written.
+`conflict=replace` on import is admin only. An upload staged before uploads
+were recorded can be named only through a task its caller created.
+
+The act scope follows `created_by_key_id` as well as `created_by`. A key that
+created a task keeps acting on it after an admin gives the task an owner with
+`PUT /tasks/{id}/owner`: its edits and its copies run as that owner, and may
+name that owner's hosted connections in `mcp_selection`
+(`TestOwnerChangeCarriesTheCreatingKeysActs`).
+
+An admin reaches a job's workspace bytes through a copy. A re-run or clone by
+a typed admin key or an admin-role session joins the source's lineage by
+default, and that admin is the copy's creator, so it reads the copy's
+workspace: the source's per-job directory.
+
 ## Recovering the 2026-10-26 copies
 
 For each ownerless copy, give it its owner. Its last occurrence (the parked
@@ -223,3 +327,48 @@ fleet sched task set-owner <copy_id> <owner email>
 The copies still share the source's lineage. A lineage cannot be changed on an
 existing row. To separate them, clone each copy with `new_lineage: true` and
 then stop the old chain.
+
+## Copies a key made of a task it did not create
+
+A re-run or clone made by an API key keeps the source's owner and records the
+key in `created_by_key_id`, so the key is the copy's creator: it acts on the
+copy (edits it, re-runs it as that owner, in that owner's lineage) and names
+the uploads on it, as it does for any task it created. A copy whose key is not
+the source's key, on a task that has an owner, is such a copy. To list them,
+run this against the fleet database:
+
+<!-- key-copies-query: TestKeyCopiesQueryListsCopiesOfOtherPrincipalsTasks runs this block -->
+```sql
+SELECT dup.id                AS copy_id,
+       dup.created_by        AS owner,
+       dup.created_by_key_id AS copy_key,
+       src.created_by_key_id AS source_key,
+       dup.source_task_id,
+       src.id IS NULL        AS source_deleted,
+       dup.status,
+       dup.created_at
+FROM sched.tasks AS dup
+LEFT JOIN sched.tasks AS src ON src.id::text = dup.source_task_id
+WHERE dup.source_task_id IS NOT NULL
+  AND dup.created_by IS NOT NULL
+  AND dup.created_by_key_id IS NOT NULL
+  AND (src.id IS NULL OR dup.created_by_key_id IS DISTINCT FROM src.created_by_key_id)
+ORDER BY dup.created_at;
+```
+
+Rows to expect that need no action:
+
+- copies made by a typed admin key or a key carrying `admin`, which may copy
+  any task (check the key with `GET /keys/{key_id}`);
+- copies whose source was permanently deleted (`source_deleted`): the source's
+  key is unknown, so a key's copy of its own task is listed too.
+
+A session user's copy is not listed (it has no key), nor is a copy made by the
+key that created the source, including after an admin gave either an owner.
+
+For a copy the key should not act on: permanently delete it
+(`DELETE /tasks/{id}/permanent` as an admin). To keep the job, first clone it
+from its owner's session, which makes a copy owned by that user with no key on
+it, then delete the old one. A clone with the bootstrap admin key keeps the
+source's key, and `PUT /tasks/{id}/owner` does not change `created_by_key_id`,
+so neither of those takes the copy away from the key.

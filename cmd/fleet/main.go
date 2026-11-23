@@ -18,10 +18,11 @@
 // BOTH the interactive engine's Deps and the runner's scheduled-agent Deps.
 //
 // Graceful shutdown (#278) distinguishes SIGTERM (deployment restart) from SIGINT
-// (dev Ctrl-C): on SIGTERM it stops admitting new work (/healthz → 503 so a load
-// balancer drains it), then drains in-flight chat turns AND scheduled tasks within
-// FLEET_SHUTDOWN_GRACE_SECONDS before force-cancelling the stragglers and closing
-// the listeners; SIGINT is the immediate path. It emits sd_notify READY=1 /
+// (dev Ctrl-C): on SIGTERM it stops admitting new work (/readyz and /healthz →
+// 503 so a load balancer drains it), then drains in-flight chat turns AND
+// scheduled tasks within FLEET_SHUTDOWN_GRACE_SECONDS before force-cancelling
+// the stragglers and closing the listeners; SIGINT is the immediate path. It
+// emits sd_notify READY=1 /
 // STOPPING=1 (a no-op off systemd) and answers SIGUSR1 with an in-flight snapshot.
 package main
 
@@ -645,7 +646,7 @@ func run() error {
 
 	// Host disk headroom guard: measures the filesystem holding the data dir and
 	// decides whether the box should shed BACKGROUND load. One guard, three
-	// consumers — the Prometheus gauges, /healthz + the admin health summary,
+	// consumers — the Prometheus gauges, /readyz + the admin health summary,
 	// and the scheduler's claim gate — so what is charted, what is reported and
 	// what is enforced can never disagree.
 	diskGuard := diskguard.New(cfg.DataDir, cfg.DiskMinFreePercent)
@@ -1020,14 +1021,21 @@ func run() error {
 
 	// Liveness + readiness probes (#215) on BOTH ports, sharing one check set
 	// and one drain signal (chatSrv.BeginShutdown is the single graceful-drain
-	// trigger, so both ports report not_ready while draining).
-	readinessChecks := buildReadinessChecks(cfg, chatStore, schedStorage.DB(), diskGuard, mgr.SandboxPool())
+	// trigger, so both ports report not_ready while draining). The database
+	// checks ping over connections of their own, so a busy pool cannot fail
+	// them (readinessPinger).
+	readinessChecks, closeReadiness, err := openReadinessChecks(cfg, diskGuard, mgr.SandboxPool())
+	if err != nil {
+		return err
+	}
+	defer closeReadiness()
 	// apiversion.Router (#321) makes both servers reachable under a /v1 prefix
 	// (X-Fleet-API-Version on those responses) while the legacy bare paths keep
 	// working with a Deprecation signal. It wraps INSIDE the health-probe layer so
-	// /healthz stays unversioned + untagged. Route registration is untouched.
+	// /livez and /readyz stay unversioned + untagged (/healthz, a chat route, is
+	// listed as unversioned forever). Route registration is untouched.
 	chatRoutes := chatSrv.Routes()
-	chatHandler := securityHeadersMiddleware(withHealthProbes(apiversion.Router(chatRoutes), startTime, chatSrv.IsDraining, readinessChecks), tlsActive(cfg))
+	chatHandler := chatListenerHandler(chatSrv, chatRoutes, startTime, readinessChecks, tlsActive(cfg))
 	orchHandlerWithProbes := withHealthProbes(apiversion.Router(orchHandler), startTime, chatSrv.IsDraining, readinessChecks)
 
 	chatServer := &http.Server{Addr: chatAddr, Handler: chatHandler, ReadHeaderTimeout: 30 * time.Second}

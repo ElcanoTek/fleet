@@ -140,7 +140,9 @@ boot() {
   mapfile -t envs < <(fleet_env "$2")
   (cd "$WORK" && exec env "${envs[@]}" "$1") >"$LOGS/$3.log" 2>&1 &
   SERVER_PID=$!
-  wait_http "http://127.0.0.1:$CHAT_PORT/healthz" 180
+  # /readyz: booted and its databases answer (not /healthz, which reports
+  # model-provider state).
+  wait_http "http://127.0.0.1:$CHAT_PORT/readyz" 180
   wait_http "http://127.0.0.1:$ORCH_PORT/health" 180
   log "$3 is up (pid $SERVER_PID)"
 }

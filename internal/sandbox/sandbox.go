@@ -31,9 +31,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/telemetry"
 )
 
@@ -252,7 +254,29 @@ type Sandbox struct {
 	// bridge because the bridge runs inside the container with no --env
 	// forwarding, so a host-side env value can't reach it directly.
 	pythonCellTimeout time.Duration
+
+	// replace builds a fresh sandbox equivalent to this one — same image,
+	// mounts, network posture and resource limits, with every check the take
+	// path ran on the original. The pool that handed this sandbox out sets it;
+	// nil (a sandbox constructed directly, or the test-only host backend) means
+	// a poisoned backend stays poisoned. See backend.
+	replace func(ctx context.Context) (*Sandbox, error)
+	// replaceMu serializes backend replacement so parallel tool calls that
+	// find the same poisoned backend start one container, not one each.
+	replaceMu sync.Mutex
+	// replacements counts the replacements this sandbox has attempted in the
+	// current run, failed ones included; see maxBackendReplacements and
+	// startRun.
+	replacements int
 }
+
+// maxBackendReplacements bounds how many times one sandbox tries to replace a
+// poisoned backend within one run (a turn, or a scheduled run). Each attempt is a container start that can wait out the
+// whole start timeout, so a failed attempt counts like a successful one: a
+// run whose commands keep timing out, or whose box cannot start a container
+// at all, stops paying for them. Past the bound the sandbox stays poisoned
+// and is retired by its owner, as before.
+const maxBackendReplacements = 3
 
 // SetPythonCellTimeout sets the per-cell run_python ceiling (#213). The pool
 // calls this at construction from the resolved FLEET_PYTHON_CELL_TIMEOUT. Zero
@@ -293,9 +317,10 @@ type impl interface {
 }
 
 // ErrPoisoned is returned by RunBash/RunPython on a sandbox whose earlier
-// cancelled/timed-out invocation could not be proved dead (#796). The sandbox
-// must be retired; the persistent pool does so automatically at the next
-// borrow/release boundary.
+// cancelled/timed-out invocation could not be proved dead (#796) and whose
+// backend could not be replaced (see backend). The sandbox must be retired;
+// the persistent pool does so automatically at the next borrow/release
+// boundary.
 var ErrPoisoned = errors.New("sandbox poisoned: a cancelled command may still be running; the sandbox is being retired")
 
 // HostExecutorCompiledIn reports whether the unsandboxed host executor (ModeHost,
@@ -342,17 +367,156 @@ func (s *Sandbox) RunBash(ctx context.Context, req BashRequest) (res BashResult,
 		req.WorkingDir = s.defaultWorkingDir
 	}
 	s.mu.Unlock()
-	if s.impl.poisoned() {
-		return BashResult{}, ErrPoisoned
+	be, err := s.backend(ctx)
+	if err != nil {
+		return BashResult{}, err
 	}
-	return s.impl.runBash(ctx, req)
+	return be.runBash(ctx, req)
 }
 
 // Poisoned reports whether a cancelled/timed-out invocation may have left
 // processes running in this sandbox (#796). The persistent pool retires a
 // poisoned sandbox instead of lending it to another turn.
 func (s *Sandbox) Poisoned() bool {
-	return s.impl.poisoned()
+	return s.currentImpl().poisoned()
+}
+
+// currentImpl returns the backend this sandbox runs on now. Read under mu:
+// backend swaps it when it replaces a poisoned one.
+func (s *Sandbox) currentImpl() impl {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.impl
+}
+
+// setReplace records how to build a fresh sandbox equivalent to this one. The
+// pool calls it on every sandbox it hands out, before the caller sees it.
+func (s *Sandbox) setReplace(build func(ctx context.Context) (*Sandbox, error)) {
+	s.mu.Lock()
+	s.replace = build
+	s.mu.Unlock()
+}
+
+// startRun opens a fresh replacement budget (maxBackendReplacements). The
+// persistent pool calls it each time it lends a conversation's sandbox to a
+// turn: the bound is per run, and that sandbox outlives many.
+func (s *Sandbox) startRun() {
+	s.mu.Lock()
+	s.replacements = 0
+	s.mu.Unlock()
+}
+
+// checkReplacement adds a check every replacement must pass before it is
+// adopted — the same one the take path ran on the original (a scoped mount's
+// identity, for one). A replacement that fails it is closed and refused.
+func (s *Sandbox) checkReplacement(check func(ctx context.Context, fresh *Sandbox) error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	build := s.replace
+	if build == nil {
+		return
+	}
+	s.replace = func(ctx context.Context) (*Sandbox, error) {
+		fresh, err := build(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if err := check(ctx, fresh); err != nil {
+			fresh.Close()
+			return nil, err
+		}
+		return fresh, nil
+	}
+}
+
+// backend returns the backend a new call runs on. A healthy backend is
+// returned as it is. A poisoned one — an earlier call timed out or was
+// cancelled and its processes could not be proved dead (#796) — is never
+// reused: it is closed, which kills the container and with it anything still
+// running, and a fresh one built the way the pool built the original takes
+// its place, bound to the same file root.
+//
+// Without this a single timed-out command cost the rest of the run: the turn
+// holds this one *Sandbox until it ends, the pool only swaps a poisoned
+// sandbox at the next borrow, and so every later bash, Python and file call
+// of that turn failed with ErrPoisoned. A scheduled patrol that spent an hour
+// collecting data and then hit the run_python ceiling could do nothing with
+// it. What does not survive the swap is in-container state: the Python
+// kernel's variables and anything written outside the mounted workspace.
+//
+// It fails closed. With no way to build a replacement, past
+// maxBackendReplacements, when the caller's context is already done, or when
+// the replacement cannot be started, cannot pass the take path's checks or
+// cannot bind the file root, the call gets ErrPoisoned exactly as before.
+func (s *Sandbox) backend(ctx context.Context) (impl, error) {
+	cur := s.currentImpl()
+	if !cur.poisoned() {
+		return cur, nil
+	}
+
+	s.replaceMu.Lock()
+	defer s.replaceMu.Unlock()
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil, ErrClosed
+	}
+	cur = s.impl
+	build := s.replace
+	replaced := s.replacements
+	root := s.fileOpRoot
+	s.mu.Unlock()
+	if !cur.poisoned() {
+		// A parallel call replaced it while this one waited on replaceMu.
+		return cur, nil
+	}
+	if build == nil || replaced >= maxBackendReplacements || ctx.Err() != nil {
+		return nil, ErrPoisoned
+	}
+	s.mu.Lock()
+	s.replacements++
+	s.mu.Unlock()
+
+	// The old container dies before the new one mounts the same workspace, so
+	// nothing the cancelled command left running can write under fresh work.
+	cur.close()
+	fresh, err := build(ctx)
+	if err != nil {
+		logging.From(ctx).Warn("sandbox: could not replace a poisoned sandbox; it stays retired", "err", err)
+		return nil, fmt.Errorf("%w; a replacement could not be started", ErrPoisoned)
+	}
+	next := fresh.impl
+	// The file root is bound again inside the replacement, exactly as it was
+	// bound inside the original, and the identity it reports is the one file
+	// calls are checked against from here on. It is not compared with the
+	// original's: the identity is whatever the runtime's own kernel reports,
+	// and a replacement pod on another node, or a fresh VM guest (kata,
+	// libkrun), numbers the same directory differently. What makes the
+	// directory the right one is what made it right the first time — the
+	// take path's mount checks, which build has just run again.
+	var identity FileOpRootIdentity
+	if root != "" {
+		got, err := next.bindFileOpRoot(ctx, root)
+		if err != nil || (got.Dev == 0 && got.Ino == 0) {
+			next.close()
+			logging.From(ctx).Warn("sandbox: a replacement sandbox could not bind the file root; refusing it", "err", err)
+			return nil, fmt.Errorf("%w; a replacement could not be bound to the workspace", ErrPoisoned)
+		}
+		identity = got
+	}
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		next.close()
+		return nil, ErrClosed
+	}
+	s.impl = next
+	if root != "" {
+		s.fileOpRootIdentity = identity
+	}
+	s.mu.Unlock()
+	logging.From(ctx).Info("sandbox: replaced a poisoned sandbox within the run", "replacement", replaced+1)
+	return next, nil
 }
 
 // ReapDetachedProcesses terminates any background processes inside a persistent
@@ -360,10 +524,14 @@ func (s *Sandbox) Poisoned() bool {
 // turn releases its borrow. Returns false (and poisons the sandbox) if cleanup
 // could not be confirmed.
 func (s *Sandbox) ReapDetachedProcesses() bool {
-	if s == nil || s.impl == nil {
+	if s == nil {
 		return true
 	}
-	if r, ok := s.impl.(interface{ reapDetachedProcesses() bool }); ok {
+	cur := s.currentImpl()
+	if cur == nil {
+		return true
+	}
+	if r, ok := cur.(interface{ reapDetachedProcesses() bool }); ok {
 		return r.reapDetachedProcesses()
 	}
 	return true
@@ -397,10 +565,11 @@ func (s *Sandbox) RunPython(ctx context.Context, req PythonRequest) (res PythonR
 	s.mu.Unlock()
 	// The span records the timeout the cell runs under, after the clamp.
 	setExecTimeout(span, req.Timeout)
-	if s.impl.poisoned() {
-		return PythonResult{}, ErrPoisoned
+	be, err := s.backend(ctx)
+	if err != nil {
+		return PythonResult{}, err
 	}
-	return s.impl.runPython(ctx, req)
+	return be.runPython(ctx, req)
 }
 
 // Close tears down the backend. Safe to call multiple times. After
@@ -412,8 +581,9 @@ func (s *Sandbox) Close() {
 		return
 	}
 	s.closed = true
+	cur := s.impl
 	s.mu.Unlock()
-	s.impl.close()
+	cur.close()
 }
 
 // ErrClosed is returned from RunBash / RunPython after Close has run.

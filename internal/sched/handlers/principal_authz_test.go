@@ -192,7 +192,7 @@ func TestScopedAPIKeyAuthorization(t *testing.T) {
 		}
 	})
 
-	// Editing is own-rows, not merely permission-gated (taskWritableByPrincipal).
+	// Editing is own-rows, not merely permission-gated (taskActableByPrincipal).
 	// The client role carries create_task (which admits it to the edit surface)
 	// but not cancel_task, so it is the right role to test WHICH task a scoped
 	// key may mutate.

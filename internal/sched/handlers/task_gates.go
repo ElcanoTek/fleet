@@ -20,9 +20,9 @@ import (
 // POST /tasks/batch and POST /tasks/import. Writes onto an existing row go
 // through admitEdit: PUT /tasks/{id} and import conflict=replace.
 //
-// Every create and edit path runs this one list;
-// TestTaskWritesGoThroughTheGates fails on a handler that writes a task
-// without it.
+// Every create and edit path runs this one list, the uploads check
+// (checkCallerFiles) included; TestTaskWritesGoThroughTheGates fails on a
+// handler that writes a task without it.
 
 // taskGates is the gate state of one request. The per-principal gates (the
 // rolling budget, the authorizing key's hourly counter) run once for the
@@ -32,14 +32,34 @@ import (
 // built from request data.
 type taskGates struct {
 	creator taskCreator
+	// caller is the principal that sent the request: the uploads a task names
+	// are checked against it (checkCallerFiles). It is the creator, except on
+	// a re-run or clone by an API key, whose copy keeps the source's owner
+	// (rerunCreator, copyGatesFor).
+	caller taskCreator
 	// budgetChecked records that the budget gate already admitted this
 	// request: batch and import run it once, before any record.
 	budgetChecked bool
+	// uploadsChecked records that the request looked up every written
+	// record's uploads before any record (uploadRefusals: batch and import),
+	// ahead of the budget and the key's counter, so a failed lookup fails the
+	// request before anything is charged. admitCreate then answers
+	// uploadRefusal, the current record's result, without a second lookup;
+	// the caller sets it before each record.
+	uploadsChecked bool
+	uploadRefusal  error
 }
 
-// taskGatesFor is the gate state of one request by creator.
+// taskGatesFor is the gate state of one request by creator, who is also the
+// caller.
 func taskGatesFor(creator taskCreator) *taskGates {
-	return &taskGates{creator: creator}
+	return &taskGates{creator: creator, caller: creator}
+}
+
+// copyGatesFor is the gate state of a re-run or clone: the copy's creator
+// (rerunCreator) and the caller who asked for the copy.
+func copyGatesFor(creator, caller taskCreator) *taskGates {
+	return &taskGates{creator: creator, caller: caller}
 }
 
 // Refusals the edit-shaped run_if rule returns. errors.New keeps the text in
@@ -89,19 +109,24 @@ func (h *Handlers) chargeRecords(g *taskGates, records int) bool {
 //     only the in-run create_task tool sets it, and that tool writes through
 //     storage.EnqueueTask, not through a handler.
 //  2. validateTaskCreate (400).
-//  3. A per-task max_cost_usd or max_total_tokens above the deployment ceiling
+//  3. The uploads in files (checkCallerFiles, against the caller): its own,
+//     on a task it created, or, for a copy, already on the source (400, the
+//     answer a missing upload gets; 500 when the lookup fails). Batch and
+//     import look them up before any record (uploadsChecked), so here they
+//     answer the record's result from that pass.
+//  4. A per-task max_cost_usd or max_total_tokens above the deployment ceiling
 //     needs admin (403, #1533).
-//  4. run_if needs admin (403). With a lineage (re-run, clone) the rule is
+//  5. run_if needs admin (403). With a lineage (re-run, clone) the rule is
 //     edit-shaped, exactly UpdateTask's: a non-admin may keep the source's
 //     gate (normalized comparison, so a lossy client echo is not a change) but
 //     may not add, change or remove one. An admin's value is authoritative.
-//  5. The per-principal budget, once per request (402).
-//  6. models.NewTask, attribution (taskCreator.attribute) and, for a copy, its
+//  6. The per-principal budget, once per request (402).
+//  7. models.NewTask, attribution (taskCreator.attribute) and, for a copy, its
 //     source and lineage.
-//  7. The mcp_selection check against the owner the run will resolve hosted
+//  8. The mcp_selection check against the owner the run will resolve hosted
 //     connections for (task.CreatedBy, just stamped), instead of
 //     dead-lettering every occurrence at dispatch (400).
-//  8. The authorizing key's priority ceiling (#230), on the post-default
+//  9. The authorizing key's priority ceiling (#230), on the post-default
 //     priority (task.Priority, 0→Normal), so it reflects what would run (403).
 //
 // A refusal is a *createRefusalError with the status and text POST /tasks
@@ -111,6 +136,17 @@ func (h *Handlers) admitCreate(ctx context.Context, g *taskGates, tc *models.Tas
 	tc.CreatedByTaskID = nil
 	if err := h.validateTaskCreate(tc); err != nil {
 		return nil, refuse(http.StatusBadRequest, err)
+	}
+	var sourceFiles []string
+	if lineage != nil {
+		sourceFiles = lineage.sourceFiles
+	}
+	if g.uploadsChecked {
+		if g.uploadRefusal != nil {
+			return nil, g.uploadRefusal
+		}
+	} else if err := h.checkCallerFiles(ctx, g.caller, tc.Files, sourceFiles); err != nil {
+		return nil, err
 	}
 	if msg := h.requireAdminForCeilingsAboveDeployment(g.creator.hasAdminPermission, tc); msg != "" {
 		return nil, &createRefusalError{status: http.StatusForbidden, detail: msg}
@@ -166,15 +202,18 @@ type taskEditScope struct {
 // nothing, so there is no budget gate.
 //
 //  1. validateTaskCreate (400).
-//  2. A ceiling above the deployment's needs admin (403).
-//  3. The key's priority ceiling, when the write sets priority (403).
-//  4. run_if, edit-shaped: a non-admin may keep the row's gate but may not
+//  2. The uploads in files (checkCallerFiles, against the caller): its own,
+//     on a task it created, or already on the row (400; 500 when the lookup
+//     fails).
+//  3. A ceiling above the deployment's needs admin (403).
+//  4. The key's priority ceiling, when the write sets priority (403).
+//  5. run_if, edit-shaped: a non-admin may keep the row's gate but may not
 //     add, change or remove one (403). A new or changed gate on a pending row
 //     is refused (409): a gate is evaluated only at the scheduled→pending
 //     promotion (models.RunIf's enforcement contract), which a pending task
 //     has passed, and the dispatch-state recompute would yank the imminent
 //     dispatch back onto the scheduler path. Removing a gate stays allowed.
-//  5. The mcp_selection check against the row's owner (400). A replace always
+//  6. The mcp_selection check against the row's owner (400). A replace always
 //     checks it. PUT checks it only when the edit changes the selection, so a
 //     prompt fix on a task whose connection lapsed since is not refused.
 //
@@ -183,6 +222,9 @@ type taskEditScope struct {
 func (h *Handlers) admitEdit(ctx context.Context, g *taskGates, existing *models.Task, tc *models.TaskCreate, scope taskEditScope) error {
 	if err := h.validateTaskCreate(tc); err != nil {
 		return refuse(http.StatusBadRequest, err)
+	}
+	if err := h.checkCallerFiles(ctx, g.caller, tc.Files, existing.Files); err != nil {
+		return err
 	}
 	if msg := h.requireAdminForCeilingsAboveDeployment(g.creator.hasAdminPermission, tc); msg != "" {
 		return &createRefusalError{status: http.StatusForbidden, detail: msg}

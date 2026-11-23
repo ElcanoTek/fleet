@@ -321,7 +321,11 @@ func (o *orchestrationState) checkCriticalToolApproval(toolName, toolCallID, raw
 				"do NOT look for another tool that does the same thing. Stop here, summarize what is waiting, and let the user approve it first.",
 			toolName, pending.tool, pending.approvalID)
 	}
-	id, err := o.approvalSink.Stage(toolName, toolCallID, rawInput)
+	stage := o.approvalSink.Stage
+	if batch, ok := o.approvalSink.(CriticalStager); ok {
+		stage = batch.StageCritical
+	}
+	id, err := stage(toolName, toolCallID, rawInput)
 	if refused := stageRefusal(err); refused != "" {
 		return true, refused
 	}
@@ -351,7 +355,24 @@ func (o *orchestrationState) checkCriticalToolApproval(toolName, toolCallID, raw
 		"APPROVAL_REQUIRED: %s is a critical action and has been staged for explicit user approval (approval_id=%s). "+
 			"Do NOT retry, and do NOT attempt the same change through a different tool — every write you stage now is frozen "+
 			"with the arguments it has and cannot see what this one does. Summarize what the action would do and wait for the "+
-			"user to click Approve.", toolName, id)
+			"user to click Approve.%s", toolName, id, supersededNote(o.approvalSink, toolCallID))
+}
+
+// supersededNote tells the model that staging this card replaced older pending
+// cards for the same tool (from an earlier turn): those were rejected and will
+// not run, so the summary must not present them as waiting for the user.
+// Caller holds o.mu.
+func supersededNote(sink ApprovalStager, toolCallID string) string {
+	reporter, ok := sink.(SupersedeReporter)
+	if !ok {
+		return ""
+	}
+	n := reporter.SupersededCount(toolCallID)
+	if n <= 0 {
+		return ""
+	}
+	return fmt.Sprintf(" Staging it REPLACED %d older pending card(s) for this same tool from an earlier turn: those were "+
+		"rejected as superseded and will NOT run. Tell the user they are gone; never describe them as waiting for approval.", n)
 }
 
 // pendingApprovalOnSameServer reports an already-staged critical action from the

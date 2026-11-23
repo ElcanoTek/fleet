@@ -2,8 +2,10 @@ package handlers
 
 // GET /admin/usage (#601 part 1): the usage-analytics read model. Rolls the
 // ALREADY-persisted metering up by principal/project/model/time-bucket over a
-// requested window — task-side from task_iterations ⋈ tasks (sched DB),
-// chat-side from turn_metrics via the ChatUsageProvider seam (chat store DB).
+// requested window — task-side from task_iterations (sched DB; the rows carry
+// their task's creator, key and model and outlive the task, so a deleted
+// task's spend still counts), chat-side from turn_metrics via the
+// ChatUsageProvider seam (chat store DB).
 // The two databases are separate, so the merge happens here, keyed on the
 // bucket key, with per-source subtotals kept so the report stays honest about
 // where each number came from. No new accounting path is introduced anywhere

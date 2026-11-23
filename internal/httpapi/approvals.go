@@ -137,6 +137,55 @@ type approvalStager struct {
 	// tools, enforce at least a 24h timeout on any remaining staged cards, and arm
 	// resume-after-approval automatically.
 	inputKind string
+	// turnStaged holds, per tool, the cards this stager (this turn) staged for
+	// a bundle-declared critical tool. A later call to the same tool in the
+	// same turn keeps them pending instead of superseding them: one card per
+	// deal is a batch of separate decisions, not a retry (the critical gate
+	// tells the model never to retry). Guarded by turnStagedMu.
+	turnStagedMu sync.Mutex
+	turnStaged   map[string][]string
+	// supersededByCall maps a staged call's tool_call_id to how many older
+	// pending cards its card replaced, so the gate can tell the model which
+	// cards will no longer run (SupersededCount). Guarded by turnStagedMu.
+	supersededByCall map[string]int64
+}
+
+// turnStagedFor returns the critical-tool cards this turn already staged for
+// toolName (kept pending when the same tool is staged again this turn).
+func (a *approvalStager) turnStagedFor(toolName string) []string {
+	a.turnStagedMu.Lock()
+	defer a.turnStagedMu.Unlock()
+	return append([]string(nil), a.turnStaged[toolName]...)
+}
+
+func (a *approvalStager) rememberTurnStaged(toolName, approvalID string) {
+	a.turnStagedMu.Lock()
+	defer a.turnStagedMu.Unlock()
+	if a.turnStaged == nil {
+		a.turnStaged = map[string][]string{}
+	}
+	a.turnStaged[toolName] = append(a.turnStaged[toolName], approvalID)
+}
+
+func (a *approvalStager) rememberSuperseded(toolCallID string, n int64) {
+	if toolCallID == "" || n <= 0 {
+		return
+	}
+	a.turnStagedMu.Lock()
+	defer a.turnStagedMu.Unlock()
+	if a.supersededByCall == nil {
+		a.supersededByCall = map[string]int64{}
+	}
+	a.supersededByCall[toolCallID] = n
+}
+
+// SupersededCount implements agentcore.SupersedeReporter: how many older
+// pending cards for the same tool the card staged for toolCallID replaced
+// (0 when none). Those cards were rejected and will not run.
+func (a *approvalStager) SupersededCount(toolCallID string) int64 {
+	a.turnStagedMu.Lock()
+	defer a.turnStagedMu.Unlock()
+	return a.supersededByCall[toolCallID]
 }
 
 var _ agent.MCPScopeBinder = (*approvalStager)(nil)
@@ -886,6 +935,19 @@ func (a *approvalStager) tryPreResolveAfterMaterialize(toolName, toolCallID, raw
 }
 
 func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, error) {
+	return a.stage(toolName, toolCallID, rawInput, false)
+}
+
+// StageCritical implements agentcore.CriticalStager: the critical-tool gate
+// stages through it, so a card it stages joins this turn's batch for the tool
+// (kept pending when the same tool is staged again this turn). The gate owns
+// the classification (bundle suffixes, catalog-critical tools, autonomous
+// blocks), so the stager never re-derives it.
+func (a *approvalStager) StageCritical(toolName, toolCallID, rawInput string) (string, error) {
+	return a.stage(toolName, toolCallID, rawInput, true)
+}
+
+func (a *approvalStager) stage(toolName, toolCallID, rawInput string, critical bool) (string, error) {
 	// A task prompt the create/edit seam will refuse is refused BEFORE a card
 	// exists (#1601): the model learns the error now, and nobody is asked to
 	// approve a call that is certain to fail after they click Approve.
@@ -975,17 +1037,34 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 	// task (Name is optional and non-unique, and tool.approval_superseded
 	// clears all pending cards for the tool on live clients), so pending
 	// schedule_task cards are never auto-superseded by subsequent calls.
+	//
+	// A critical tool staged by the critical gate (StageCritical) keeps the
+	// cards this same turn staged for it: one card per deal is a batch, and
+	// superseding them rejected every card but the last while the agent told
+	// the user all were waiting (live 2026-11-23). A card from an earlier turn
+	// is still superseded.
 	if toolName != tools.ScheduleTaskToolName {
-		if n, err := a.store.SupersedePendingApprovals(a.ctx, a.userEmail, a.conversationID, toolName); err != nil {
+		var keep []string
+		if critical {
+			keep = a.turnStagedFor(toolName)
+		}
+		if n, err := a.store.SupersedePendingApprovals(a.ctx, a.userEmail, a.conversationID, toolName, keep...); err != nil {
 			logging.From(a.ctx).Error("supersede approvals failed", "tool", safe.LogSafe(toolName), "conv_id", safe.LogSafe(a.conversationID), "err", err)
 		} else if n > 0 {
+			a.rememberSuperseded(toolCallID, n)
 			// Tell the UI to mark the old card as resolved. The client
 			// already handles rejected approvals — this just nudges any
 			// open stream to refresh its approval state.
-			a.emitUserScoped("tool.approval_superseded", map[string]any{
+			ev := map[string]any{
 				"tool":  toolName,
 				"count": n,
-			})
+			}
+			// The batch this turn staged stays pending: clients drop only the
+			// tool's cards NOT listed here (Codex P2 on #2231).
+			if len(keep) > 0 {
+				ev["kept_approval_ids"] = keep
+			}
+			a.emitUserScoped("tool.approval_superseded", ev)
 		}
 	}
 
@@ -993,6 +1072,9 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 	approval, err := a.store.CreateApproval(a.ctx, a.conversationID, a.userEmail, toolName, toolCallID, rawInput, a.expiryUnixFor(toolName), seat)
 	if err != nil {
 		return "", err
+	}
+	if critical {
+		a.rememberTurnStaged(toolName, approval.ID)
 	}
 	// A tool in critical_tool_resume: settling this card starts the turn that
 	// carries on (approval_resume.go). Armed before the card is announced.

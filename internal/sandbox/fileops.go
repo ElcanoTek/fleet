@@ -376,12 +376,17 @@ func (s *Sandbox) RunFileOp(ctx context.Context, req FileOpRequest) (res FileOpR
 		s.mu.Unlock()
 		return FileOpResult{}, ErrClosed
 	}
+	s.mu.Unlock()
+	be, err := s.backend(ctx)
+	if err != nil {
+		return FileOpResult{}, err
+	}
+	// Read the bound root after backend: a replacement binds it again and
+	// the identity to check against is the one that backend reported.
+	s.mu.Lock()
 	boundRoot := s.fileOpRoot
 	boundIdentity := s.fileOpRootIdentity
 	s.mu.Unlock()
-	if s.impl.poisoned() {
-		return FileOpResult{}, ErrPoisoned
-	}
 	if len(req.Path) == 0 || req.Path[0] != '/' {
 		return FileOpResult{}, errors.New("fileop path must be absolute")
 	}
@@ -418,7 +423,7 @@ func (s *Sandbox) RunFileOp(ctx context.Context, req FileOpRequest) (res FileOpR
 			req.expectedIno = boundIdentity.Ino
 		}
 	}
-	return s.impl.runFileOp(ctx, req)
+	return be.runFileOp(ctx, req)
 }
 
 // BindFileOpRoot establishes the writable FileOp capability for this sandbox.

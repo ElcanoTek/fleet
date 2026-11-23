@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -115,6 +116,30 @@ func (db *Database) FindTaskIDsByName(ctx context.Context, names []string) (map[
 		out[name] = id
 	}
 	return out, rows.Err()
+}
+
+// TaskWithFileCreatedBy reports whether a task created by the given user, or
+// by the given API key, lists name among its files. It answers the upload
+// check's "on a task you created" case (handlers.checkCallerFiles); the GIN
+// index on files (idx_tasks_files) serves the containment test. With neither
+// a user nor a key it reports false.
+func (db *Database) TaskWithFileCreatedBy(ctx context.Context, name string, userID *uuid.UUID, keyID *string) (bool, error) {
+	if userID == nil && keyID == nil {
+		return false, nil
+	}
+	file, err := json.Marshal([]string{name})
+	if err != nil {
+		return false, err
+	}
+	var found bool
+	err = db.conn.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM tasks
+			WHERE files @> $1::jsonb
+			  AND (($2::uuid IS NOT NULL AND created_by = $2::uuid)
+			    OR ($3::text IS NOT NULL AND created_by_key_id = $3::text)))`,
+		string(file), userID, keyID).Scan(&found)
+	return found, err
 }
 
 // GetTaskByName returns the task whose non-empty name matches, or (nil, nil)

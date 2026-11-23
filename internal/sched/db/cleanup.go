@@ -37,7 +37,9 @@ const cleanupEligibleSubquery = `
 // older than retentionDays, ALWAYS preserving the most recent keepPerTask runs
 // per task bucket (prompt+recurrence) regardless of age (#252). retentionDays<=0
 // disables pruning (returns 0) so a misconfiguration can never mass-delete.
-// Returns the number of task rows deleted.
+// Returns the number of task rows deleted. The pruned tasks' task_iterations
+// rows stay: they are the spend record (migration 0210), so retention never
+// changes what budgets and the usage report count.
 func (db *Database) CleanupOldRuns(ctx context.Context, retentionDays, keepPerTask int) (int, error) {
 	if retentionDays <= 0 {
 		return 0, nil
@@ -80,6 +82,7 @@ func (db *Database) CleanupOldRuns(ctx context.Context, retentionDays, keepPerTa
 }
 
 // DeleteOldHistory deletes tasks and logs older than days, in one transaction.
+// As in CleanupOldRuns, the tasks' task_iterations rows (the spend record) stay.
 func (db *Database) DeleteOldHistory(ctx context.Context, days int) (int, error) {
 	cutoff := time.Now().UTC().AddDate(0, 0, -days)
 
