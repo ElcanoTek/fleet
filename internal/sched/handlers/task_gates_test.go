@@ -506,11 +506,11 @@ func TestTaskImportReportsANameTakenAfterThePlan(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/tasks/import", nil)
 	gates := taskGatesFor(taskCreator{hasAdminPermission: true})
 
-	if got := env.h.importRecord(req, rec, importCreate, models.TaskImportConflictSkip, gates, false); got.Status != models.TaskImportSkipped || got.Reason != "conflict=skip" {
+	if got := env.h.importRecord(req, rec, importCreate, models.TaskImportConflictSkip, gates, false, nil); got.Status != models.TaskImportSkipped || got.Reason != "conflict=skip" {
 		t.Fatalf("conflict=skip = %+v, want skipped", got)
 	}
 	want := taskNameTaken("taken-late").detail
-	if got := env.h.importRecord(req, rec, importCreate, models.TaskImportConflictError, gates, false); got.Status != models.TaskImportErrored || got.Error != want {
+	if got := env.h.importRecord(req, rec, importCreate, models.TaskImportConflictError, gates, false, nil); got.Status != models.TaskImportErrored || got.Error != want {
 		t.Fatalf("conflict=error = %+v, want errored with %q", got, want)
 	}
 }

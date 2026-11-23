@@ -162,7 +162,7 @@ func TestUpdateTaskRunIfPersistsAndNormalizes(t *testing.T) {
 	// — the pending refusal has its own subtests below.
 	//
 	// They are also seeded ATTRIBUTED to clientKey. Editing a task is own-rows
-	// (taskWritableByPrincipal), so an unattributed fixture would be refused by
+	// (taskActableByPrincipal), so an unattributed fixture would be refused by
 	// the ownership check before reaching the run_if logic this test is about.
 	addGatedWithStatus := func(t *testing.T, status models.TaskStatus) *models.Task {
 		t.Helper()
@@ -362,7 +362,7 @@ func TestUpdateTaskKeepsGatedTaskOnSchedulerPath(t *testing.T) {
 	r, keyMgr, store := setupRunIfAuthz(t)
 
 	// Attributed fixtures throughout: editing is own-rows
-	// (taskWritableByPrincipal), and this test is about the dispatch-state
+	// (taskActableByPrincipal), and this test is about the dispatch-state
 	// recompute, not about ownership.
 	clientKeyID, clientKey := mustCreateRoleKeyWithID(t, keyMgr, "client")
 	put := func(taskID uuid.UUID, tc models.TaskCreate) *httptest.ResponseRecorder {

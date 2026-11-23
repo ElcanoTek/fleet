@@ -37,9 +37,15 @@ import (
 // of its own, the source's authorizing key. A scoped key stays the copy's
 // authorizing key: spend is attributed to it, and ADR-0043 lets the key that
 // made a task read it.
+//
+// The source's owner passes to the copy only for a key that may act on the
+// source (taskActableByPrincipal: the key that created it, or admin), because
+// the copy then runs as that owner. rerunOrClone refuses every other caller
+// before it gets here; this check keeps the rule where the owner is chosen, so
+// any other key's copy is its own (no user, the calling key).
 func (h *Handlers) rerunCreator(ctx context.Context, p principal, source *models.Task) (taskCreator, error) {
 	creator := creatorFromPrincipal(p)
-	if p.user != nil || source == nil {
+	if p.user != nil || source == nil || !taskActableByPrincipal(p, source) {
 		return creator, nil
 	}
 	if source.CreatedBy != nil {

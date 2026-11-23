@@ -478,6 +478,12 @@ func (s *Storage) FindTaskIDsByName(ctx context.Context, names []string) (map[st
 	return s.db.FindTaskIDsByName(ctx, names)
 }
 
+// TaskWithFileCreatedBy reports whether a task created by the given user, or
+// by the given API key, lists name among its files (db.TaskWithFileCreatedBy).
+func (s *Storage) TaskWithFileCreatedBy(ctx context.Context, name string, userID *uuid.UUID, keyID *string) (bool, error) {
+	return s.db.TaskWithFileCreatedBy(ctx, name, userID, keyID)
+}
+
 // GetTaskByName returns the task whose non-empty name matches, or (nil, nil)
 // when no such task exists (#238).
 func (s *Storage) GetTaskByName(ctx context.Context, name string) (*models.Task, error) {

@@ -27,6 +27,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/diskguard"
@@ -89,7 +90,7 @@ func (s *Server) handleAdminStorage(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	resp := storageResponse{DefaultDays: storageCleanupDefaultDays}
 	resp.Uploads = duTree(ctx, filepath.Join(s.cfg.EmailAttachmentDir, "uploads"))
-	resp.TempUploads = duTree(ctx, filepath.Join(s.cfg.DataDir, "temp_uploads"))
+	resp.TempUploads = duUploadsTree(ctx, filepath.Join(s.cfg.DataDir, "temp_uploads"))
 
 	// One walk of the workspace tree, not two: the total and the per-conversation
 	// rows come from the same pass, so opening the panel no longer sizes every
@@ -166,7 +167,7 @@ func (s *Server) handleAdminStorageCleanup(w http.ResponseWriter, r *http.Reques
 	stashDir := filepath.Join(s.cfg.EmailAttachmentDir, "multiplayer-private")
 	tempDir := filepath.Join(s.cfg.DataDir, "temp_uploads")
 	workspaceRoot := tools.WorkspaceDirForConversation("")
-	before := duTree(ctx, uploadsDir).Bytes + duTree(ctx, tempDir).Bytes + duTree(ctx, workspaceRoot).Bytes + duTree(ctx, stashDir).Bytes
+	before := duTree(ctx, uploadsDir).Bytes + duUploadsTree(ctx, tempDir).Bytes + duTree(ctx, workspaceRoot).Bytes + duTree(ctx, stashDir).Bytes
 
 	var resp storageCleanupResponse
 	age := time.Duration(req.OlderThanDays) * 24 * time.Hour
@@ -206,7 +207,7 @@ func (s *Server) handleAdminStorageCleanup(w http.ResponseWriter, r *http.Reques
 	}
 
 	resp.RemainingUploadsBytes = duTree(ctx, uploadsDir).Bytes
-	resp.RemainingTempBytes = duTree(ctx, tempDir).Bytes
+	resp.RemainingTempBytes = duUploadsTree(ctx, tempDir).Bytes
 	resp.RemainingWorkspaceByte = duTree(ctx, workspaceRoot).Bytes + duTree(ctx, stashDir).Bytes
 	if freed := before - (resp.RemainingUploadsBytes + resp.RemainingTempBytes + resp.RemainingWorkspaceByte); freed > 0 {
 		resp.BytesFreed = freed
@@ -307,8 +308,27 @@ func diskUsage(path string) (total, available int64, err error) {
 // of it. A cancelled walk returns the partial total, which is the right answer
 // for a display that is about to be discarded anyway.
 func duTree(ctx context.Context, dir string) storageTreeStats {
+	return walkTree(ctx, dir, false)
+}
+
+// duUploadsTree is duTree for the temp_uploads staging tree, leaving out its
+// dot-directories: they hold per-upload bookkeeping (".checksums", ".uploaders"
+// sidecars), not uploads, so they are neither counted as files nor sized.
+func duUploadsTree(ctx context.Context, dir string) storageTreeStats {
+	return walkTree(ctx, dir, true)
+}
+
+// walkTree is duTree's walk; skipDotDirs leaves out every directory below dir
+// whose name starts with a dot.
+func walkTree(ctx context.Context, dir string, skipDotDirs bool) storageTreeStats {
 	out := storageTreeStats{Path: dir}
-	_ = filepath.WalkDir(dir, out.countingWalk(ctx))
+	walk := out.countingWalk(ctx)
+	_ = filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if skipDotDirs && err == nil && d.IsDir() && path != dir && strings.HasPrefix(d.Name(), ".") {
+			return filepath.SkipDir
+		}
+		return walk(path, d, err)
+	})
 	return out
 }
 
