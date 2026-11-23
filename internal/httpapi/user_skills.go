@@ -114,6 +114,7 @@ func (s *Server) userSkillByID(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) userSkillError(w http.ResponseWriter, err error) {
 	switch {
+	case writeAccountGone(w, err):
 	case errors.Is(err, store.ErrUserSkillInvalid):
 		http.Error(w, err.Error(), http.StatusBadRequest)
 	case errors.Is(err, store.ErrUserSkillNotFound):

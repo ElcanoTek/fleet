@@ -925,6 +925,14 @@ var accountTableConstants = map[string]string{"chatSchedulesTable": "chat_schedu
 // the reason. Without the lock a write still in flight when the account is
 // deleted — a turn, a request, a server running while the CLI deletes — could
 // commit after the deletion and be found by a later account under the email.
+//
+// What it does not check: it looks for a lock call anywhere in the function,
+// not that the lock comes first or runs in the same transaction as the
+// insert (review that; lockAccountTx's doc says why it must); it follows the
+// insert helpers in accountWriteHelpers one level only; and it reads SQL
+// written in the function body (or naming its table by a constant in
+// accountTableConstants), so a statement kept in a package-level constant or
+// built elsewhere is not seen.
 func TestAccountKeyedWritersTakeTheAccountLock(t *testing.T) {
 	t.Parallel()
 	guarded := map[string]bool{}
@@ -1177,7 +1185,7 @@ func TestChatFirstWriterRacingDeletionLeavesNoQueuedMessage(t *testing.T) {
 	if _, err := s.db.ExecContext(ctx, `UPDATE chat.conversations SET multiplayer = TRUE WHERE id = $1`, conv.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.db.ExecContext(ctx, `INSERT INTO chat.approvals (id, conversation_id, user_email, tool_name, args_json, status, created_at) VALUES ('armed-card', $1, $2, 't', '{}', 'approved', 1)`, conv.ID, gone); err != nil {
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO chat.approvals (id, conversation_id, user_email, tool_name, args_json, status, resume_state, created_at) VALUES ('armed-card', $1, $2, 't', '{}', 'approved', 'armed', 1)`, conv.ID, gone); err != nil {
 		t.Fatal(err)
 	}
 	// The writer, as ClaimApprovalResume runs: the chat row, then the message.

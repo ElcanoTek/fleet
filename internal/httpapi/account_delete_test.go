@@ -428,6 +428,67 @@ func TestMaintenanceKeepsAnAccountCreatedDuringTheSweep(t *testing.T) {
 	}
 }
 
+// An upload tree an interrupted removal set aside is removed on the next
+// pass even when no tree is orphaned; a live account's tree stays.
+func TestMaintenanceRemovesSetAsideUploadsOnEveryPass(t *testing.T) {
+	t.Parallel()
+	s := memberFixture(t, "live@x.com")
+	att := t.TempDir()
+	s.cfg.EmailAttachmentDir = att
+	liveTree := filepath.Join(accountdelete.UploadsDir(att, "live@x.com"), "tok")
+	aside := filepath.Join(att, "uploads", ".removing-"+accountdelete.Digest("gone@x.com")+"-0123", "tok")
+	for _, d := range []string{liveTree, aside} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.sweepDeletedAccounts(context.Background())
+	if _, err := os.Stat(filepath.Dir(aside)); !os.IsNotExist(err) {
+		t.Errorf("the set-aside tree survived a pass with no orphan (err %v)", err)
+	}
+	if _, err := os.Stat(liveTree); err != nil {
+		t.Errorf("the live account's uploads were removed: %v", err)
+	}
+}
+
+// The store's one-digest check (the sweep's last look before a removal)
+// hashes an account's email as accountdelete.Digest names its trees.
+func TestStoreDigestCheckMatchesAccountDeletion(t *testing.T) {
+	t.Parallel()
+	s := memberFixture(t, "Mixed.Case@X.com")
+	st := s.concreteStore(t)
+	ctx := context.Background()
+	if live, err := st.AccountDigestLive(ctx, accountdelete.Digest(" Mixed.Case@X.com ")); err != nil || !live {
+		t.Fatalf("the account's own digest: live %v, err %v; want live", live, err)
+	}
+	if live, err := st.AccountDigestLive(ctx, accountdelete.Digest("nobody@x.com")); err != nil || live {
+		t.Fatalf("an address with no account: live %v, err %v; want not live", live, err)
+	}
+}
+
+// A write the store refuses because the account no longer exists — it was
+// deleted (by the CLI, say) after the request was admitted — is answered as
+// any later request of the account is: 403 not_a_member, not a 500.
+func TestWriteForAnAccountDeletedMidRequestIsNotAMember(t *testing.T) {
+	t.Parallel()
+	s := serverFixture(t)
+	// Admitted, as before the deletion; the account row is already gone.
+	s.isMember = func(context.Context, string) (bool, error) { return true, nil }
+	for _, c := range []struct {
+		path string
+		body map[string]any
+	}{
+		{"/conversations", map[string]any{"persona": "victoria"}},
+		{"/memories", map[string]any{"content": "a late fact"}},
+		{"/user-skills", map[string]any{"name": "late-skill", "description": "d", "body": "b"}},
+	} {
+		w := do(t, s.Routes(), http.MethodPost, c.path, c.body, "gone@x.com")
+		if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "not_a_member") {
+			t.Errorf("POST %s: status %d body %q, want 403 not_a_member", c.path, w.Code, w.Body.String())
+		}
+	}
+}
+
 // Deleting an account stops the turns it has running — here one in its own
 // chat — and waits for them; another person's turn keeps running.
 func TestStopAccountWorkCancelsItsTurns(t *testing.T) {

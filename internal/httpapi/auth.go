@@ -382,6 +382,21 @@ func writeNotAMember(w http.ResponseWriter) {
 	_, _ = w.Write([]byte(`{"error":"not_a_member"}`))
 }
 
+// writeAccountGone answers a write the store refused because the signed-in
+// account no longer exists (store.ErrUserNotFound from its account-row lock:
+// the account was deleted — by the CLI, say — while the request ran) as
+// membershipMiddleware answers every request after that: 403 not_a_member,
+// which the web app takes to its No access page. It reports whether err was
+// that refusal; the account writers' handlers call it before their own
+// error mapping.
+func writeAccountGone(w http.ResponseWriter, err error) bool {
+	if !errors.Is(err, store.ErrUserNotFound) {
+		return false
+	}
+	writeNotAMember(w)
+	return true
+}
+
 // headerSessionRevoked marks the response below for the web tier's proxy funnel.
 // The verdict has to be readable without touching the body, because that funnel
 // streams the body straight through to the browser (chatServerPassthrough, the

@@ -222,14 +222,22 @@ advises on each demoted split admin, unknown role and duplicate username in it.
   chat's row, so the deletion first locks every chat in which the account
   has an approval card or a countdown: such a message is written before the
   deletion reads the queue, and removed with the rest, or after it, when its
-  cards are gone. Four writes do not need an account and are left as they
+  cards are gone. These writes do not need the account and are left as they
   are: a connector shared with an address and an address added to a
-  multiplayer chat's participants (both allowed before its account exists),
+  multiplayer chat's participants (both allowed before its account exists);
   a central sign-in session generation (written at central sign-in, also
   before the account exists, and by a central sign-out, which only ends
-  sessions), and the one-time legacy import. A guard test
+  sessions); an administrator's message queued in a chat
+  (`QueueAdminMessage`: the row is the chat owner's and is written under the
+  chat's row lock, so deleting the owner deletes it with the chat); and the
+  one-time legacy import. A guard test
   (`TestAccountKeyedWritersTakeTheAccountLock`) fails when a new insert into
-  such a table takes neither the lock nor a reviewed exemption.
+  such a table takes neither the lock nor a reviewed exemption. A write
+  refused this way while its request runs is answered 403 `not_a_member`,
+  as every later request of the account is. One consequence for webhook
+  chats: Connector Studio in a chat a webhook started for an address with
+  no account now gets a tool error instead of creating a connector for that
+  address.
 
   **Steps left.** The database deletion alone decides whether the account is
   deleted. A later step that does not complete (the key store, a file) is
@@ -254,10 +262,11 @@ advises on each demoted split admin, unknown role and duplicate username in it.
   losing duplicate username stay; of the queue, approvals and schedules
   only live rows — waiting, pending, active or paused — are read), upload and private workspace
   trees under the attachment directory whose digest is no account's (each
-  checked against the accounts once more right before it goes, and moved
+  checked once more, for its own digest, right before it goes, and moved
   aside before it is removed, so an account created under the address in
-  the meantime keeps the files it wrote), and the in-memory approve/deny-all
-  decisions of such addresses. That covers
+  the meantime keeps the files it wrote; a tree left set aside by an
+  interrupted removal goes on the next pass), and the in-memory
+  approve/deny-all decisions of such addresses. That covers
   accounts deleted before deletion reached these, a deletion from the CLI
   while the server runs (a turn in flight can write a private workspace tree
   back as it ends, and the CLI cannot reach the server's memory), and a CLI

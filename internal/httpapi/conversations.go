@@ -417,7 +417,9 @@ func (s *Server) conversationOrder(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err != nil {
-			http.Error(w, "could not save your chat order", http.StatusInternalServerError)
+			if !writeAccountGone(w, err) {
+				http.Error(w, "could not save your chat order", http.StatusInternalServerError)
+			}
 			return
 		}
 		writeJSON(w, r, map[string]any{"scope": req.Scope, "conversation_ids": kept})

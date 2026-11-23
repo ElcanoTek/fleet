@@ -91,7 +91,9 @@ func (s *Server) pushSubscribe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.store.UpsertPushSubscription(r.Context(), user, req.Endpoint, req.Keys.Auth, req.Keys.P256dh); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		if !writeAccountGone(w, err) {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

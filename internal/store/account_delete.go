@@ -49,22 +49,30 @@ func cancelPendingAdminWorkTx(ctx context.Context, tx *sql.Tx, email string) err
 }
 
 // lockParticipantChatsTx locks, inside DeleteUser's transaction and before it
-// removes any of the account's rows, the chats in which the account has an
-// approval card or an auto-submit countdown. Two writers turn those into a
-// new queued message for the account while holding only the chat row — an
-// approval resume (ClaimApprovalResume) and a countdown that fires
-// (sweepOneUIAutoSubmit) — so with the chat locked here first such a message
-// either commits before the deletion reads the queue (and is removed with
-// the rest) or is written after it, when the cards and countdowns it comes
-// from are gone. New ones cannot appear meanwhile: creating either takes the
-// account-row lock this transaction holds.
+// removes any of the account's rows, the account's own chats and the chats in
+// which it has an approval card that is armed or can still be (pending, or
+// approved and still executing: ArmApprovalResume, ArmFailedApprovalResume)
+// or a live auto-submit countdown — all in one statement, in id order. Two writers turn such a card or countdown
+// into a new queued message for the account while holding only the chat row
+// FOR UPDATE — an approval resume (ClaimApprovalResume) and a countdown that
+// fires (sweepOneUIAutoSubmit) — so with the chat locked here first such a
+// message either commits before the deletion reads the queue (and is removed
+// with the rest) or is written after it, when the cards and countdowns it
+// comes from are gone. New ones cannot appear meanwhile: creating either
+// takes the account-row lock this transaction holds. FOR NO KEY UPDATE still
+// waits for those writers' FOR UPDATE, but not for the key-share locks of
+// rows other people insert into these chats meanwhile.
 func lockParticipantChatsTx(ctx context.Context, tx *sql.Tx, email string) error {
 	if _, err := tx.ExecContext(ctx,
 		`SELECT 1 FROM chat.conversations
-		  WHERE id IN (SELECT conversation_id FROM chat.approvals WHERE user_email = $1
-		               UNION SELECT conversation_id FROM chat.ui_autosubmits WHERE user_email = $1)
+		  WHERE user_email = $1
+		     OR id IN (SELECT conversation_id FROM chat.approvals
+		                WHERE user_email = $1
+		                  AND (resume_state = 'armed'
+		                       OR (resume_state = '' AND (status = 'pending' OR (status = 'approved' AND is_err IS NULL AND result_text = $2))))
+		               UNION SELECT conversation_id FROM chat.ui_autosubmits WHERE user_email = $1 AND status IN ('pending', 'paused'))
 		  ORDER BY id
-		  FOR UPDATE`, email); err != nil {
+		  FOR NO KEY UPDATE`, email, ApprovalExecutingSentinel); err != nil {
 		return fmt.Errorf("lock the account's chats: %w", err)
 	}
 	return nil
@@ -357,6 +365,20 @@ func (s *Store) SweepDeletedAccountRows(ctx context.Context) (int64, error) {
 		}
 	}
 	return total, nil
+}
+
+// AccountDigestLive reports whether an account's email has the given
+// digest: the first 32 hex characters of sha256 of the email
+// (accountdelete.Digest, which hashes the normalized email — the form every
+// account is created in). The maintenance pass asks it about one tree right
+// before removing a tree its account listing found orphaned, for an account
+// created under that address since; it reads no row back.
+func (s *Store) AccountDigestLive(ctx context.Context, digest string) (bool, error) {
+	var live bool
+	err := s.db.QueryRowContext(ctx,
+		`SELECT EXISTS (SELECT 1 FROM core.users WHERE left(encode(sha256(convert_to(email, 'UTF8')), 'hex'), 32) = $1)`,
+		digest).Scan(&live)
+	return live, err
 }
 
 // normalizedAddresses runs q (one text column) and returns the values already

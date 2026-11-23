@@ -40,6 +40,7 @@ type memoryPatchRequest struct {
 // the UI showed the user their own mistake.
 func writeMemoryStoreError(w http.ResponseWriter, err error) {
 	switch {
+	case writeAccountGone(w, err):
 	case errors.Is(err, store.ErrMemoryNotFound), errors.Is(err, store.ErrMemoryProposalNotFound):
 		http.Error(w, err.Error(), http.StatusNotFound)
 	case errors.Is(err, store.ErrProjectNotOwner):

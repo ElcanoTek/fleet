@@ -237,15 +237,12 @@ func TestSweepOrphanUploads(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(aside, "tok"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	var calls int
 	var listedAfterRead bool
 	n, err := SweepOrphanUploads(att, func() ([]string, error) {
-		if calls++; calls == 1 {
-			_, statErr := os.Stat(UploadsDir(att, "gone@x.com"))
-			listedAfterRead = statErr == nil
-		}
+		_, statErr := os.Stat(UploadsDir(att, "gone@x.com"))
+		listedAfterRead = statErr == nil
 		return []string{"live@x.com"}, nil
-	})
+	}, func(string) (bool, error) { return false, nil })
 	if err != nil || n != 1 {
 		t.Fatalf("SweepOrphanUploads = %d, %v; want 1", n, err)
 	}
@@ -263,8 +260,30 @@ func TestSweepOrphanUploads(t *testing.T) {
 			t.Errorf("%s was removed: %v", keep, err)
 		}
 	}
-	if n, err := SweepOrphanUploads(filepath.Join(att, "none"), func() ([]string, error) { return nil, nil }); err != nil || n != 0 {
+	if n, err := SweepOrphanUploads(filepath.Join(att, "none"), func() ([]string, error) { return nil, nil }, func(string) (bool, error) { return false, nil }); err != nil || n != 0 {
 		t.Errorf("a missing directory: %d, %v", n, err)
+	}
+}
+
+// A tree an interrupted removal set aside is removed on the next pass even
+// when there is no orphan to remove — here no digest tree at all.
+func TestSweepOrphanUploadsRemovesSetAsideTreesOnEveryPass(t *testing.T) {
+	t.Parallel()
+	att := t.TempDir()
+	aside := filepath.Join(att, "uploads", asidePrefix+Digest("gone@x.com")+"-0123")
+	if err := os.MkdirAll(filepath.Join(aside, "tok"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	listed := false
+	n, err := SweepOrphanUploads(att, func() ([]string, error) { listed = true; return nil, nil }, func(string) (bool, error) { return false, nil })
+	if err != nil || n != 0 {
+		t.Fatalf("SweepOrphanUploads = %d, %v; want 0", n, err)
+	}
+	if listed {
+		t.Error("the accounts were listed with no digest tree to judge")
+	}
+	if _, err := os.Stat(aside); !os.IsNotExist(err) {
+		t.Fatalf("the set-aside tree survived a pass with no orphan (err %v)", err)
 	}
 }
 
@@ -279,23 +298,25 @@ func TestSweepOrphanUploadsKeepsAnAccountCreatedMeanwhile(t *testing.T) {
 		t.Fatal(err)
 	}
 	fresh := filepath.Join(UploadsDir(att, "back@x.com"), "fresh-tok")
-	var calls int
+	created := false
+	var asked []string
 	n, err := SweepOrphanUploads(att, func() ([]string, error) {
-		if calls++; calls == 1 {
-			// The listing the sweep judges by has no account for the
-			// address; the account is created, and uploads, right after.
-			if err := os.MkdirAll(fresh, 0o700); err != nil {
-				t.Fatal(err)
-			}
-			return nil, nil
+		// The listing the sweep judges by has no account for the address;
+		// the account is created, and uploads, right after.
+		if err := os.MkdirAll(fresh, 0o700); err != nil {
+			t.Fatal(err)
 		}
-		return []string{"back@x.com"}, nil
+		created = true
+		return nil, nil
+	}, func(digest string) (bool, error) {
+		asked = append(asked, digest)
+		return created && digest == Digest("back@x.com"), nil
 	})
 	if err != nil || n != 0 {
 		t.Fatalf("SweepOrphanUploads = %d, %v; want 0", n, err)
 	}
-	if calls < 2 {
-		t.Fatalf("the accounts were listed %d time(s); want a second look before the removal", calls)
+	if len(asked) != 1 || asked[0] != Digest("back@x.com") {
+		t.Fatalf("asked about %v; want one look at the tree's digest before the removal", asked)
 	}
 	if _, err := os.Stat(fresh); err != nil {
 		t.Fatalf("the upload of the account created meanwhile was removed: %v", err)

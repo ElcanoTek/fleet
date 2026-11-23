@@ -245,12 +245,12 @@ func UploadDigests(attachmentDir string) ([]string, error) {
 }
 
 // RemoveUploads removes the upload trees named by digests under
-// attachmentDir — each through RemoveOrphanTree, so one whose address has an
-// account again by then (live) stays — and the trees a removal left set aside
-// (asidePrefix). It returns how many digest trees it removed.
+// attachmentDir, each through RemoveOrphanTree, so one whose address has an
+// account again by then (live) stays. It returns how many it removed. The
+// trees an interrupted removal left set aside are not its business: the
+// caller removes them on every pass (RemoveSetAsideUploads), orphans or not.
 func RemoveUploads(attachmentDir string, digests []string, live func(digest string) (bool, error)) (int, error) {
 	dir := filepath.Join(attachmentDir, "uploads")
-	RemoveAside(dir)
 	removed := 0
 	var firstErr error
 	for _, d := range digests {
@@ -281,7 +281,7 @@ const asidePrefix = ".removing-"
 // immediately before the removal rather than taken from the caller's earlier
 // listing, so an account created under the address since keeps the files it
 // has written; and the tree is first renamed aside, so a file written after
-// that check lands in a fresh tree instead of the one being removed. It
+// the rename lands in a fresh tree instead of the one being removed. It
 // reports whether it removed the tree (a tree already gone is not an error).
 func RemoveOrphanTree(path, digest string, live func(digest string) (bool, error)) (bool, error) {
 	ok, err := live(digest)
@@ -324,31 +324,24 @@ func RemoveAside(dir string) {
 	}
 }
 
-// LiveDigests is the live check RemoveOrphanTree takes: whether some account's
-// email has the given Digest, by listing the accounts afresh on every call.
-func LiveDigests(accounts func() ([]string, error)) func(digest string) (bool, error) {
-	return func(digest string) (bool, error) {
-		emails, err := accounts()
-		if err != nil {
-			return false, err
-		}
-		for _, e := range emails {
-			if Digest(e) == digest {
-				return true, nil
-			}
-		}
-		return false, nil
-	}
+// RemoveSetAsideUploads removes the upload trees under attachmentDir that an
+// interrupted removal left set aside (RemoveAside on its uploads directory).
+// A sweep calls it on every pass, whether or not it finds an orphan.
+func RemoveSetAsideUploads(attachmentDir string) {
+	RemoveAside(filepath.Join(attachmentDir, "uploads"))
 }
 
 // SweepOrphanUploads removes the upload trees under attachmentDir that belong
 // to no account: those of accounts deleted before deletion removed them, or by
-// a CLI that resolved another attachment directory. It reads the directory
-// BEFORE listing the accounts, so an account created while it runs is either
-// in the list or had no directory yet, and asks once more right before each
-// removal (RemoveOrphanTree), so a tree whose address has an account again by
-// then stays. It returns how many it removed.
-func SweepOrphanUploads(attachmentDir string, accounts func() ([]string, error)) (int, error) {
+// a CLI that resolved another attachment directory. It removes the trees an
+// interrupted removal set aside first, then reads the directory BEFORE
+// listing the accounts (accounts, once), so an account created while it runs
+// is either in the list or had no directory yet; and right before each
+// removal it asks live about that one digest (RemoveOrphanTree), so a tree
+// whose address has an account again by then stays. It returns how many it
+// removed.
+func SweepOrphanUploads(attachmentDir string, accounts func() ([]string, error), live func(digest string) (bool, error)) (int, error) {
+	RemoveSetAsideUploads(attachmentDir)
 	digests, err := UploadDigests(attachmentDir)
 	if err != nil || len(digests) == 0 {
 		return 0, err
@@ -357,15 +350,15 @@ func SweepOrphanUploads(attachmentDir string, accounts func() ([]string, error))
 	if err != nil {
 		return 0, err
 	}
-	live := make(map[string]bool, len(emails))
+	listed := make(map[string]bool, len(emails))
 	for _, e := range emails {
-		live[Digest(e)] = true
+		listed[Digest(e)] = true
 	}
 	var orphans []string
 	for _, d := range digests {
-		if !live[d] {
+		if !listed[d] {
 			orphans = append(orphans, d)
 		}
 	}
-	return RemoveUploads(attachmentDir, orphans, LiveDigests(accounts))
+	return RemoveUploads(attachmentDir, orphans, live)
 }

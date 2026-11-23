@@ -113,6 +113,7 @@ func (s *Server) handleConversationBranch(w http.ResponseWriter, r *http.Request
 	branch, err := s.store.BranchConversation(r.Context(), user, parentConvID, body.BranchPointMessageID, title)
 	if err != nil {
 		switch {
+		case writeAccountGone(w, err):
 		case errors.Is(err, store.ErrBranchPointNotFound):
 			http.Error(w, err.Error(), http.StatusBadRequest)
 		case errors.Is(err, sql.ErrNoRows):

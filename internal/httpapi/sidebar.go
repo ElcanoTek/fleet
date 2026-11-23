@@ -138,7 +138,9 @@ func (s *Server) handleSidebar(w http.ResponseWriter, r *http.Request) {
 		}
 		applied, err := s.store.SetSidebarLayout(ctx, user, raw, rev)
 		if err != nil {
-			http.Error(w, "internal error", http.StatusInternalServerError)
+			if !writeAccountGone(w, err) {
+				http.Error(w, "internal error", http.StatusInternalServerError)
+			}
 			return
 		}
 		if applied {
@@ -153,7 +155,9 @@ func (s *Server) handleSidebar(w http.ResponseWriter, r *http.Request) {
 		}
 		applied, err := s.store.DeleteSidebarLayout(ctx, user, rev)
 		if err != nil {
-			http.Error(w, "internal error", http.StatusInternalServerError)
+			if !writeAccountGone(w, err) {
+				http.Error(w, "internal error", http.StatusInternalServerError)
+			}
 			return
 		}
 		if applied {

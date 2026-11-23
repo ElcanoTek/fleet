@@ -145,12 +145,14 @@ func (s *Server) accountEmails(ctx context.Context) ([]string, error) {
 // this process's memory), and a CLI that resolved another attachment
 // directory.
 //
-// The directories are read first and the accounts listed afterwards, so an
-// account created while the pass runs is either listed or had no directory
-// yet. A tree that looks orphaned is checked against the accounts once more
-// right before it goes (accountdelete.RemoveOrphanTree), so an account created
-// since under an address whose old tree is still there keeps what it wrote;
-// the approvals are judged against a listing taken after the files.
+// The directories are read first and the accounts listed afterwards (once),
+// so an account created while the pass runs is either listed or had no
+// directory yet. A tree that looks orphaned is checked once more, for its
+// own digest alone, right before it goes (accountdelete.RemoveOrphanTree,
+// digestLive), so an account created since under an address whose old tree
+// is still there keeps what it wrote; the approvals are judged against a
+// listing taken after the files. Upload trees an interrupted removal set
+// aside are removed on every pass.
 func (s *Server) sweepDeletedAccounts(ctx context.Context) {
 	if s.store == nil {
 		return
@@ -166,6 +168,7 @@ func (s *Server) sweepDeletedAccounts(ctx context.Context) {
 	}
 	var uploads []string
 	if s.cfg != nil && s.cfg.EmailAttachmentDir != "" {
+		accountdelete.RemoveSetAsideUploads(s.cfg.EmailAttachmentDir)
 		var err error
 		if uploads, err = accountdelete.UploadDigests(s.cfg.EmailAttachmentDir); err != nil {
 			logging.From(ctx).Error("maintenance: reading the uploads directory failed", "err", err)
@@ -184,7 +187,7 @@ func (s *Server) sweepDeletedAccounts(ctx context.Context) {
 	if s.afterAccountSnapshot != nil {
 		s.afterAccountSnapshot()
 	}
-	live := accountdelete.LiveDigests(func() ([]string, error) { return s.accountEmails(ctx) })
+	live := s.digestLive(ctx)
 	var orphans []string
 	for _, d := range uploads {
 		if !liveDigests[d] {
@@ -209,6 +212,30 @@ func (s *Server) sweepDeletedAccounts(ctx context.Context) {
 		liveEmails[e] = true
 	}
 	s.sessionApprovals.ForgetUsersExcept(liveEmails)
+}
+
+// digestLive is the sweep's last look before it removes a tree: whether an
+// account's email has that one digest now. The store answers it with one
+// query that reads no row back (store.AccountDigestLive); a store without
+// that query is answered by listing the accounts.
+func (s *Server) digestLive(ctx context.Context) func(digest string) (bool, error) {
+	if q, ok := s.store.(interface {
+		AccountDigestLive(context.Context, string) (bool, error)
+	}); ok {
+		return func(digest string) (bool, error) { return q.AccountDigestLive(ctx, digest) }
+	}
+	return func(digest string) (bool, error) {
+		emails, err := s.accountEmails(ctx)
+		if err != nil {
+			return false, err
+		}
+		for _, e := range emails {
+			if accountdelete.Digest(e) == digest {
+				return true, nil
+			}
+		}
+		return false, nil
+	}
 }
 
 // participantStash is one participants/<digest> tree in a conversation's

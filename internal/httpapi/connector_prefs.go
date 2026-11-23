@@ -72,6 +72,9 @@ func (s *Server) connectorPrefs(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if err := s.store.SetConnectorPref(r.Context(), user, p); err != nil {
+			if writeAccountGone(w, err) {
+				return
+			}
 			if errors.Is(err, store.ErrConnectorPrefInvalid) {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return

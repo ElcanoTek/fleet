@@ -454,7 +454,9 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 		}
 		conv, err = s.store.CreateConversation(r.Context(), user, title, persona, reqModel, lockdown)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			if !writeAccountGone(w, err) {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+			}
 			return
 		}
 		// Seed the optional MCP server opt-in list (and seat overrides, #988)
