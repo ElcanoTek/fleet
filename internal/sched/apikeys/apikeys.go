@@ -999,13 +999,22 @@ func (m *Manager) BindUserKeys(ctx context.Context, lookup AccountLookup) (bound
 	return bound, missing, nil
 }
 
-// DeleteUserKeys permanently deletes every user-type key that acts as email
-// (KeyTypeUser, APIKey.UserEmail) and reports how many it deleted. Deleting an
-// account calls it (internal/accountdelete): a user key acts only as its
-// account, so it has nothing left to do once the account is gone. Keys of
-// every other type name no account and are untouched. The audit log keeps a
-// delete_key entry per key.
-func (m *Manager) DeleteUserKeys(ctx context.Context, email string) (int, error) {
+// DeleteUserKeys permanently deletes the user-type keys (KeyTypeUser) of the
+// account accountID, which was email's, and reports how many it deleted.
+// Deleting an account calls it once the account's rows are gone
+// (internal/accountdelete): a user key acts only as its account, so it has
+// nothing left to do. It deletes
+//
+//   - every user key bound to accountID (APIKey.AccountID), and
+//   - the user keys for email that name no account (minted before keys named
+//     their account, or marked as having none) — but only while no account
+//     holds email: emailLive is asked under the key store's lock, which a
+//     key's first-use binding (RecordUserKeyAccount) also takes.
+//
+// A key bound to any other account — one created under email after this
+// one was deleted — is never touched; nor are keys of every other type,
+// which name no account. The audit log keeps a delete_key entry per key.
+func (m *Manager) DeleteUserKeys(ctx context.Context, email, accountID string, emailLive func(context.Context) (bool, error)) (int, error) {
 	// Both sides through the one email key (pgtext.EmailKey).
 	email = pgtext.EmailKey(email)
 	if email == "" {
@@ -1016,9 +1025,32 @@ func (m *Manager) DeleteUserKeys(ctx context.Context, email string) (int, error)
 		return 0, err
 	}
 	defer unlock()
+	ofEmail := func(key *APIKey) bool {
+		return key.Type == KeyTypeUser && pgtext.EmailKey(key.UserEmail) == email
+	}
+	unboundLeft := false
+	for _, key := range m.keys {
+		if ofEmail(key) && key.AccountID == "" {
+			unboundLeft = true
+			break
+		}
+	}
+	takeUnbound := false
+	if unboundLeft {
+		live := true // with no way to ask, an unbound key is left alone
+		if emailLive != nil {
+			if live, err = emailLive(ctx); err != nil {
+				return 0, err
+			}
+		}
+		takeUnbound = !live
+	}
 	var gone []*APIKey
 	for _, key := range m.keys {
-		if key.Type == KeyTypeUser && pgtext.EmailKey(key.UserEmail) == email {
+		if !ofEmail(key) {
+			continue
+		}
+		if (accountID != "" && key.AccountID == accountID) || (key.AccountID == "" && takeUnbound) {
 			gone = append(gone, key)
 		}
 	}

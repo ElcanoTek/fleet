@@ -180,10 +180,15 @@ func (s *Server) handleAdminUserDelete(w http.ResponseWriter, r *http.Request, e
 		// In this process: forget the account's in-memory approvals, end its
 		// part in live multiplayer chats, and remove its private workspace
 		// trees under the locks a running turn takes.
-		ServerCleanup: func(email string) {
-			s.sessionApprovals.ForgetUser(email)
+		// A new account created under the address since the commit keeps
+		// what is its own: its in-memory approvals and its trees.
+		ServerCleanup: func(email string, live func(digest string) (bool, error)) {
 			s.reconcileAllMultiplayerAccess(ctx, affectedConvIDs...)
-			s.purgeParticipantPrivateStashes(email)
+			if again, err := live(accountdelete.Digest(email)); err == nil && again {
+				return
+			}
+			s.sessionApprovals.ForgetUser(email)
+			s.purgeParticipantPrivateStashes(email, live)
 		},
 	}
 	if s.cfg != nil {

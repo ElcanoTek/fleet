@@ -548,6 +548,26 @@ func TestTurnRegisteringWhileItsAccountIsDeletedNeverRuns(t *testing.T) {
 	}
 }
 
+// The server's own cleanup after a deletion leaves a private workspace tree
+// alone when the address holds a new account by then (it is that account's
+// now), and removes it otherwise.
+func TestPurgeParticipantStashesSparesANewAccount(t *testing.T) {
+	t.Parallel()
+	s := &Server{cfg: &config.Config{EmailAttachmentDir: t.TempDir()}, inflight: make(map[string]inflightEntry)}
+	tree := filepath.Join(accountdelete.PrivateWorkspaceRoot(s.cfg.EmailAttachmentDir), "conv-1", "participants", accountdelete.Digest("back@x.com"))
+	if err := os.MkdirAll(tree, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	s.purgeParticipantPrivateStashes("back@x.com", func(string) (bool, error) { return true, nil })
+	if _, err := os.Stat(tree); err != nil {
+		t.Fatalf("the new account's private workspace tree was removed: %v", err)
+	}
+	s.purgeParticipantPrivateStashes("back@x.com", func(string) (bool, error) { return false, nil })
+	if _, err := os.Stat(tree); !os.IsNotExist(err) {
+		t.Fatalf("the deleted account's private workspace tree survived (err %v)", err)
+	}
+}
+
 // Deleting an account stops the turns it has running — here one in its own
 // chat — and waits for them; another person's turn keeps running.
 func TestStopAccountWorkCancelsItsTurns(t *testing.T) {
@@ -748,9 +768,9 @@ func TestAdminDeleteWarnsOfWorkStillRunning(t *testing.T) {
 // on its own: it returns only when its context ends.
 type blockingDeleteStore struct{ *store.Store }
 
-func (blockingDeleteStore) DeleteUser(ctx context.Context, _ string) error {
+func (blockingDeleteStore) DeleteAccount(ctx context.Context, _ string) (string, error) {
 	<-ctx.Done()
-	return ctx.Err()
+	return "", ctx.Err()
 }
 
 // A deletion that gets stuck after the account's work stopped is bounded: it

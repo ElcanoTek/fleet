@@ -252,7 +252,7 @@ func (s *Server) removeConversationPrivateStash(convID string) {
 	_ = os.RemoveAll(stashDir)
 }
 
-func (s *Server) purgeParticipantPrivateStashes(userEmail string) {
+func (s *Server) purgeParticipantPrivateStashes(userEmail string, live func(digest string) (bool, error)) {
 	userEmail = strings.ToLower(strings.TrimSpace(userEmail))
 	if userEmail == "" {
 		return
@@ -284,11 +284,20 @@ func (s *Server) purgeParticipantPrivateStashes(userEmail string) {
 		if !filepath.IsLocal(convID) || strings.ContainsAny(convID, `/\`) {
 			continue
 		}
+		path := filepath.Join(root, convID, "participants", digest)
 		unlock := s.workspaceSwapLocks.lock(convID)
+		// A participant turn running under the address is the deleted
+		// account's unless a new account holds the address by now.
 		if s.isActiveParticipantUser(convID, userEmail) {
-			s.markParticipantWorkspacePurged(convID, userEmail)
+			if again, err := live(digest); err != nil || !again {
+				s.markParticipantWorkspacePurged(convID, userEmail)
+			}
 		}
-		_ = os.RemoveAll(filepath.Join(root, convID, "participants", digest)) //nolint:gosec // server-derived stash path
+		// RemoveOrphanTree asks live again right before the removal: a tree
+		// whose address holds a new account by then is that account's.
+		if _, err := os.Lstat(path); err == nil {
+			_, _ = accountdelete.RemoveOrphanTree(path, digest, live)
+		}
 		unlock()
 	}
 }

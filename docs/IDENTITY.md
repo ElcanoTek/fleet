@@ -176,9 +176,9 @@ advises on each demoted split admin, unknown role and duplicate username in it.
     sent is cancelled; a request a server is already carrying out, and an
     admin-mode turn already running, finish as usual
     ([CHAT-ADMINISTRATION.md](CHAT-ADMINISTRATION.md));
-  - in the API-key store (`api_keys.json`): the user API keys that act as it
-    (each key is also bound to its account's id, see
-    [PRINCIPAL.md](PRINCIPAL.md));
+  - in the API-key store (`api_keys.json`): the user API keys bound to its
+    id (see [PRINCIPAL.md](PRINCIPAL.md)), and the keys for its address that
+    name no account while no account holds the address;
   - on disk, under `EMAIL_ATTACHMENT_DIR`: its uploads and its private
     workspace files in multiplayer chats. Its chats' workspace directories are
     reaped by the orphan-workspace sweep. Its uploads go even where a kept
@@ -188,6 +188,18 @@ advises on each demoted split admin, unknown role and duplicate username in it.
     it, and an image it sent in someone else's multiplayer chat was its own
     upload, so that chat keeps the message without the image — later turns
     replay the chat without it, as they do for an upload the cleanup removed.
+
+  **A new account under the same address.** The keys and files are reached
+  after the database deletion has committed, and the address may hold a new
+  account by then (the CLI deleting while someone signs up, say). Those steps
+  are limited to the deleted account: they remove only the keys bound to its
+  id (`store.DeleteAccount` reads it in the deletion's transaction), the
+  unbound keys only while no account holds the address (asked under the key
+  store's lock), and each file tree only while no account's address has its
+  digest (asked right before the tree is moved aside). A tree the new
+  account holds stays whole: the deleted account's files left in it are
+  referred to by none of the new account's chats, and the hourly attachment
+  cleanup removes them by age once no kept chat refers to them.
 
   **Work in flight.** The web route first refuses what the deletion would
   refuse (no such account: 404; a team-shared project still owned: 409),

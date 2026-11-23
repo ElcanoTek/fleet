@@ -956,6 +956,24 @@ var deleteUserAfterGuard func()
 // the decrypted refresh token) and is NOT attempted here — the rows, and
 // with them the only ciphertext copies, are gone after this commit.
 func (s *Store) DeleteUser(ctx context.Context, email string) error {
+	return s.deleteUser(ctx, email, nil)
+}
+
+// DeleteAccount is DeleteUser that also reports the id (core.users.id) of the
+// account it deleted, read in the deletion's own transaction. What
+// accountdelete does after the commit is limited to that account: a later
+// account created under the same address in the meantime has another id, and
+// keeps its user API keys (apikeys.Manager.DeleteUserKeys).
+func (s *Store) DeleteAccount(ctx context.Context, email string) (accountID string, err error) {
+	if err := s.deleteUser(ctx, email, &accountID); err != nil {
+		return "", err
+	}
+	return accountID, nil
+}
+
+// deleteUser is DeleteUser's body; accountID, when not nil, receives the
+// deleted account's id.
+func (s *Store) deleteUser(ctx context.Context, email string, accountID *string) error {
 	email = normalizeEmail(email)
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -983,9 +1001,16 @@ func (s *Store) DeleteUser(ctx context.Context, email string) error {
 	// one that comes second waits, finds the account gone, and is refused.
 	// Without it a transfer could commit between this guard and the deletes
 	// below, which would then take the just-transferred project with them.
-	if _, err := tx.ExecContext(ctx,
-		`SELECT 1 FROM core.users WHERE email = $1 FOR UPDATE`, email); err != nil {
+	var id string
+	switch err := tx.QueryRowContext(ctx,
+		`SELECT id::text FROM core.users WHERE email = $1 FOR UPDATE`, email).Scan(&id); {
+	case errors.Is(err, sql.ErrNoRows):
+		return ErrUserNotFound
+	case err != nil:
 		return fmt.Errorf("lock account: %w", err)
+	}
+	if accountID != nil {
+		*accountID = id
 	}
 	shared, err := teamSharedProjectsOwnedByTx(ctx, tx, email)
 	if err != nil {

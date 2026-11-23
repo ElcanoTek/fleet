@@ -93,7 +93,8 @@ func TestDeleteUserKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	n, err := m.DeleteUserKeys(ctx, " Gone@X.com ")
+	noAccount := func(context.Context) (bool, error) { return false, nil }
+	n, err := m.DeleteUserKeys(ctx, " Gone@X.com ", "gone-id", noAccount)
 	if err != nil || n != 2 {
 		t.Fatalf("DeleteUserKeys = %d, %v; want 2 keys", n, err)
 	}
@@ -109,8 +110,51 @@ func TestDeleteUserKeys(t *testing.T) {
 			}
 		}
 	}
-	if n, err := m.DeleteUserKeys(ctx, "gone@x.com"); err != nil || n != 0 {
+	if n, err := m.DeleteUserKeys(ctx, "gone@x.com", "gone-id", noAccount); err != nil || n != 0 {
 		t.Errorf("second DeleteUserKeys = %d, %v; want 0, nil", n, err)
+	}
+}
+
+// DeleteUserKeys is limited to the deleted account: a key bound to it goes; a
+// key bound to a later account under the same address stays; and a key that
+// names no account goes only while no account holds the address.
+func TestDeleteUserKeysSparesALaterAccount(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	m, err := NewManager(filepath.Join(dir, "keys.json"), filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	old, _, err := m.CreateBoundUserKey(ctx, "old", "back@x.com", "old-id", 0, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	later, _, err := m.CreateBoundUserKey(ctx, "later", "back@x.com", "later-id", 0, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	unbound, _, err := m.CreateUserKey(ctx, "legacy", "back@x.com", 0, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	asked := 0
+	held := func(context.Context) (bool, error) { asked++; return true, nil }
+	if n, err := m.DeleteUserKeys(ctx, "back@x.com", "old-id", held); err != nil || n != 1 {
+		t.Fatalf("DeleteUserKeys with the address held = %d, %v; want the old account's key only", n, err)
+	}
+	if asked != 1 {
+		t.Errorf("the address was asked about %d times; want once", asked)
+	}
+	if m.GetKey(old.KeyID) != nil || m.GetKey(later.KeyID) == nil || m.GetKey(unbound.KeyID) == nil {
+		t.Fatalf("old %v, later %v, unbound %v; want only the old account's key gone",
+			m.GetKey(old.KeyID) != nil, m.GetKey(later.KeyID) != nil, m.GetKey(unbound.KeyID) != nil)
+	}
+	free := func(context.Context) (bool, error) { return false, nil }
+	if n, err := m.DeleteUserKeys(ctx, "back@x.com", "old-id", free); err != nil || n != 1 || m.GetKey(unbound.KeyID) != nil {
+		t.Fatalf("DeleteUserKeys with the address free = %d, %v; want the unbound key gone", n, err)
+	}
+	if m.GetKey(later.KeyID) == nil {
+		t.Fatal("a key bound to a later account was deleted")
 	}
 }
 

@@ -16,29 +16,39 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/ElcanoTek/fleet/internal/sched/apikeys"
 )
 
 type fakeStore struct {
 	err     error
 	deleted []string
+	// live is the set of digests an account has now (AccountDigestLive).
+	live map[string]bool
 }
 
-func (s *fakeStore) DeleteUser(_ context.Context, email string) error {
+func (s *fakeStore) DeleteAccount(_ context.Context, email string) (string, error) {
 	if s.err != nil {
-		return s.err
+		return "", s.err
 	}
 	s.deleted = append(s.deleted, email)
-	return nil
+	return "deleted-account-id", nil
+}
+
+func (s *fakeStore) AccountDigestLive(_ context.Context, digest string) (bool, error) {
+	return s.live[digest], nil
 }
 
 type fakeKeys struct {
 	n     int
 	err   error
 	calls []string
+	ids   []string
 }
 
-func (k *fakeKeys) DeleteUserKeys(_ context.Context, email string) (int, error) {
+func (k *fakeKeys) DeleteUserKeys(_ context.Context, email, accountID string, _ func(context.Context) (bool, error)) (int, error) {
 	k.calls = append(k.calls, email)
+	k.ids = append(k.ids, accountID)
 	return k.n, k.err
 }
 
@@ -78,8 +88,8 @@ func TestDelete(t *testing.T) {
 		if err != nil || res.KeysDeleted != 2 || len(res.Problems) != 0 {
 			t.Fatalf("Delete = %+v, %v", res, err)
 		}
-		if len(st.deleted) != 1 || len(keys.calls) != 1 {
-			t.Fatalf("store calls %v, key calls %v", st.deleted, keys.calls)
+		if len(st.deleted) != 1 || len(keys.calls) != 1 || keys.ids[0] != "deleted-account-id" {
+			t.Fatalf("store calls %v, key calls %v for %v; want the deleted account's id", st.deleted, keys.calls, keys.ids)
 		}
 		for _, f := range goneFiles {
 			if _, err := os.Stat(f); !os.IsNotExist(err) {
@@ -99,7 +109,7 @@ func TestDelete(t *testing.T) {
 		keys := &fakeKeys{}
 		cleaned := false
 		_, err := Delete(ctx, &fakeStore{err: refusal}, "gone@x.com", Options{Keys: keys, AttachmentDir: att,
-			ServerCleanup: func(string) { cleaned = true }})
+			ServerCleanup: func(string, func(string) (bool, error)) { cleaned = true }})
 		if !errors.Is(err, refusal) {
 			t.Fatalf("err = %v, want the store's refusal", err)
 		}
@@ -127,7 +137,7 @@ func TestDelete(t *testing.T) {
 		files := seedFiles(t, att, "gone@x.com")
 		var got string
 		if _, err := Delete(ctx, &fakeStore{}, "gone@x.com", Options{Keys: &fakeKeys{}, AttachmentDir: att,
-			ServerCleanup: func(email string) { got = email }}); err != nil {
+			ServerCleanup: func(email string, _ func(string) (bool, error)) { got = email }}); err != nil {
 			t.Fatal(err)
 		}
 		if got != "gone@x.com" {
@@ -140,8 +150,9 @@ func TestDelete(t *testing.T) {
 }
 
 // TestEveryAccountDeletionGoesThroughDelete: outside the store (which defines
-// DeleteUser and calls it in its own tests) and this package, no code reaches
-// DeleteUser directly — neither a call nor a method value (f := st.DeleteUser)
+// DeleteUser and DeleteAccount and calls them in its own tests) and this
+// package, no code reaches either directly — neither a call nor a method value
+// (f := st.DeleteUser)
 // — and no code outside the store deletes from the identity table in SQL. A
 // new deletion path that did would delete the rows and leave the account's
 // API keys and files behind.
@@ -180,8 +191,8 @@ func TestEveryAccountDeletionGoesThroughDelete(t *testing.T) {
 			ast.Inspect(f, func(n ast.Node) bool {
 				switch n := n.(type) {
 				case *ast.SelectorExpr:
-					if n.Sel.Name == "DeleteUser" {
-						offenders = append(offenders, fmt.Sprintf("%s:%d: DeleteUser", rel, fset.Position(n.Pos()).Line))
+					if n.Sel.Name == "DeleteUser" || n.Sel.Name == "DeleteAccount" {
+						offenders = append(offenders, fmt.Sprintf("%s:%d: %s", rel, fset.Position(n.Pos()).Line, n.Sel.Name))
 					}
 				case *ast.BasicLit:
 					if n.Kind == token.STRING && rawDelete.MatchString(n.Value) {
@@ -355,5 +366,67 @@ func TestRemoveOrphanTree(t *testing.T) {
 	}
 	if gone, err := RemoveOrphanTree(filepath.Join(att, "none"), d, func(string) (bool, error) { return false, nil }); gone || err != nil {
 		t.Fatalf("a missing tree: %v, %v", gone, err)
+	}
+}
+
+// After the database deletion commits, the address may hold a new account
+// before the keys and files are reached. That account keeps what is its own:
+// the user keys bound to its id, an unbound key minted before keys named
+// their account (it may still bind to it), and the upload and private
+// workspace trees under its digest. With no new account the deleted
+// account's unbound key and trees go too. Not parallel: it uses
+// afterDatabaseDeletion.
+func TestDeleteSparesAnAccountCreatedAfterTheCommit(t *testing.T) {
+	ctx := context.Background()
+	for _, recreated := range []bool{true, false} {
+		att := t.TempDir()
+		files := seedFiles(t, att, "back@x.com")
+		dir := t.TempDir()
+		mgr, err := apikeys.NewManager(filepath.Join(dir, "keys.json"), filepath.Join(dir, "audit.jsonl"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		st := &fakeStore{live: map[string]bool{}}
+		old, _, err := mgr.CreateBoundUserKey(ctx, "old", "back@x.com", "deleted-account-id", 0, nil, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		legacy, _, err := mgr.CreateUserKey(ctx, "legacy", "back@x.com", 0, nil, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var fresh *apikeys.APIKey
+		afterDatabaseDeletion = func() {
+			if !recreated {
+				return
+			}
+			st.live[Digest("back@x.com")] = true
+			if fresh, _, err = mgr.CreateBoundUserKey(ctx, "new", "back@x.com", "new-account-id", 0, nil, ""); err != nil {
+				t.Error(err)
+			}
+		}
+		res, err := Delete(ctx, st, "back@x.com", Options{Keys: mgr, AttachmentDir: att})
+		afterDatabaseDeletion = nil
+		if err != nil || len(res.Problems) != 0 {
+			t.Fatalf("recreated=%v: Delete = %+v, %v", recreated, res, err)
+		}
+		if mgr.GetKey(old.KeyID) != nil {
+			t.Errorf("recreated=%v: the deleted account's key survived", recreated)
+		}
+		if got := mgr.GetKey(legacy.KeyID) != nil; got != recreated {
+			t.Errorf("recreated=%v: the unbound key kept = %v, want %v", recreated, got, recreated)
+		}
+		if recreated && (fresh == nil || mgr.GetKey(fresh.KeyID) == nil) {
+			t.Error("the new account's key was deleted")
+		}
+		for _, f := range files {
+			_, err := os.Stat(f)
+			if recreated && err != nil {
+				t.Errorf("the new account's %s was removed: %v", f, err)
+			}
+			if !recreated && !os.IsNotExist(err) {
+				t.Errorf("the deleted account's %s survived (err %v)", f, err)
+			}
+		}
 	}
 }

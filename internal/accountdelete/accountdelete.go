@@ -43,12 +43,17 @@ import (
 
 // Store is the database half: *store.Store.
 type Store interface {
-	DeleteUser(ctx context.Context, email string) error
+	// DeleteAccount deletes the account's rows and reports the deleted
+	// account's id (store.Store.DeleteAccount).
+	DeleteAccount(ctx context.Context, email string) (accountID string, err error)
+	// AccountDigestLive reports whether an account's email has the given
+	// Digest now (store.Store.AccountDigestLive).
+	AccountDigestLive(ctx context.Context, digest string) (bool, error)
 }
 
 // Keys is the API-key store: *apikeys.Manager.
 type Keys interface {
-	DeleteUserKeys(ctx context.Context, email string) (int, error)
+	DeleteUserKeys(ctx context.Context, email, accountID string, emailLive func(context.Context) (bool, error)) (int, error)
 }
 
 // Options says where the account's keys and files are.
@@ -61,10 +66,11 @@ type Options struct {
 	AttachmentDir string
 	// ServerCleanup is the running server's own step, run after the database
 	// deletion: it forgets the account's in-memory state and removes its
-	// private workspace trees under the locks a turn in flight takes. nil (a
-	// CLI, outside the server process) removes those trees under
-	// AttachmentDir.
-	ServerCleanup func(email string)
+	// private workspace trees under the locks a turn in flight takes, each
+	// through RemoveOrphanTree with live (so a tree whose address has an
+	// account again stays). nil (a CLI, outside the server process) removes
+	// those trees under AttachmentDir.
+	ServerCleanup func(email string, live func(digest string) (bool, error))
 }
 
 // Result is what Delete did after the database deletion committed.
@@ -128,19 +134,40 @@ func (p Problem) String() string {
 	return string(p.Kind) + ": " + p.Err
 }
 
+// afterDatabaseDeletion is a test seam: it runs in Delete right after the
+// database deletion committed, before the keys and files.
+var afterDatabaseDeletion func()
+
 // Delete deletes the account email: the database rows, then its user API
 // keys, then its files. An error is the database's (store.ErrUserNotFound,
 // *store.OwnsSharedProjectsError, …) and means nothing was deleted.
+//
+// The steps after the commit are limited to the account the database step
+// deleted, because the address may hold a new account by then (created the
+// moment the old one was gone, before these steps ran): only the keys bound
+// to the deleted account's id go, with the unbound ones only while no account
+// holds the address (Keys.DeleteUserKeys); and each file tree is checked
+// right before it is removed (RemoveOrphanTree) — one whose address has an
+// account again belongs to that account now and stays. The deleted account's
+// files left in it are referenced by no chat of the new account, and the
+// hourly attachment cleanup removes them by age once no kept chat refers to
+// them.
 func Delete(ctx context.Context, st Store, email string, opt Options) (Result, error) {
 	// Each step normalizes the address the way its own store keys it.
 	email = strings.TrimSpace(email)
 	var res Result
-	if err := st.DeleteUser(ctx, email); err != nil {
+	accountID, err := st.DeleteAccount(ctx, email)
+	if err != nil {
 		return res, err
 	}
+	if afterDatabaseDeletion != nil {
+		afterDatabaseDeletion()
+	}
+	live := func(digest string) (bool, error) { return st.AccountDigestLive(ctx, digest) }
+	emailLive := func(ctx context.Context) (bool, error) { return st.AccountDigestLive(ctx, Digest(email)) }
 	if opt.Keys == nil {
 		res.Problems = append(res.Problems, Problem{Kind: KeysUnavailable, Email: email})
-	} else if n, err := opt.Keys.DeleteUserKeys(ctx, email); err != nil {
+	} else if n, err := opt.Keys.DeleteUserKeys(ctx, email, accountID, emailLive); err != nil {
 		res.Problems = append(res.Problems, Problem{Kind: KeysFailed, Email: email, Err: err.Error()})
 	} else {
 		res.KeysDeleted = n
@@ -152,15 +179,15 @@ func Delete(ctx context.Context, st Store, email string, opt Options) (Result, e
 		// from the directory it really uses.
 		if _, err := os.Stat(opt.AttachmentDir); err != nil {
 			res.Problems = append(res.Problems, Problem{Kind: AttachmentDirUnreadable, Email: email, Path: opt.AttachmentDir, Err: err.Error()})
-		} else if err := os.RemoveAll(UploadsDir(opt.AttachmentDir, email)); err != nil {
+		} else if _, err := RemoveOrphanTree(UploadsDir(opt.AttachmentDir, email), Digest(email), live); err != nil {
 			res.Problems = append(res.Problems, Problem{Kind: UploadsFailed, Email: email, Err: err.Error()})
 		}
 	}
 	switch {
 	case opt.ServerCleanup != nil:
-		opt.ServerCleanup(email)
+		opt.ServerCleanup(email, live)
 	case opt.AttachmentDir != "":
-		if err := removePrivateWorkspaces(PrivateWorkspaceRoot(opt.AttachmentDir), email); err != nil {
+		if err := removePrivateWorkspaces(PrivateWorkspaceRoot(opt.AttachmentDir), email, live); err != nil {
 			res.Problems = append(res.Problems, Problem{Kind: PrivateWorkspacesFailed, Email: email, Err: err.Error()})
 		}
 	}
@@ -190,8 +217,9 @@ func PrivateWorkspaceRoot(attachmentDir string) string {
 }
 
 // removePrivateWorkspaces removes participants/<Digest(email)> from every
-// conversation directory under root. A missing root is nothing to remove.
-func removePrivateWorkspaces(root, email string) error {
+// conversation directory under root, each through RemoveOrphanTree (live).
+// A missing root is nothing to remove.
+func removePrivateWorkspaces(root, email string, live func(digest string) (bool, error)) error {
 	entries, err := os.ReadDir(root)
 	if os.IsNotExist(err) {
 		return nil
@@ -205,7 +233,7 @@ func removePrivateWorkspaces(root, email string) error {
 		if !d.IsDir() || !filepath.IsLocal(d.Name()) {
 			continue
 		}
-		if err := os.RemoveAll(filepath.Join(root, d.Name(), "participants", digest)); err != nil && firstErr == nil {
+		if _, err := RemoveOrphanTree(filepath.Join(root, d.Name(), "participants", digest), digest, live); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}

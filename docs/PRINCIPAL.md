@@ -83,8 +83,10 @@ spells `X-User-Email`, `X-User-Session-Epoch`, `X-User-Session-Source`,
   case binding cannot tell apart: a key minted
   before this release for an account that was deleted and re-created
   before it binds to the re-created account. Deleting an account deletes
-  the user keys that act as it (`apikeys.Manager.DeleteUserKeys`, through
-  `accountdelete.Delete`; see [IDENTITY.md](IDENTITY.md)). A user key
+  the user keys bound to its id, and its address's unbound keys while no
+  account holds the address (`apikeys.Manager.DeleteUserKeys`, through
+  `accountdelete.Delete`; see [IDENTITY.md](IDENTITY.md)); a key bound to an
+  account created under the address since is never touched. A user key
   carries no Operations Center permission and
   reaches no scoped-key route; any other key type is refused on the chat API
   with 403 `not_a_user_key`. Rotation and revocation are the ordinary key
