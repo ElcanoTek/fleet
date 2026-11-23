@@ -1711,6 +1711,13 @@ answer your approval cards; those stay yours.
 
 ### Long conversations
 
+A long conversation opens on its most recent messages, so it is ready to read
+and reply to straight away. **Load earlier messages**, at the top of the
+transcript, brings in the messages before them a page at a time and keeps your
+place while it does. The cumulative cost in the totals line and the panels in
+Dashboard view cover the whole conversation, whether or not all of it has been
+loaded.
+
 As a conversation grows, **Summarize earlier messages** in **More options** (`•••`)
 shows how full the chat is, as a percentage of the model's context window. With **Show
 details** on, a totals line above the composer gives the same figure as a

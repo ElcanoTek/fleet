@@ -2241,24 +2241,7 @@ func (s *Store) LoadHistory(ctx context.Context, convID string) ([]agent.History
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	var out []agent.HistoryEntry
-	for rows.Next() {
-		var e agent.HistoryEntry
-		var content string
-		// NULL for a pre-056 row (see the migration): those keep their blocks
-		// inside content.text, so an empty string here is the honest read —
-		// there is no separately-stored suffix to hand back.
-		var injected sql.NullString
-		if err := rows.Scan(&e.ID, &e.Role, &e.Type, &content, &injected); err != nil {
-			return nil, err
-		}
-		e.InjectedContext = injected.String
-		e.Content = json.RawMessage(content)
-		out = append(out, e)
-	}
-	return out, rows.Err()
+	return scanHistoryRows(rows)
 }
 
 // AppendHistory writes every entry in turn order and bumps the conversation

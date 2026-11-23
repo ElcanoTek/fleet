@@ -226,6 +226,14 @@ func TestQueryForwardingIsPerRoute(t *testing.T) {
 		{"/api/admin/doctor?deep=1", "/admin/doctor?deep=1"},
 		{"/api/admin/doctor?deep=2", "/admin/doctor"},
 		{"/api/conversations/c1/approvals/a%201", "/conversations/c1?approval_id=a%201"},
+		// The conversation read forwards omit_history and the history window
+		// (docs/CHAT-HISTORY-WINDOW.md), and nothing else: a browser cannot
+		// name approval_id or the terminal's review flags on this route.
+		{"/api/conversations/c1", "/conversations/c1"},
+		{"/api/conversations/c1?limit=60", "/conversations/c1?limit=60"},
+		{"/api/conversations/c1?before=900&limit=60", "/conversations/c1?limit=60&before=900"},
+		{"/api/conversations/c1?from=412", "/conversations/c1?from=412"},
+		{"/api/conversations/c1?omit_history=1&approval_index=1&approval_id=a1&settlement_only=1", "/conversations/c1?omit_history=1"},
 		{"/api/conversations/c1/export?format=html&include=full&x=1", "/conversations/c1/export?format=html&include=full"},
 		{"/api/orchestrator/tasks?tag=ops&tag=&tag=urgent&secret=x&status=running", ""},
 	}

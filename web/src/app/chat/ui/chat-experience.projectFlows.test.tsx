@@ -4,6 +4,7 @@ import { ChatExperience, type ConversationSummary } from "./chat-experience";
 import { ChatToastProvider } from "./ChatToasts";
 import { clearChatSession } from "./chatSessionStore";
 import { resetSidebarStoreForTests } from "@/app/shared/sidebar/store";
+import { withoutHistoryWindow } from "./historyWindow.testing";
 
 // jsdom has no layout, so the real virtualizer mounts no transcript rows; the
 // file-state tests below assert on rendered replies, so every row renders.
@@ -74,7 +75,7 @@ function mockBackend() {
     new Response(JSON.stringify(body), { status });
   const projects = [SHARED_PROJECT, PERSONAL_PROJECT];
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = String(input);
+    const url = withoutHistoryWindow(String(input));
     const method = init?.method ?? "GET";
     if (method === "POST" && url === "/api/projects") {
       const body = JSON.parse(String(init?.body)) as { name: string; team_shared: boolean };
@@ -311,7 +312,7 @@ describe("output share markers never go stale (Codex round 7)", () => {
     const base = fetchMock.getMockImplementation()!;
     let outputsFail = false;
     fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
+      const url = withoutHistoryWindow(String(input));
       if ((init?.method ?? "GET") === "GET") {
         if (url === "/api/conversations/conv-s")
           return new Response(
@@ -360,7 +361,7 @@ describe("a branch's own outputs override its withheld files (Codex round 7)", (
     const fetchMock = mockBackend();
     const base = fetchMock.getMockImplementation()!;
     fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
+      const url = withoutHistoryWindow(String(input));
       if ((init?.method ?? "GET") === "GET") {
         if (url === "/api/conversations/conv-a")
           return new Response(
@@ -413,7 +414,7 @@ describe("a failed outputs refresh fails a branch closed (Codex round 15)", () =
     const base = fetchMock.getMockImplementation()!;
     let outputsFail = false;
     fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
+      const url = withoutHistoryWindow(String(input));
       if ((init?.method ?? "GET") === "GET") {
         if (url === "/api/conversations/conv-a")
           return new Response(
@@ -498,7 +499,7 @@ describe("Move and share is one action (A1)", () => {
     const fetchMock = mockBackend();
     const base = fetchMock.getMockImplementation()!;
     fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
+      const url = withoutHistoryWindow(String(input));
       if ((init?.method ?? "GET") === "POST" && url.endsWith("/share-with-team")) {
         return new Response("an archived chat can't be shared with your team; unarchive it first", {
           status: 409,
@@ -530,7 +531,7 @@ describe("Create shared project from the share dialog (A1b)", () => {
     // No project is shared with the team yet (A1b), and the move is refused.
     const created: unknown[] = [];
     fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
+      const url = withoutHistoryWindow(String(input));
       const method = init?.method ?? "GET";
       if (method === "GET" && url === "/api/projects")
         return new Response(JSON.stringify({ projects: [PERSONAL_PROJECT, ...created] }));
@@ -591,7 +592,7 @@ describe("a create that lands after its dialog was dismissed (Codex round 15)", 
     // No project is shared with the team yet, so the share dialog offers A1b.
     const created: unknown[] = [];
     fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
+      const url = withoutHistoryWindow(String(input));
       const method = init?.method ?? "GET";
       if (method === "GET" && url === "/api/projects")
         return new Response(JSON.stringify({ projects: [PERSONAL_PROJECT, ...created] }));
@@ -655,7 +656,7 @@ describe("bulk delete across teams", () => {
       project_id: "p-ops",
     };
     fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
+      const url = withoutHistoryWindow(String(input));
       if ((init?.method ?? "GET") === "GET") {
         if (url === "/api/projects")
           return new Response(

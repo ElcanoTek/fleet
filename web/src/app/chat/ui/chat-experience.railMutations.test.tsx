@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { ChatExperience, type ConversationSummary } from "./chat-experience";
 import { clearChatSession } from "./chatSessionStore";
 import { RECENT_SORT_ITEM } from "./conversationOrganization";
+import { withoutHistoryWindow } from "./historyWindow.testing";
 
 // Full-mount coverage for the rail's delete / rename / archive mutations
 // against a backend that says no. Each used to fail silently: the confirm
@@ -42,7 +43,7 @@ function mockBackend(onWrite: (url: string, init: RequestInit) => Reply) {
   const json = (body: unknown, status = 200) =>
     new Response(JSON.stringify(body), { status });
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = String(input);
+    const url = withoutHistoryWindow(String(input));
     if (init?.method && init.method !== "GET") {
       const reply = onWrite(url, init);
       if (reply instanceof Error) throw reply;

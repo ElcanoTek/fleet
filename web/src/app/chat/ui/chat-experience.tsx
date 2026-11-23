@@ -86,6 +86,18 @@ import { type ModelPrices } from "@/app/shared/lib/modelCost";
 import { mcpAccountOverrides } from "./mcpAccounts";
 import { allocMessageIds } from "./messageIds";
 import {
+  attachDeferredApprovals,
+  attachLeftoverApprovals,
+  attachTranscriptCards,
+  earlierPageQuery,
+  historyReadQuery,
+  parseHistoryPage,
+  prependOlderMessages,
+  preludeMessages,
+  preludeRetiredCount,
+  type HistoryWindow,
+} from "./historyWindow";
+import {
   droppedOptionalMcpServerNames,
   setOptionalMcpServersEnabled,
   enabledOptionalMcpServerNames,
@@ -598,6 +610,34 @@ export function ChatExperience({
   const [messagesByConv, setMessagesByConv] = useState<Map<string, Message[]>>(
     () => new Map(restoredSession?.messagesByConv ?? []),
   );
+  // The conversations held only in part (docs/CHAT-HISTORY-WINDOW.md): opening
+  // a long chat loads its newest turns, and "Load earlier messages" pages
+  // back. A conversation with no entry here is held whole. The ref mirrors
+  // the state for the closures (loads, recovery) that must read the window
+  // as it is now, not as it was when they were created.
+  const [historyWindows, setHistoryWindows] = useState<Map<string, HistoryWindow>>(
+    () => new Map(restoredSession?.historyWindowByConv ?? []),
+  );
+  const historyWindowsRef = useRef<ReadonlyMap<string, HistoryWindow>>(
+    new Map(restoredSession?.historyWindowByConv ?? []),
+  );
+  const setHistoryWindow = (convId: string, next: HistoryWindow | undefined) => {
+    setHistoryWindows((prev) => {
+      if (!next && !prev.has(convId)) return prev;
+      const merged = new Map(prev);
+      if (next) merged.set(convId, next);
+      else merged.delete(convId);
+      historyWindowsRef.current = merged;
+      return merged;
+    });
+  };
+  // The "Load earlier messages" request of the conversation it was pressed
+  // in: in flight, or failed (the control then offers it again).
+  const [earlierLoad, setEarlierLoad] = useState<{
+    convId: string;
+    state: "loading" | "failed";
+  } | null>(null);
+  const earlierLoadingRef = useRef<Set<string>>(new Set());
   // True once the initial bootstrap (cold start) or the rehydration (warm
   // return) has established a snapshot worth persisting. Gates the mirror
   // effect below so a mid-cold-start unmount never saves a half-empty snapshot
@@ -1666,6 +1706,7 @@ export function ChatExperience({
     if (!bootstrapped) return;
     writeChatSession({
       messagesByConv,
+      historyWindowByConv: historyWindows,
       conversations,
       archivedConversations,
       activeConversationId,
@@ -1682,6 +1723,7 @@ export function ChatExperience({
   }, [
     bootstrapped,
     messagesByConv,
+    historyWindows,
     conversations,
     archivedConversations,
     activeConversationId,
@@ -1806,6 +1848,8 @@ export function ChatExperience({
       messagesByConvRef.current = next;
       return next;
     });
+    // Nothing of the conversation is held any more, so no part of it is.
+    setHistoryWindow(convId, undefined);
     setUiAutoSubmitsByConv((prev) => {
       if (!prev.has(convId)) return prev;
       const next = new Map(prev);
@@ -1821,6 +1865,17 @@ export function ChatExperience({
   const messages = useMemo(() => {
     return messagesByConv.get(currentConvKey) ?? [];
   }, [currentConvKey, messagesByConv]);
+  // Set while only the newest part of this conversation is loaded.
+  const heldWindow = historyWindows.get(currentConvKey);
+  // What card state and the dashboard board are derived from: the loaded
+  // messages, preceded by the cards older than them. Never drawn as rows.
+  const cardMessages = useMemo(
+    () =>
+      heldWindow && heldWindow.prelude.length > 0
+        ? [...heldWindow.prelude, ...messages]
+        : messages,
+    [heldWindow, messages],
+  );
 
   // Context-usage signal. Hoisted up here so both the conversation
   // totals chip (in the stats panel) and the composer-side compact
@@ -2897,7 +2952,16 @@ export function ChatExperience({
     // fresh server copy underneath the rendered messages.
     if (!options.background) setIsLoadingHistory(true);
     try {
-      const url = conversationApiUrl(conversationId);
+      // A navigation starts over with the newest window; any other load
+      // re-reads exactly what is held (historyReadQuery).
+      const url = conversationApiUrl(
+        conversationId,
+        historyReadQuery(historyWindowsRef.current.get(conversationId), {
+          startOver: claimsView,
+          heldWhole:
+            (messagesByConvRef.current.get(conversationId)?.length ?? 0) > 0,
+        }),
+      );
       if (!url) throw new Error(tr("Unable to load conversation."));
       const acceptEpoch = autonomousAcceptedEpochRef.current;
       const response = await fetch(url, {
@@ -2925,6 +2989,8 @@ export function ChatExperience({
         // banner does not depend on where the handler nests it.
         branch_origin?: BranchOrigin | null;
         history: HistoryEntry[] | null;
+        // Present on a windowed read with older entries behind it.
+        history_page?: unknown;
         pending_approvals?: Array<{
           approval_id: string;
           tool: string;
@@ -3155,7 +3221,8 @@ export function ChatExperience({
         nextAuto.set(data.conversation.id, byCall);
         return nextAuto;
       });
-      const next = historyToMessages(data.history ?? []);
+      const historyPage = parseHistoryPage(data.history_page);
+      const loaded = historyToMessages(data.history ?? []);
 
       // Re-attach approval cards + memory proposals so a page reload (or the
       // visibilitychange/focus auto-refetch) keeps the transcript's live
@@ -3164,106 +3231,51 @@ export function ChatExperience({
       // records whose undo hint has no other durable delivery (#1153). Each
       // card anchors to the message holding its tool_call; cards with no
       // matching call (older rows, mock turns, promote cards) fall back to
-      // the last assistant message, the previous behavior.
+      // the last assistant message, the previous behavior — except a settled
+      // card whose call is older than the loaded window, which waits for its
+      // page (attachTranscriptCards).
       const pendingApprovals = data.pending_approvals ?? [];
       const resolvedApprovals = data.resolved_approvals ?? [];
       followResume = resolvedApprovals.some(
         (p) => p.executing === true && p.resume_after_approval === true,
       );
       const pendingMemoryProposals = data.pending_memory_proposals ?? [];
-      if (
-        pendingApprovals.length > 0 ||
-        resolvedApprovals.length > 0 ||
-        pendingMemoryProposals.length > 0
-      ) {
-        // Server order is oldest-first per list, and resolutions precede
-        // anything still pending, so resolved-then-pending keeps cards in
-        // rough chronological order within a message.
-        const approvalCards: Approval[] = [
-          ...resolvedApprovals.map((p): Approval => hydrateResolvedApproval(p)),
-          ...pendingApprovals.map((p): Approval => ({
-            id: p.approval_id,
-            tool: p.tool,
-            summary: p.summary,
-            status: "pending",
-            expiresAt: p.expires_at,
-            mcpServer: p.mcp_server,
-            mcpAccount: p.mcp_account,
-            toolCallId: p.tool_call_id,
-            noSessionApproval: p.no_session_approval === true || undefined,
-            resumeAfterApproval: p.resume_after_approval === true || undefined,
-            card: parseApprovalCardData(p.card),
-            cardSha256: parseApprovalCardSha256(p.card_sha256),
-            groupId: p.group_id || undefined,
-            progressUpdates: p.progress_updates === true || undefined,
-            narrowable: parseApprovalNarrowable(p.narrowable),
-            stoppable: p.stoppable === true || undefined,
-          })),
-        ];
-        const memoryCards: MemoryProposal[] = pendingMemoryProposals.map(
-          (p) => ({
-            id: p.proposal_id,
-            content: p.content,
-            kind: p.kind,
-            supersedesContent: p.supersedes_content,
-            status: "pending",
-          }),
-        );
-        const lastAssistantIdx = (() => {
-          for (let i = next.length - 1; i >= 0; i--) {
-            if (next[i].role === "assistant") return i;
-          }
-          return -1;
-        })();
-        // toolCallId → message index, so each card lands where its call ran.
-        const messageForCall = new Map<string, number>();
-        next.forEach((m, idx) => {
-          for (const tc of m.toolCalls ?? []) messageForCall.set(tc.id, idx);
-        });
-        const attachAt = new Map<number, Approval[]>();
-        let orphaned: Approval[] = [];
-        for (const card of approvalCards) {
-          const idx = card.toolCallId
-            ? messageForCall.get(card.toolCallId)
-            : undefined;
-          const target = idx ?? (lastAssistantIdx >= 0 ? lastAssistantIdx : -1);
-          if (target >= 0) {
-            attachAt.set(target, [...(attachAt.get(target) ?? []), card]);
-          } else {
-            orphaned = [...orphaned, card];
-          }
-        }
-        for (const [idx, cards] of attachAt) {
-          next[idx] = {
-            ...next[idx],
-            approvals: [...(next[idx].approvals ?? []), ...cards],
-          };
-        }
-        if (memoryCards.length > 0 && lastAssistantIdx >= 0) {
-          next[lastAssistantIdx] = {
-            ...next[lastAssistantIdx],
-            memoryProposals: [
-              ...(next[lastAssistantIdx].memoryProposals ?? []),
-              ...memoryCards,
-            ],
-          };
-        }
-        if (
-          orphaned.length > 0 ||
-          (memoryCards.length > 0 && lastAssistantIdx < 0)
-        ) {
-          // No assistant message exists yet — park the cards on a
-          // placeholder so they still have somewhere to live.
-          next.push({
-            id: allocMessageIds(),
-            role: "assistant",
-            content: "",
-            state: "done",
-            approvals: orphaned,
-            memoryProposals: lastAssistantIdx < 0 ? memoryCards : [],
-          });
-        }
-      }
+      // Server order is oldest-first per list, and resolutions precede
+      // anything still pending, so resolved-then-pending keeps cards in
+      // rough chronological order within a message.
+      const approvalCards: Approval[] = [
+        ...resolvedApprovals.map((p): Approval => hydrateResolvedApproval(p)),
+        ...pendingApprovals.map((p): Approval => ({
+          id: p.approval_id,
+          tool: p.tool,
+          summary: p.summary,
+          status: "pending",
+          expiresAt: p.expires_at,
+          mcpServer: p.mcp_server,
+          mcpAccount: p.mcp_account,
+          toolCallId: p.tool_call_id,
+          noSessionApproval: p.no_session_approval === true || undefined,
+          resumeAfterApproval: p.resume_after_approval === true || undefined,
+          card: parseApprovalCardData(p.card),
+          cardSha256: parseApprovalCardSha256(p.card_sha256),
+          groupId: p.group_id || undefined,
+          progressUpdates: p.progress_updates === true || undefined,
+          narrowable: parseApprovalNarrowable(p.narrowable),
+          stoppable: p.stoppable === true || undefined,
+        })),
+      ];
+      const memoryCards: MemoryProposal[] = pendingMemoryProposals.map((p) => ({
+        id: p.proposal_id,
+        content: p.content,
+        kind: p.kind,
+        supersedesContent: p.supersedes_content,
+        status: "pending",
+      }));
+      const attached = attachTranscriptCards(loaded, approvalCards, memoryCards, {
+        moreNotLoaded: historyPage !== null,
+        placeholderId: allocMessageIds,
+      });
+      const next = attached.messages;
 
       // Snap-to-bottom on next render is an "I just opened this chat"
       // affordance. When the caller is a background refresh (tab return
@@ -3274,6 +3286,20 @@ export function ChatExperience({
         pendingHistoryScrollRef.current = data.conversation.id;
       }
       setConvMessages(data.conversation.id, next);
+      // What is held of the conversation now: its newest window with more
+      // behind it, or (no page) all of it.
+      setHistoryWindow(
+        data.conversation.id,
+        historyPage
+          ? {
+              startId: historyPage.nextBefore,
+              prelude: preludeMessages(historyPage.earlierCards),
+              earlierTotals: historyPage.earlierTotals,
+              earlierSummaryId: historyPage.earlierSummaryId,
+              deferredApprovals: attached.deferred,
+            }
+          : undefined,
+      );
       // A boot restore or background revalidation must not close navigation
       // the reader opened while that request was in flight.
       if (!options.background && !options.restore) setSidebarOpen(false);
@@ -3308,6 +3334,62 @@ export function ChatExperience({
     if (!options.adopt) void reattachToConv(conversationId);
     if (!options.adopt && followResume) {
       void followApprovalResume(conversationId, approvalResumeFollowExecutingMs);
+    }
+  };
+
+  // "Load earlier messages": fetches the page older than what is held and
+  // puts it in front of the loaded messages (docs/CHAT-HISTORY-WINDOW.md).
+  const loadEarlierMessages = async (conversationId: string) => {
+    const held = historyWindowsRef.current.get(conversationId);
+    if (!held || earlierLoadingRef.current.has(conversationId)) return;
+    const url = conversationApiUrl(conversationId, earlierPageQuery(held));
+    if (!url) return;
+    earlierLoadingRef.current.add(conversationId);
+    setEarlierLoad({ convId: conversationId, state: "loading" });
+    try {
+      const response = await fetch(url, { cache: "no-store" });
+      if (!response.ok) throw new Error("earlier messages");
+      const data = (await response.json()) as {
+        history?: HistoryEntry[] | null;
+        history_page?: unknown;
+      };
+      // The held part moved while this page was in flight (a navigation
+      // started the chat over, it was cleared or deleted): the page no
+      // longer adjoins it, so it is dropped rather than put in front of
+      // messages it does not precede.
+      const now = historyWindowsRef.current.get(conversationId);
+      if (!now || now.startId !== held.startId) {
+        setEarlierLoad((cur) => (cur?.convId === conversationId ? null : cur));
+        return;
+      }
+      const page = parseHistoryPage(data.history_page);
+      const placed = attachDeferredApprovals(
+        historyToMessages(data.history ?? []),
+        now.deferredApprovals,
+      );
+      setConvMessages(conversationId, (prev) => {
+        const merged = prependOlderMessages(prev, placed.messages);
+        // The first message is loaded now: a settled card whose call no page
+        // held goes where it always went, the last reply.
+        return page ? merged : attachLeftoverApprovals(merged, placed.deferred);
+      });
+      setHistoryWindow(
+        conversationId,
+        page
+          ? {
+              startId: page.nextBefore,
+              prelude: preludeMessages(page.earlierCards),
+              earlierTotals: page.earlierTotals,
+              earlierSummaryId: page.earlierSummaryId,
+              deferredApprovals: placed.deferred,
+            }
+          : undefined,
+      );
+      setEarlierLoad((cur) => (cur?.convId === conversationId ? null : cur));
+    } catch {
+      setEarlierLoad({ convId: conversationId, state: "failed" });
+    } finally {
+      earlierLoadingRef.current.delete(conversationId);
     }
   };
 
@@ -4221,6 +4303,7 @@ export function ChatExperience({
     dashboardConvId,
     dashboardJustCreated,
     messages,
+    cardMessages,
     isStreaming,
     setSidebarOpen,
   });
@@ -6129,6 +6212,11 @@ export function ChatExperience({
     setSpreadsheetNudgeDismissed,
     activeConversationIdRef,
     messagesByConvRef,
+    heldHistoryQuery: (convId: string) =>
+      historyReadQuery(historyWindowsRef.current.get(convId), {
+        startOver: false,
+        heldWhole: true,
+      }),
     pendingApprovalScrollRef,
     serverModelByConvRef,
     selectedModel,
@@ -6433,7 +6521,10 @@ export function ChatExperience({
     [currentConvKey, uiAutoSubmitsByConv],
   );
   const refreshUIAutoSubmits = useCallback(async (convId: string) => {
-    const url = conversationApiUrl(convId, "?omit_history=1&approval_index=1");
+    // omit_history alone: the countdowns ride the conversation read, and this
+    // refresh needs none of its transcript. (approval_index answers with the
+    // approval lists only, so it must not be named here.)
+    const url = conversationApiUrl(convId, "?omit_history=1");
     if (!url) return;
     try {
       const res = await fetch(url, { cache: "no-store" });
@@ -8766,8 +8857,14 @@ export function ChatExperience({
             <DashboardBoard
               className={dashboardPane === "chat" ? "max-lg:hidden" : ""}
               panels={board.panels}
-              summaryIndex={summaryIndex}
-              liveMessageIndex={isStreaming ? messages.length - 1 : -1}
+              // Panel positions index cardMessages: the loaded messages
+              // follow the cards older than them.
+              summaryIndex={
+                summaryIndex >= 0
+                  ? cardMessages.length - messages.length + summaryIndex
+                  : preludeRetiredCount(heldWindow) || -1
+              }
+              liveMessageIndex={isStreaming ? cardMessages.length - 1 : -1}
               storageScope={dashboardConvId ?? currentConvKey}
               submissions={dashboardGenUi?.submissions ?? new Map()}
               replies={dashboardGenUi?.replies ?? new Map()}
@@ -8808,6 +8905,15 @@ export function ChatExperience({
               isLoadingHistory={isLoadingHistory}
               isLockdown={isLockdown}
               messages={messages}
+              cardMessages={cardMessages}
+              earlierMessages={
+                !heldWindow
+                  ? "none"
+                  : earlierLoad?.convId === currentConvKey
+                    ? earlierLoad.state
+                    : "available"
+              }
+              onLoadEarlier={() => void loadEarlierMessages(currentConvKey)}
               approvalJumpRequest={approvalJumpRequest}
               pills={pills}
               activePillId={activePillId}
@@ -8908,6 +9014,7 @@ export function ChatExperience({
                 {showStats ? (
                   <ConversationTotalsChip
                     messages={messages}
+                    earlier={heldWindow?.earlierTotals ?? null}
                     usage={contextUsage}
                   />
                 ) : null}

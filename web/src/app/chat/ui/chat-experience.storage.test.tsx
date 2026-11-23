@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { ChatExperience, type ConversationSummary } from "./chat-experience";
 import { clearChatSession } from "./chatSessionStore";
+import { withoutHistoryWindow } from "./historyWindow.testing";
 
 // Web Storage can throw on every access (Safari private mode, a full quota,
 // site data blocked). Chat used to read "chat-show-stats" in a mount effect
@@ -24,7 +25,7 @@ function mockBackend() {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input);
+      const url = withoutHistoryWindow(String(input));
       if (url === "/api/conversations") return json({ conversations: CONVS });
       if (url === "/api/conversations?archived=true") return json({ conversations: [] });
       if (url === "/api/conversations/conv-a") return json({ conversation: CONVS[0], history: [] });
