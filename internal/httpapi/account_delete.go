@@ -186,7 +186,9 @@ func (s *Server) sweepDeletedAccounts(ctx context.Context) {
 	}
 	var uploads []string
 	if s.cfg != nil && s.cfg.EmailAttachmentDir != "" {
-		accountdelete.RemoveSetAsideUploads(s.cfg.EmailAttachmentDir)
+		if err := accountdelete.RemoveSetAsideUploads(s.cfg.EmailAttachmentDir); err != nil {
+			logging.From(ctx).Error("maintenance: removing set-aside upload trees failed", "err", err)
+		}
 		var err error
 		if uploads, err = accountdelete.UploadDigests(s.cfg.EmailAttachmentDir); err != nil {
 			logging.From(ctx).Error("maintenance: reading the uploads directory failed", "err", err)
@@ -311,7 +313,9 @@ func (s *Server) removeOrphanParticipantStashes(ctx context.Context, stashes []p
 	for _, c := range stashes {
 		dir := filepath.Join(root, c.convID, "participants")
 		if c.aside {
-			_ = os.RemoveAll(filepath.Join(dir, c.name))
+			if err := os.RemoveAll(filepath.Join(dir, c.name)); err != nil {
+				logging.From(ctx).Error("maintenance: removing a set-aside private workspace tree failed", "err", err)
+			}
 			continue
 		}
 		if liveDigests[c.name] {

@@ -42,7 +42,7 @@ it("translates the warnings of an account deletion with steps left", () => {
   ).toBe(
     "algunas solicitudes o turnos de la cuenta seguían en curso después de 15 segundos; lo que escriban para la cuenta después se rechaza o lo elimina la pasada de mantenimiento",
   );
-  expect(localizeError("removing the account's uploads failed: disk full", "pt")).toBe(
-    "não foi possível eliminar os ficheiros carregados da conta: disk full",
-  );
+  expect(
+    localizeError("removing the account's uploads failed: disk full; the server's hourly maintenance pass tries again", "pt"),
+  ).toBe("não foi possível eliminar os ficheiros carregados da conta: disk full; a manutenção horária do servidor volta a tentar");
 });

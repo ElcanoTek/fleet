@@ -1515,13 +1515,13 @@
       ]
     },
     {
-      "message": "removing the account's private workspace files failed: {0}",
+      "message": "removing the account's private workspace files failed: {0}; the server's hourly maintenance pass tries again",
       "fields": [
         "%s"
       ]
     },
     {
-      "message": "removing the account's uploads failed: {0}",
+      "message": "removing the account's uploads failed: {0}; the server's hourly maintenance pass tries again",
       "fields": [
         "%s"
       ]

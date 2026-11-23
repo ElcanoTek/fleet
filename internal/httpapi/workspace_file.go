@@ -252,10 +252,17 @@ func (s *Server) removeConversationPrivateStash(convID string) {
 	_ = os.RemoveAll(stashDir)
 }
 
-func (s *Server) purgeParticipantPrivateStashes(userEmail string, live func(digest string) (bool, error)) {
+// purgeParticipantPrivateStashes removes userEmail's participant trees from
+// every conversation's private workspace stash, each under the conversation's
+// swap lock and through accountdelete.RemoveOrphanTree (live), and returns the
+// first failure (the remaining trees are still tried). A tree left behind by a
+// failure is reported by the caller (accountdelete.PrivateWorkspacesFailed)
+// and removed by the maintenance pass once its digest is no account's
+// (removeOrphanParticipantStashes).
+func (s *Server) purgeParticipantPrivateStashes(userEmail string, live func(digest string) (bool, error)) error {
 	userEmail = strings.ToLower(strings.TrimSpace(userEmail))
 	if userEmail == "" {
-		return
+		return nil
 	}
 	s.inflightMu.Lock()
 	for convID, activeUser := range s.activeParticipantWorkspaces {
@@ -268,14 +275,21 @@ func (s *Server) purgeParticipantPrivateStashes(userEmail string, live func(dige
 	}
 	s.inflightMu.Unlock()
 	root, err := s.privateWorkspaceStashRoot()
-	if err != nil || root == "" {
-		return
+	if err != nil {
+		return err
+	}
+	if root == "" {
+		return nil
 	}
 	entries, err := os.ReadDir(root)
+	if os.IsNotExist(err) {
+		return nil
+	}
 	if err != nil {
-		return
+		return err
 	}
 	digest := participantDigest(userEmail)
+	var firstErr error
 	for _, d := range entries {
 		if !d.IsDir() {
 			continue
@@ -294,12 +308,18 @@ func (s *Server) purgeParticipantPrivateStashes(userEmail string, live func(dige
 			}
 		}
 		// RemoveOrphanTree asks live again right before the removal: a tree
-		// whose address holds a new account by then is that account's.
+		// whose address holds a new account by then is that account's (not a
+		// failure); any other error leaves the tree and is reported.
 		if _, err := os.Lstat(path); err == nil {
-			_, _ = accountdelete.RemoveOrphanTree(path, digest, live)
+			if _, err := accountdelete.RemoveOrphanTree(path, digest, live); err != nil && firstErr == nil {
+				firstErr = err
+			}
+		} else if !os.IsNotExist(err) && firstErr == nil {
+			firstErr = err
 		}
 		unlock()
 	}
+	return firstErr
 }
 
 func (s *Server) markParticipantWorkspacePurged(convID, userEmail string) {

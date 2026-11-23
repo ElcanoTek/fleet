@@ -261,8 +261,11 @@ advises on each demoted split admin, unknown role and duplicate username in it.
   address.
 
   **Steps left.** The database deletion alone decides whether the account is
-  deleted. A later step that does not complete (the key store, a file) is
-  reported — and so is work still running after the 15 seconds: the web
+  deleted. A later step that does not complete (the key store, an upload or
+  private workspace tree — in the server's own cleanup too) is reported —
+  and so is work still running after the 15 seconds; a tree left behind is
+  removed by the hourly maintenance pass while its digest is no account's
+  (a tree the address's new account holds is not a failure): the web
   route answers 200 `{"warnings": [...]}` instead of 204
   (not an error status — the account is gone, and a retry would only get
   404), and Settings → Admin → Users shows the warnings above the table; the

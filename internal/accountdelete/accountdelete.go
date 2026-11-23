@@ -68,9 +68,10 @@ type Options struct {
 	// deletion: it forgets the account's in-memory state and removes its
 	// private workspace trees under the locks a turn in flight takes, each
 	// through RemoveOrphanTree with live (so a tree whose address has an
-	// account again stays). nil (a CLI, outside the server process) removes
-	// those trees under AttachmentDir.
-	ServerCleanup func(email string, live func(digest string) (bool, error))
+	// account again stays). An error it returns — a tree it could not remove
+	// — is reported as PrivateWorkspacesFailed. nil (a CLI, outside the server
+	// process) removes those trees under AttachmentDir.
+	ServerCleanup func(email string, live func(digest string) (bool, error)) error
 }
 
 // Result is what Delete did after the database deletion committed.
@@ -127,9 +128,9 @@ func (p Problem) String() string {
 		return fmt.Sprintf("the attachment directory %s could not be read (%s), so no upload or private workspace file was removed there; "+
 			"the server's maintenance pass removes them from the directory it uses", p.Path, p.Err)
 	case UploadsFailed:
-		return "removing the account's uploads failed: " + p.Err
+		return "removing the account's uploads failed: " + p.Err + "; the server's hourly maintenance pass tries again"
 	case PrivateWorkspacesFailed:
-		return "removing the account's private workspace files failed: " + p.Err
+		return "removing the account's private workspace files failed: " + p.Err + "; the server's hourly maintenance pass tries again"
 	}
 	return string(p.Kind) + ": " + p.Err
 }
@@ -179,13 +180,15 @@ func Delete(ctx context.Context, st Store, email string, opt Options) (Result, e
 		// from the directory it really uses.
 		if _, err := os.Stat(opt.AttachmentDir); err != nil {
 			res.Problems = append(res.Problems, Problem{Kind: AttachmentDirUnreadable, Email: email, Path: opt.AttachmentDir, Err: err.Error()})
-		} else if _, err := RemoveOrphanTree(UploadsDir(opt.AttachmentDir, email), Digest(email), live); err != nil {
+		} else if err := removeUploadTree(UploadsDir(opt.AttachmentDir, email), Digest(email), live); err != nil {
 			res.Problems = append(res.Problems, Problem{Kind: UploadsFailed, Email: email, Err: err.Error()})
 		}
 	}
 	switch {
 	case opt.ServerCleanup != nil:
-		opt.ServerCleanup(email, live)
+		if err := opt.ServerCleanup(email, live); err != nil {
+			res.Problems = append(res.Problems, Problem{Kind: PrivateWorkspacesFailed, Email: email, Err: err.Error()})
+		}
 	case opt.AttachmentDir != "":
 		if err := removePrivateWorkspaces(PrivateWorkspaceRoot(opt.AttachmentDir), email, live); err != nil {
 			res.Problems = append(res.Problems, Problem{Kind: PrivateWorkspacesFailed, Email: email, Err: err.Error()})
@@ -216,6 +219,19 @@ func PrivateWorkspaceRoot(attachmentDir string) string {
 	return filepath.Join(attachmentDir, "multiplayer-private")
 }
 
+// removeUploadTree removes the account's upload tree through
+// RemoveOrphanTree (live); a tree that is not there is nothing to remove, and
+// asks nothing.
+func removeUploadTree(path, digest string, live func(digest string) (bool, error)) error {
+	if _, err := os.Lstat(path); os.IsNotExist(err) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	_, err := RemoveOrphanTree(path, digest, live)
+	return err
+}
+
 // removePrivateWorkspaces removes participants/<Digest(email)> from every
 // conversation directory under root, each through RemoveOrphanTree (live).
 // A missing root is nothing to remove.
@@ -233,7 +249,16 @@ func removePrivateWorkspaces(root, email string, live func(digest string) (bool,
 		if !d.IsDir() || !filepath.IsLocal(d.Name()) {
 			continue
 		}
-		if _, err := RemoveOrphanTree(filepath.Join(root, d.Name(), "participants", digest), digest, live); err != nil && firstErr == nil {
+		path := filepath.Join(root, d.Name(), "participants", digest)
+		if _, err := os.Lstat(path); os.IsNotExist(err) {
+			continue // nothing to remove here, and no account lookup for it
+		} else if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		if _, err := RemoveOrphanTree(path, digest, live); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
@@ -339,24 +364,32 @@ func IsAside(name string) bool {
 }
 
 // RemoveAside removes the trees under dir that a RemoveOrphanTree moved aside
-// and did not finish removing.
-func RemoveAside(dir string) {
+// and did not finish removing, and returns the first failure (a missing dir
+// has none). What it leaves is tried again on the next pass.
+func RemoveAside(dir string) error {
 	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return
+	if os.IsNotExist(err) {
+		return nil
 	}
+	if err != nil {
+		return err
+	}
+	var firstErr error
 	for _, e := range entries {
 		if IsAside(e.Name()) {
-			_ = os.RemoveAll(filepath.Join(dir, e.Name()))
+			if err := os.RemoveAll(filepath.Join(dir, e.Name())); err != nil && firstErr == nil {
+				firstErr = err
+			}
 		}
 	}
+	return firstErr
 }
 
 // RemoveSetAsideUploads removes the upload trees under attachmentDir that an
 // interrupted removal left set aside (RemoveAside on its uploads directory).
 // A sweep calls it on every pass, whether or not it finds an orphan.
-func RemoveSetAsideUploads(attachmentDir string) {
-	RemoveAside(filepath.Join(attachmentDir, "uploads"))
+func RemoveSetAsideUploads(attachmentDir string) error {
+	return RemoveAside(filepath.Join(attachmentDir, "uploads"))
 }
 
 // SweepOrphanUploads removes the upload trees under attachmentDir that belong
@@ -369,7 +402,9 @@ func RemoveSetAsideUploads(attachmentDir string) {
 // whose address has an account again by then stays. It returns how many it
 // removed.
 func SweepOrphanUploads(attachmentDir string, accounts func() ([]string, error), live func(digest string) (bool, error)) (int, error) {
-	RemoveSetAsideUploads(attachmentDir)
+	if err := RemoveSetAsideUploads(attachmentDir); err != nil {
+		return 0, err
+	}
 	digests, err := UploadDigests(attachmentDir)
 	if err != nil || len(digests) == 0 {
 		return 0, err

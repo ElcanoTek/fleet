@@ -182,13 +182,13 @@ func (s *Server) handleAdminUserDelete(w http.ResponseWriter, r *http.Request, e
 		// trees under the locks a running turn takes.
 		// A new account created under the address since the commit keeps
 		// what is its own: its in-memory approvals and its trees.
-		ServerCleanup: func(email string, live func(digest string) (bool, error)) {
+		ServerCleanup: func(email string, live func(digest string) (bool, error)) error {
 			s.reconcileAllMultiplayerAccess(ctx, affectedConvIDs...)
 			if again, err := live(accountdelete.Digest(email)); err == nil && again {
-				return
+				return nil
 			}
 			s.sessionApprovals.ForgetUser(email)
-			s.purgeParticipantPrivateStashes(email, live)
+			return s.purgeParticipantPrivateStashes(email, live)
 		},
 	}
 	if s.cfg != nil {
@@ -238,9 +238,9 @@ func accountDeleteWarning(p accountdelete.Problem) error {
 	case accountdelete.AttachmentDirUnreadable:
 		return fmt.Errorf("the attachment directory %s could not be read (%s), so no upload or private workspace file was removed there; the server's maintenance pass removes them from the directory it uses", p.Path, p.Err)
 	case accountdelete.UploadsFailed:
-		return fmt.Errorf("removing the account's uploads failed: %s", p.Err)
+		return fmt.Errorf("removing the account's uploads failed: %s; the server's hourly maintenance pass tries again", p.Err)
 	case accountdelete.PrivateWorkspacesFailed:
-		return fmt.Errorf("removing the account's private workspace files failed: %s", p.Err)
+		return fmt.Errorf("removing the account's private workspace files failed: %s; the server's hourly maintenance pass tries again", p.Err)
 	}
 	return errors.New(p.String())
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -565,6 +566,42 @@ func TestPurgeParticipantStashesSparesANewAccount(t *testing.T) {
 	s.purgeParticipantPrivateStashes("back@x.com", func(string) (bool, error) { return false, nil })
 	if _, err := os.Stat(tree); !os.IsNotExist(err) {
 		t.Fatalf("the deleted account's private workspace tree survived (err %v)", err)
+	}
+}
+
+// failingDigestStore is the real store whose account-digest lookup fails, so
+// every file removal after a deletion's commit fails.
+type failingDigestStore struct{ *store.Store }
+
+func (failingDigestStore) AccountDigestLive(context.Context, string) (bool, error) {
+	return false, errors.New("database unreachable")
+}
+
+// A private workspace tree the deletion could not remove is reported (200
+// with a warning, not 204) and is removed by a later maintenance pass, once
+// its digest is no account's.
+func TestAdminDeleteReportsAStashTreeItCouldNotRemove(t *testing.T) {
+	t.Parallel()
+	s := memberFixture(t, "boss@x.com", "u@x.com")
+	setRole(t, s, "boss@x.com", "admin", "")
+	s.cfg.EmailAttachmentDir = t.TempDir()
+	tree := filepath.Join(accountdelete.PrivateWorkspaceRoot(s.cfg.EmailAttachmentDir), "conv-1", "participants", accountdelete.Digest("u@x.com"))
+	if err := os.MkdirAll(tree, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	st := s.concreteStore(t)
+	s.store = failingDigestStore{st}
+	w := do(t, s.Routes(), http.MethodDelete, "/admin/users/u@x.com", nil, "boss@x.com")
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "private workspace files failed") {
+		t.Fatalf("status %d body %s, want 200 with a private workspace warning", w.Code, w.Body.String())
+	}
+	if _, err := os.Stat(tree); err != nil {
+		t.Fatalf("the tree is gone although its removal was reported as failed: %v", err)
+	}
+	s.store = st
+	s.sweepDeletedAccounts(context.Background())
+	if _, err := os.Stat(tree); !os.IsNotExist(err) {
+		t.Fatalf("the maintenance pass left the deleted account's tree (err %v)", err)
 	}
 }
 

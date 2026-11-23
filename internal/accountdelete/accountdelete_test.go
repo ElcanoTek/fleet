@@ -23,8 +23,10 @@ import (
 type fakeStore struct {
 	err     error
 	deleted []string
-	// live is the set of digests an account has now (AccountDigestLive).
-	live map[string]bool
+	// live is the set of digests an account has now (AccountDigestLive);
+	// liveErr makes that lookup fail.
+	live    map[string]bool
+	liveErr error
 }
 
 func (s *fakeStore) DeleteAccount(_ context.Context, email string) (string, error) {
@@ -36,6 +38,9 @@ func (s *fakeStore) DeleteAccount(_ context.Context, email string) (string, erro
 }
 
 func (s *fakeStore) AccountDigestLive(_ context.Context, digest string) (bool, error) {
+	if s.liveErr != nil {
+		return false, s.liveErr
+	}
 	return s.live[digest], nil
 }
 
@@ -109,7 +114,7 @@ func TestDelete(t *testing.T) {
 		keys := &fakeKeys{}
 		cleaned := false
 		_, err := Delete(ctx, &fakeStore{err: refusal}, "gone@x.com", Options{Keys: keys, AttachmentDir: att,
-			ServerCleanup: func(string, func(string) (bool, error)) { cleaned = true }})
+			ServerCleanup: func(string, func(string) (bool, error)) error { cleaned = true; return nil }})
 		if !errors.Is(err, refusal) {
 			t.Fatalf("err = %v, want the store's refusal", err)
 		}
@@ -137,7 +142,7 @@ func TestDelete(t *testing.T) {
 		files := seedFiles(t, att, "gone@x.com")
 		var got string
 		if _, err := Delete(ctx, &fakeStore{}, "gone@x.com", Options{Keys: &fakeKeys{}, AttachmentDir: att,
-			ServerCleanup: func(email string, _ func(string) (bool, error)) { got = email }}); err != nil {
+			ServerCleanup: func(email string, _ func(string) (bool, error)) error { got = email; return nil }}); err != nil {
 			t.Fatal(err)
 		}
 		if got != "gone@x.com" {
@@ -147,6 +152,42 @@ func TestDelete(t *testing.T) {
 			t.Errorf("uploads survived with a server cleanup set (err %v)", err)
 		}
 	})
+}
+
+// A file removal after the commit that fails is reported (with what the
+// maintenance pass does about it), and its trees stay for that pass: the
+// lookup each removal asks first failing, or the server's own cleanup failing.
+func TestDeleteReportsFailedRemovals(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	att := t.TempDir()
+	files := seedFiles(t, att, "gone@x.com")
+	st := &fakeStore{liveErr: errors.New("database unreachable")}
+	res, err := Delete(ctx, st, "gone@x.com", Options{Keys: &fakeKeys{}, AttachmentDir: att})
+	if err != nil {
+		t.Fatal(err)
+	}
+	kinds := map[ProblemKind]bool{}
+	for _, p := range res.Problems {
+		kinds[p.Kind] = true
+		if !strings.Contains(p.String(), "maintenance pass tries again") {
+			t.Errorf("%s does not say the maintenance pass tries again", p.String())
+		}
+	}
+	if len(res.Problems) != 2 || !kinds[UploadsFailed] || !kinds[PrivateWorkspacesFailed] {
+		t.Fatalf("problems = %+v, want an upload and a private workspace failure", res.Problems)
+	}
+	for _, f := range files {
+		if _, err := os.Stat(f); err != nil {
+			t.Errorf("%s was removed although its removal was reported as failed: %v", f, err)
+		}
+	}
+	// The server's own cleanup failing is reported the same way.
+	res, err = Delete(ctx, &fakeStore{}, "gone@x.com", Options{Keys: &fakeKeys{},
+		ServerCleanup: func(string, func(string) (bool, error)) error { return errors.New("read-only file system") }})
+	if err != nil || len(res.Problems) != 1 || res.Problems[0].Kind != PrivateWorkspacesFailed {
+		t.Fatalf("server cleanup failure: %+v, %v", res, err)
+	}
 }
 
 // TestEveryAccountDeletionGoesThroughDelete: outside the store (which defines
