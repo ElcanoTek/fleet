@@ -85,6 +85,7 @@ func (p *Pool) TakePersistent(ctx context.Context, convID string) (*Sandbox, fun
 			continue
 		}
 		if p.sandboxAlive(e.sb) {
+			e.sb.startRun()
 			return e.sb, p.borrow(e), nil
 		}
 		// Dead container: drop this entry (releasing our claim) and loop to
@@ -113,6 +114,7 @@ func (p *Pool) TakePersistent(ctx context.Context, convID string) (*Sandbox, fun
 		e.lastUsed = p.now()
 		p.persistentMu.Unlock()
 		sb.Close()
+		e.sb.startRun()
 		return e.sb, p.borrow(e), nil
 	}
 	e := &persistentEntry{sb: sb, convID: convID, lastUsed: p.now(), inUse: 1}

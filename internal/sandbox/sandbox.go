@@ -264,13 +264,14 @@ type Sandbox struct {
 	// replaceMu serializes backend replacement so parallel tool calls that
 	// find the same poisoned backend start one container, not one each.
 	replaceMu sync.Mutex
-	// replacements counts the replacements this sandbox has attempted,
-	// failed ones included; see maxBackendReplacements.
+	// replacements counts the replacements this sandbox has attempted in the
+	// current run, failed ones included; see maxBackendReplacements and
+	// startRun.
 	replacements int
 }
 
 // maxBackendReplacements bounds how many times one sandbox tries to replace a
-// poisoned backend. Each attempt is a container start that can wait out the
+// poisoned backend within one run (a turn, or a scheduled run). Each attempt is a container start that can wait out the
 // whole start timeout, so a failed attempt counts like a successful one: a
 // run whose commands keep timing out, or whose box cannot start a container
 // at all, stops paying for them. Past the bound the sandbox stays poisoned
@@ -393,6 +394,15 @@ func (s *Sandbox) currentImpl() impl {
 func (s *Sandbox) setReplace(build func(ctx context.Context) (*Sandbox, error)) {
 	s.mu.Lock()
 	s.replace = build
+	s.mu.Unlock()
+}
+
+// startRun opens a fresh replacement budget (maxBackendReplacements). The
+// persistent pool calls it each time it lends a conversation's sandbox to a
+// turn: the bound is per run, and that sandbox outlives many.
+func (s *Sandbox) startRun() {
+	s.mu.Lock()
+	s.replacements = 0
 	s.mu.Unlock()
 }
 

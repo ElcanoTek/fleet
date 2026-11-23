@@ -333,3 +333,40 @@ func TestSandbox_ReplacementRebindsTheFileRoot(t *testing.T) {
 		t.Fatalf("file call checked against dev=%d ino=%d, want the replacement's own identity (9, 9)", moved.gotDev.Load(), moved.gotIno.Load())
 	}
 }
+
+// The replacement bound is per run. A conversation's sandbox is lent to turn
+// after turn, and timeouts spent in earlier turns must not leave a later one
+// unable to replace its first poisoned backend.
+func TestTakePersistent_EachTurnGetsAFreshReplacementBudget(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	p := newPersistentTestPool(&now, time.Hour, 0)
+	defer p.Close()
+
+	cur := &poisonableImpl{}
+	conv := &Sandbox{mode: ModeContainer, impl: cur}
+	conv.setReplace(func(context.Context) (*Sandbox, error) {
+		cur = &poisonableImpl{}
+		return &Sandbox{mode: ModeContainer, impl: cur}, nil
+	})
+	p.persistentMu.Lock()
+	p.persistent["conv-budget"] = &persistentEntry{sb: conv, convID: "conv-budget"}
+	p.persistentMu.Unlock()
+
+	ctx := context.Background()
+	for turn := range 2 {
+		sb, release, err := p.TakePersistent(ctx, "conv-budget")
+		if err != nil {
+			t.Fatalf("turn %d: TakePersistent: %v", turn+1, err)
+		}
+		if sb != conv {
+			t.Fatalf("turn %d: expected the conversation's sandbox to be reused", turn+1)
+		}
+		for i := range maxBackendReplacements {
+			cur.poison.Store(true)
+			if _, err := sb.RunBash(ctx, BashRequest{Command: "true"}); err != nil {
+				t.Fatalf("turn %d, replacement %d: %v", turn+1, i+1, err)
+			}
+		}
+		release()
+	}
+}
