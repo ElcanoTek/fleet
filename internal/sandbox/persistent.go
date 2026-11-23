@@ -136,63 +136,79 @@ func isSafeConversationDirSegment(convID string) bool {
 // never mounts sibling users' or conversations' directories.
 func (p *Pool) newPersistentSandbox(ctx context.Context, convID string) (*Sandbox, func(), error) {
 	if p.cfg.Mode == ModeContainer && p.cfg.Container.WorkspaceHostDir != "" && isSafeConversationDirSegment(convID) {
-		if p.isClosed() {
-			return nil, func() {}, ErrClosed
+		build := func(ctx context.Context) (*Sandbox, error) {
+			return p.buildConversationSandbox(ctx, convID)
 		}
-		if ctx == nil {
-			ctx = context.Background()
-		}
-		root := p.cfg.Container.WorkspaceHostDir
-		convDir := filepath.Join(root, convID)
-		// The directory becomes this container's read-write mount, and podman
-		// follows a symbolic link in a volume source. A whole-root sandbox
-		// (another conversation's per-turn sandbox, an approval, a worktree
-		// run) can rename it and leave a link in its place, so it is created
-		// without following a link (Mkdir never follows one at the name it
-		// creates), opened through descriptors that refuse a link at every
-		// level below the root, and a marker file placed through that
-		// descriptor must be visible inside the started container. That
-		// rules out a mount of any directory nobody could put the marker in:
-		// a whole-root sandbox that read the marker's name could create it in
-		// a directory it can already write, but only in one of those, so a
-		// swap still cannot mount anything it could not reach before. A
-		// marker rather than a device/inode compare, because under a VM
-		// runtime (kata, libkrun) the mount reaches a guest kernel whose
-		// device numbers differ.
-		if err := os.MkdirAll(root, 0o755); err != nil { //nolint:gosec // readable by rootless container user
-			return nil, func() {}, fmt.Errorf("prepare persistent conversation workspace %s: %w", convDir, err)
-		}
-		if err := os.Mkdir(convDir, 0o755); err != nil && !errors.Is(err, fs.ErrExist) { //nolint:gosec // readable by rootless container user
-			return nil, func() {}, fmt.Errorf("prepare persistent conversation workspace %s: %w", convDir, err)
-		}
-		marker, err := placeMountMarker(root, convDir)
-		if err != nil {
-			var linkErr *symlinkLevelError
-			if errors.As(err, &linkErr) {
-				return nil, func() {}, fmt.Errorf("prepare persistent conversation workspace: %w (a conversation directory that is a symbolic link is refused, not followed)", err)
-			}
-			return nil, func() {}, fmt.Errorf("prepare persistent conversation workspace: %w", err)
-		}
-		defer marker.remove()
-		cfg := p.warmContainerConfig()
-		cfg.WorkspaceHostDir = convDir
-		startCtx, cancel := context.WithTimeout(ctx, p.startTimeoutFor(cfg)+5*time.Second)
-		defer cancel()
-		sb, err := p.newBackendSandbox(startCtx, cfg)
+		sb, err := build(ctx)
 		if err != nil {
 			return nil, func() {}, err
 		}
-		if verr := marker.verifyMounted(startCtx, sb); verr != nil {
-			sb.Close()
-			return nil, func() {}, verr
-		}
-		if p.isClosed() {
-			sb.Close()
-			return nil, func() {}, ErrClosed
-		}
+		// A replacement for a poisoned backend (Sandbox.backend) goes through
+		// the same no-link open and mount-marker check as the original.
+		sb.setReplace(build)
 		return sb, sb.Close, nil
 	}
 	return p.Take(ctx)
+}
+
+// buildConversationSandbox starts one container whose writable workspace is
+// convID's own directory, and proves that directory is what it mounted.
+func (p *Pool) buildConversationSandbox(ctx context.Context, convID string) (*Sandbox, error) {
+	if p.isClosed() {
+		return nil, ErrClosed
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	root := p.cfg.Container.WorkspaceHostDir
+	convDir := filepath.Join(root, convID)
+	// The directory becomes this container's read-write mount, and podman
+	// follows a symbolic link in a volume source. A whole-root sandbox
+	// (another conversation's per-turn sandbox, an approval, a worktree
+	// run) can rename it and leave a link in its place, so it is created
+	// without following a link (Mkdir never follows one at the name it
+	// creates), opened through descriptors that refuse a link at every
+	// level below the root, and a marker file placed through that
+	// descriptor must be visible inside the started container. That
+	// rules out a mount of any directory nobody could put the marker in:
+	// a whole-root sandbox that read the marker's name could create it in
+	// a directory it can already write, but only in one of those, so a
+	// swap still cannot mount anything it could not reach before. A
+	// marker rather than a device/inode compare, because under a VM
+	// runtime (kata, libkrun) the mount reaches a guest kernel whose
+	// device numbers differ.
+	if err := os.MkdirAll(root, 0o755); err != nil { //nolint:gosec // readable by rootless container user
+		return nil, fmt.Errorf("prepare persistent conversation workspace %s: %w", convDir, err)
+	}
+	if err := os.Mkdir(convDir, 0o755); err != nil && !errors.Is(err, fs.ErrExist) { //nolint:gosec // readable by rootless container user
+		return nil, fmt.Errorf("prepare persistent conversation workspace %s: %w", convDir, err)
+	}
+	marker, err := placeMountMarker(root, convDir)
+	if err != nil {
+		var linkErr *symlinkLevelError
+		if errors.As(err, &linkErr) {
+			return nil, fmt.Errorf("prepare persistent conversation workspace: %w (a conversation directory that is a symbolic link is refused, not followed)", err)
+		}
+		return nil, fmt.Errorf("prepare persistent conversation workspace: %w", err)
+	}
+	defer marker.remove()
+	cfg := p.warmContainerConfig()
+	cfg.WorkspaceHostDir = convDir
+	startCtx, cancel := context.WithTimeout(ctx, p.startTimeoutFor(cfg)+5*time.Second)
+	defer cancel()
+	sb, err := p.newBackendSandbox(startCtx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	if verr := marker.verifyMounted(startCtx, sb); verr != nil {
+		sb.Close()
+		return nil, verr
+	}
+	if p.isClosed() {
+		sb.Close()
+		return nil, ErrClosed
+	}
+	return sb, nil
 }
 
 // mountMarkerPrefix names every marker, so a marker a killed process left

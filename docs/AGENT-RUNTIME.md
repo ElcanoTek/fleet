@@ -25,7 +25,15 @@ sandbox (a one-shot `podman exec python3`), so they inherit the same runtime,
 seccomp, caps, cgroups, disk/PID limits, and lockdown network posture as bash;
 the helper is confined to the narrow conversation/worktree root with
 descriptor-relative no-follow traversal, and cancellation kills + retires the
-container before returning. With no sandbox they fail closed (no host fallback).
+container before returning. A retired container is never reused, but it no
+longer costs the rest of the run: the next sandbox call of that turn or
+scheduled run starts a fresh container the way the first one was started
+(same image, mounts, network posture, limits and mount checks), bound to the
+same workspace. Files in the workspace survive; the Python kernel's variables
+and anything written outside the workspace do not. One run replaces its
+container at most three times, and when a replacement cannot be started or
+checked the calls fail as they did before. With no sandbox they fail closed
+(no host fallback).
 The agent loop itself runs in the fleet process, but it holds no privileged
 local executor: local data-plane calls are handed to the sandbox under full host
 policy (cost ceilings, repeat detection, critical-tool approval staging, the

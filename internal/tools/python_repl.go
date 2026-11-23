@@ -197,6 +197,12 @@ func runPythonWithSandbox(ctx context.Context, sb *sandbox.Sandbox, params RunPy
 		ResetKernel:  params.ResetKernel,
 	})
 	if runErr != nil {
+		if errors.Is(runErr, sandbox.ErrPoisoned) {
+			// The cell timed out or was cancelled and its sandbox is gone. Say
+			// what that costs and what it does not, so the model saves its work
+			// to files and carries on instead of ending the run.
+			return "", fmt.Errorf("%w. A later call gets a fresh sandbox when one can be started: files in the workspace are kept, Python variables and imports are not. Do the work in smaller steps and save intermediate results to files", runErr)
+		}
 		return "", runErr
 	}
 	elapsed := time.Since(start)

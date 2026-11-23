@@ -304,3 +304,79 @@ func TestContainerPythonCancel_KillsDelayedMarkerWrite(t *testing.T) {
 	// The container is dead; the delayed write must never reach the host.
 	markerAbsent(t, workspace, "py-marker", 4*time.Second)
 }
+
+// TestPoolContainer_TimedOutPythonIsReplacedWithinTheRun is the live half of
+// in-run replacement: a run_python cell that reaches its ceiling kills and
+// retires the container, and the very next calls on the same *Sandbox — the
+// one a turn holds until it ends — run in a fresh container over the same
+// workspace. Before, every later bash, Python and file call of that turn
+// failed with ErrPoisoned.
+func TestPoolContainer_TimedOutPythonIsReplacedWithinTheRun(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("container backend tested on linux only")
+	}
+	if _, err := exec.LookPath("podman"); err != nil {
+		t.Skip("podman not available")
+	}
+	bridge, err := os.ReadFile("../tools/python_bridge.py")
+	if err != nil {
+		t.Skipf("python_bridge.py not readable: %v", err)
+	}
+	workspace := t.TempDir()
+	if err := os.Chmod(workspace, 0o777); err != nil {
+		t.Fatalf("chmod workspace: %v", err)
+	}
+	p := NewPool(PoolConfig{
+		Mode:         ModeContainer,
+		BridgeScript: bridge,
+		Container: ContainerConfig{
+			Image:            testImage(),
+			WorkspaceHostDir: workspace,
+		},
+	})
+	defer p.Close()
+
+	ctx := context.Background()
+	sb, cleanup, err := p.Take(ctx)
+	if err != nil {
+		t.Fatalf("Take: %v", err)
+	}
+	defer cleanup()
+	if err := sb.BindFileOpRoot(ctx, workspace); err != nil {
+		t.Fatalf("BindFileOpRoot: %v", err)
+	}
+	kept := filepath.Join(workspace, "kept.txt")
+	first, err := sb.RunPython(ctx, PythonRequest{
+		Code:    fmt.Sprintf("import pathlib; pathlib.Path(%q).write_text('saved before the timeout'); in_kernel = 1; print('ok')", kept),
+		Timeout: 60 * time.Second,
+	})
+	if err != nil || first.Status != "success" {
+		t.Fatalf("first cell: status=%q err=%v stderr=%q", first.Status, err, first.Stderr)
+	}
+
+	if _, err := sb.RunPython(ctx, PythonRequest{Code: "import time; time.sleep(120)", Timeout: 2 * time.Second}); !errors.Is(err, ErrPoisoned) {
+		t.Fatalf("timed-out cell = %v, want an error wrapping ErrPoisoned", err)
+	}
+
+	read, err := sb.RunFileOp(ctx, FileOpRequest{Op: FileOpRead, Root: workspace, Path: kept})
+	if err != nil {
+		t.Fatalf("file read after the timeout = %v, want it to run in a replacement container", err)
+	}
+	if got := string(read.Data); !strings.Contains(got, "saved before the timeout") {
+		t.Fatalf("workspace file after replacement = %q, want the content written before the timeout", got)
+	}
+	after, err := sb.RunPython(ctx, PythonRequest{
+		Code:    "print('in_kernel' in globals())",
+		Timeout: 60 * time.Second,
+	})
+	if err != nil || after.Status != "success" {
+		t.Fatalf("cell after the timeout: status=%q err=%v stderr=%q", after.Status, err, after.Stderr)
+	}
+	if !strings.Contains(after.Stdout+after.Output, "False") {
+		t.Fatalf("kernel state after replacement: stdout=%q output=%q, want a fresh kernel (in_kernel undefined)", after.Stdout, after.Output)
+	}
+	bash, err := sb.RunBash(ctx, BashRequest{Command: "cat " + shellSingleQuote(kept), Timeout: 10 * time.Second})
+	if err != nil || bash.ExitCode != 0 {
+		t.Fatalf("bash after the timeout: exit=%d err=%v stderr=%q", bash.ExitCode, err, string(bash.Stderr))
+	}
+}
