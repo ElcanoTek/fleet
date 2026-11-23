@@ -401,7 +401,16 @@ func TestCatwalkSharedFetch(t *testing.T) {
 		_, _ = io.WriteString(w, `[{"id":"p","type":"openai","models":[{"id":"m"}]}]`)
 	}))
 	defer srv.Close()
+	// Registered after srv.Close, so it runs first: a failing assertion
+	// releases the held request instead of leaving Close waiting on it.
+	var releaseOnce sync.Once
+	releaseFetch := func() { releaseOnce.Do(func() { close(release) }) }
+	defer releaseFetch()
 	m := newModelCatalogs(srv.Client(), srv.URL)
+	// The fetch is held open on purpose until the end of the test; keep the
+	// shared fetch's own timeout out of the way on a slow runner, where it
+	// would otherwise end the fetch and leave a cached error behind.
+	m.fetchTimeout = time.Minute
 
 	const callers = 8
 	var wg sync.WaitGroup
@@ -433,7 +442,7 @@ func TestCatwalkSharedFetch(t *testing.T) {
 	if _, err := m.loadCatwalk(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled caller: %v", err)
 	}
-	close(release)
+	releaseFetch()
 	wg.Wait()
 	close(errs)
 	for err := range errs {
