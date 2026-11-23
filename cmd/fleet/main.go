@@ -706,6 +706,9 @@ func run() error {
 	chatOpts = append(chatOpts, httpapi.WithTaskModelRollout(schedStorage.RolloutTaskModels))
 	chatOpts = append(chatOpts, httpapi.WithSchedPing(schedStorage.DB().Ping))
 	chatOpts = append(chatOpts, httpapi.WithTaskWorkspaceSweeper(schedStorage.SweepTaskWorkspaces))
+	chatOpts = append(chatOpts, httpapi.WithTempUploadSweeper(func(ctx context.Context, tempDir string, window time.Duration) int {
+		return storage.SweepTempUploadsWith(tempDir, window, schedStorage.TempUploadKeeper(ctx, tempDir, window), nil).Removed
+	}))
 	chatOpts = append(chatOpts, httpapi.WithTaskOutlierProvider(taskOutlierProvider(schedStorage)))
 
 	// Admin-managed LLM providers: after a persisted edit the handler invokes
@@ -1075,6 +1078,12 @@ func run() error {
 	// orphaned in between — retried with backoff for the life of the process
 	// if it fails, so a boot-time error cannot leave it missing.
 	go keepChatScheduleCascade(ctx, schedStorage)
+	// Record the uploads of messages no write of this release recorded —
+	// those written before migration 0211, then on each start those added
+	// since the last one — in the background so the boot never waits on it;
+	// until it has run to the end in this process, the attachment cleanup
+	// keeps every upload.
+	go keepMessageUploadsBackfill(ctx, chatStore.BackfillMessageUploads, messageUploadsBackfillRetry)
 	defer cancel()
 
 	// SLA monitor (#274): a 60s sweep that warns/fails in-flight tasks running
@@ -1202,6 +1211,50 @@ func keepChatScheduleCascade(ctx context.Context, st *storage.Storage) {
 				logging.From(ctx).Info("chat schedules: installed the conversation-delete cascade", "orphans_removed", orphans)
 			}
 		})
+}
+
+// messageUploadsBackfillRetry is how long keepMessageUploadsBackfill waits
+// after a failed attempt before resuming.
+const messageUploadsBackfillRetry = time.Minute
+
+// messageUploadsBackfillErrorAfter is how many failed attempts in a row turn
+// the warning into an error: until the backfill completes no upload is
+// removed, so a backfill that keeps failing is something an operator must see.
+const messageUploadsBackfillErrorAfter = 5
+
+// keepMessageUploadsBackfill runs backfill (store.BackfillMessageUploads)
+// until it completes or ctx ends. Each attempt resumes where the last one
+// stopped, so a failure costs a retry, not a restart from the beginning; a
+// box that is restarted meanwhile resumes on its next boot. A failure logs a
+// warning, and from the messageUploadsBackfillErrorAfter-th in a row an
+// error.
+func keepMessageUploadsBackfill(ctx context.Context, backfill func(context.Context) (int, error), retry time.Duration) {
+	defer safe.RecoverContext(ctx, "cmd.message-uploads-backfill", nil)
+	failures := 0
+	for {
+		n, err := backfill(ctx)
+		if err == nil {
+			if n > 0 {
+				logging.From(ctx).Info("message uploads backfill: recorded the uploads of earlier messages", "references", n)
+			}
+			return
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		failures++
+		level := slog.LevelWarn
+		if failures >= messageUploadsBackfillErrorAfter {
+			level = slog.LevelError
+		}
+		logging.From(ctx).Log(ctx, level, "message uploads backfill: failed; no upload is removed until it completes",
+			"err", err, "recorded", n, "failures_in_a_row", failures, "retry_in", retry)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(retry):
+		}
+	}
 }
 
 // initTracing wires OpenTelemetry tracing (#186) and returns a stop func meant
@@ -2014,6 +2067,15 @@ func pruneStaleWorktrees(ctx context.Context, cfg *config.Config) {
 	}
 }
 
+// uploadReferences is chatStore as the attachment cleanup's reference lookup,
+// or nil — never a typed nil — when there is no chat store.
+func uploadReferences(chatStore *store.Store) store.UploadReferences {
+	if chatStore == nil {
+		return nil
+	}
+	return chatStore
+}
+
 // runMaintenancePass is one iteration of the maintenance loop, factored out so
 // it is directly testable and so each step's failure is visibly independent of
 // the others. Every step is best-effort: one erroring must never skip the rest.
@@ -2032,17 +2094,25 @@ func runMaintenancePass(ctx context.Context, cfg *config.Config, h *handlers.Han
 		// Tell the post-turn gate this pass happened so the two drivers don't
 		// each keep their own idea of "recently swept" and double the work.
 		chatSrv.NoteMaintenanceRun(time.Now())
-	} else if n, err := store.SweepAttachments(cfg.EmailAttachmentDir, ttl); err != nil {
+	} else {
 		// No chat plane to run the full pass: the attachment tree is still
-		// shared with the orchestrator upload path, so sweep it directly.
-		logging.From(ctx).Error("maintenance: attachment sweep failed", "err", err)
-	} else if n > 0 {
-		logging.From(ctx).Info("maintenance: removed expired attachment files", "removed", n)
+		// shared with the orchestrator upload path, so sweep it directly —
+		// with the same keep rule, so an upload a chat still refers to stays
+		// (and without a chat store, every upload stays). A partial failure
+		// still reports what was removed.
+		n, err := store.SweepAttachments(cfg.EmailAttachmentDir, ttl, store.AttachmentKeeper(passCtx, uploadReferences(chatStore), cfg.EmailAttachmentDir))
+		if err != nil {
+			logging.From(ctx).Error("maintenance: attachment sweep failed", "err", err)
+		}
+		if n > 0 {
+			logging.From(ctx).Info("maintenance: removed expired attachment files", "removed", n)
+		}
 	}
 
 	// Orchestrator temp_uploads — the sched plane's own upload staging area,
-	// which the chat plane's sweeps do not cover. Scratch, on its own clock
-	// (FLEET_SCRATCH_RETENTION_DAYS) rather than the conversation window.
+	// which the chat plane's sweeps do not cover. On its own clock
+	// (FLEET_SCRATCH_RETENTION_DAYS) rather than the conversation window, for
+	// files no live task names (storage.TempUploadKeeper).
 	h.CleanupTempFiles(cfg.ScratchRetention())
 
 	// Abandoned per-user remote-MCP OAuth flow rows. Correctness is already

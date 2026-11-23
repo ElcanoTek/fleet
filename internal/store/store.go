@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -66,6 +67,11 @@ type Store struct {
 	// (hard delete — no behavior change for existing deployments). Set via
 	// SetSoftDelete from FLEET_CONVERSATION_SOFT_DELETE.
 	softDelete bool
+	// uploadRefsScanned is set once this process has run
+	// BackfillMessageUploads to the end. Until then the attachment cleanup
+	// keeps every chat upload, even when an earlier start completed the
+	// record: each start first records messages added since the last one.
+	uploadRefsScanned atomic.Bool
 	// tokenCipher encrypts the per-user remote-MCP OAuth secrets at rest (#443).
 	// nil = the remote-MCP-OAuth feature is disabled (no FLEET_MCP_OAUTH_ENCRYPTION_KEY);
 	// the token CRUD then fails closed via secretbox.ErrNoCipher rather than
@@ -2289,45 +2295,32 @@ func (s *Store) appendHistoryTx(ctx context.Context, tx *sql.Tx, convID string, 
 		return nil, err
 	}
 
+	// The ids are drawn first and written explicitly (reserveMessageIDs), so
+	// ids[i] is entries[i]'s message by construction: the FTS rows, the
+	// upload references and the dbIds the turn stream hands the client are
+	// paired with the right message.
+	ids, err := reserveMessageIDs(ctx, tx, len(entries))
+	if err != nil {
+		return nil, err
+	}
 	var b strings.Builder
-	b.WriteString(`INSERT INTO messages (conversation_id, role, type, content, created_at, injected_context) VALUES `)
-	args := make([]any, 0, len(entries)*6)
+	b.WriteString(`INSERT INTO messages (id, conversation_id, role, type, content, created_at, injected_context) VALUES `)
+	const cols = 7
+	args := make([]any, 0, len(entries)*cols)
 	for i, e := range entries {
 		if i > 0 {
 			b.WriteString(", ")
 		}
-		base := i*6 + 1
-		fmt.Fprintf(&b, "($%d, $%d, $%d, $%d, $%d, $%d)", base, base+1, base+2, base+3, base+4, base+5)
+		base := i*cols + 1
+		fmt.Fprintf(&b, "($%d, $%d, $%d, $%d, $%d, $%d, $%d)", base, base+1, base+2, base+3, base+4, base+5, base+6)
 		// InjectedContext is empty for every entry this path writes today
 		// except a deliberate carry-over; the branch copy CLEARS it on
 		// purpose (ADR-0058), so writing the field rather than defaulting the
 		// column keeps that intent visible instead of implicit.
-		args = append(args, convID, e.Role, e.Type, string(e.Content), now, e.InjectedContext)
+		args = append(args, ids[i], convID, e.Role, e.Type, string(e.Content), now, e.InjectedContext)
 	}
-	// RETURNING id (in VALUES order) so we can link the extracted FTS plaintext
-	// rows back to their messages. Postgres preserves multi-row INSERT order.
-	b.WriteString(" RETURNING id")
-	ids := make([]int64, 0, len(entries))
-	rows, err := tx.QueryContext(ctx, b.String(), args...)
-	if err != nil {
+	if _, err := tx.ExecContext(ctx, b.String(), args...); err != nil {
 		return nil, err
-	}
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
-			_ = rows.Close()
-			return nil, err
-		}
-		ids = append(ids, id)
-	}
-	if err := rows.Err(); err != nil {
-		_ = rows.Close()
-		return nil, err
-	}
-	// Close before the next statement on this tx (one active result set at a time).
-	_ = rows.Close()
-	if len(ids) != len(entries) {
-		return nil, fmt.Errorf("AppendHistory: inserted %d messages but got %d ids", len(entries), len(ids))
 	}
 
 	// Full-text search index maintenance (#308): extract searchable plaintext from
@@ -2337,6 +2330,55 @@ func (s *Store) appendHistoryTx(ctx context.Context, tx *sql.Tx, convID string, 
 			return nil, err
 		}
 	}
+	// The uploads these messages refer to, so the attachment cleanup keeps them
+	// while the messages exist (migration 0211).
+	if err := insertMessageUploads(ctx, tx, historyUploadRefs(entries, ids)); err != nil {
+		return nil, err
+	}
+	return ids, nil
+}
+
+// historyUploadRefs is messageUploadRefs for entries inserted as ids.
+func historyUploadRefs(entries []agent.HistoryEntry, ids []int64) []messageUploadRef {
+	return messageUploadRefs(ids, func(i int) (string, []byte) { return entries[i].Type, entries[i].Content })
+}
+
+// reserveMessageIDs draws n ids from the messages id sequence for the caller
+// to insert explicitly: ids[i] is the id of the i-th message it writes. A
+// multi-row INSERT ... RETURNING does not promise its rows in VALUES order, so
+// pairing returned ids with the inputs by position could attach one message's
+// derived rows (search text, upload references) to another. Drawing the ids
+// first makes the pairing part of the statement. They are sorted, so a
+// batch's ids rise in input order, which is the order history is read back
+// in. Callers draw them after lockConversationForAppend, so the #2044
+// ordering still holds.
+func reserveMessageIDs(ctx context.Context, tx *sql.Tx, n int) ([]int64, error) {
+	if n == 0 {
+		return nil, nil
+	}
+	rows, err := tx.QueryContext(ctx,
+		`SELECT nextval(pg_get_serial_sequence('messages', 'id')) FROM generate_series(1, $1)`, n)
+	if err != nil {
+		return nil, fmt.Errorf("reserve message ids: %w", err)
+	}
+	ids := make([]int64, 0, n)
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			_ = rows.Close()
+			return nil, fmt.Errorf("reserve message ids: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, fmt.Errorf("reserve message ids: %w", err)
+	}
+	_ = rows.Close()
+	if len(ids) != n {
+		return nil, fmt.Errorf("reserve message ids: drew %d of %d", len(ids), n)
+	}
+	slices.Sort(ids)
 	return ids, nil
 }
 

@@ -164,19 +164,29 @@ func importMessagesTx(ctx context.Context, tx *sql.Tx, convID string, msgs []Imp
 	if len(msgs) == 0 {
 		return nil
 	}
+	// Ids drawn first and written explicitly, so ids[i] is msgs[i]'s message
+	// by construction and each upload reference lands on the message that
+	// names it (reserveMessageIDs, migration 0211).
+	ids, err := reserveMessageIDs(ctx, tx, len(msgs))
+	if err != nil {
+		return err
+	}
 	var b strings.Builder
-	b.WriteString(`INSERT INTO messages (conversation_id, role, type, content, created_at) VALUES `)
-	args := make([]any, 0, len(msgs)*5)
+	b.WriteString(`INSERT INTO messages (id, conversation_id, role, type, content, created_at) VALUES `)
+	const cols = 6
+	args := make([]any, 0, len(msgs)*cols)
 	for i, m := range msgs {
 		if i > 0 {
 			b.WriteString(", ")
 		}
-		base := i*5 + 1
-		fmt.Fprintf(&b, "($%d, $%d, $%d, $%d, $%d)", base, base+1, base+2, base+3, base+4)
-		args = append(args, convID, m.Role, m.Type, string(m.Content), m.CreatedAt)
+		base := i*cols + 1
+		fmt.Fprintf(&b, "($%d, $%d, $%d, $%d, $%d, $%d)", base, base+1, base+2, base+3, base+4, base+5)
+		args = append(args, ids[i], convID, m.Role, m.Type, string(m.Content), m.CreatedAt)
 	}
-	_, err := tx.ExecContext(ctx, b.String(), args...)
-	return err
+	if _, err := tx.ExecContext(ctx, b.String(), args...); err != nil {
+		return err
+	}
+	return insertMessageUploads(ctx, tx, messageUploadRefs(ids, func(i int) (string, []byte) { return msgs[i].Type, msgs[i].Content }))
 }
 
 // ImportMemory inserts a legacy memory, insert-if-absent by id. learned_at is

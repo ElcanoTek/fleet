@@ -42,9 +42,9 @@ iteration.
 | `SweepExpired` | Temporary conversations past `CONVERSATION_TTL_DAYS` without activity (default 90; no `FLEET_` prefix — it predates the alias chain), plus per-user cap eviction (`CONVERSATION_UNPINNED_CAP`, 500). The policy and the warning people get first: [CHAT-RETENTION.md](CHAT-RETENTION.md) | TTL / cap |
 | `PurgeTerminalInputs` | Terminal input-queue rows | `FLEET_INPUT_QUEUE_RETENTION_DAYS` (30) |
 | `SweepTurnEvents` | Finished turns' durable SSE ledgers | `FLEET_TURN_EVENT_RETENTION_DAYS` (14) |
-| `SweepAttachments` | Attachment files past the conversation TTL | conversation TTL |
-| `SweepOrphanWorkspaces` | `<workspace>/<convID>/` dirs with no live conversation row | liveness, not age |
-| `CleanupTempFiles` | Orchestrator `temp_uploads` staging files | `FLEET_SCRATCH_RETENTION_DAYS` (14) |
+| `SweepAttachments` | Attachment files past the conversation TTL that nothing kept uses: an upload a message of a still-existing conversation names, and the Multiplayer private stash, stay (`store.AttachmentKeeper`, [ATTACHMENT-SCOPING.md](ATTACHMENT-SCOPING.md#how-long-an-upload-lives)) | conversation TTL, then use |
+| `SweepOrphanWorkspaces` | `<workspace>/<convID>/` dirs with no live conversation row; each candidate is looked up again just before removal, so a chat created during the pass keeps its dir | liveness, not age |
+| `CleanupTempFiles` | Orchestrator `temp_uploads` files no kept job names: a job with a pending, scheduled, running, paused or dead-lettered task, a recurring job whose next occurrence is not spawned yet, or a job that finished within the window (`storage.TempUploadKeeper`) | `FLEET_SCRATCH_RETENTION_DAYS` (14 by default), then use |
 | `SweepExpiredOAuthFlows` | Abandoned per-user remote-MCP OAuth flow rows | flow expiry |
 | `worktree.PruneStale` | Orphaned per-run git worktrees | `FLEET_WORKTREE_PRUNE_AGE` (24h) |
 
@@ -260,7 +260,7 @@ rarely reach their cap — it just makes the number visible at boot rather than 
 | `CONVERSATION_TTL_DAYS` | `90` | Days without activity before a temporary chat is deleted. |
 | `CONVERSATION_UNPINNED_CAP` | `500` | Most temporary chats one person keeps; the least recently active go first. |
 | `FLEET_CONVERSATION_EXPIRY_WARNING_DAYS` | `14` | How long before deletion a chat is flagged in the interface. `0` turns the warning off. |
-| `FLEET_SCRATCH_RETENTION_DAYS` | `14` | Age before orchestrator upload staging files (`temp_uploads`) are removed. |
+| `FLEET_SCRATCH_RETENTION_DAYS` | `14` | Age before orchestrator upload files (`temp_uploads`) are removed, once no job that can still run names them and the job naming them finished at least that long ago. |
 | `FLEET_INPUT_QUEUE_RETENTION_DAYS` | `30` | Age before terminal input-queue rows are purged. `0` disables. |
 | `FLEET_TURN_EVENT_RETENTION_DAYS` | `14` | Age before finished turns' SSE ledgers are swept. `0` disables. |
 | `FLEET_PAUSED_TASK_EXPIRY_MINUTES` | `0` (off) | Fail a task awaiting input longer than this. |
