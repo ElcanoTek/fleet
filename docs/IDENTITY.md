@@ -280,9 +280,11 @@ advises on each demoted split admin, unknown role and duplicate username in it.
   a user budget is matched by email, so the limit and the spend already
   counted in its current window apply to a later account under the same
   email until an admin removes the budget; authorship labels on workspace
-  data; Operations Center tasks and datasets (they record the account's id,
-  which a later account does not share); and central Auth's last applied
-  state for its subject. A webhook trigger whose notify address
+  data; Operations Center tasks, their spend records (`task_iterations`) and
+  datasets, and the uploader records of staged task uploads
+  (`temp_uploads/.uploaders`, which age out with the uploads) — they record
+  the account's id, which a later account does not share; and central Auth's
+  last applied state for its subject. A webhook trigger whose notify address
   (`NotifyUser`, in the bundle's trigger configuration) names a deleted
   account keeps creating chats under that address — operator
   configuration, which deletion does not edit — and a later account created

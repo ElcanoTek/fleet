@@ -17,6 +17,7 @@ const resumeUser = "alice@example.com"
 
 func resumeConv(t *testing.T, s *Store) *Conversation {
 	t.Helper()
+	seedAccount(t, s, resumeUser)
 	conv, err := s.CreateConversation(context.Background(), resumeUser, "t", "victoria", "m", false)
 	if err != nil {
 		t.Fatalf("CreateConversation: %v", err)

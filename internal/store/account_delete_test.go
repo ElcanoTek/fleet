@@ -252,6 +252,8 @@ var accountColumns = map[string]accountColumnRule{
 	"sched.datasets.created_by_key_id":                    {kind: "kept", why: "not an account: an API key id"},
 	"sched.datasets.created_by_user_id":                   {kind: "kept", why: "the account's id (core.users.id), which a later account under the same email does not get; the dataset is workspace data"},
 	"sched.task_feedback.created_by":                      {kind: "kept", why: "authorship of feedback on a workspace task: a label that grants nothing"},
+	"sched.task_iterations.created_by":                    {kind: "kept", why: "spend accounting (migration 0210): the account's id (core.users.id), which a later account under the same email does not get; usage and budgets keep counting the spend under it, as turn_metrics outlives the account"},
+	"sched.task_iterations.created_by_key_id":             {kind: "kept", why: "not an account: an API key id"},
 	"sched.task_learned_instructions.activated_by":        {kind: "kept", why: "who activated a task's learned instructions: a label that grants nothing"},
 	"sched.task_triggers.email_policy":                    {kind: "kept", why: "the sender addresses an email trigger accepts: addresses, not accounts"},
 	"sched.tasks.created_by":                              {kind: "kept", why: "the account's id (core.users.id), which a later account under the same email does not get; Operations Center tasks are workspace data"},
