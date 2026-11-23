@@ -1055,10 +1055,16 @@ func (a *approvalStager) stage(toolName, toolCallID, rawInput string, critical b
 			// Tell the UI to mark the old card as resolved. The client
 			// already handles rejected approvals — this just nudges any
 			// open stream to refresh its approval state.
-			a.emitUserScoped("tool.approval_superseded", map[string]any{
+			ev := map[string]any{
 				"tool":  toolName,
 				"count": n,
-			})
+			}
+			// The batch this turn staged stays pending: clients drop only the
+			// tool's cards NOT listed here (Codex P2 on #2231).
+			if len(keep) > 0 {
+				ev["kept_approval_ids"] = keep
+			}
+			a.emitUserScoped("tool.approval_superseded", ev)
 		}
 	}
 

@@ -113,6 +113,37 @@ func TestStagerOffersCriticalStaging(t *testing.T) {
 	}
 }
 
+// The superseded event names the batch it kept, so clients drop only the
+// voided cards and not the ones this turn staged (Codex P2 on #2231).
+func TestStage_SupersededEventNamesTheKeptBatch(t *testing.T) {
+	batchPolicy(t)
+	st := &supersedeBatchStore{superseded: 1}
+	sink := &eventSink{}
+	a := &approvalStager{ctx: context.Background(), store: st, conversationID: "c1", userEmail: "u@e.com", sink: sink}
+	const tool = "mcp_magnite_publisher_mcp_mgpub_update_rtb_rule"
+	for i := 1; i <= 2; i++ {
+		if _, err := a.StageCritical(tool, fmt.Sprintf("call-%d", i), `{}`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var evs []map[string]any
+	for i, n := range sink.names {
+		if n == "tool.approval_superseded" {
+			ev, _ := sink.payloads[i].(map[string]any)
+			evs = append(evs, ev)
+		}
+	}
+	if len(evs) != 2 {
+		t.Fatalf("superseded events = %d, want 2", len(evs))
+	}
+	if _, ok := evs[0]["kept_approval_ids"]; ok {
+		t.Fatalf("first event %v names kept cards; nothing was staged yet", evs[0])
+	}
+	if got, _ := evs[1]["kept_approval_ids"].([]string); !slices.Equal(got, []string{"ap-1"}) {
+		t.Fatalf("second event kept_approval_ids = %v, want [ap-1]", evs[1]["kept_approval_ids"])
+	}
+}
+
 // The stager reports how many older cards a staged call replaced, so the gate
 // can tell the model those will not run.
 func TestStage_ReportsSupersededCount(t *testing.T) {
