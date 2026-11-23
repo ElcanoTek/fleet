@@ -245,6 +245,25 @@ func TestSandbox_ReplacementFailsClosed(t *testing.T) {
 		}
 	})
 
+	t.Run("failed attempts are bounded too", func(t *testing.T) {
+		old := &poisonableImpl{}
+		builds := 0
+		sb := &Sandbox{mode: ModeContainer, impl: old}
+		sb.setReplace(func(context.Context) (*Sandbox, error) {
+			builds++
+			return nil, errors.New("pod unschedulable")
+		})
+		old.poison.Store(true)
+		for range maxBackendReplacements + 4 {
+			if _, err := sb.RunBash(ctx, BashRequest{Command: "true"}); !errors.Is(err, ErrPoisoned) {
+				t.Fatalf("RunBash = %v, want ErrPoisoned", err)
+			}
+		}
+		if builds != maxBackendReplacements {
+			t.Fatalf("a sandbox that cannot be replaced tried %d starts, want %d and then no more", builds, maxBackendReplacements)
+		}
+	})
+
 	t.Run("bounded", func(t *testing.T) {
 		cur := &poisonableImpl{}
 		sb := &Sandbox{mode: ModeContainer, impl: cur}

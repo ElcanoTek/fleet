@@ -264,15 +264,17 @@ type Sandbox struct {
 	// replaceMu serializes backend replacement so parallel tool calls that
 	// find the same poisoned backend start one container, not one each.
 	replaceMu sync.Mutex
-	// replacements counts the backends this sandbox has already replaced; see
-	// maxBackendReplacements.
+	// replacements counts the replacements this sandbox has attempted,
+	// failed ones included; see maxBackendReplacements.
 	replacements int
 }
 
-// maxBackendReplacements bounds how many times one sandbox replaces a poisoned
-// backend. Each replacement is a container start, and a run whose commands
-// keep timing out should stop paying for them: past the bound the sandbox
-// stays poisoned and is retired by its owner, as before.
+// maxBackendReplacements bounds how many times one sandbox tries to replace a
+// poisoned backend. Each attempt is a container start that can wait out the
+// whole start timeout, so a failed attempt counts like a successful one: a
+// run whose commands keep timing out, or whose box cannot start a container
+// at all, stops paying for them. Past the bound the sandbox stays poisoned
+// and is retired by its owner, as before.
 const maxBackendReplacements = 3
 
 // SetPythonCellTimeout sets the per-cell run_python ceiling (#213). The pool
@@ -461,6 +463,9 @@ func (s *Sandbox) backend(ctx context.Context) (impl, error) {
 	if build == nil || replaced >= maxBackendReplacements || ctx.Err() != nil {
 		return nil, ErrPoisoned
 	}
+	s.mu.Lock()
+	s.replacements++
+	s.mu.Unlock()
 
 	// The old container dies before the new one mounts the same workspace, so
 	// nothing the cancelled command left running can write under fresh work.
@@ -496,7 +501,6 @@ func (s *Sandbox) backend(ctx context.Context) (impl, error) {
 		return nil, ErrClosed
 	}
 	s.impl = next
-	s.replacements++
 	if root != "" {
 		s.fileOpRootIdentity = identity
 	}
