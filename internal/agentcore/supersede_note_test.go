@@ -42,3 +42,43 @@ func TestCriticalGateNamesSupersededCards(t *testing.T) {
 		t.Fatalf("msg = %q, want no superseded note", msg)
 	}
 }
+
+// batchStager records which staging entry point the gate used.
+type batchStager struct {
+	sentinelStager
+	critical []string
+	plain    []string
+}
+
+func (s *batchStager) Stage(toolName, _, _ string) (string, error) {
+	s.plain = append(s.plain, toolName)
+	return s.ret, nil
+}
+
+func (s *batchStager) StageCritical(toolName, _, _ string) (string, error) {
+	s.critical = append(s.critical, toolName)
+	return s.ret, nil
+}
+
+// The gate stages every critical call through StageCritical when the stager
+// offers it, including a tool that is critical only because its MCP catalog
+// entry says so (runCriticalTools, not a bundle suffix): the stager then keeps
+// the turn's batch for it too (Codex P1 on #2231).
+func TestCriticalGateStagesThroughStageCritical(t *testing.T) {
+	t.Cleanup(func() { ConfigureAgentPolicy(testFixturePolicy()) })
+	ConfigureAgentPolicy(AgentPolicy{CriticalToolSuffixes: []string{"update_rtb_rule"}})
+
+	sink := &batchStager{sentinelStager: sentinelStager{ret: "appr-1"}}
+	o := newOrchestrationState(NewLogSession())
+	o.setApprovalSink(sink)
+	o.runCriticalTools = map[string]string{"mcp_custom_post_thing": "post_thing"}
+
+	for _, tool := range []string{"mcp_mg_update_rtb_rule", "mcp_custom_post_thing"} {
+		if blocked, msg := o.checkCriticalToolApproval(tool, "call-"+tool, `{}`); !blocked || !strings.Contains(msg, "APPROVAL_REQUIRED") {
+			t.Fatalf("%s: blocked=%v msg=%q, want a staged card", tool, blocked, msg)
+		}
+	}
+	if len(sink.plain) != 0 || len(sink.critical) != 2 {
+		t.Fatalf("StageCritical=%v Stage=%v; want both critical calls through StageCritical", sink.critical, sink.plain)
+	}
+}

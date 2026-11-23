@@ -320,6 +320,15 @@ type SupersedeReporter interface {
 	SupersededCount(toolCallID string) int64
 }
 
+// CriticalStager is implemented by a stager that treats the cards the
+// critical-tool gate stages as a batch: a later call to the same tool in the
+// same turn keeps them pending instead of superseding them. The gate uses it
+// when available, so the stager inherits the gate's own classification
+// (bundle suffixes, catalog-critical tools, autonomous blocks).
+type CriticalStager interface {
+	StageCritical(toolName, toolCallID, rawInput string) (approvalID string, err error)
+}
+
 type ApprovalStager interface {
 	Stage(toolName, toolCallID, rawInput string) (approvalID string, err error)
 	StageSuggestion(reason string) (approvalID, msg string, err error)

@@ -935,6 +935,19 @@ func (a *approvalStager) tryPreResolveAfterMaterialize(toolName, toolCallID, raw
 }
 
 func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, error) {
+	return a.stage(toolName, toolCallID, rawInput, false)
+}
+
+// StageCritical implements agentcore.CriticalStager: the critical-tool gate
+// stages through it, so a card it stages joins this turn's batch for the tool
+// (kept pending when the same tool is staged again this turn). The gate owns
+// the classification (bundle suffixes, catalog-critical tools, autonomous
+// blocks), so the stager never re-derives it.
+func (a *approvalStager) StageCritical(toolName, toolCallID, rawInput string) (string, error) {
+	return a.stage(toolName, toolCallID, rawInput, true)
+}
+
+func (a *approvalStager) stage(toolName, toolCallID, rawInput string, critical bool) (string, error) {
 	// A task prompt the create/edit seam will refuse is refused BEFORE a card
 	// exists (#1601): the model learns the error now, and nobody is asked to
 	// approve a call that is certain to fail after they click Approve.
@@ -1025,11 +1038,11 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 	// clears all pending cards for the tool on live clients), so pending
 	// schedule_task cards are never auto-superseded by subsequent calls.
 	//
-	// A bundle-declared critical tool keeps the cards this same turn staged
-	// for it: one card per deal is a batch, and superseding them rejected
-	// every card but the last while the agent told the user all were waiting
-	// (live 2026-11-23). A card from an earlier turn is still superseded.
-	critical := agentcore.IsCriticalTool(toolName)
+	// A critical tool staged by the critical gate (StageCritical) keeps the
+	// cards this same turn staged for it: one card per deal is a batch, and
+	// superseding them rejected every card but the last while the agent told
+	// the user all were waiting (live 2026-11-23). A card from an earlier turn
+	// is still superseded.
 	if toolName != tools.ScheduleTaskToolName {
 		var keep []string
 		if critical {

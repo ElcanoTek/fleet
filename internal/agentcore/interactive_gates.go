@@ -321,7 +321,11 @@ func (o *orchestrationState) checkCriticalToolApproval(toolName, toolCallID, raw
 				"do NOT look for another tool that does the same thing. Stop here, summarize what is waiting, and let the user approve it first.",
 			toolName, pending.tool, pending.approvalID)
 	}
-	id, err := o.approvalSink.Stage(toolName, toolCallID, rawInput)
+	stage := o.approvalSink.Stage
+	if batch, ok := o.approvalSink.(CriticalStager); ok {
+		stage = batch.StageCritical
+	}
+	id, err := stage(toolName, toolCallID, rawInput)
 	if refused := stageRefusal(err); refused != "" {
 		return true, refused
 	}
