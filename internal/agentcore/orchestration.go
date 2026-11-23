@@ -312,6 +312,14 @@ type pendingCriticalAction struct {
 // driver (P3) wires an implementation that persists to the approvals table and
 // emits an SSE event; in scheduled mode the sink is nil and these gates are
 // inert.
+// SupersedeReporter is implemented by a stager that can say how many older
+// pending cards for the same tool a freshly staged card replaced (rejected as
+// superseded). The critical gate tells the model, so it never reports a card
+// as waiting for the user when it was replaced and will not run.
+type SupersedeReporter interface {
+	SupersededCount(toolCallID string) int64
+}
+
 type ApprovalStager interface {
 	Stage(toolName, toolCallID, rawInput string) (approvalID string, err error)
 	StageSuggestion(reason string) (approvalID, msg string, err error)
