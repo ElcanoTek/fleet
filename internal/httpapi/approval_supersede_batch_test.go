@@ -107,7 +107,10 @@ func TestStage_EarlierTurnAndNonCriticalCardsAreStillSuperseded(t *testing.T) {
 // it, so a catalog-critical tool (Tool.Critical, not in the bundle's suffix
 // list) gets the same batch treatment as a suffix-listed one (Codex P1, #2231).
 func TestStagerOffersCriticalStaging(t *testing.T) {
-	var _ agentcore.CriticalStager = &approvalStager{}
+	var stager any = &approvalStager{}
+	if _, ok := stager.(agentcore.CriticalStager); !ok {
+		t.Fatal("approvalStager must implement agentcore.CriticalStager, or the critical gate stages through plain Stage and batches are superseded")
+	}
 }
 
 // The stager reports how many older cards a staged call replaced, so the gate
