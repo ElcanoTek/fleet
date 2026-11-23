@@ -380,3 +380,41 @@ func TestPoolContainer_TimedOutPythonIsReplacedWithinTheRun(t *testing.T) {
 		t.Fatalf("bash after the timeout: exit=%d err=%v stderr=%q", bash.ExitCode, err, string(bash.Stderr))
 	}
 }
+
+// TestContainerPython_DeadKernelFailsTheCellAtOnce covers the case that
+// started most of these retirements in production: the sandbox's memory limit
+// OOM-kills the IPython kernel, which then never answers. The bridge used to
+// wait for it until the cell's deadline (fifteen minutes by default), the Go
+// side read that as a timeout and retired the whole container. A killed kernel
+// now fails its cell within the poll interval, with a message that says so,
+// and the container stays: the next cell gets a fresh kernel in it.
+func TestContainerPython_DeadKernelFailsTheCellAtOnce(t *testing.T) {
+	sb, _ := newPythonCancelTestContainer(t)
+	ctx := context.Background()
+
+	start := time.Now()
+	res, err := sb.RunPython(ctx, PythonRequest{
+		Code:    "import os, signal\nos.kill(os.getpid(), signal.SIGKILL)",
+		Timeout: 120 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("cell that kills its kernel = %v, want a failed cell and no sandbox error", err)
+	}
+	if elapsed := time.Since(start); elapsed > 30*time.Second {
+		t.Fatalf("a dead kernel took %v to report, want well under the 120s cell timeout", elapsed)
+	}
+	if res.Status != "error" || !strings.Contains(res.Error, "killed") {
+		t.Fatalf("status=%q error=%q, want an error saying the kernel was killed", res.Status, res.Error)
+	}
+	if sb.Poisoned() {
+		t.Fatal("a dead kernel must not retire the container")
+	}
+
+	after, err := sb.RunPython(ctx, PythonRequest{Code: "print(6 * 7)", Timeout: 60 * time.Second})
+	if err != nil || after.Status != "success" {
+		t.Fatalf("cell after the dead kernel: status=%q err=%v error=%q", after.Status, err, after.Error)
+	}
+	if !strings.Contains(after.Stdout+after.Output, "42") {
+		t.Fatalf("fresh kernel output: stdout=%q output=%q, want 42", after.Stdout, after.Output)
+	}
+}

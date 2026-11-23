@@ -624,6 +624,49 @@ def remaining_time(deadline):
     return max(0.01, deadline - time.time())
 
 
+def kernel_exit_code():
+    """Returns the kernel process's exit code, or None while it is running."""
+    if kernel_process is None:
+        return None
+    return kernel_process.poll()
+
+
+def kernel_died_error(code, stdout, stderr):
+    """The result for a cell whose kernel process went away under it.
+
+    A kernel that the kernel-side OOM killer took (the sandbox's memory limit)
+    never answers on its channels, so without this the wait below ran to its
+    deadline: fifteen minutes by default, reported as a timeout, after which
+    the Go side retired the whole sandbox. The cell fails at once instead, the
+    container stays, and the message says what happened and what to change.
+    """
+    if code == -signal.SIGKILL:
+        reason = (
+            "was killed (SIGKILL), which almost always means the sandbox "
+            "ran out of memory"
+        )
+    elif code < 0:
+        reason = f"was killed by signal {-code}"
+    else:
+        reason = f"exited with code {code}"
+    return {
+        "status": "error",
+        "stdout": stdout,
+        "stderr": stderr,
+        "result": None,
+        "error": (
+            f"The Python kernel {reason} while running this cell. Its variables "
+            "and imports are gone; files in the workspace are kept, and the "
+            "next run_python call starts a fresh kernel. If memory was the "
+            "cause, load less at a time: read only the columns and rows you "
+            "need, process files one by one, del large objects you are done "
+            "with, and save intermediate results to files."
+        ),
+        "bridge_truncation": {},
+        "kernel_died": True,
+    }
+
+
 # IPython colours every traceback it emits, and the kernel hands those ANSI
 # sequences straight through content["traceback"]. Nobody downstream is a
 # terminal: the escapes reach a model as noise it pays for by the token, and a
@@ -704,6 +747,13 @@ def run_code_on_kernel(code, client, timeout_seconds=None):
 
         if shell_reply_seen and idle_seen:
             break
+
+        # A dead kernel sends nothing more; stop waiting for it.
+        exit_code = kernel_exit_code()
+        if exit_code is not None:
+            return kernel_died_error(
+                exit_code, stdout_content.render(), stderr_content.render()
+            )
 
     if not shell_reply_seen:
         return execution_timeout_error("python shell reply", timeout)
@@ -866,6 +916,15 @@ def execute_code(
     try:
         # Execute the main code
         res = run_code_on_kernel(code, client, timeout_seconds=timeout_seconds)
+
+        if res.get("kernel_died"):
+            # Drop the dead kernel's client and connection file so the next
+            # request lazy-starts a fresh one (and re-applies the cwd).
+            with contextlib.suppress(Exception):
+                client.stop_channels()
+            cleanup()
+            client = None
+            _kernel_cwd = None
 
         vars_data = {}
         if res["status"] == "success" and return_vars:

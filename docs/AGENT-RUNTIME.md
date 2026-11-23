@@ -32,7 +32,10 @@ scheduled run starts a fresh container the way the first one was started
 same workspace. Files in the workspace survive; the Python kernel's variables
 and anything written outside the workspace do not. One run replaces its
 container at most three times, and when a replacement cannot be started or
-checked the calls fail as they did before. With no sandbox they fail closed
+checked the calls fail as they did before. A `run_python` kernel that dies
+under its cell (most often the memory limit's OOM kill) is not a retirement at
+all: the cell fails at once with a message saying so, the container stays,
+and the next cell starts a fresh kernel. With no sandbox they fail closed
 (no host fallback).
 The agent loop itself runs in the fleet process, but it holds no privileged
 local executor: local data-plane calls are handed to the sandbox under full host
