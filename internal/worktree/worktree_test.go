@@ -724,6 +724,14 @@ func TestCheckRefusesALayoutTheHostWouldFollow(t *testing.T) {
 				t.Fatal(err)
 			}
 		},
+		"symlinked lfs": func(t *testing.T, gitDir string) {
+			if err := os.RemoveAll(filepath.Join(gitDir, "lfs")); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(t.TempDir(), filepath.Join(gitDir, "lfs")); err != nil {
+				t.Fatal(err)
+			}
+		},
 		"symlinked info": func(t *testing.T, gitDir string) {
 			if err := os.RemoveAll(filepath.Join(gitDir, "info")); err != nil {
 				t.Fatal(err)
@@ -767,13 +775,13 @@ func TestCheckRefusesALayoutTheHostWouldFollow(t *testing.T) {
 }
 
 // TestPrepareRepoAtStartup creates the directories a repository may lack
-// (worktrees/, logs/refs/heads/, objects/info/, info/) and reports one that
-// exists as a symlink instead of following it.
+// (worktrees/, logs/refs/heads/, objects/info/, info/, lfs/) and reports one
+// that exists as a symlink instead of following it.
 func TestPrepareRepoAtStartup(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	gitRepo(t, root)
-	for _, rel := range []string{"worktrees", "logs", filepath.Join("objects", "info"), "info"} {
+	for _, rel := range []string{"worktrees", "logs", filepath.Join("objects", "info"), "info", "lfs"} {
 		if err := os.RemoveAll(filepath.Join(root, ".git", rel)); err != nil {
 			t.Fatal(err)
 		}
@@ -781,7 +789,7 @@ func TestPrepareRepoAtStartup(t *testing.T) {
 	if err := PrepareRepoAtStartup(ctx, root); err != nil {
 		t.Fatalf("PrepareRepoAtStartup: %v", err)
 	}
-	for _, rel := range []string{"worktrees", filepath.Join("logs", "refs", "heads"), filepath.Join("objects", "info"), "info"} {
+	for _, rel := range []string{"worktrees", filepath.Join("logs", "refs", "heads"), filepath.Join("objects", "info"), "info", "lfs"} {
 		if fi, err := os.Lstat(filepath.Join(root, ".git", rel)); err != nil || !fi.IsDir() {
 			t.Errorf("%s not created as a directory: %v", rel, err)
 		}

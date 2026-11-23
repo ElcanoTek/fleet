@@ -35,7 +35,8 @@ workspace root is a git repository at boot — the root repository's
 mounts. A worktree run takes `sandbox.Pool.TakeWorktree` (always a cold
 start), which adds, writable and nested in them, only what its git writes:
 its checkout, its `.git/worktrees/<id>` record, and `.git/objects`,
-`.git/refs` and `.git/logs` (with `objects/info` read-only again).
+`.git/refs`, `.git/logs` and `.git/lfs` (with `objects/info` read-only
+again).
 
 Not mounted: the root itself, every other `tasks/<lineage>/`, every chat
 conversation directory, `mcp-shared/`, and every other occurrence's

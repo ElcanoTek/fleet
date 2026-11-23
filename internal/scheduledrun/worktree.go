@@ -308,8 +308,8 @@ func checkoutResult(exit int, output, branch, base string) error {
 
 // withWorktreeNotice prefixes a worktree run's task prompt with what its git
 // can and cannot do. The sandbox mounts the repository's .git read-only
-// except the run's own checkout and record, the object store, refs and
-// reflogs (sandbox.WorktreeMount), so git prints a packed-refs.lock error
+// except the run's own checkout and record, the object store, refs, reflogs
+// and Git LFS store (sandbox.WorktreeMount), so git prints a packed-refs.lock error
 // after most ref updates while the command itself succeeds, and anything
 // that rewrites packed-refs, the config (an upstream, a submodule) or
 // another worktree fails. Appended

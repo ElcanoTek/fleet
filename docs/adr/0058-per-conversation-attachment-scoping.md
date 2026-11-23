@@ -11,8 +11,8 @@
 - **Amended by:** [ADR-0118](0118-host-git-and-workspace-git-dirs.md) — the
   whole-root workspace mount keeps the root repository's `.git` and
   `.fleet-worktrees/`, and `mcp-shared/`, read-only (a worktree run's
-  sandbox gets only its own checkout and record and the object store, refs
-  and reflogs writable), and the host runs no git in the workspace
+  sandbox gets only its own checkout and record and the object store, refs,
+  reflogs and LFS store writable), and the host runs no git in the workspace
   repository.
 - **Relates to:** [ADR-0049](0049-kubernetes-backend-split-control-plane.md)
   (which already staged attachments into the workspace claim on that backend —

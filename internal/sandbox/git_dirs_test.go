@@ -4,7 +4,7 @@ package sandbox
 // per-run worktree directory .fleet-worktrees): every whole-root sandbox gets
 // both as their own read-only bind mounts, and a worktree run's sandbox gets,
 // writable and nested in them, only what its git writes (its checkout and
-// record, objects/, refs/, logs/), with objects/info read-only again. The plan
+// record, objects/, refs/, logs/, lfs/), with objects/info read-only again. The plan
 // and argument tests need no container runtime. The real thing runs in
 // scheduledrun's TestWorktreeRunsLiveContainer, where fleet's own code writes
 // the worktree records and does the checkout (this package cannot import
@@ -27,7 +27,7 @@ type gitFixture struct {
 }
 
 // gitDirsFixture lays out a whole-root workspace the way a worktree run sees
-// it: .git (objects/info, refs, logs, worktrees/<id>), .fleet-worktrees/<run>
+// it: .git (objects/info, refs, logs, lfs, worktrees/<id>), .fleet-worktrees/<run>
 // and a conversation directory.
 func gitDirsFixture(t *testing.T) gitFixture {
 	t.Helper()
@@ -42,7 +42,7 @@ func gitDirsFixture(t *testing.T) gitFixture {
 	f.admin = filepath.Join(f.gitDir, "worktrees", "task-run")
 	for _, d := range []string{
 		filepath.Join(f.gitDir, "hooks"), filepath.Join(f.gitDir, "objects", "info"),
-		filepath.Join(f.gitDir, "refs"), filepath.Join(f.gitDir, "logs"), f.admin, f.wt, f.conv,
+		filepath.Join(f.gitDir, "refs"), filepath.Join(f.gitDir, "logs"), filepath.Join(f.gitDir, "lfs"), f.admin, f.wt, f.conv,
 	} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			t.Fatal(err)
@@ -82,7 +82,7 @@ func TestWholeRootGitDirsPlan(t *testing.T) {
 	run.Worktree = &WorktreeMount{Path: f.wt, AdminDir: f.admin}
 	mounts := run.gitDirMounts()
 	gotRO, gotRW = mountPaths(mounts)
-	wantRW := []string{filepath.Join(f.gitDir, "objects"), filepath.Join(f.gitDir, "refs"), filepath.Join(f.gitDir, "logs"), f.admin, f.wt}
+	wantRW := []string{filepath.Join(f.gitDir, "objects"), filepath.Join(f.gitDir, "refs"), filepath.Join(f.gitDir, "logs"), filepath.Join(f.gitDir, "lfs"), f.admin, f.wt}
 	wantRO := []string{f.gitDir, f.wtDir, filepath.Join(f.gitDir, "objects", "info")}
 	slices.Sort(gotRW)
 	slices.Sort(wantRW)
@@ -118,9 +118,10 @@ func TestWholeRootGitDirsPlan(t *testing.T) {
 	if err := checkWorktreeMount(ContainerConfig{WorkspaceHostDir: f.root}, *run.Worktree); err == nil {
 		t.Error("checkWorktreeMount accepted a pool with no recorded repository")
 	}
-	// No objects/info means no read-only mount over it, and no logs means the
-	// run's branch cannot be created inside the read-only .git: refused.
-	for _, dir := range []string{filepath.Join(f.gitDir, "objects", "info"), filepath.Join(f.gitDir, "logs")} {
+	// No objects/info means no read-only mount over it, no logs means the
+	// run's branch cannot be created inside the read-only .git, and no lfs
+	// means git-lfs cannot store what it downloads: refused.
+	for _, dir := range []string{filepath.Join(f.gitDir, "objects", "info"), filepath.Join(f.gitDir, "logs"), filepath.Join(f.gitDir, "lfs")} {
 		if err := os.Rename(dir, dir+".away"); err != nil {
 			t.Fatal(err)
 		}
@@ -194,7 +195,7 @@ func TestWholeRootGitDirsRunArgs(t *testing.T) {
 				}
 				want[m.path] = mode
 			}
-			if tc.wt == nil && len(want) != 2 || tc.wt != nil && len(want) != 8 {
+			if tc.wt == nil && len(want) != 2 || tc.wt != nil && len(want) != 9 {
 				t.Fatalf("planned mounts = %v", want)
 			}
 

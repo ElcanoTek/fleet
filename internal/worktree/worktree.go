@@ -186,9 +186,10 @@ var ErrNotPinnedRepo = errors.New("the workspace repository cannot be used for w
 // Check reports whether root's .git is still the real directory pinned at
 // startup and lays out no pointer out of itself: no commondir file (which
 // would make git use another directory as the repository); real refs/,
-// worktrees/, logs/, info/, objects/ and objects/info/ directories, reached
-// without following a link (CreateWorktree writes the new worktree's record
-// into worktrees/); no objects/info/alternates (which would make git read objects
+// worktrees/, logs/, info/, lfs/, objects/ and objects/info/ directories,
+// reached without following a link (CreateWorktree writes the new worktree's
+// record into worktrees/; a worktree run's sandbox mounts objects/, refs/,
+// logs/ and lfs/ writable); no objects/info/alternates (which would make git read objects
 // from another repository); regular HEAD, config and packed-refs files; and
 // no reftable ref storage (whose tables worktree runs could not write; see
 // ADR-0118). Anything Check cannot establish is a refusal, never read as
@@ -199,8 +200,8 @@ func (p RepoPin) Check(ctx context.Context, root string) error {
 
 // CheckBeforeStart is Check for a process that is not the server, such as
 // `fleet doctor`: a directory PrepareRepoAtStartup creates (worktrees/,
-// logs/, info/, objects/info/) may still be missing, because the server
-// creates it when it starts.
+// logs/, info/, lfs/, objects/info/) may still be missing, because the
+// server creates it when it starts.
 func (p RepoPin) CheckBeforeStart(ctx context.Context, root string) error {
 	return p.check(ctx, root, true)
 }
@@ -238,7 +239,7 @@ func (p RepoPin) check(ctx context.Context, root string, startupDirsMayBeMissing
 	createdAtStart := func(rel string, err error) bool {
 		return startupDirsMayBeMissing && errors.Is(err, fs.ErrNotExist) && slices.Contains(startupDirs, rel)
 	}
-	for _, name := range []string{"refs", "worktrees", "logs", "info"} {
+	for _, name := range []string{"refs", "worktrees", "logs", "info", "lfs"} {
 		d, err := tools.OpenSubdirNoFollow(gitDir.Root, name)
 		if createdAtStart(name, err) {
 			continue
@@ -292,7 +293,9 @@ func mustBeAbsent(dir *os.Root, name, dirPath string) error {
 }
 
 // startupDirs are the directories inside .git that the worktree code acts
-// on, or that a worktree run's sandbox mounts, and
+// on, or that a worktree run's sandbox mounts (lfs/, the Git LFS store,
+// is mounted writable for worktree runs; the host never reads or acts on
+// anything under it), and
 // that therefore must be real directories from the first sandbox on: they
 // are created at startup when missing (git init does not always create all
 // of them — logs/ comes with the first ref update, worktrees/ with the first
@@ -304,6 +307,7 @@ var startupDirs = []string{
 	filepath.Join("logs", "refs"),
 	filepath.Join("logs", "refs", "heads"),
 	"info",
+	"lfs",
 }
 
 // PrepareRepoAtStartup creates the startupDirs that are missing under

@@ -40,8 +40,9 @@ func liveSandboxImage() string {
 //     pass reports the existing branch and leaves the commit in place.
 //   - In the run's sandbox the config, hooks, info/, commondir, alternates,
 //     packed-refs, HEAD, another run's record and another run's checkout stay
-//     read-only; in a chat sandbox nothing under .git or .fleet-worktrees can
-//     be written and neither directory can be renamed.
+//     read-only, and the Git LFS store (.git/lfs) is writable; in a chat
+//     sandbox nothing under .git or .fleet-worktrees can be written and
+//     neither directory can be renamed.
 //   - The sandbox image's git is new enough for the checkout (minSandboxGit).
 func TestWorktreeRunsLiveContainer(t *testing.T) {
 	image := liveSandboxOrSkip(t)
@@ -175,6 +176,7 @@ func TestWorktreeRunsLiveContainer(t *testing.T) {
 			"touch " + q(filepath.Join(run.path, "f.txt")),
 			"echo x > " + q(filepath.Join(gitDir, "refs", "heads", "planted")),
 			"touch " + q(filepath.Join(gitDir, "objects", "planted")),
+			"touch " + q(filepath.Join(gitDir, "lfs", "planted")),
 		}, readOnlyEverywhere...))
 		if code, out := bash(sb, "git -C "+q(root)+" log --oneline -1 && touch "+q(filepath.Join(conv, "ok"))); code != 0 {
 			t.Errorf("read of the repository / write to a conversation dir failed: %d %q", code, out)
@@ -195,6 +197,13 @@ func TestWorktreeRunsLiveContainer(t *testing.T) {
 		}
 		if err := checkout(sb, run); err == nil || !strings.Contains(err.Error(), "already exists") {
 			t.Errorf("a second checkout pass: err = %v, want the existing branch reported", err)
+		}
+		// The Git LFS store is writable, as git-lfs needs it to store the
+		// objects it downloads (the default image has no git-lfs; the write is
+		// what git-lfs would do).
+		lfsObject := filepath.Join(gitDir, "lfs", "objects", "ab", "cd", "abcd-test")
+		if code, out := bash(sb, "mkdir -p "+q(filepath.Dir(lfsObject))+" && echo lfs > "+q(lfsObject)); code != 0 {
+			t.Errorf("writing under .git/lfs in the worktree run: exit %d, output %q", code, out)
 		}
 		refused(t, sb, readOnlyEverywhere)
 		_, version := bash(sb, "git version")

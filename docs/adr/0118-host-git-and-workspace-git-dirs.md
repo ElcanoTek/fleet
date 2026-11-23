@@ -161,17 +161,17 @@ itself leaves alone. What such a command does there stays inside
 `.git/worktrees` and `.fleet-worktrees`, through no-follow handles, under
 the same checks. Before acting, host code checks that it still is that directory and
 points nowhere else (`RepoPin.Check`): no `commondir`; real `refs/`,
-`worktrees/`, `logs/`, `info/`, `objects/` and `objects/info/` directories
-reached without following a link; no `objects/info/alternates`; regular
+`worktrees/`, `logs/`, `info/`, `lfs/`, `objects/` and `objects/info/`
+directories reached without following a link; no `objects/info/alternates`; regular
 `HEAD`, `config` and `packed-refs` files; no reftable ref storage. Anything
 it cannot establish is a refusal. A root not recorded, one that had no `.git`
 at startup, whose `.git` was replaced since, whose `.git` is a gitfile or a
 symlink, or that uses reftable, gets no worktree tasks (a clear error) and no
 record pruning (reported once per process). The directories `Check` requires
 that git does not always create (`worktrees/`, `logs/refs/heads/`,
-`objects/info/`, `info/`) are created at boot, in mock mode too, so the
-mounts in decision 5 exist; `TakeWorktree` refuses a run without `objects`,
-`objects/info`, `refs` or `logs`. Sandboxes a crashed prior process left
+`objects/info/`, `info/`, `lfs/`) are created at boot, in mock mode too, so
+the mounts in decision 5 exist; `TakeWorktree` refuses a run without
+`objects`, `objects/info`, `refs`, `logs` or `lfs`. Sandboxes a crashed prior process left
 running keep that process's mounts (a writable `.git` on the first start
 after an upgrade), so on the podman backend they are reclaimed before the
 repository is recorded and prepared. `fleet doctor` and the server's boot
@@ -193,9 +193,10 @@ scheduled runs — mounts both read-only, as mount points none can rename or
 replace. A worktree run takes `Pool.TakeWorktree` (always a cold start),
 which adds, writable and nested in them, exactly what its git writes: its
 checkout (`.fleet-worktrees/<run>`), its record (`.git/worktrees/<id>`:
-index, HEAD, its reflog), and the object store, refs and reflogs
-(`.git/objects`, `.git/refs`, `.git/logs`), with `.git/objects/info` read-only
-again inside the object store. Config, hooks, `info/`, `HEAD`, `packed-refs`,
+index, HEAD, its reflog), and the object store, refs, reflogs and Git LFS
+store (`.git/objects`, `.git/refs`, `.git/logs`, `.git/lfs`), with
+`.git/objects/info` read-only again inside the object store. The host
+creates `.git/lfs` at boot and never reads or acts on anything under it. Config, hooks, `info/`, `HEAD`, `packed-refs`,
 `commondir`, other worktrees' records and checkouts stay read-only. Podman
 adds a `--volume` per mount, parents first; kubernetes a `subPath` mount of
 the claim for each that exists, so the kubelet never creates one.
@@ -246,7 +247,10 @@ the regular-file check of decision 3.
   created it; a run that fails before that leaves no branch.
 - Repository hooks do not run during fleet's checkout of a run's worktree
   (they do for the run's own git commands). A git-lfs repository's worktree
-  holds LFS pointer files until the run fetches the objects itself.
+  holds LFS pointer files until the run fetches the objects itself
+  (`git lfs pull`), which works when git-lfs is in the sandbox image:
+  `.git/lfs` is writable in worktree runs (and read-only in every other
+  whole-root sandbox). The default image does not include git-lfs.
 - Submodules cannot be initialised in a worktree run: `git submodule update
   --init` writes `.git/config` and `.git/modules`, which are read-only there.
 - A branch a run creates from a remote-tracking ref needs `--no-track`, and

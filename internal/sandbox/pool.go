@@ -617,7 +617,8 @@ type WorktreeTake struct {
 // It mounts exactly what every whole-root sandbox mounts — the root
 // repository's .git and .fleet-worktrees read-only among it — plus, writable,
 // the parts the run's in-sandbox git writes: its own checkout and record and
-// the repository's object store, refs and reflogs (ContainerConfig.Worktree).
+// the repository's object store, refs, reflogs and Git LFS store
+// (ContainerConfig.Worktree).
 // Each is its own bind mount, so the run can change what is inside them but
 // not swap the directories themselves. The warm inventory has none of the
 // writable parts, which is why this always cold-starts.
@@ -679,13 +680,14 @@ func checkWorktreeMount(cfg ContainerConfig, wt WorktreeMount) error {
 		return fmt.Errorf("worktree sandbox: record %q is not directly under %q (fail-closed)", wt.AdminDir, filepath.Join(gitDir, "worktrees"))
 	}
 	// objects/info carries its own read-only mount inside the writable object
-	// store (without it the run could create alternates there); objects, refs
-	// and logs are the writable mounts its git needs (without logs, creating
-	// the run's branch fails inside the read-only .git).
+	// store (without it the run could create alternates there); objects,
+	// refs, logs and lfs are the writable mounts its git needs (without logs,
+	// creating the run's branch fails inside the read-only .git; without lfs,
+	// git-lfs cannot store the objects it downloads).
 	for _, dir := range []string{
 		wt.Path, wt.AdminDir,
 		filepath.Join(gitDir, "objects"), filepath.Join(gitDir, "objects", "info"),
-		filepath.Join(gitDir, "refs"), filepath.Join(gitDir, "logs"),
+		filepath.Join(gitDir, "refs"), filepath.Join(gitDir, "logs"), filepath.Join(gitDir, "lfs"),
 	} {
 		if _, err := pinNoSymlinks(cfg.WorkspaceHostDir, dir); err != nil {
 			return fmt.Errorf("worktree sandbox: %q is not a real directory beneath the root (fail-closed): %w", dir, err)

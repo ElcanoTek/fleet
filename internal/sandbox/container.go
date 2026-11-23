@@ -258,9 +258,10 @@ type ContainerConfig struct {
 	// their own writable bind mounts, exactly what its in-sandbox git writes:
 	// its checkout (Worktree.Path, under .fleet-worktrees), its record
 	// (Worktree.AdminDir, under .git/worktrees — index, HEAD, its reflog), and
-	// the repository's object store, refs and reflogs (.git/objects,
-	// .git/refs, .git/logs). .git/objects/info (where alternates live) is
-	// read-only again inside the object store. Everything else in .git —
+	// the repository's object store, refs, reflogs and Git LFS store
+	// (.git/objects, .git/refs, .git/logs, .git/lfs: git-lfs in the image
+	// downloads objects into .git/lfs). .git/objects/info (where alternates
+	// live) is read-only again inside the object store. Everything else in .git —
 	// config, hooks, info/, HEAD, packed-refs, commondir, the other worktrees'
 	// records — stays read-only (gitDirMounts).
 	Worktree *WorktreeMount
@@ -421,7 +422,7 @@ func (cfg ContainerConfig) gitDirMounts() []gitDirMount {
 		}
 	}
 	if wt := cfg.Worktree; wt != nil && gitDir != "" && worktreesDir != "" {
-		for _, sub := range []string{"objects", "refs", "logs"} {
+		for _, sub := range []string{"objects", "refs", "logs", "lfs"} {
 			planned = append(planned, gitDirMount{path: filepath.Join(gitDir, sub)})
 		}
 		if isDirectChild(filepath.Join(gitDir, "worktrees"), wt.AdminDir) {
