@@ -43,7 +43,13 @@ which creates nothing, reads no transcripts at all. A fleet-wide log reader is
 an explicit grant, not a key type: mint it with the `view_all_logs` permission
 (`POST /keys` with `{"permissions": ["view_tasks", "view_logs",
 "view_all_logs"]}`), or use an admin key. See
-[ADR-0043](adr/0043-per-task-run-log-scoping.md).
+[ADR-0043](adr/0043-per-task-run-log-scoping.md). `view_all_logs` grants
+reading: such a key cannot edit, re-run, clone, wake or answer a task it did
+not create, even when it also holds `create_task`, and it does not read
+workspace files. The one exception is cancelling: a key that also holds
+`cancel_task` can cancel any task it can read, but only the task's creator or
+an admin can permanently delete it
+([TASK-OWNERSHIP.md](TASK-OWNERSHIP.md#5-reading-is-not-acting)).
 
 ## 2. Kick off a job
 
@@ -70,6 +76,7 @@ Useful create-time fields (see `TaskCreate` in openapi.yaml for all of them):
 | `output_schema` | bounded JSON Schema → success requires atomically committed, schema-valid machine output |
 | `sandbox_limits` | per-task memory/cpu/pids override, bounded by operator ceilings |
 | `allow_network` | unseal the sandbox's egress for this task (default sealed) |
+| `files` | uploads (`POST /upload`) the run gets as inputs; a non-admin key names only uploads it staged itself or that are on a task it created |
 | `carry_context` | recurring runs start with the prior run's final answer |
 | `expected_duration_minutes` | SLA warn/fail tracking |
 | `allow_task_creation` | let the run enqueue follow-up tasks (agents scheduling agents) |
@@ -88,9 +95,9 @@ replace edits an existing task, as `PUT /tasks/{id}` does). A batch of N tasks
 counts as N requests. An import counts at least one request: one per record
 it creates or replaces, and records `conflict=skip` leaves alone add nothing.
 An import dry run (`?dry_run=true`) writes nothing and counts as one request;
-it checks each record's structure, duplicate and existing names, and the two
-admin-only rules, but not validation, the budget, the priority ceiling or the
-connector check.
+it checks each record's structure, duplicate and existing names, the two
+admin-only rules and the uploads each record to create names, but not
+validation, the budget, the priority ceiling or the connector check.
 
 ## 3. Watch it run, consume the result
 

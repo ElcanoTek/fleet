@@ -40,6 +40,7 @@ func (h *Handlers) HandleUpload(w http.ResponseWriter, r *http.Request) {
 
 	isAuthed := false
 	identity := "" // the principal's log identity, as the auth middleware sets it
+	uploader := "" // who the upload is recorded under (uploaderIdentity); "" for the admin key
 
 	// 1. API Key
 	if h.verifyAdminKey(r) {
@@ -55,6 +56,7 @@ func (h *Handlers) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		}
 		isAuthed = true
 		identity = user.Username
+		uploader = uploaderIdentity(&user.ID, nil)
 	} else {
 		// 1b. Scoped API key carrying create_task permission (#719): an uploaded
 		// file is only usable via a subsequent task create, so the SAME scoped
@@ -73,6 +75,7 @@ func (h *Handlers) HandleUpload(w http.ResponseWriter, r *http.Request) {
 			if valid, key, _ := h.apiKeys.ValidateKeyOn(r.Context(), apikeys.SurfaceOrchestrator, apiKey, &perm, nil, nil); valid && key != nil {
 				isAuthed = true
 				identity = apiKeyIdentity(key.KeyID)
+				uploader = uploaderIdentity(nil, &key.KeyID)
 			}
 		}
 	}
@@ -133,7 +136,7 @@ func (h *Handlers) HandleUpload(w http.ResponseWriter, r *http.Request) {
 
 	// Generate unique filename preserving original name with short UUID suffix
 	// This helps users identify files while avoiding collisions
-	originalName := sanitizeFilename(header.Filename)
+	originalName := uploadFilename(header.Filename)
 	if originalName == "" {
 		writeError(w, http.StatusBadRequest, "Invalid filename")
 		return
@@ -158,9 +161,20 @@ func (h *Handlers) HandleUpload(w http.ResponseWriter, r *http.Request) {
 
 	// Save checksum to sidecar file in the dedicated checksums directory
 	checksumPath := filepath.Join(tempDir, ".checksums", filename+".sha256")
-	if err := os.WriteFile(checksumPath, []byte(checksum), 0600); err != nil { //nolint:gosec // G703: filename is IsLocal-gated + sanitizeFilename-reduced, and the upload path was asserted within tempDir via withinDir.
+	if err := os.WriteFile(checksumPath, []byte(checksum), 0600); err != nil { //nolint:gosec // G703: filename is IsLocal-gated + uploadFilename-reduced, and the upload path was asserted within tempDir via withinDir.
 		// Non-critical error, just log it
 		logging.From(logCtx).Error("Failed to save checksum sidecar", "filename", safe.LogSafe(filename), "err", err)
+	}
+
+	// Record who uploaded it: a non-admin may name only its own uploads in a
+	// task (checkCallerFiles), so an upload whose uploader cannot be recorded
+	// would be unusable — remove it and fail the request instead.
+	if err := recordUploader(tempDir, filename, uploader); err != nil {
+		logging.From(logCtx).Error("Failed to record uploader", "filename", safe.LogSafe(filename), "err", err)
+		_ = os.Remove(path)         //nolint:gosec // G703: path was asserted within tempDir via withinDir above.
+		_ = os.Remove(checksumPath) //nolint:gosec // G703: filename is IsLocal-gated + uploadFilename-reduced, and the upload path was asserted within tempDir via withinDir.
+		writeError(w, http.StatusInternalServerError, "Failed to save file")
+		return
 	}
 
 	logging.From(logCtx).Info("File uploaded", "filename", safe.LogSafe(filename), "size_bytes", size, "checksum", safe.LogSafe(checksum))
@@ -181,7 +195,7 @@ func (h *Handlers) HandleUpload(w http.ResponseWriter, r *http.Request) {
 // bytes never landed. On any failure the partial file is removed, so a
 // half-written upload cannot linger under the name a task would attach.
 func writeUploadFile(path string, src io.Reader) (size int64, checksum string, err error) {
-	dst, err := os.Create(path) //nolint:gosec // G304: the caller sanitized the filename (sanitizeFilename allowlist) AND asserted the resolved path is within the uploads dir via withinDir/filepath.Rel.
+	dst, err := os.Create(path) //nolint:gosec // G304: the caller sanitized the filename (uploadFilename: the sanitizeFilename allowlist) AND asserted the resolved path is within the uploads dir via withinDir/filepath.Rel.
 	if err != nil {
 		return 0, "", err
 	}
@@ -346,6 +360,153 @@ func getFileChecksum(ctx context.Context, dataDir, filename string) (string, err
 	return checksum, nil
 }
 
+// uploadersDirName is the sidecar directory under temp_uploads that records
+// who staged each upload: ".uploaders/<filename>" holds the uploader's
+// uploaderIdentity. It sits next to ".checksums" and ages out with the
+// uploads (CleanupTempFiles and the admin sweep walk the whole tree).
+const uploadersDirName = ".uploaders"
+
+// uploaderIdentity is the form an upload's principal is recorded and compared
+// in: "user:<id>" for a session user, "key:<key_id>" for an API key. The admin
+// key has no identity here (""): it records nothing, and an admin principal
+// may name any staged upload.
+func uploaderIdentity(userID *uuid.UUID, keyID *string) string {
+	switch {
+	case userID != nil:
+		return "user:" + userID.String()
+	case keyID != nil:
+		return "key:" + *keyID
+	default:
+		return ""
+	}
+}
+
+// stagedUploadName reports whether name has the shape of a staged upload: one
+// local path component with no U+0000 (which no upload name holds, and which
+// Postgres refuses in a lookup key, pgtext). Anything else is refused by
+// validateTaskCreate, so checkCallerFiles leaves it to that message.
+func stagedUploadName(name string) bool {
+	return name != "" && !strings.Contains(name, "..") && !strings.ContainsAny(name, "/\\\x00") && filepath.IsLocal(name)
+}
+
+// recordUploader writes filename's uploader sidecar. An empty uploader (the
+// admin key) records nothing.
+func recordUploader(tempDir, filename, uploader string) error {
+	if uploader == "" {
+		return nil
+	}
+	dir := filepath.Join(tempDir, uploadersDirName)
+	path := filepath.Join(dir, filename)
+	if !stagedUploadName(filename) || !withinDir(dir, path) {
+		return fmt.Errorf("invalid filename: path traversal not allowed")
+	}
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte(uploader), 0600) //nolint:gosec // G703: filename is a single local component and path is asserted within dir via withinDir.
+}
+
+// uploaderOf returns the recorded uploader of a staged upload, or "" when none
+// is recorded (an admin-key upload, or one staged before uploads were
+// recorded).
+func (h *Handlers) uploaderOf(name string) string {
+	dir := filepath.Join(h.config.DataDir, "temp_uploads", uploadersDirName)
+	path := filepath.Join(dir, name)
+	if !stagedUploadName(name) || !withinDir(dir, path) {
+		return ""
+	}
+	data, err := os.ReadFile(path) //nolint:gosec // G304: name is a single local component and path is asserted within dir via withinDir.
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
+// checkCallerFiles decides which staged uploads the caller may name in a
+// task's files. The run copies each named upload into its workspace, where the
+// task's creator can download it, so naming an upload hands out its bytes. A
+// principal holding admin may name any upload. Any other caller may name an
+// upload that is
+//
+//   - already on the task it acts on (kept: the task being edited, or the
+//     source of a re-run or clone, which the caller passed the act check for);
+//   - recorded as its own (uploaderOf, written by HandleUpload); or
+//   - on a task it created (the creating user, or the creating API key), which
+//     covers uploads staged before uploaders were recorded.
+//
+// Any other name is refused with the message a missing upload gets, so the
+// answer does not say whether the upload exists. The returned error is a
+// *createRefusalError.
+func (h *Handlers) checkCallerFiles(ctx context.Context, caller taskCreator, files, kept []string) error {
+	if caller.hasAdminPermission || len(files) == 0 {
+		return nil
+	}
+	keep := make(map[string]struct{}, len(kept))
+	for _, k := range kept {
+		keep[strings.TrimSpace(k)] = struct{}{}
+	}
+	self := uploaderIdentity(caller.creatorID, caller.creatorKey)
+	for _, f := range files {
+		name := strings.TrimSpace(f)
+		if !stagedUploadName(name) {
+			continue // validateTaskCreate refuses it with its own message
+		}
+		if _, ok := keep[name]; ok {
+			continue
+		}
+		if self != "" && h.uploaderOf(name) == self {
+			continue
+		}
+		onOwnTask, err := h.storage.TaskWithFileCreatedBy(ctx, name, caller.creatorID, caller.creatorKey)
+		if err != nil {
+			logging.From(ctx).Error("Failed to look up tasks naming an upload", "filename", safe.LogSafe(name), "err", err)
+			return &createRefusalError{status: http.StatusInternalServerError, detail: "Failed to look up task"}
+		}
+		if !onOwnTask {
+			return &createRefusalError{status: http.StatusBadRequest, detail: fmt.Sprintf("file not found: %s", name)}
+		}
+	}
+	return nil
+}
+
+// uploadRefusals runs checkCallerFiles over the files of many records before
+// any is charged or written, for the bulk paths (batch, import). A refused
+// upload is that record's failure, by record index; a failed lookup is the
+// returned error, which fails the request. A nil entry is a record not
+// checked. The caller sets taskGates.uploadsChecked and hands each record's
+// result to admitCreate (uploadRefusal), so nothing is looked up twice.
+func (h *Handlers) uploadRefusals(ctx context.Context, caller taskCreator, files [][]string) (map[int]error, error) {
+	refusals := map[int]error{}
+	for i, names := range files {
+		if err := h.checkCallerFiles(ctx, caller, names, nil); err != nil {
+			if !callerFilesRefused(err) {
+				return nil, err
+			}
+			refusals[i] = err
+		}
+	}
+	return refusals, nil
+}
+
+// callerFilesRefused reports whether err from checkCallerFiles is a refusal
+// of a named upload (400), as opposed to a failed lookup, which the bulk paths
+// surface as a server error rather than a per-record failure.
+func callerFilesRefused(err error) bool {
+	var refusal *createRefusalError
+	return errors.As(err, &refusal) && refusal.status == http.StatusBadRequest
+}
+
+// writeCallerFilesRefusal writes checkCallerFiles's error: a refusal or lookup
+// failure with the status it carries, anything else as a 500.
+func writeCallerFilesRefusal(w http.ResponseWriter, err error) {
+	var refusal *createRefusalError
+	if errors.As(err, &refusal) {
+		writeError(w, refusal.status, refusal.detail)
+		return
+	}
+	writeError(w, http.StatusInternalServerError, "Failed to look up task")
+}
+
 // withinDir reports whether target resolves to a location inside base. It uses
 // filepath.Rel (NOT a string-prefix check, which is fooled by sibling dirs like
 // /data/temp_uploads-evil) and rejects any path whose relative form escapes the
@@ -370,6 +531,21 @@ func withinDir(base, target string) bool {
 		return false
 	}
 	return true
+}
+
+// uploadFilename is the name POST /upload stores a file under, before its
+// unique suffix: sanitizeFilename, with each run of dots made one dot. Task
+// files refuse any name holding "..", and the uploader record shares that
+// shape check (stagedUploadName), so an upload named "a..b.pdf" kept as is
+// would be staged but could never be attached. Download names (HandleDownload,
+// the workspace browser) keep plain sanitizeFilename, so a file staged under
+// an older name is still found by that name.
+func uploadFilename(filename string) string {
+	name := sanitizeFilename(filename)
+	for strings.Contains(name, "..") {
+		name = strings.ReplaceAll(name, "..", ".")
+	}
+	return strings.Trim(name, "._-")
 }
 
 func sanitizeFilename(filename string) string {

@@ -58,6 +58,14 @@ func (h *Handlers) rerunOrClone(w http.ResponseWriter, r *http.Request, keepRecu
 		writeError(w, http.StatusForbidden, "Tasks are private to their creator")
 		return
 	}
+	// A copy made by an API key runs as the source's owner (rerunCreator), so
+	// copying acts for that owner: it is open to the task's creator and to
+	// admin (taskActableByPrincipal). view_all_logs reads every task; it does
+	// not let a key start runs as their owners.
+	if !taskActableByPrincipal(p, source) {
+		writeError(w, http.StatusForbidden, "Only the task creator or an admin can re-run or clone this task")
+		return
+	}
 	// The body is optional; only decode when present (rerun-with-no-changes sends none).
 	var req taskRerunRequest
 	if r.Body != nil && r.ContentLength != 0 {
@@ -81,17 +89,18 @@ func (h *Handlers) rerunOrClone(w http.ResponseWriter, r *http.Request, keepRecu
 		writeError(w, http.StatusInternalServerError, "Failed to resolve the source task's owner")
 		return
 	}
-	lineage := &rerunLineage{sourceID: source.ID, sourceRunIf: source.RunIf, sourceLineage: source.WorkspaceLineage()}
+	lineage := &rerunLineage{sourceID: source.ID, sourceRunIf: source.RunIf, sourceLineage: source.WorkspaceLineage(), sourceFiles: source.Files}
 	if req.Overrides.NewLineage {
 		lineage.sourceLineage = uuid.Nil // NewTask's fresh lineage stands
 	}
 
 	// The copy is a create like any other, so it goes through the ONE governed
-	// pipeline (run_if privilege boundary, budget gate, priority ceiling,
-	// attribution, mcp_selection check) rather than a validate-and-insert of
-	// its own — the overrides expose run_if and priority, so a private path
-	// here was a weaker route around every gate POST /tasks enforces.
-	newTask, err := h.createTaskGovernedFrom(r.Context(), creator, tc, lineage)
+	// pipeline (run_if privilege boundary, uploads check, budget gate,
+	// priority ceiling, attribution, mcp_selection check) rather than a
+	// validate-and-insert of its own: the overrides expose run_if, priority
+	// and files. The uploads are checked against the caller, who may differ
+	// from the copy's creator (copyGatesFor).
+	newTask, err := h.createTaskGovernedFrom(r.Context(), copyGatesFor(creator, creatorFromPrincipal(p)), tc, lineage)
 	if err != nil {
 		var refusal *createRefusalError
 		if errors.As(err, &refusal) {

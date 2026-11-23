@@ -16,9 +16,13 @@ import (
 	"github.com/ElcanoTek/fleet/internal/safe"
 )
 
-// perCheckTimeout bounds every individual probe so one stuck subsystem can't
-// hang the whole readiness response.
-const perCheckTimeout = 5 * time.Second
+// PerCheckTimeout bounds every individual probe so one stuck subsystem can't
+// hang the whole readiness response. The checks run in parallel, so it is
+// also about the longest /readyz takes to answer: a readiness probe's own
+// timeout must exceed it, or a slow non-critical check (which /readyz folds
+// to 207, still ready) fails the probe instead (the Helm chart's test pins
+// this).
+const PerCheckTimeout = 5 * time.Second
 
 // Status values for an individual check.
 const (
@@ -77,7 +81,7 @@ func Liveness(startTime time.Time, now time.Time) LiveResponse {
 	return LiveResponse{Status: "ok", UptimeSeconds: up}
 }
 
-// RunReadiness runs every check in parallel (each under its own perCheckTimeout
+// RunReadiness runs every check in parallel (each under its own PerCheckTimeout
 // derived from ctx), then folds the results: any failing CRITICAL check →
 // not_ready/503; else any failing non-critical check → degraded/207; else
 // ready/200. Returns the response and the HTTP status code to send.
@@ -126,7 +130,7 @@ func RunReadiness(ctx context.Context, checks []Check) (ReadyResponse, int) {
 // runOne executes a single probe under a per-check deadline, recovering panics
 // into an error result so one bad probe can't crash the handler.
 func runOne(ctx context.Context, c Check) (res Result) {
-	cctx, cancel := context.WithTimeout(ctx, perCheckTimeout)
+	cctx, cancel := context.WithTimeout(ctx, PerCheckTimeout)
 	defer cancel()
 
 	done := make(chan Result, 1)

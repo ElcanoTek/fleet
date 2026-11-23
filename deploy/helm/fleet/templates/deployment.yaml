@@ -1,3 +1,30 @@
+{{- /*
+The probes below speak plain HTTP to the chat port, 8080, which the chart
+binds with FLEET_SERVER_ADDR. config.env is rendered after that, so a
+FLEET_SERVER_ADDR there that binds another port moves the listener, and
+FLEET_TLS_MODE=manual|auto makes it HTTPS: either fails every probe, and the
+liveness probe then restarts the pod in a loop. A FLEET_SERVER_ADDR that binds
+port 8080 on every interface is the chart's own setting and renders. Each
+value is compared as fleet reads that key: FLEET_TLS_MODE with one pair of
+quotes stripped, then trimmed and lowercased, so a value fleet would reject
+at boot is refused here too (an unquoted off in a values file is YAML for
+false); FLEET_SERVER_ADDR with one pair of quotes stripped and nothing else,
+since fleet binds it verbatim. TLS belongs at the Ingress. The same keys set
+through config.existingSecret cannot be seen here (deploy/helm/fleet/README.md).
+*/ -}}
+{{- $env := .Values.config.env | default dict }}
+{{- $tls := lower (trim (include "fleet.stripEnvQuotes" (get $env "FLEET_TLS_MODE"))) }}
+{{- if or (eq $tls "manual") (eq $tls "auto") }}
+{{- fail (printf "config.env.FLEET_TLS_MODE=%s: the chart's probes and Service speak plain HTTP to the chat port, and an HTTPS chat listener would fail every probe and restart the pod in a loop. Terminate TLS at the Ingress and remove FLEET_TLS_MODE (or set it to \"off\", quoted)." $tls) }}
+{{- else if not (has $tls (list "" "off")) }}
+{{- fail (printf "config.env.FLEET_TLS_MODE=%q: fleet accepts only off, manual or auto and would refuse to start. An unquoted off or no in a values file is YAML for false: write \"off\" (quoted), or remove FLEET_TLS_MODE." $tls) }}
+{{- end }}
+{{- if hasKey $env "FLEET_SERVER_ADDR" }}
+{{- $addr := include "fleet.stripEnvQuotes" (get $env "FLEET_SERVER_ADDR") }}
+{{- if not (has $addr (list ":8080" "0.0.0.0:8080" "[::]:8080")) }}
+{{- fail (printf "config.env.FLEET_SERVER_ADDR=%q: the chart binds the chat listener to 0.0.0.0:8080, the port its probes and Service target; another address (fleet binds the value exactly as written, spaces included) would fail every probe or every boot and restart the pod in a loop. Remove FLEET_SERVER_ADDR from config.env, or set it to 0.0.0.0:8080." $addr) }}
+{{- end }}
+{{- end }}
 # The fleet control plane. ONE replica, forever: scheduler leases and the
 # worker semaphore are single-owner (ADR-0004 / ADR-0049) — two replicas
 # against one database pair is a correctness bug. There is deliberately no
@@ -198,29 +225,61 @@ spec:
               mountPath: {{ .Values.workspaceRoot }}
             - name: data
               mountPath: {{ .Values.dataDir }}
-          # Boot order is: chat DB connect+migrate → sched DB connect+migrate →
-          # sandbox preflight (up to 30s) → listeners. The listener comes up
-          # LAST, so without a startupProbe liveness starts counting during
+          # Each probe asks the endpoint that answers its own question. This is
+          # ONE replica: a failing readiness probe takes the whole UI and API
+          # offline, and a failing liveness probe restarts the pod, killing
+          # every in-flight turn and task. Not /healthz: it answers 503 while
+          # any model's circuit breaker is open (5 provider errors in 5
+          # minutes), which a provider incident or a delisted model causes
+          # while runs fall back and chat keeps working, and it does not
+          # check the databases. It is for monitors (docs/DEPLOYMENT-KUBERNETES.md,
+          # "Health probes"). cmd/fleet's TestChartProbesMatchTheirMeaning
+          # renders this chart and sends each probe below to the chat listener
+          # as fleet builds it.
+          #
+          # Startup: /livez answers once the listener is up, and boot order is
+          # chat DB connect+migrate → sched DB connect+migrate → sandbox
+          # preflight (up to 30s) → listeners, so it answers when boot has
+          # finished. Without a startupProbe liveness starts counting during
           # migrations and kills the pod at ~t+120s. A large migrated database
           # then never finishes: every restart re-runs the migration from the
           # start and is killed again, and each kill risks leaving the migrator
           # dirty.
           startupProbe:
             httpGet:
-              path: /healthz
+              path: /livez
               port: chat
             periodSeconds: 10
+            timeoutSeconds: 5
             failureThreshold: {{ .Values.startupProbeFailureThreshold }}
+          # Readiness: /readyz is 503 while a database ping fails or while the
+          # process drains on SIGTERM, and 207 (still ready) when only the
+          # sandbox or disk check is degraded. The database pings use
+          # connections of their own, so a busy pool does not fail them. Its
+          # checks run in parallel, each cut off at 5s, so the timeout sits
+          # above that: at the kubelet's 1s default a slow apiserver (the
+          # sandbox check under the kubernetes backend) would fail the probe
+          # although /readyz says ready. Six failures (a minute) ride out a
+          # database failover or a network blip before the only replica
+          # leaves the Service.
           readinessProbe:
             httpGet:
-              path: /healthz
+              path: /readyz
               port: chat
             periodSeconds: 10
+            timeoutSeconds: 10
+            failureThreshold: 6
+          # Liveness: /livez is 200 while the process serves HTTP, including
+          # while it drains, and depends on neither the databases nor any
+          # model provider: a restart fixes neither, and it would cut a drain
+          # short.
           livenessProbe:
             httpGet:
-              path: /healthz
+              path: /livez
               port: chat
             periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
       volumes:

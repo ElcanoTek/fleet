@@ -47,9 +47,10 @@ func (h *Handlers) EstimateTask(w http.ResponseWriter, r *http.Request) {
 	// This handler used to enforce a hand-rolled copy that predated the
 	// web tier's session path (#157), which made
 	// the forecast silently dead ("Unauthorized") for every cookie-path
-	// Operations Center user. The resolved creator is discarded: the forecast
-	// creates nothing, so this cannot become a weaker path to task creation.
-	_, r, ok := h.authorizeTaskCreator(w, r)
+	// Operations Center user. The forecast creates nothing; the resolved
+	// creator only decides which uploads the body may name, so a forecast
+	// answers a file exactly as POST /tasks would (checkCallerFiles).
+	creator, r, ok := h.authorizeTaskCreator(w, r)
 	if !ok {
 		return
 	}
@@ -57,6 +58,10 @@ func (h *Handlers) EstimateTask(w http.ResponseWriter, r *http.Request) {
 	var tc models.TaskCreate
 	if err := readJSON(r, &tc); err != nil {
 		writeError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	if err := h.checkCallerFiles(r.Context(), creator, tc.Files, nil); err != nil {
+		writeCallerFilesRefusal(w, err)
 		return
 	}
 	if err := h.validateTaskCreate(&tc); err != nil {

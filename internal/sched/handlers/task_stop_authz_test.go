@@ -15,11 +15,12 @@ import (
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
 
-// TestTaskStopFollowsTaskScope pins taskStoppableByPrincipal on both stop
-// surfaces, DELETE /tasks/{id} (cancel) and DELETE /tasks/{id}/permanent:
-// the cancel permission reaches the tasks the principal can see, the creator
-// (a user or an API key) may always stop its own task, and admin and
-// view_all_logs principals keep fleet-wide reach.
+// TestTaskStopFollowsTaskScope pins DELETE /tasks/{id} (cancel,
+// taskStoppableByPrincipal) and DELETE /tasks/{id}/permanent
+// (taskDeletableByPrincipal): the cancel permission stops the tasks the
+// principal can see, so with view_all_logs every task; only the creator (a
+// user or an API key) or an admin permanently deletes one; and the creator
+// may always stop and delete its own task.
 func TestTaskStopFollowsTaskScope(t *testing.T) {
 	t.Parallel()
 
@@ -53,7 +54,7 @@ func TestTaskStopFollowsTaskScope(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create operator key: %v", err)
 	}
-	_, auditorOperatorKey, err := keyMgr.CreateKey(context.Background(), "auditor-operator",
+	auditorOperator, auditorOperatorKey, err := keyMgr.CreateKey(context.Background(), "auditor-operator",
 		[]models.Permission{models.PermissionCancelTask, models.PermissionViewTasks, models.PermissionViewAllLogs}, nil, 0, nil, "")
 	if err != nil {
 		t.Fatalf("create auditor-operator key: %v", err)
@@ -97,10 +98,37 @@ func TestTaskStopFollowsTaskScope(t *testing.T) {
 		}
 	})
 
-	t.Run("view_all_logs with the cancel permission stops any task", func(t *testing.T) {
-		foreign := addTask(t, store, "fleet task")
+	t.Run("view_all_logs with the cancel permission stops any task but deletes none it did not create", func(t *testing.T) {
+		otherKeyID, _ := mustCreateRoleKeyWithID(t, keyMgr, "client")
+		foreign := addTaskCreatedByKey(t, store, "another key's fleet task", otherKeyID)
+		if code := do("/tasks/"+foreign.ID.String()+"/permanent", auditorOperatorKey); code != http.StatusForbidden {
+			t.Errorf("permanent delete of another principal's task = %d, want 403", code)
+		}
 		if code := do("/tasks/"+foreign.ID.String(), auditorOperatorKey); code != http.StatusOK {
 			t.Errorf("cancel = %d, want 200", code)
+		}
+		if got := status(foreign); got != models.TaskStatusCancelled {
+			t.Errorf("task status = %s, want cancelled (cancelled, not deleted)", got)
+		}
+		if code := do("/tasks/"+foreign.ID.String()+"/permanent", auditorOperatorKey); code != http.StatusForbidden {
+			t.Errorf("permanent delete of the cancelled task = %d, want 403", code)
+		}
+		if got := status(foreign); got != models.TaskStatusCancelled {
+			t.Errorf("task status after the refused delete = %s, want it still there, cancelled", got)
+		}
+	})
+
+	t.Run("the creator deletes its own task without the cancel permission", func(t *testing.T) {
+		own := addTaskCreatedByKeyWithStatus(t, store, "a finished task this key created", taskKey.KeyID, models.TaskStatusSuccess)
+		if code := do("/tasks/"+own.ID.String()+"/permanent", taskKeyRaw); code != http.StatusOK {
+			t.Fatalf("creator's permanent delete = %d, want 200", code)
+		}
+	})
+
+	t.Run("view_all_logs with the cancel permission deletes a task it created", func(t *testing.T) {
+		own := addTaskCreatedByKeyWithStatus(t, store, "a finished task the auditor key created", auditorOperator.KeyID, models.TaskStatusSuccess)
+		if code := do("/tasks/"+own.ID.String()+"/permanent", auditorOperatorKey); code != http.StatusOK {
+			t.Fatalf("permanent delete of its own task = %d, want 200", code)
 		}
 	})
 

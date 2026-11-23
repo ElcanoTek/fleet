@@ -508,7 +508,7 @@ func taskNameTaken(name string) *createRefusalError {
 // CreatedByKeyID is readable by nobody except fleet-wide grant holders
 // (ADR-0043), so every caller must pass the real creator.
 func (h *Handlers) createTaskGoverned(ctx context.Context, creator taskCreator, tc models.TaskCreate) (*models.Task, error) {
-	return h.createTaskGovernedFrom(ctx, creator, tc, nil)
+	return h.createTaskGovernedFrom(ctx, taskGatesFor(creator), tc, nil)
 }
 
 // rerunLineage is the source a rerun/clone copies (#270): the id recorded on
@@ -520,15 +520,19 @@ type rerunLineage struct {
 	// sourceLineage is the source job's lineage: the copy joins it so a re-run
 	// or clone works in the same per-job directory (#1543).
 	sourceLineage uuid.UUID
+	// sourceFiles are the source's uploads, which the copy may keep: the
+	// caller passed the act check on the source (checkCallerFiles).
+	sourceFiles []string
 }
 
-// createTaskGovernedFrom is createTaskGoverned with an optional rerun lineage:
-// it runs Handlers.admitCreate, the gate list batch and import also run, and
-// persists the admitted task. A re-run or clone is a create like any other, so
-// its overrides (run_if and priority among them) meet the same gates as a
-// POST /tasks body.
-func (h *Handlers) createTaskGovernedFrom(ctx context.Context, creator taskCreator, tc models.TaskCreate, lineage *rerunLineage) (*models.Task, error) {
-	task, err := h.admitCreate(ctx, taskGatesFor(creator), &tc, lineage)
+// createTaskGovernedFrom is createTaskGoverned with the request's gate state
+// and an optional rerun lineage: it runs Handlers.admitCreate, the gate list
+// batch and import also run, and persists the admitted task. A re-run or clone
+// is a create like any other, so its overrides (run_if, priority and files
+// among them) meet the same gates as a POST /tasks body; its gates name the
+// caller apart from the copy's creator (copyGatesFor).
+func (h *Handlers) createTaskGovernedFrom(ctx context.Context, g *taskGates, tc models.TaskCreate, lineage *rerunLineage) (*models.Task, error) {
+	task, err := h.admitCreate(ctx, g, &tc, lineage)
 	if err != nil {
 		return nil, err
 	}
@@ -1700,13 +1704,13 @@ func (h *Handlers) DeleteTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Same authorization as stopping (taskStoppableByPrincipal): the cancel
-	// permission over the tasks the principal can see, or having created the
-	// task. Deleting is more destructive than cancelling, but it is
-	// destructive to the SAME task, so a stricter rule here would only mean a
-	// job author can kill their own run and then not clean it up. Same 404 /
-	// 403 split as CancelTask.
-	if !taskStoppableByPrincipal(p, task) {
+	// taskDeletableByPrincipal: the task's creator (user or API key) or admin.
+	// The cancel permission stops a task the principal can read but does not
+	// delete one it did not create: deleting removes the owner's record and
+	// transcripts for good. A job author still deletes its own task without the
+	// cancel permission. Same 404 / 403 split as CancelTask: a task the
+	// principal can read is a 403, any other a 404.
+	if !taskDeletableByPrincipal(p, task) {
 		if taskVisibleToPrincipal(p, task) {
 			writeError(w, http.StatusForbidden, "Only the task creator or an admin can delete this task")
 			return
@@ -1846,7 +1850,7 @@ func (h *Handlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 	// read path guarding the same row was narrowed to own rows. GetTask is
 	// unscoped by design (the read surfaces filter above it), so the check
 	// belongs here.
-	if !taskWritableByPrincipal(p, task) {
+	if !taskActableByPrincipal(p, task) {
 		writeError(w, http.StatusForbidden, "Only the task creator or an admin can edit this task")
 		return
 	}
@@ -2122,7 +2126,7 @@ func (h *Handlers) UpdateTaskTags(w http.ResponseWriter, r *http.Request) {
 	// Own-rows authorization, same helper and same reason as UpdateTask. Tags
 	// drive filtering and routing, so retagging a teammate's task is a write to
 	// their work, not a cosmetic change.
-	if !taskWritableByPrincipal(p, task) {
+	if !taskActableByPrincipal(p, task) {
 		writeError(w, http.StatusForbidden, "Only the task creator or an admin can retag this task")
 		return
 	}

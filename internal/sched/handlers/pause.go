@@ -29,11 +29,13 @@ func (h *Handlers) taskFromPath(w http.ResponseWriter, r *http.Request) (*models
 	return task, true
 }
 
-// taskResumableByPrincipal is the per-task gate for wake: the same
-// permission-OR-owns shape CancelTask uses (an operator with cancel_task, or
-// the creating user), narrowed by row visibility for the permission holder.
+// taskResumableByPrincipal is the per-task gate for wake: cancel_task on a
+// task the principal may act on (taskActableByPrincipal: one it created, or
+// any task for admin), or the creating user. A wake's note reaches the parked
+// run, which runs as the task's owner, so the permission holder's reach is the
+// act scope, not row visibility: view_all_logs reads every task but wakes none.
 func taskResumableByPrincipal(p principal, task *models.Task) bool {
-	if p.hasPermission(models.PermissionCancelTask) && taskVisibleToPrincipal(p, task) {
+	if p.hasPermission(models.PermissionCancelTask) && taskActableByPrincipal(p, task) {
 		return true
 	}
 	return p.ownsTask(task)
@@ -57,7 +59,7 @@ func (h *Handlers) WakeTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !taskResumableByPrincipal(p, task) {
-		writeError(w, http.StatusForbidden, "Waking a task requires operator permission or ownership of the task")
+		writeError(w, http.StatusForbidden, "Only the user who created the task, an admin, or the API key that created it with operator permission can wake it")
 		return
 	}
 	if task.Status != models.TaskStatusPausedAwaitingWake {

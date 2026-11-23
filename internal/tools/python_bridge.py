@@ -567,6 +567,30 @@ def cleanup():
         connection_file = None
 
 
+def drop_dead_kernel():
+    """Clears away a kernel that died under a cell, and what it left running.
+
+    The kernel was started as the leader of its own session, so its process
+    group id is its pid, and that group outlives it for as long as any
+    member does: workers a cell started (multiprocessing, a subprocess) keep
+    running after the OOM killer takes the kernel alone. They are killed
+    here, by the group id, before the next cell gets a fresh kernel; left
+    alone they would go on writing files and holding the memory that killed
+    it. os.getpgid cannot be asked for the id any more, because poll() has
+    already reaped the kernel.
+    """
+    global client, _kernel_cwd
+    if kernel_process is not None:
+        with contextlib.suppress(Exception):
+            os.killpg(kernel_process.pid, signal.SIGKILL)
+    if client is not None:
+        with contextlib.suppress(Exception):
+            client.stop_channels()
+    cleanup()  # forgets the process and removes its connection file
+    client = None
+    _kernel_cwd = None
+
+
 class OutputCollector:
     """Bound output capture to avoid unbounded bridge memory growth."""
 
@@ -622,6 +646,49 @@ def execution_timeout_error(prefix, timeout=DEFAULT_EXECUTION_TIMEOUT_SECONDS):
 
 def remaining_time(deadline):
     return max(0.01, deadline - time.time())
+
+
+def kernel_exit_code():
+    """Returns the kernel process's exit code, or None while it is running."""
+    if kernel_process is None:
+        return None
+    return kernel_process.poll()
+
+
+def kernel_died_error(code, stdout, stderr):
+    """The result for a cell whose kernel process went away under it.
+
+    A kernel that the kernel-side OOM killer took (the sandbox's memory limit)
+    never answers on its channels, so without this the wait below ran to its
+    deadline: fifteen minutes by default, reported as a timeout, after which
+    the Go side retired the whole sandbox. The cell fails at once instead, the
+    container stays, and the message says what happened and what to change.
+    """
+    if code == -signal.SIGKILL:
+        reason = (
+            "was killed (SIGKILL), which almost always means the sandbox "
+            "ran out of memory"
+        )
+    elif code < 0:
+        reason = f"was killed by signal {-code}"
+    else:
+        reason = f"exited with code {code}"
+    return {
+        "status": "error",
+        "stdout": stdout,
+        "stderr": stderr,
+        "result": None,
+        "error": (
+            f"The Python kernel {reason} while running this cell. Its variables "
+            "and imports are gone; files in the workspace are kept, and the "
+            "next run_python call starts a fresh kernel. If memory was the "
+            "cause, load less at a time: read only the columns and rows you "
+            "need, process files one by one, del large objects you are done "
+            "with, and save intermediate results to files."
+        ),
+        "bridge_truncation": {},
+        "kernel_died": True,
+    }
 
 
 # IPython colours every traceback it emits, and the kernel hands those ANSI
@@ -704,6 +771,13 @@ def run_code_on_kernel(code, client, timeout_seconds=None):
 
         if shell_reply_seen and idle_seen:
             break
+
+        # A dead kernel sends nothing more; stop waiting for it.
+        exit_code = kernel_exit_code()
+        if exit_code is not None:
+            return kernel_died_error(
+                exit_code, stdout_content.render(), stderr_content.render()
+            )
 
     if not shell_reply_seen:
         return execution_timeout_error("python shell reply", timeout)
@@ -867,6 +941,11 @@ def execute_code(
         # Execute the main code
         res = run_code_on_kernel(code, client, timeout_seconds=timeout_seconds)
 
+        if res.get("kernel_died"):
+            # The next request lazy-starts a fresh kernel (and re-applies
+            # the cwd).
+            drop_dead_kernel()
+
         vars_data = {}
         if res["status"] == "success" and return_vars:
             # Round-trip extracted vars through a tempfile, not stdout: the
@@ -942,7 +1021,17 @@ def execute_code(
                 )
 
                 var_res = run_code_on_kernel(extract_script, client)
-                if var_res["status"] == "success":
+                if var_res.get("kernel_died"):
+                    # The cell ran, but reading its variables back killed the
+                    # kernel (normalizing a large object can). Say so rather
+                    # than report a success with the variables missing.
+                    drop_dead_kernel()
+                    res["status"] = "error"
+                    res["error"] = (
+                        "The cell finished, but reading back return_vars "
+                        "failed. " + var_res["error"]
+                    )
+                elif var_res["status"] == "success":
                     # malformed/missing file → keep vars_data empty
                     with (
                         contextlib.suppress(Exception),

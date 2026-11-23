@@ -26,7 +26,7 @@ func mustCreateTypedKey(t *testing.T, keyMgr *apikeys.Manager, kt apikeys.KeyTyp
 
 // mustCreateTypedKeyWithID also returns the KeyID, so a test can attribute a
 // fixture task to the key that will act on it (task.CreatedByKeyID). Mutating a
-// task is own-rows (taskWritableByPrincipal), so an UNATTRIBUTED fixture now
+// task is own-rows (taskActableByPrincipal), so an UNATTRIBUTED fixture now
 // exercises the ownership check rather than whatever the test meant to assert.
 func mustCreateTypedKeyWithID(t *testing.T, keyMgr *apikeys.Manager, kt apikeys.KeyType, slugs []string) (string, string) {
 	t.Helper()

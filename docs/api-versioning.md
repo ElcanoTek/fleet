@@ -19,7 +19,7 @@ stripped and served by the identical handler at `<path>`. No route is registered
 twice, so the OpenAPI route-parity test still walks the bare router; the spec's
 `servers` block documents `/v1` as the primary base.
 
-Health probes (`/healthz`, `/health`, `/readyz`) and version discovery
+Health endpoints (`/healthz`, `/health`, `/livez`, `/readyz`) and version discovery
 (`/api-info`) are **unversioned forever** — never prefixed-only, never
 deprecation-tagged.
 
