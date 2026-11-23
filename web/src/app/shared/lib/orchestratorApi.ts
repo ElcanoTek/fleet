@@ -261,6 +261,10 @@ export type PromptLibraryItem = {
   read_only: boolean;
   owned_by_caller: boolean;
   owner_username?: string;
+  /** A workspace-shared prompt whose author's account was deleted: no
+   *  account owns it, only admins can edit it, and `owner_username` is left
+   *  out. */
+  owner_deleted?: boolean;
   path?: string;
   created_at?: string;
   updated_at?: string;

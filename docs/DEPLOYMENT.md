@@ -419,7 +419,13 @@ each piece yourself):
    >   already open (a chat turn, a task run-log) finishes its turn, because the
    >   epoch is checked when a request connects, not per SSE event.
    > - **One account, permanently** — delete it. The user-list gate then 403s
-   >   every request.
+   >   every request; the deletion also deletes the account's user API keys
+   >   and its central sign-in session generations. An account later created
+   >   under the same email starts without its data, keys and sessions, but
+   >   not without everything: a user budget is matched by email, so its
+   >   limit and the spend counted in its current window apply to the later
+   >   account until an admin removes it. What goes and what stays:
+   >   [IDENTITY.md](IDENTITY.md), "Deleting an account".
    > - **Everyone, break-glass** — rotate `APP_SESSION_SECRET` in
    >   `/etc/fleet/fleet.env` and `fleet restart`. Every
    >   outstanding cookie fails signature verification at once, so all users

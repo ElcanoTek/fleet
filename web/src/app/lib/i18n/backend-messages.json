@@ -12,7 +12,6 @@
     "Failed to aggregate task usage",
     "Failed to cancel task",
     "Failed to cleanup history",
-    "Failed to create API key",
     "Failed to create temp dir",
     "Failed to create user",
     "Failed to delete budget",
@@ -379,9 +378,11 @@
     "tenant_id must be a valid Microsoft Entra Directory (tenant) ID, domain, or 'organizations'/'common'",
     "that person can't take this chat: they need an active Fleet account that can chat",
     "that team already exists — ask an admin to add you to it",
+    "the API-key store is busy with another change; try again in a few seconds",
     "the Stop was sent, but the turn has not confirmed it yet",
     "the assistant could not draft this patrol; try again or edit the draft yourself",
     "the chat made with this client_request_id was deleted; retry with a new one",
+    "the deletion was interrupted before it started; nothing was deleted",
     "the input could not be withdrawn from the queue",
     "the message could not be queued behind the running turn; send it again",
     "the message could not be recorded against its turn; send it again",
@@ -394,6 +395,7 @@
     "the turn ended before its input was saved",
     "the turn journal lost a write; refusing to record success for an incompletely journaled turn",
     "thinking_budget_tokens must be \u003e= 0 (0 = off, omit to inherit the default)",
+    "this API key was minted for an earlier account under this email, or before the account existed; mint a new key for the account (fleet sched apikey create \u003cname\u003e --type user --user \u003cemail\u003e)",
     "this action cannot be narrowed: approve or decline it whole",
     "this action cannot be stopped once it runs",
     "this action is not running: decline it instead",
@@ -1060,6 +1062,13 @@
       ]
     },
     {
+      "message": "deleting the user API keys acting as {0} failed ({1}); list them with `fleet sched apikey list` and delete them with `fleet sched apikey delete \u003ckey_id\u003e`",
+      "fields": [
+        "%s",
+        "%s"
+      ]
+    },
+    {
       "message": "description exceeds maximum length of {0} characters",
       "fields": [
         "%d"
@@ -1504,6 +1513,18 @@
       ]
     },
     {
+      "message": "removing the account's private workspace files failed: {0}",
+      "fields": [
+        "%s"
+      ]
+    },
+    {
+      "message": "removing the account's uploads failed: {0}",
+      "fields": [
+        "%s"
+      ]
+    },
+    {
       "message": "replacing {0} needs expected_sha256: read the file first (view_file prints its sha256) so you never overwrite a newer version",
       "fields": [
         "%s"
@@ -1658,6 +1679,12 @@
       ]
     },
     {
+      "message": "some of the account's requests or turns were still running after {0} seconds; what they write for the account afterwards is refused, or removed by the maintenance pass",
+      "fields": [
+        "%d"
+      ]
+    },
+    {
       "message": "stage connector approval: {0}",
       "fields": [
         "%w"
@@ -1725,8 +1752,21 @@
       ]
     },
     {
+      "message": "the API-key store was not available, so the user API keys acting as {0} were not deleted; list them with `fleet sched apikey list` and delete them with `fleet sched apikey delete \u003ckey_id\u003e`",
+      "fields": [
+        "%s"
+      ]
+    },
+    {
       "message": "the approval was narrowed, but its record {0}; nothing was run",
       "fields": [
+        "%s"
+      ]
+    },
+    {
+      "message": "the attachment directory {0} could not be read ({1}), so no upload or private workspace file was removed there; the server's maintenance pass removes them from the directory it uses",
+      "fields": [
+        "%s",
         "%s"
       ]
     },

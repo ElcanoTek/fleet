@@ -27,6 +27,8 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/pgtext"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
@@ -59,6 +61,17 @@ type APIKey struct {
 	// UserEmail is the person a user-type key acts as (KeyTypeUser); empty
 	// for every other type.
 	UserEmail string `json:"user_email,omitempty"`
+	// AccountID is the id (core.users.id) of the account a user-type key acts
+	// as. CreateBoundUserKey records it when the key is minted; a key minted
+	// before keys named their account gets it once, from the account its email
+	// had then (BindUserKeys at boot, or the key's first use). The chat edge
+	// admits the key only for that account, so a later account created under
+	// the same email is never it.
+	AccountID string `json:"account_id,omitempty"`
+	// AccountMissing records that a user key minted before keys named their
+	// account had no account under its email when it was bound. It acts as no
+	// one — in particular not as an account created under that email later.
+	AccountMissing bool `json:"account_missing,omitempty"`
 
 	// MaxPriority caps the task urgency this key may submit (#230): a task at a
 	// priority MORE urgent (lower integer) than this value is rejected. nil =
@@ -171,6 +184,11 @@ type Manager struct {
 	// save — the cheap staleness check behind syncLocked.
 	stamp fileStamp
 	mu    sync.RWMutex
+	// lockWait overrides how long a write waits for the key file's lock
+	// (tests); 0 is defaultFileLockWait.
+	lockWait time.Duration
+	// degraded logs, once, that writes go on without the file lock.
+	degraded sync.Once
 }
 
 // NewManager creates a new API key manager.
@@ -387,16 +405,133 @@ func (m *Manager) save() error {
 	}
 	// Write to a sibling temp file then atomically rename, so a crash mid-write
 	// can't leave a torn api_keys.json that fails to deserialize and wedges
-	// startup (NewManager would refuse to load it).
-	tmp := m.storagePath + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+	// startup (NewManager would refuse to load it). The temp name is unique:
+	// the server and a CLI writing at once must not share one file.
+	f, err := os.CreateTemp(dir, filepath.Base(m.storagePath)+".*.tmp")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := os.Chmod(tmp, 0o600); err != nil {
+		_ = os.Remove(tmp)
 		return err
 	}
 	if err := os.Rename(tmp, m.storagePath); err != nil {
+		_ = os.Remove(tmp)
 		return err
 	}
 	m.stampLocked(data)
 	return nil
+}
+
+// lockForWrite takes the key file's lock, then the in-process lock, then
+// re-reads the file, so a read-modify-write here cannot lose a change another
+// process (the `fleet sched apikey` CLI, the server) made meanwhile. The file
+// lock is taken first, on a descriptor of its own and without the in-process
+// lock, so a write waiting for another process stalls no key check (they
+// need only the in-process lock); a second descriptor conflicts with the
+// first even in one process, so writers here still go one at a time. The
+// returned function releases both. It fails, holding nothing, when another
+// process keeps the file locked past the wait (ErrStoreLocked).
+func (m *Manager) lockForWrite() (func(), error) {
+	release, err := m.fileLock(m.fileLockWait())
+	if err != nil {
+		return nil, err
+	}
+	m.mu.Lock()
+	m.syncLocked()
+	return func() {
+		release()
+		m.mu.Unlock()
+	}, nil
+}
+
+// ErrStoreLocked is a write's error when another process holds the key
+// file's lock for longer than the wait (a stopped or hung CLI, say).
+var ErrStoreLocked = errors.New("the API-key store is locked by another process; try again")
+
+// defaultFileLockWait bounds how long a write waits for the key file's lock.
+const defaultFileLockWait = 5 * time.Second
+
+// SetFileLockWait sets how long a write waits for another process holding
+// the key file's lock before it fails with ErrStoreLocked (0 restores
+// defaultFileLockWait). Tests shorten it.
+func (m *Manager) SetFileLockWait(d time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.lockWait = d
+}
+
+func (m *Manager) fileLockWait() time.Duration {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.lockWait > 0 {
+		return m.lockWait
+	}
+	return defaultFileLockWait
+}
+
+// fileLock takes an exclusive advisory lock (flock) on api_keys.json.lock
+// beside the key file, held across every read-modify-write by every process
+// that writes the store. It tries without blocking until wait passes (0: one
+// try) and then fails with ErrStoreLocked, so a process that keeps the lock
+// stalls nobody for long.
+//
+// The lock file is created mode 0644 whatever the umask, so a lock file a
+// root-run CLI created can be locked by the service user; it is opened
+// read-write, or read-only when that is refused. When it cannot be opened at
+// all, or flock is not supported on it (some network filesystems refuse it on
+// a read-only descriptor), writes go on with the in-process lock alone, and
+// that is logged once.
+func (m *Manager) fileLock(wait time.Duration) (release func(), err error) {
+	path := m.storagePath + ".lock"
+	noLock := func(why error) (func(), error) {
+		m.degraded.Do(func() {
+			logging.From(context.Background()).Warn("apikeys: writing the key store without its cross-process lock", "lock_file", path, "err", why)
+		})
+		return func() {}, nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return noLock(err)
+	}
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o644) //nolint:gosec // G302: an empty lock file; it holds nothing
+	if err == nil {
+		_ = f.Chmod(0o644) // the umask may have narrowed it; another user's file stays as it is
+	} else {
+		var rerr error
+		if f, rerr = os.Open(path); rerr != nil { //nolint:gosec // G304: the store's own lock file
+			return noLock(err)
+		}
+	}
+	deadline := time.Now().Add(wait)
+	for {
+		err := unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, unix.EWOULDBLOCK) && !errors.Is(err, unix.EINTR) {
+			_ = f.Close()
+			return noLock(err)
+		}
+		if !time.Now().Before(deadline) {
+			_ = f.Close()
+			return nil, fmt.Errorf("%w (%s)", ErrStoreLocked, path)
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	return func() {
+		_ = unix.Flock(int(f.Fd()), unix.LOCK_UN)
+		_ = f.Close()
+	}, nil
 }
 
 func (m *Manager) logAudit(ctx context.Context, entry AuditLogEntry) {
@@ -425,9 +560,11 @@ func (m *Manager) logAudit(ctx context.Context, entry AuditLogEntry) {
 
 // CreateKey creates a new API key.
 func (m *Manager) CreateKey(ctx context.Context, name string, permissions []models.Permission, role *string, rateLimit int, expiresInDays *int, description string) (*APIKey, string, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.syncLocked()
+	unlock, err := m.lockForWrite()
+	if err != nil {
+		return nil, "", err
+	}
+	defer unlock()
 
 	rawKey, keyHash, keyPrefix, err := m.generateKey()
 	if err != nil {
@@ -511,7 +648,7 @@ func (m *Manager) CreateTypedKey(ctx context.Context, name string, kt KeyType, a
 	if kt == KeyTypeUser {
 		return nil, "", errors.New("a user key names its user: use CreateUserKey")
 	}
-	return m.createTypedKey(ctx, name, kt, allowedTriggerSlugs, "", rateLimit, expiresInDays, description)
+	return m.createTypedKey(ctx, name, kt, allowedTriggerSlugs, "", "", rateLimit, expiresInDays, description)
 }
 
 // CreateUserKey mints a user-type key (KeyTypeUser) that acts as email on the
@@ -526,30 +663,42 @@ func (m *Manager) CreateTypedKey(ctx context.Context, name string, kt KeyType, a
 // turns are limited as its person's are, by the chat's per-user limiter
 // (FLEET_CHAT_RATE_LIMIT_ENABLED, CHAT_RATE_PER_MIN, CHAT_RATE_PER_DAY).
 func (m *Manager) CreateUserKey(ctx context.Context, name, email string, rateLimit int, expiresInDays *int, description string) (*APIKey, string, error) {
+	email, err := checkUserKey(email, rateLimit)
+	if err != nil {
+		return nil, "", err
+	}
+	return m.createTypedKey(ctx, name, KeyTypeUser, nil, email, "", rateLimit, expiresInDays, description)
+}
+
+// checkUserKey applies a user key's rules and returns its email as keys store
+// it.
+func checkUserKey(email string, rateLimit int) (string, error) {
 	// Checked as given, then lowercased (pgtext.CheckedEmail): the key acts as
 	// this account on every request, so a look-alike must not become the
 	// ASCII address it lowercases to.
 	checked, ok := pgtext.CheckedEmail(email)
 	if !ok {
-		return nil, "", fmt.Errorf("a user key's email has a character an address may not hold")
+		return "", fmt.Errorf("a user key's email has a character an address may not hold")
 	}
 	email = checked
 	if email == "" || !strings.Contains(email, "@") {
-		return nil, "", fmt.Errorf("a user key needs the email of the account it acts as")
+		return "", fmt.Errorf("a user key needs the email of the account it acts as")
 	}
 	if rateLimit != 0 {
-		return nil, "", fmt.Errorf("a user key takes no per-key rate limit: its turns are limited by the chat's per-user limit, like its person's")
+		return "", fmt.Errorf("a user key takes no per-key rate limit: its turns are limited by the chat's per-user limit, like its person's")
 	}
-	return m.createTypedKey(ctx, name, KeyTypeUser, nil, email, rateLimit, expiresInDays, description)
+	return email, nil
 }
 
-func (m *Manager) createTypedKey(ctx context.Context, name string, kt KeyType, allowedTriggerSlugs []string, userEmail string, rateLimit int, expiresInDays *int, description string) (*APIKey, string, error) {
+func (m *Manager) createTypedKey(ctx context.Context, name string, kt KeyType, allowedTriggerSlugs []string, userEmail, accountID string, rateLimit int, expiresInDays *int, description string) (*APIKey, string, error) {
 	if !kt.Valid() {
 		return nil, "", fmt.Errorf("invalid key type: %q", kt)
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.syncLocked()
+	unlock, err := m.lockForWrite()
+	if err != nil {
+		return nil, "", err
+	}
+	defer unlock()
 
 	rawKey, keyHash, keyPrefix, err := m.generateTypedKey(kt)
 	if err != nil {
@@ -580,6 +729,7 @@ func (m *Manager) createTypedKey(ctx context.Context, name string, kt KeyType, a
 		Type:                kt,
 		AllowedTriggerSlugs: allowedTriggerSlugs,
 		UserEmail:           userEmail,
+		AccountID:           accountID,
 		Permissions:         perms,
 		RateLimit:           rateLimit,
 		CreatedAt:           time.Now().UTC(),
@@ -621,9 +771,11 @@ func (m *Manager) createTypedKey(ctx context.Context, name string, kt KeyType, a
 
 // RotateKey rotates an API key, keeping the old key valid for a grace period.
 func (m *Manager) RotateKey(ctx context.Context, keyID string, gracePeriodHours int) (*APIKey, string, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.syncLocked()
+	unlock, err := m.lockForWrite()
+	if err != nil {
+		return nil, "", err
+	}
+	defer unlock()
 
 	key, ok := m.keys[keyID]
 	if !ok {
@@ -632,10 +784,7 @@ func (m *Manager) RotateKey(ctx context.Context, keyID string, gracePeriodHours 
 	// Preserve the key's type across rotation (#190): a typed key rotates to a
 	// fresh token of the SAME type, so its scope is unchanged; a legacy (sk-) key
 	// stays legacy.
-	var (
-		rawKey, keyHash, keyPrefix string
-		err                        error
-	)
+	var rawKey, keyHash, keyPrefix string
 	if key.Type != KeyTypeLegacy {
 		rawKey, keyHash, keyPrefix, err = m.generateTypedKey(key.Type)
 	} else {
@@ -680,9 +829,11 @@ func (m *Manager) RotateKey(ctx context.Context, keyID string, gracePeriodHours 
 
 // RevokeKey revokes (disables) an API key.
 func (m *Manager) RevokeKey(ctx context.Context, keyID string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.syncLocked()
+	unlock, err := m.lockForWrite()
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	key, ok := m.keys[keyID]
 	if !ok {
 		return fmt.Errorf("key %s not found", keyID)
@@ -697,9 +848,11 @@ func (m *Manager) RevokeKey(ctx context.Context, keyID string) error {
 
 // DeleteKey permanently deletes an API key.
 func (m *Manager) DeleteKey(ctx context.Context, keyID string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.syncLocked()
+	unlock, err := m.lockForWrite()
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	key, ok := m.keys[keyID]
 	if !ok {
 		return fmt.Errorf("key %s not found", keyID)
@@ -714,6 +867,189 @@ func (m *Manager) DeleteKey(ctx context.Context, keyID string) error {
 	}
 	m.logAudit(ctx, AuditLogEntry{KeyID: keyID, Action: "delete_key", ResourceType: "api_key", ResourceID: &keyID, Success: true})
 	return nil
+}
+
+// ErrNoAccount refuses a user key for an address that has no account: a user
+// key is bound to the account it acts as, so the account comes first.
+var ErrNoAccount = errors.New("a user key acts as an existing account: create the account first")
+
+// CreateBoundUserKey mints a user key (CreateUserKey's rules) bound to the
+// account it acts as: email and that account's id, which the caller looked
+// up. Every fleet command that mints a user key uses it. The key is written
+// once, with its account.
+func (m *Manager) CreateBoundUserKey(ctx context.Context, name, email, accountID string, rateLimit int, expiresInDays *int, description string) (*APIKey, string, error) {
+	accountID = strings.TrimSpace(accountID)
+	if accountID == "" {
+		return nil, "", ErrNoAccount
+	}
+	email, err := checkUserKey(email, rateLimit)
+	if err != nil {
+		return nil, "", err
+	}
+	return m.createTypedKey(ctx, name, KeyTypeUser, nil, email, accountID, rateLimit, expiresInDays, description)
+}
+
+// RecordUserKeyAccount binds a user key that names no account yet to
+// accountID, or, with accountID "", records that its email had no account
+// (AccountMissing): from then on the key acts as no one. A key is bound once;
+// recording the same account again is a no-op, any other change an error.
+func (m *Manager) RecordUserKeyAccount(ctx context.Context, keyID, accountID string) error {
+	accountID = strings.TrimSpace(accountID)
+	unlock, err := m.lockForWrite()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	key, ok := m.keys[keyID]
+	if !ok {
+		return fmt.Errorf("key %s not found", keyID)
+	}
+	if key.Type != KeyTypeUser {
+		return fmt.Errorf("key %s is not a user key", keyID)
+	}
+	switch {
+	case key.AccountID == accountID && !key.AccountMissing && accountID != "":
+		return nil
+	case accountID == "" && key.AccountMissing && key.AccountID == "":
+		// Already recorded as having no account (another first use got there).
+		return nil
+	case key.AccountID != "" || key.AccountMissing:
+		return fmt.Errorf("key %s is already bound", keyID)
+	}
+	key.AccountID, key.AccountMissing = accountID, accountID == ""
+	if err := m.save(); err != nil {
+		key.AccountID, key.AccountMissing = "", false
+		return err
+	}
+	m.logAudit(ctx, AuditLogEntry{KeyID: keyID, Action: "bind_key", ResourceType: "api_key", ResourceID: &keyID,
+		Details: map[string]interface{}{"account_id": accountID, "account_missing": accountID == ""}, Success: true})
+	return nil
+}
+
+// AccountLookup finds the account under email: its id, or found=false when
+// there is none. An error means the answer is not known.
+type AccountLookup func(ctx context.Context, email string) (id string, found bool, err error)
+
+// BindUserKeys binds every user key minted before keys named their account
+// (no AccountID, not AccountMissing) to the account its email has now, or
+// marks it AccountMissing when there is none. fleet serve runs it at boot, so
+// the binding reflects the accounts of the moment keys started naming theirs.
+// A key whose lookup fails is left for the next boot or its first use. The
+// lookups run without the key store's lock; the results are written in one
+// save.
+func (m *Manager) BindUserKeys(ctx context.Context, lookup AccountLookup) (bound, missing int, err error) {
+	type pending struct{ keyID, email string }
+	m.mu.Lock()
+	m.syncLocked()
+	var todo []pending
+	for _, key := range m.keys {
+		if key.Type == KeyTypeUser && key.AccountID == "" && !key.AccountMissing {
+			todo = append(todo, pending{key.KeyID, key.UserEmail})
+		}
+	}
+	m.mu.Unlock()
+	if len(todo) == 0 {
+		return 0, 0, nil
+	}
+	found := map[string]string{} // keyID → account id ("" = no account)
+	for _, p := range todo {
+		id, ok, lerr := lookup(ctx, p.email)
+		if lerr != nil {
+			continue
+		}
+		if !ok {
+			id = ""
+		}
+		found[p.keyID] = id
+	}
+	unlock, err := m.lockForWrite()
+	if err != nil {
+		return 0, 0, err
+	}
+	defer unlock()
+	var changed []*APIKey
+	for _, p := range todo {
+		id, decided := found[p.keyID]
+		key, ok := m.keys[p.keyID]
+		if !decided || !ok || key.AccountID != "" || key.AccountMissing || key.UserEmail != p.email {
+			continue
+		}
+		key.AccountID, key.AccountMissing = id, id == ""
+		changed = append(changed, key)
+		if id == "" {
+			missing++
+		} else {
+			bound++
+		}
+	}
+	if len(changed) == 0 {
+		return 0, 0, nil
+	}
+	if err := m.save(); err != nil {
+		for _, key := range changed {
+			key.AccountID, key.AccountMissing = "", false
+		}
+		return 0, 0, err
+	}
+	for _, key := range changed {
+		keyID := key.KeyID
+		m.logAudit(ctx, AuditLogEntry{KeyID: keyID, Action: "bind_key", ResourceType: "api_key", ResourceID: &keyID,
+			Details: map[string]interface{}{"account_id": key.AccountID, "account_missing": key.AccountMissing}, Success: true})
+	}
+	return bound, missing, nil
+}
+
+// DeleteUserKeys permanently deletes every user-type key that acts as email
+// (KeyTypeUser, APIKey.UserEmail) and reports how many it deleted. Deleting an
+// account calls it (internal/accountdelete): a user key acts only as its
+// account, so it has nothing left to do once the account is gone. Keys of
+// every other type name no account and are untouched. The audit log keeps a
+// delete_key entry per key.
+func (m *Manager) DeleteUserKeys(ctx context.Context, email string) (int, error) {
+	// Both sides through the one email key (pgtext.EmailKey).
+	email = pgtext.EmailKey(email)
+	if email == "" {
+		return 0, nil
+	}
+	unlock, err := m.lockForWrite()
+	if err != nil {
+		return 0, err
+	}
+	defer unlock()
+	var gone []*APIKey
+	for _, key := range m.keys {
+		if key.Type == KeyTypeUser && pgtext.EmailKey(key.UserEmail) == email {
+			gone = append(gone, key)
+		}
+	}
+	if len(gone) == 0 {
+		return 0, nil
+	}
+	for _, key := range gone {
+		delete(m.keys, key.KeyID)
+		delete(m.keyHashIndex, key.KeyHash)
+		if key.PreviousKeyHash != nil {
+			delete(m.keyHashIndex, *key.PreviousKeyHash)
+		}
+	}
+	if err := m.save(); err != nil {
+		// The file still holds the keys: keep memory in step with it.
+		for _, key := range gone {
+			m.keys[key.KeyID] = key
+			m.keyHashIndex[key.KeyHash] = key.KeyID
+			if key.PreviousKeyHash != nil {
+				m.keyHashIndex[*key.PreviousKeyHash] = key.KeyID
+			}
+		}
+		return 0, err
+	}
+	for _, key := range gone {
+		delete(m.rateLimits, key.KeyID)
+		keyID := key.KeyID
+		m.logAudit(ctx, AuditLogEntry{KeyID: keyID, Action: "delete_key", ResourceType: "api_key", ResourceID: &keyID,
+			Details: map[string]interface{}{"reason": "account deleted"}, Success: true})
+	}
+	return len(gone), nil
 }
 
 // ValidateKey validates an API key and checks permissions, on no particular
@@ -757,15 +1093,34 @@ func (m *Manager) validate(ctx context.Context, rawKey string, surface Surface, 
 	}
 	if key.PreviousKeyHash != nil && keyHash == *key.PreviousKeyHash {
 		if key.PreviousKeyExpires != nil && time.Now().UTC().After(*key.PreviousKeyExpires) {
-			delete(m.keyHashIndex, *key.PreviousKeyHash)
+			// Retire it in memory at once: the rotated-out token is refused
+			// here whatever happens next.
+			delete(m.keyHashIndex, keyHash)
 			key.PreviousKeyHash = nil
 			key.PreviousKeyExpires = nil
-			// Persist the retirement of the rotated-out previous key. If this
-			// fails the in-memory index is already updated (the old hash will be
-			// rejected this process), but the change must survive a restart, so
-			// surface the failure rather than dropping it silently.
-			if err := m.save(); err != nil {
-				logging.From(ctx).Error("apikeys: failed to persist expiry of rotated key", "key_id", key.KeyID, "err", err)
+			// Persist it only if the file's lock is free right now:
+			// authentication never waits on another process. Under the lock
+			// the file is re-read first; another process's change to the key
+			// is adopted (then retired again here if it still holds this
+			// token). The key is saved when it no longer has a rotated-out
+			// token — which an unchanged file still records. When skipped,
+			// the next write of the store saves it, and the expiry is checked
+			// on every use meanwhile.
+			if release, err := m.fileLock(0); err == nil {
+				m.syncLocked()
+				if cur, ok := m.keys[keyID]; ok {
+					if cur.PreviousKeyHash != nil && *cur.PreviousKeyHash == keyHash {
+						delete(m.keyHashIndex, keyHash)
+						cur.PreviousKeyHash = nil
+						cur.PreviousKeyExpires = nil
+					}
+					if cur.PreviousKeyHash == nil {
+						if err := m.save(); err != nil {
+							logging.From(ctx).Error("apikeys: failed to persist expiry of rotated key", "key_id", cur.KeyID, "err", err)
+						}
+					}
+				}
+				release()
 			}
 			return false, nil, "API key has been rotated"
 		}
@@ -803,7 +1158,10 @@ func (m *Manager) validate(ctx context.Context, rawKey string, surface Surface, 
 		return false, nil, errMsg
 	}
 
-	return true, key, ""
+	// A copy: the caller reads it after the lock is released, while a
+	// concurrent request may bind the record (RecordUserKeyAccount).
+	k := *key
+	return true, &k, ""
 }
 
 // LookupKeyMeta resolves a raw key to its stable key ID and per-key rate-limit
@@ -906,9 +1264,11 @@ func (m *Manager) ConsumeN(keyID string, n int) bool {
 // (#230) and persists it. Used by the create/update handlers. Returns an error
 // for an unknown key.
 func (m *Manager) SetMaxPriority(keyID string, ceiling *int) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.syncLocked()
+	unlock, err := m.lockForWrite()
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	key, ok := m.keys[keyID]
 	if !ok {
 		return fmt.Errorf("api key not found: %s", keyID)

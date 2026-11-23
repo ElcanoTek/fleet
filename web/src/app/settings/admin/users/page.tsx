@@ -54,6 +54,7 @@ import {
 } from "@/components/ui/table";
 import { responseErrorText } from "@/app/lib/responseError";
 import { errorMessage } from "@/app/shared/lib/errorMessage";
+import { localizeError } from "@/app/lib/i18n/errors";
 import { getGatedJson } from "@/app/settings/lib/getGated";
 import { plural } from "@/app/shared/lib/format";
 
@@ -513,6 +514,13 @@ export default function AdminUsersPage() {
     projects?: OwnedSharedProject[];
   } | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
+  // A delete that succeeded with steps left: the account is gone (the row is
+  // removed and the panel closed), and the server says what is left and how
+  // to remove it. Shown above the table until the next delete.
+  const [deleteWarnings, setDeleteWarnings] = useState<{
+    email: string;
+    warnings: string[];
+  } | null>(null);
   // ── discovery toolbar state (search / filters / grouping) ──
   const [query, setQuery] = useState("");
   const [filterRole, setFilterRole] = useState("all");
@@ -736,6 +744,7 @@ export default function AdminUsersPage() {
   // under the button that provoked it. Success removes the row and closes it.
   const remove = async (u: AdminUser) => {
     setDeleteError(null);
+    setDeleteWarnings(null);
     setDeleting(u.email);
     try {
       const res = await fetch(
@@ -782,6 +791,19 @@ export default function AdminUsersPage() {
           projects,
         });
         return;
+      }
+      // 200 carries {"warnings": [...]} — deleted, with steps left; 204 is a
+      // complete deletion.
+      if (res.status === 200) {
+        try {
+          const body = (await res.json()) as { warnings?: unknown };
+          const warnings = Array.isArray(body.warnings)
+            ? body.warnings.filter((w): w is string => typeof w === "string" && w.trim() !== "")
+            : [];
+          if (warnings.length > 0) setDeleteWarnings({ email: u.email, warnings });
+        } catch {
+          // An unreadable body still means the account was deleted.
+        }
       }
       setUsers((prev) =>
         prev ? prev.filter((x) => x.email !== u.email) : prev,
@@ -969,6 +991,16 @@ export default function AdminUsersPage() {
         </>
       }
     >
+      {deleteWarnings ? (
+        <NoticeBanner tone="warning" className="mb-3">
+          <p>{tr("{0} was deleted, but some steps did not finish:", [deleteWarnings.email])}</p>
+          <ul className="mt-1 list-disc pl-5">
+            {deleteWarnings.warnings.map((w) => (
+              <li key={w}>{localizeError(w)}</li>
+            ))}
+          </ul>
+        </NoticeBanner>
+      ) : null}
       {error ? (
         <NoticeBanner tone="danger">{error}</NoticeBanner>
       ) : (
@@ -1378,7 +1410,7 @@ export default function AdminUsersPage() {
                   names what to transfer — so say that here too, where the
                   admin decides. */}
               <p className="mt-2 text-[0.7rem] leading-[1.5] text-[var(--color-text-muted)]">
-                {tr("Deleting removes their chats, memories, connected MCP servers (and stored credentials), connector settings, skills and personal projects. Projects they share with a team are kept — transfer those first, from the project’s settings.")}
+                {tr("Deleting removes their chats, memories, connected MCP servers (and stored credentials), connector settings, skills, personal projects, API keys and uploaded files. Projects they share with a team are kept — transfer those first, from the project’s settings.")}
               </p>
             </div>
           ) : null}

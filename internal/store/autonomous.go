@@ -109,8 +109,11 @@ func scanUIAutoSubmitRows(rows *sql.Rows) ([]UIAutoSubmit, error) {
 	return out, rows.Err()
 }
 
+// normalizeAutonomousUserEmail is the store's one email normaliser
+// (normalizeEmail): acceptances are written and matched with it, as account
+// deletion matches them.
 func normalizeAutonomousUserEmail(userEmail string) string {
-	return strings.ToLower(strings.TrimSpace(userEmail))
+	return normalizeEmail(userEmail)
 }
 
 func escapeLikeLiteral(s string) string {
@@ -127,7 +130,7 @@ func (s *Store) GetAutonomousAcceptance(ctx context.Context, userEmail string) (
 	}
 	var version int
 	err := s.db.QueryRowContext(ctx,
-		`SELECT policy_version FROM chat.autonomous_acceptances WHERE LOWER(user_email) = $1 ORDER BY policy_version DESC LIMIT 1`,
+		`SELECT policy_version FROM chat.autonomous_acceptances WHERE user_email = $1 ORDER BY policy_version DESC LIMIT 1`,
 		email,
 	).Scan(&version)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -185,7 +188,7 @@ func (s *Store) CreateUIAutoSubmit(ctx context.Context, row UIAutoSubmit) (UIAut
 	if strings.TrimSpace(row.Status) == "" {
 		row.Status = UIAutoSubmitStatusPending
 	}
-	row.UserEmail = strings.TrimSpace(row.UserEmail)
+	row.UserEmail = normalizeEmail(row.UserEmail)
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -833,7 +836,7 @@ func (s *Store) sweepOneUIAutoSubmit(ctx context.Context, id, convID string, now
 		`SELECT EXISTS (
 		   SELECT 1
 		     FROM chat.autonomous_acceptances
-		    WHERE LOWER(user_email) = $1
+		    WHERE user_email = $1
 		      AND policy_version >= $2
 		 )`,
 		normalizeAutonomousUserEmail(row.UserEmail),

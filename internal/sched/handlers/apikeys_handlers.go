@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -115,7 +116,7 @@ func (h *Handlers) CreateAPIKey(w http.ResponseWriter, r *http.Request) {
 		)
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "Failed to create API key")
+		writeKeyStoreError(w, err, http.StatusInternalServerError, "Failed to create API key")
 		return
 	}
 
@@ -207,6 +208,22 @@ func (h *Handlers) GetAPIKey(w http.ResponseWriter, r *http.Request) {
 // leaves the old key valid is indistinguishable from not rotating.
 const maxRotateGraceHours = 168
 
+// errKeyStoreBusy is the answer to a key write while another process holds the
+// key store's lock longer than a write waits (apikeys.ErrStoreLocked).
+const errKeyStoreBusy = "the API-key store is busy with another change; try again in a few seconds"
+
+// writeKeyStoreError answers a key write that failed: 503 with Retry-After
+// when the key store is locked by another process (a fixed message: the
+// error names the lock file's path), otherwise status and msg.
+func writeKeyStoreError(w http.ResponseWriter, err error, status int, msg string) {
+	if errors.Is(err, apikeys.ErrStoreLocked) {
+		w.Header().Set("Retry-After", "5")
+		writeError(w, http.StatusServiceUnavailable, errKeyStoreBusy)
+		return
+	}
+	writeError(w, status, msg)
+}
+
 // RotateAPIKey handles POST /keys/{key_id}/rotate
 func (h *Handlers) RotateAPIKey(w http.ResponseWriter, r *http.Request) {
 	keyID := chi.URLParam(r, "key_id")
@@ -222,7 +239,7 @@ func (h *Handlers) RotateAPIKey(w http.ResponseWriter, r *http.Request) {
 
 	key, rawKey, err := h.apiKeys.RotateKey(r.Context(), keyID, gracePeriodHours)
 	if err != nil {
-		writeError(w, http.StatusNotFound, err.Error())
+		writeKeyStoreError(w, err, http.StatusNotFound, err.Error())
 		return
 	}
 
@@ -240,7 +257,7 @@ func (h *Handlers) RotateAPIKey(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) RevokeAPIKey(w http.ResponseWriter, r *http.Request) {
 	keyID := chi.URLParam(r, "key_id")
 	if err := h.apiKeys.RevokeKey(r.Context(), keyID); err != nil {
-		writeError(w, http.StatusNotFound, err.Error())
+		writeKeyStoreError(w, err, http.StatusNotFound, err.Error())
 		return
 	}
 
@@ -259,7 +276,7 @@ func (h *Handlers) RevokeAPIKey(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) DeleteAPIKey(w http.ResponseWriter, r *http.Request) {
 	keyID := chi.URLParam(r, "key_id")
 	if err := h.apiKeys.DeleteKey(r.Context(), keyID); err != nil {
-		writeError(w, http.StatusNotFound, err.Error())
+		writeKeyStoreError(w, err, http.StatusNotFound, err.Error())
 		return
 	}
 

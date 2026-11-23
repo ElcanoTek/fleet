@@ -7,12 +7,14 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/sched/apikeys"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/testdb/fleetdb"
 )
@@ -47,9 +49,23 @@ func serverFixture(t *testing.T) *Server {
 		// (a different user reaches the handler and gets 404). The gate
 		// itself is covered by membership_test against the real store.
 		isMember: allowAllMembers,
+		// The key store every server has (cmd/fleet wires one): deleting an
+		// account deletes its user keys from it.
+		apiKeys: newTestKeyStore(t),
 	}
 	t.Cleanup(func() { stopServerFixture(t, srv, st) })
 	return srv
+}
+
+// newTestKeyStore is an empty API-key store of the test's own.
+func newTestKeyStore(t *testing.T) *apikeys.Manager {
+	t.Helper()
+	dir := t.TempDir()
+	mgr, err := apikeys.NewManager(filepath.Join(dir, "api_keys.json"), filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return mgr
 }
 
 // allowAllMembers is the test override for Server.isMember: every

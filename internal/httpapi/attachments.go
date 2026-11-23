@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/accountdelete"
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/safe"
@@ -62,9 +63,11 @@ type uploadedAttachment struct {
 // so a caller with no email still cannot reach anyone else's subtree. That is
 // a test-only shape: every route reaching here sits behind the auth + member
 // middleware, which refuses a request whose principal names no user.
+//
+// The segment is accountdelete.Digest, the one digest account deletion and its
+// maintenance sweep remove by.
 func userUploadsRoot(baseDir, userEmail string) string {
-	sum := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(userEmail))))
-	return filepath.Join(baseDir, "uploads", hex.EncodeToString(sum[:])[:32])
+	return filepath.Join(baseDir, "uploads", accountdelete.Digest(userEmail))
 }
 
 // postAttachments accepts one-or-more files via multipart/form-data under the

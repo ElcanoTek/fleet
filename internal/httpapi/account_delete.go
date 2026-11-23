@@ -1,0 +1,270 @@
+// Copyright (c) 2026 ElcanoTek
+// SPDX-License-Identifier: MIT
+
+package httpapi
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/ElcanoTek/fleet/internal/accountdelete"
+	"github.com/ElcanoTek/fleet/internal/identity"
+	"github.com/ElcanoTek/fleet/internal/logging"
+	"github.com/ElcanoTek/fleet/internal/safe"
+)
+
+// defaultAccountDrainTimeout bounds how long deleting an account waits for
+// the account's requests and turns to stop once cancelled. Past it the deletion
+// goes ahead: a write that still lands afterwards is refused for want of an
+// account (store.withAccountRow) or removed by the maintenance pass
+// (sweepDeletedAccounts).
+const defaultAccountDrainTimeout = 15 * time.Second
+
+// defaultAccountDeleteTimeout bounds an account deletion once the account's
+// work is stopped (the database deletion, keys, files, the server's cleanup).
+const defaultAccountDeleteTimeout = 2 * time.Minute
+
+// accountDeleteTimeout is defaultAccountDeleteTimeout, or accountDeleteLimit
+// (a test seam).
+func (s *Server) accountDeleteTimeout() time.Duration {
+	if s.accountDeleteLimit > 0 {
+		return s.accountDeleteLimit
+	}
+	return defaultAccountDeleteTimeout
+}
+
+// accountDrainTimeout is how long this server waits for an account's work
+// to stop (accountDrain, a test seam, or defaultAccountDrainTimeout).
+func (s *Server) accountDrainTimeout() time.Duration {
+	if s.accountDrain > 0 {
+		return s.accountDrain
+	}
+	return defaultAccountDrainTimeout
+}
+
+// stopAccountWork stops what the account has running in this process before
+// it is deleted: its requests in flight (s.accounts, already closed by the
+// caller) and the turns it runs — in its own chats, and as a participant in
+// other people's. It waits for them up to accountDrainTimeout and reports
+// whether everything stopped in time. It returns early with ctx's error when
+// ctx ends — the deleting request was cancelled (its client went away, or the
+// account deleting is itself being deleted) — and the caller then deletes
+// nothing, though the requests and turns it already cancelled stay cancelled.
+func (s *Server) stopAccountWork(ctx context.Context, email string) (stopped bool, err error) {
+	email = identity.NormalizeEmail(email)
+	deadline := time.Now().Add(s.accountDrainTimeout())
+	var turns []string
+	for _, convID := range s.runningTurnConvIDs() {
+		if s.turnBelongsTo(ctx, convID, email) && s.cancelInflight(convID) {
+			turns = append(turns, convID)
+		}
+	}
+	stopped = true
+	tick := time.NewTicker(25 * time.Millisecond)
+	defer tick.Stop()
+	for _, convID := range turns {
+		for stopped {
+			entry, ok := s.getInflight(convID)
+			if !ok || !entry.IsRunning() {
+				break
+			}
+			if !time.Now().Before(deadline) {
+				stopped = false
+				break
+			}
+			select {
+			case <-ctx.Done():
+				return false, ctx.Err()
+			case <-tick.C:
+			}
+		}
+	}
+	drained, err := s.accounts.wait(ctx, email, time.Until(deadline))
+	if err != nil {
+		return false, err
+	}
+	return stopped && drained, nil
+}
+
+// runningTurnConvIDs lists the conversations with a turn running now.
+func (s *Server) runningTurnConvIDs() []string {
+	s.inflightMu.Lock()
+	defer s.inflightMu.Unlock()
+	out := make([]string, 0, len(s.inflight))
+	for id, e := range s.inflight {
+		if e.IsRunning() {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// turnBelongsTo reports whether convID's running turn is email's (already
+// normalized): it runs it (as owner or as a multiplayer participant), or the
+// chat is email's own and goes with the account.
+func (s *Server) turnBelongsTo(ctx context.Context, convID, email string) bool {
+	if entry, ok := s.getInflight(convID); ok && entry.steer != nil && identity.NormalizeEmail(entry.steer.user) == email {
+		return true
+	}
+	s.inflightMu.Lock()
+	participant := s.activeParticipantWorkspaces[convID]
+	s.inflightMu.Unlock()
+	if participant != "" && identity.NormalizeEmail(participant) == email {
+		return true
+	}
+	if s.store == nil {
+		return false
+	}
+	conv, err := s.store.GetConversationOwnerAndMultiplayer(ctx, convID)
+	return err == nil && conv != nil && identity.NormalizeEmail(conv.UserEmail) == email
+}
+
+// accountEmails lists every account's email, whatever its state.
+func (s *Server) accountEmails(ctx context.Context) ([]string, error) {
+	users, err := s.store.ListUsers(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(users))
+	for _, u := range users {
+		out = append(out, identity.NormalizeEmail(u.Email))
+	}
+	return out, nil
+}
+
+// sweepDeletedAccounts is the maintenance pass's account step: it removes
+// what names an address that no longer has an account — rows in tables only
+// a signed-in account writes (store.SweepDeletedAccountRows), upload and
+// private workspace trees under the attachment directory, and this process's
+// in-memory approvals. It covers accounts deleted before deletion reached
+// these, a deletion from the CLI while this server runs (a turn in flight can
+// write a private workspace tree back as it ends, and the CLI cannot reach
+// this process's memory), and a CLI that resolved another attachment
+// directory.
+//
+// The directories are read first and the accounts listed once afterwards, so
+// an account created while the pass runs is either listed or had no
+// directory yet: its files are never taken for a deleted account's.
+func (s *Server) sweepDeletedAccounts(ctx context.Context) {
+	if s.store == nil {
+		return
+	}
+	if sw, ok := s.store.(interface {
+		SweepDeletedAccountRows(context.Context) (int64, error)
+	}); ok {
+		if n, err := sw.SweepDeletedAccountRows(ctx); err != nil {
+			logging.From(ctx).Error("maintenance: deleted-account row sweep failed", "err", err)
+		} else if n > 0 {
+			logging.From(ctx).Info("maintenance: removed rows of deleted accounts", "removed", n)
+		}
+	}
+	var uploads []string
+	if s.cfg != nil && s.cfg.EmailAttachmentDir != "" {
+		var err error
+		if uploads, err = accountdelete.UploadDigests(s.cfg.EmailAttachmentDir); err != nil {
+			logging.From(ctx).Error("maintenance: reading the uploads directory failed", "err", err)
+		}
+	}
+	stashes := s.participantStashes()
+	emails, err := s.accountEmails(ctx)
+	if err != nil {
+		logging.From(ctx).Error("maintenance: listing accounts failed", "err", err)
+		return
+	}
+	liveEmails := make(map[string]bool, len(emails))
+	liveDigests := make(map[string]bool, len(emails))
+	for _, e := range emails {
+		liveEmails[e] = true
+		liveDigests[accountdelete.Digest(e)] = true
+	}
+	var orphans []string
+	for _, d := range uploads {
+		if !liveDigests[d] {
+			orphans = append(orphans, d)
+		}
+	}
+	if len(orphans) > 0 {
+		if n, err := accountdelete.RemoveUploads(s.cfg.EmailAttachmentDir, orphans); err != nil {
+			logging.From(ctx).Error("maintenance: deleted-account upload sweep failed", "err", err)
+		} else if n > 0 {
+			logging.From(ctx).Info("maintenance: removed uploads of deleted accounts", "removed", n)
+		}
+	}
+	s.removeOrphanParticipantStashes(ctx, stashes, liveDigests)
+	s.sessionApprovals.ForgetUsersExcept(liveEmails)
+}
+
+// participantStash is one participants/<digest> tree in a conversation's
+// private workspace stash.
+type participantStash struct{ convID, digest string }
+
+// participantStashes lists every participants/<digest> tree in the private
+// workspace stashes.
+func (s *Server) participantStashes() []participantStash {
+	root, err := s.privateWorkspaceStashRoot()
+	if err != nil || root == "" {
+		return nil
+	}
+	convs, err := os.ReadDir(root)
+	if err != nil {
+		return nil
+	}
+	var out []participantStash
+	for _, d := range convs {
+		convID := d.Name()
+		if !d.IsDir() || !filepath.IsLocal(convID) || strings.ContainsAny(convID, `/\`) {
+			continue
+		}
+		entries, err := os.ReadDir(filepath.Join(root, convID, "participants"))
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if e.IsDir() && accountdelete.IsDigest(e.Name()) {
+				out = append(out, participantStash{convID, e.Name()})
+			}
+		}
+	}
+	return out
+}
+
+// removeOrphanParticipantStashes removes the trees among stashes whose digest
+// is no account's. Each removal holds the conversation's swap lock and marks
+// a participant turn still running for that digest, so it does not move the
+// tree back as it ends.
+func (s *Server) removeOrphanParticipantStashes(ctx context.Context, stashes []participantStash, liveDigests map[string]bool) {
+	root, err := s.privateWorkspaceStashRoot()
+	if err != nil || root == "" {
+		return
+	}
+	removed := 0
+	for _, c := range stashes {
+		if liveDigests[c.digest] {
+			continue
+		}
+		unlock := s.workspaceSwapLocks.lock(c.convID)
+		s.inflightMu.Lock()
+		active := s.activeParticipantWorkspaces[c.convID]
+		s.inflightMu.Unlock()
+		if active != "" && accountdelete.Digest(active) == c.digest {
+			s.markParticipantWorkspacePurged(c.convID, active)
+		}
+		if err := os.RemoveAll(filepath.Join(root, c.convID, "participants", c.digest)); err == nil {
+			removed++
+		}
+		unlock()
+	}
+	if removed > 0 {
+		logging.From(ctx).Info("maintenance: removed private workspace files of deleted accounts", "removed", removed)
+	}
+}
+
+// logAccountDeleteProblems logs each step of a deletion that did not complete.
+func logAccountDeleteProblems(ctx context.Context, email string, problems []accountdelete.Problem) {
+	for _, problem := range problems {
+		logging.From(ctx).Warn("admin users: deleted, with a step left", "email", safe.LogSafe(email), "problem", safe.LogSafe(problem.String()))
+	}
+}

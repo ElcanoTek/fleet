@@ -36,6 +36,7 @@ var bareSlogAllowed = map[string]string{
 	"cmd/fleet.serveChat":                               reasonBoot,
 	"cmd/fleet.serveInBackground":                       reasonBoot,
 	"cmd/fleet.buildWebServer":                          reasonBoot,
+	"cmd/fleet.bindUserKeysAtBoot":                      reasonBoot,
 	"cmd/fleet.buildTaskNotifier":                       reasonBoot,
 	"cmd/fleet.emailReplierFor":                         reasonBoot,
 	"cmd/fleet.configureGuardrail":                      reasonBoot,

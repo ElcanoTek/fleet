@@ -55,10 +55,35 @@ spells `X-User-Email`, `X-User-Session-Epoch`, `X-User-Session-Source`,
   update` refuses to install over it. `config.Validate` no longer requires a
   server token, and `bootstrap.sh` no longer generates one.
 - **User API keys.** `fleet sched apikey create <name> --type user --user
-  <email>` mints a `fleet_user_…` key that names one account. The chat
-  listener accepts it as `X-API-Key` or `Authorization: Bearer`; the account
-  is resolved on every request (an unknown or disabled account is
-  `not_a_member`). A user key carries no Operations Center permission and
+  <email>` mints a `fleet_user_…` key that names one account, and is bound
+  to it: the key records the account's id (`apikeys.APIKey.AccountID`), so
+  the account must exist first — for an address with none the command says
+  to create it (`fleet chat user add <email> --password -`) and mints
+  nothing. The chat listener accepts the key as `X-API-Key` or
+  `Authorization: Bearer`; the account is resolved on every request (an
+  unknown or disabled account is `not_a_member`). A key acts only as the
+  account it is bound to (`Principal.KeyAccountID`): an account created
+  later under the same email is answered 403 `key_predates_account`, whose
+  fix is a new key for that account. A key minted before keys named their
+  account is bound once — by `fleet serve` at boot
+  (`apikeys.Manager.BindUserKeys`), or on its first use when the boot could
+  not look its account up — to the account its email has then; one whose
+  email has no account then is marked `account_missing`, acts as no one and
+  is answered `key_predates_account` too, also once an account is created
+  under that email. Every write of `api_keys.json`, by the server or the
+  CLI, holds an advisory lock on `api_keys.json.lock` beside it (a write
+  that cannot get it within five seconds fails; a key check never waits for
+  it); where that file cannot be opened or locked, writes go on without it
+  and the server logs that once — a revocation lost to such a race is
+  harmless for user keys, since a key acts only as the account it is bound
+  to. `fleet sched apikey list` shows each user key's
+  account: its id, `missing` or `unbound` (`account` in `--json`). The one
+  case binding cannot tell apart: a key minted
+  before this release for an account that was deleted and re-created
+  before it binds to the re-created account. Deleting an account deletes
+  the user keys that act as it (`apikeys.Manager.DeleteUserKeys`, through
+  `accountdelete.Delete`; see [IDENTITY.md](IDENTITY.md)). A user key
+  carries no Operations Center permission and
   reaches no scoped-key route; any other key type is refused on the chat API
   with 403 `not_a_user_key`. Rotation and revocation are the ordinary key
   verbs, and take effect on the server's next request: the key store

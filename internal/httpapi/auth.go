@@ -14,6 +14,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/pgtext"
 	"github.com/ElcanoTek/fleet/internal/principal"
 	"github.com/ElcanoTek/fleet/internal/safe"
+	"github.com/ElcanoTek/fleet/internal/sched/apikeys"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
@@ -248,10 +249,45 @@ func (s *Server) membershipMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		resolved, _, err := principal.Resolve(ctx, s.directory(), p, principal.Enabled)
+		// The account gate first, on the principal's email, so a request that
+		// is admitted cannot be one a deletion that starts and ends while it
+		// resolves never saw: a deletion closes the gate, then cancels and
+		// waits for every request inside it (accountGate).
+		ctx, leave, open := s.accounts.enter(ctx, p.Email)
+		if !open {
+			writeNotAMember(w)
+			return
+		}
+		defer leave()
+		resolved, account, err := principal.Resolve(ctx, s.directory(), p, principal.Enabled)
+		if err != nil && ctx.Err() != nil && s.accounts.isClosed(p.Email) {
+			// The lookup was cut short because the account is being deleted.
+			writeNotAMember(w)
+			return
+		}
+		if (p.AuthMethod == principal.MethodAPIKey || p.AuthMethod == principal.MethodBearer) &&
+			p.KeyID != "" && p.KeyAccountID == "" && (err == nil || errors.Is(err, principal.ErrNotMember)) {
+			// A user key minted before keys named their account, on its first
+			// use: bind it to the account its email has now, or record that it
+			// has none, in which case it acts as no one from now on.
+			// A key store another process keeps locked leaves the key unbound
+			// for now (this request is still judged by its email; a later one
+			// binds it); any other failure is the server's.
+			if bindErr := s.bindUserKey(ctx, p.KeyID, account); bindErr != nil && !errors.Is(bindErr, apikeys.ErrStoreLocked) {
+				http.Error(w, "membership check failed", http.StatusInternalServerError)
+				return
+			}
+			if account == nil {
+				writeKeyPredatesAccount(w)
+				return
+			}
+		}
 		switch {
 		case errors.Is(err, principal.ErrNotMember), errors.Is(err, principal.ErrNoIdentity):
 			writeNotAMember(w)
+			return
+		case errors.Is(err, principal.ErrKeyPredatesAccount):
+			writeKeyPredatesAccount(w)
 			return
 		case errors.Is(err, principal.ErrSessionRevoked):
 			writeSessionRevoked(w)
@@ -261,6 +297,37 @@ func (s *Server) membershipMiddleware(next http.Handler) http.Handler {
 			return
 		}
 		next.ServeHTTP(w, r.WithContext(principal.With(ctx, resolved)))
+	})
+}
+
+// bindUserKey records the account a not-yet-bound user key acts as: the
+// account's id, or — account nil — that its email has no account.
+func (s *Server) bindUserKey(ctx context.Context, keyID string, account *identity.User) error {
+	if s.apiKeys == nil {
+		return nil
+	}
+	id := ""
+	if account != nil {
+		id = account.ID.String()
+	}
+	if err := s.apiKeys.RecordUserKeyAccount(ctx, keyID, id); err != nil {
+		logging.From(ctx).Error("user key: binding to its account failed", "key_id", keyID, "err", err)
+		return err
+	}
+	return nil
+}
+
+// errKeyPredatesAccount is the refusal of a user API key that does not act as
+// the account its email names now (principal.ErrKeyPredatesAccount, or a key
+// whose email had no account when it was bound).
+var errKeyPredatesAccount = errors.New("this API key was minted for an earlier account under this email, or before the account existed; mint a new key for the account (fleet sched apikey create <name> --type user --user <email>)")
+
+// writeKeyPredatesAccount answers 403 {"error":"key_predates_account"}: the
+// account is fine, the key is not its own.
+func writeKeyPredatesAccount(w http.ResponseWriter) {
+	writeJSONStatus(w, nil, http.StatusForbidden, map[string]string{
+		"error":   "key_predates_account",
+		"message": errKeyPredatesAccount.Error(),
 	})
 }
 

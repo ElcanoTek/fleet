@@ -436,7 +436,7 @@ func schedAPIKeyCreate(argv []string) int {
 			return errf(1, "unknown key type %q (want admin|task|webhook|readonly|user)", t)
 		}
 		if kt == apikeys.KeyTypeUser {
-			return createUserKey(mgr, ks, name, f.user, *rateLimit)
+			return createUserKey(mgr, ks, name, f.user, *rateLimit, chatAccountLookup)
 		}
 		slugs := parseCSVList(*triggerSlugs)
 		if kt == apikeys.KeyTypeWebhook {
@@ -478,18 +478,50 @@ func schedAPIKeyCreate(argv []string) int {
 	return 0
 }
 
+// chatAccountLookup finds an account in the chat database the CLI resolves
+// (DATABASE_URL, or the server's env file): the id a user key is bound to.
+func chatAccountLookup(ctx context.Context, email string) (string, bool, error) {
+	dsn, err := chatDSN("")
+	if err != nil {
+		return "", false, err
+	}
+	st, err := openChatStoreDSN(dsn)
+	if err != nil {
+		return "", false, fmt.Errorf("open chat DB: %w", err)
+	}
+	defer st.Close()
+	u, err := st.Identity().GetByEmail(ctx, email)
+	if errors.Is(err, identity.ErrNotFound) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return u.ID.String(), true, nil
+}
+
 // createUserKey mints a user key (ADR-0108): the credential `fleet chat`,
 // `fleet acp` and fleet-bench authenticate with, acting as email on the chat
-// API. The account is resolved on every request, so a key for an address with
-// no enabled account is refused then, not here.
-func createUserKey(mgr *apikeys.Manager, ks keyStore, name, email string, rateLimit int) int {
+// API. The key is bound to the account it acts as (its id), so the account
+// must exist first: a later account created under the same email is never
+// the key's. The account is still resolved on every request, so disabling it
+// ends the key's access.
+func createUserKey(mgr *apikeys.Manager, ks keyStore, name, email string, rateLimit int, lookup apikeys.AccountLookup) int {
 	if strings.TrimSpace(email) == "" {
 		return errf(1, "--type user requires --user <email> (the account the key acts as)")
 	}
 	if rateLimit != 0 {
 		return errf(1, "--rate-limit-per-minute does not apply to a user key: its turns are limited by the chat's per-user limit, like its person's (FLEET_CHAT_RATE_LIMIT_ENABLED, CHAT_RATE_PER_MIN, CHAT_RATE_PER_DAY)")
 	}
-	key, raw, err := mgr.CreateUserKey(context.Background(), name, email, rateLimit, nil, "created via the fleet CLI")
+	ctx := context.Background()
+	accountID, found, err := lookup(ctx, email)
+	if err != nil {
+		return errf(5, "look up the account %s: %v", email, err)
+	}
+	if !found {
+		return errf(1, "%s has no account: create the account first (fleet chat user add %s --password -), then mint its key", email, email)
+	}
+	key, raw, err := mgr.CreateBoundUserKey(ctx, name, email, accountID, rateLimit, nil, "created via the fleet CLI")
 	if err != nil {
 		return errf(5, "%v", err)
 	}
@@ -523,6 +555,7 @@ func schedAPIKeyList(argv []string) int {
 			Name    string `json:"name"`
 			Type    string `json:"type"`
 			User    string `json:"user,omitempty"`
+			Account string `json:"account,omitempty"`
 			Enabled bool   `json:"enabled"`
 		}
 		rows := make([]row, 0, len(keys))
@@ -532,7 +565,7 @@ func schedAPIKeyList(argv []string) int {
 				typeStr = "legacy"
 			}
 			// Never the raw key — the same fields as the text listing.
-			rows = append(rows, row{KeyID: k.KeyID, Name: k.Name, Type: typeStr, User: k.UserEmail, Enabled: k.Enabled})
+			rows = append(rows, row{KeyID: k.KeyID, Name: k.Name, Type: typeStr, User: k.UserEmail, Account: keyAccount(k), Enabled: k.Enabled})
 		}
 		return printJSON(rows)
 	}
@@ -549,9 +582,30 @@ func schedAPIKeyList(argv []string) int {
 		if k.UserEmail != "" {
 			typeStr += "\tuser=" + k.UserEmail
 		}
+		if a := keyAccount(k); a != "" {
+			typeStr += "\taccount=" + a
+		}
 		fmt.Printf("%s\t%s\ttype=%s\tenabled=%v\n", k.KeyID, k.Name, typeStr, k.Enabled)
 	}
 	return 0
+}
+
+// keyAccount is what `apikey list` shows of the account a user key acts as:
+// the account's id it is bound to; "missing" for a key whose email had no
+// account when it was bound (it acts as no one: mint a new key once the
+// account exists); "unbound" for a key minted before keys named their account
+// and not yet bound (fleet serve binds it at boot or on its first use). ""
+// for keys that act as no account.
+func keyAccount(k *apikeys.APIKey) string {
+	switch {
+	case k.Type != apikeys.KeyTypeUser:
+		return ""
+	case k.AccountMissing:
+		return "missing"
+	case k.AccountID == "":
+		return "unbound"
+	}
+	return k.AccountID
 }
 
 func schedAPIKeyRevoke(argv []string) int {

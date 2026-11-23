@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/accountdelete"
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/migrations"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
@@ -317,11 +318,15 @@ type chatStore interface {
 	// allowExisting (admins). See internal/httpapi/me.go.
 	SetOwnTeam(ctx context.Context, email, teamID string, allowExisting bool) (*store.User, error)
 	RenameTeam(ctx context.Context, from, to string) (usersUpdated, projectsUpdated int64, err error)
-	// CreateUser/DeleteUser/UpdatePassword complete the admin Users tab CRUD so
-	// user management no longer requires CLI access to the box (`fleet admin
-	// add` / `fleet chat user ...` stay the scriptable equivalents).
+	// CreateUser/UpdatePassword and the deletion below complete the admin
+	// Users tab CRUD so user management no longer requires CLI access to the
+	// box (`fleet admin add` / `fleet chat user ...` stay the scriptable
+	// equivalents).
 	CreateUser(ctx context.Context, email, plainPassword string) (*store.User, error)
-	DeleteUser(ctx context.Context, email string) error
+	// accountdelete.Store (DeleteUser) is here only to be handed to
+	// accountdelete.Delete, which every account deletion goes through; no
+	// handler calls it directly (TestEveryAccountDeletionGoesThroughDelete).
+	accountdelete.Store
 	UpdatePassword(ctx context.Context, email, plainPassword string) error
 	CountUsers(ctx context.Context) (int, error)
 	VerifyUser(ctx context.Context, email, plainPassword string) error

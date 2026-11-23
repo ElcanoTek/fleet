@@ -159,7 +159,8 @@ func adminList(argv []string) int {
 }
 
 // adminRm removes an account: its login, its Operations Center access and its
-// owned data (the store's delete cascade). One row, one delete.
+// owned data — the store's delete cascade, its user API keys and its files
+// (deleteAccount, the same deletion as Settings → Admin → Users).
 func adminRm(argv []string) int {
 	fs := flag.NewFlagSet("admin rm", flag.ContinueOnError)
 	chatURL := fs.String("chat-database-url", "", "chat Postgres DSN (default DATABASE_URL, schema chat)")
@@ -177,12 +178,16 @@ func adminRm(argv []string) int {
 		return code
 	}
 	defer st.Close()
-	if err := st.DeleteUser(context.Background(), email); err != nil {
-		if errors.Is(err, store.ErrUserNotFound) {
+	res, err := deleteAccount(context.Background(), st, email)
+	if err != nil {
+		switch {
+		case errors.Is(err, store.ErrUserNotFound):
 			return errf(2, "%s is not an account", email)
+		case errors.Is(err, errKeyStore):
+			return errf(1, "remove %s: %v — nothing was removed", email, err)
 		}
 		return errf(5, "remove %s: %v", email, err)
 	}
-	fmt.Printf("removed admin %s (login, Operations Center access and owned data)\n", email)
-	return 0
+	fmt.Printf("removed admin %s (login, Operations Center access, owned data and %s)\n", email, userKeysPhrase(res.KeysDeleted))
+	return deletedExitCode(res)
 }

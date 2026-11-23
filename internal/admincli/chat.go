@@ -2,6 +2,7 @@ package admincli
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -343,12 +344,15 @@ func chatUserDel(argv []string) int {
 		return errf(1, "open chat DB: %v", err)
 	}
 	defer st.Close()
-	ctx := context.Background()
-	if err := st.DeleteUser(ctx, email); err != nil {
+	res, err := deleteAccount(context.Background(), st, email)
+	if err != nil {
+		if errors.Is(err, errKeyStore) {
+			return errf(1, "%v — nothing was deleted", err)
+		}
 		return errf(5, "%v", err)
 	}
-	fmt.Printf("deleted chat user %s\n", email)
-	return 0
+	fmt.Printf("deleted chat user %s and %s\n", email, userKeysPhrase(res.KeysDeleted))
+	return deletedExitCode(res)
 }
 
 func chatUserList(argv []string) int {

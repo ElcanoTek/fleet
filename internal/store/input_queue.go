@@ -207,12 +207,18 @@ func (s *Store) SettleDirectInput(ctx context.Context, id, turnID string) error 
 }
 
 // insertInput is the shared insert behind EnqueueInput and ClaimDirectInput.
+// It takes the sender's account row before the chat's (lockWriterAccountTx),
+// so an input for an account being deleted commits before the deletion or is
+// refused after it.
 func (s *Store) insertInput(ctx context.Context, r InputQueueRow) (InputQueueRow, bool, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return InputQueueRow{}, false, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if err := lockWriterAccountTx(ctx, tx, r.UserEmail, r.ConversationID); err != nil {
+		return InputQueueRow{}, false, err
+	}
 	stored, created, err := s.insertInputTx(ctx, tx, r)
 	if err != nil {
 		return InputQueueRow{}, false, err

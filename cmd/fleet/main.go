@@ -741,6 +741,11 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("apikeys manager: %w", err)
 	}
+	// User keys minted before keys named their account are bound once, to the
+	// account their email has now; one whose email has none acts as no one
+	// from here on (apikeys.APIKey.AccountMissing). A key whose lookup fails
+	// is bound on its first use instead.
+	bindUserKeysAtBoot(keyMgr, chatStore)
 	chatOpts = append(chatOpts, httpapi.WithAPIKeys(keyMgr))
 
 	chatSrv := httpapi.New(cfg, mgr, chatStore, chatOpts...)

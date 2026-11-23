@@ -346,8 +346,15 @@ func (s *Store) RevokeExternalSessions(ctx context.Context, eventID, issuer, sub
 		if storedIssuer != issuer || storedSubject != subject {
 			return "", false, errors.New("logout event identity mismatch")
 		}
-		if err := tx.QueryRowContext(ctx, `SELECT epoch FROM core.external_auth_epochs WHERE issuer = $1 AND subject = $2`, issuer, subject).
-			Scan(&epoch); err != nil {
+		// The generation the first delivery rotated may be gone since: the
+		// account was deleted, or the maintenance pass removed it. Then no
+		// session carries it and a replay has nothing to rotate.
+		err := tx.QueryRowContext(ctx, `SELECT epoch FROM core.external_auth_epochs WHERE issuer = $1 AND subject = $2`, issuer, subject).
+			Scan(&epoch)
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", false, tx.Commit()
+		}
+		if err != nil {
 			return "", false, err
 		}
 		return epoch, false, tx.Commit()
@@ -916,19 +923,31 @@ func (s *Store) UpdatePassword(ctx context.Context, email, plainPassword string)
 	return nil
 }
 
-// DeleteUser removes a user by email AND their conversations. The
-// on-disk workspace directories belonging to those conversations are
-// reaped on the next SweepOrphanWorkspaces run (post-turn, from any
-// user), so uploaded attachments and scratch files don't outlive the
-// account that produced them.
+// deleteUserAfterGuard is a test seam: it runs right after DeleteUser's
+// shared-project guard, where a concurrent transfer could otherwise land.
+var deleteUserAfterGuard func()
+
+// DeleteUser removes a user by email AND everything in the database that is
+// the account's, so a later account created under the same address starts
+// with nothing of it (#563). It is the database half of deleting an account;
+// every deletion path calls it through internal/accountdelete, which also
+// deletes the account's user API keys and its on-disk upload and private
+// workspace trees. TestEveryAccountColumnHasADeletionRule lists, for every
+// column that names an account, whether this deletes it, scrubs it or keeps
+// it, and why.
 //
-// It also purges the user's remote MCP servers — cascading their encrypted
-// OAuth tokens and in-flight authorization flows — so a deleted account's
-// third-party credentials can never be inherited by a later account
-// re-provisioned under the same address (#563). Projects OWNED by the user
-// are removed with DeleteProject semantics: member conversations are
-// detached (their history belongs to their users) and the project's shared
-// memories go with the project.
+// What goes: the account's conversations (their workspace directories are
+// reaped on the next SweepOrphanWorkspaces run), its memories, remote MCP
+// servers — cascading their encrypted OAuth tokens and in-flight
+// authorization flows —, connector preferences, skills, personas, chat
+// orders, sidebar layout, pins and per-project state, its queued inputs,
+// approvals, schedules and auto-submit countdowns in other people's chats,
+// its Autonomous-mode acceptance, push subscriptions, connector share grants
+// to it, central sign-in session generations and private prompts
+// (deleteAccountKeyedRowsTx). Its workspace-shared prompts stay, owned by no
+// account. Projects OWNED by the user are removed with DeleteProject
+// semantics: member conversations are detached (their history belongs to
+// their users) and the project's shared memories go with the project.
 //
 // The cascade is done in a single transaction so a partial failure
 // can't leave orphan rows; the workspace sweep is best-effort and
@@ -936,10 +955,6 @@ func (s *Store) UpdatePassword(ctx context.Context, email, plainPassword string)
 // revocation is a remotemcp-service concern (it needs an HTTP client and
 // the decrypted refresh token) and is NOT attempted here — the rows, and
 // with them the only ciphertext copies, are gone after this commit.
-// deleteUserAfterGuard is a test seam: it runs right after DeleteUser's
-// shared-project guard, where a concurrent transfer could otherwise land.
-var deleteUserAfterGuard func()
-
 func (s *Store) DeleteUser(ctx context.Context, email string) error {
 	email = normalizeEmail(email)
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -981,6 +996,9 @@ func (s *Store) DeleteUser(ctx context.Context, email string) error {
 	}
 	if deleteUserAfterGuard != nil {
 		deleteUserAfterGuard()
+	}
+	if err := cancelPendingAdminWorkTx(ctx, tx, email); err != nil {
+		return err
 	}
 
 	if _, err := tx.ExecContext(ctx,
@@ -1119,6 +1137,9 @@ func (s *Store) DeleteUser(ctx context.Context, email string) error {
 	if _, err := tx.ExecContext(ctx,
 		`DELETE FROM projects WHERE owner_email = $1`, email); err != nil {
 		return fmt.Errorf("delete projects: %w", err)
+	}
+	if err := deleteAccountKeyedRowsTx(ctx, tx, email); err != nil {
+		return err
 	}
 	res, err := tx.ExecContext(ctx, `DELETE FROM core.users WHERE email = $1`, email)
 	if err != nil {

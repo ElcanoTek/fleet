@@ -51,18 +51,22 @@ func promptLibraryUser(account *identity.User) *models.User {
 }
 
 type PromptLibraryItem struct {
-	ID            string    `json:"id"`
-	Name          string    `json:"name"`
-	Description   string    `json:"description,omitempty"`
-	Content       string    `json:"content"`
-	Source        string    `json:"source"`
-	Visibility    string    `json:"visibility"`
-	ReadOnly      bool      `json:"read_only"`
-	OwnedByCaller bool      `json:"owned_by_caller"`
-	OwnerUsername string    `json:"owner_username,omitempty"`
-	Path          string    `json:"path,omitempty"`
-	CreatedAt     time.Time `json:"created_at,omitempty"`
-	UpdatedAt     time.Time `json:"updated_at,omitempty"`
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	Description   string `json:"description,omitempty"`
+	Content       string `json:"content"`
+	Source        string `json:"source"`
+	Visibility    string `json:"visibility"`
+	ReadOnly      bool   `json:"read_only"`
+	OwnedByCaller bool   `json:"owned_by_caller"`
+	OwnerUsername string `json:"owner_username,omitempty"`
+	// OwnerDeleted marks a workspace-shared prompt whose author's account was
+	// deleted: no account owns it (models.ReleasedPromptOwnerPrefix), only
+	// admins can edit it, and OwnerUsername is left out.
+	OwnerDeleted bool      `json:"owner_deleted,omitempty"`
+	Path         string    `json:"path,omitempty"`
+	CreatedAt    time.Time `json:"created_at,omitempty"`
+	UpdatedAt    time.Time `json:"updated_at,omitempty"`
 	// Fields and PromptTemplate make a Git entry a form prompt: the picker
 	// collects the fields and inserts the rendered template instead of
 	// Content. Only Git entries that declare a valid form carry them (see
@@ -96,6 +100,9 @@ func promptLibraryItemFromModel(p *models.PromptLibraryEntry, owner string, admi
 		Content: p.Content, Source: "workspace", Visibility: p.Visibility,
 		OwnedByCaller: p.OwnerUsername == owner || admin,
 		OwnerUsername: p.OwnerUsername, CreatedAt: p.CreatedAt, UpdatedAt: p.UpdatedAt,
+	}
+	if models.PromptOwnerDeleted(p.OwnerUsername) {
+		item.OwnerDeleted, item.OwnerUsername, item.OwnedByCaller = true, "", admin
 	}
 	if fields, tmpl, issues := clientconfig.ParsePromptForm([]byte(p.Content)); len(issues) == 0 && len(fields) > 0 {
 		item.Fields = fields

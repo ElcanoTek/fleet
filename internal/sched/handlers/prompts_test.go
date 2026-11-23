@@ -12,8 +12,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/identity"
+	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
 
 const formPromptYAML = `name: Campaign page
@@ -205,5 +208,27 @@ func TestPromptLibraryHeaderTrustAuthorizesChatMembers(t *testing.T) {
 	meAuthed.ServeHTTP(meRec, meReq)
 	if meRec.Code != http.StatusForbidden {
 		t.Fatalf("chat-only member GET /api/me = %d, want 403 not_a_member", meRec.Code)
+	}
+}
+
+// A workspace-shared prompt whose author's account was deleted is owned by no
+// account: the item says so (owner_deleted) instead of naming an owner, and
+// only an admin may edit it.
+func TestPromptLibraryItemOfADeletedAccount(t *testing.T) {
+	t.Parallel()
+	released := &models.PromptLibraryEntry{
+		ID: uuid.New(), OwnerUsername: models.ReleasedPromptOwnerPrefix + "00000000-0000-0000-0000-000000000001",
+		Name: "weekly", Content: "c", Visibility: "workspace",
+	}
+	item := promptLibraryItemFromModel(released, "someone@x.com", false)
+	if !item.OwnerDeleted || item.OwnerUsername != "" || item.OwnedByCaller {
+		t.Fatalf("member's view = %+v, want owner_deleted, no owner, not editable", item)
+	}
+	if admin := promptLibraryItemFromModel(released, "admin", true); !admin.OwnedByCaller || !admin.OwnerDeleted {
+		t.Fatalf("admin's view = %+v, want editable and owner_deleted", admin)
+	}
+	owned := &models.PromptLibraryEntry{ID: uuid.New(), OwnerUsername: "a@x.com", Name: "mine", Content: "c", Visibility: "workspace"}
+	if item := promptLibraryItemFromModel(owned, "b@x.com", false); item.OwnerDeleted || item.OwnerUsername != "a@x.com" {
+		t.Fatalf("an owned prompt = %+v", item)
 	}
 }

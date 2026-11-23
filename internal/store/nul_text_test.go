@@ -244,6 +244,7 @@ func nulMemoryUpdate(t *testing.T, f *nulFixture) {
 }
 
 func nulMemoryProposal(t *testing.T, f *nulFixture) {
+	seedAccount(t, f.s, nulUser) // a proposal is written only for an existing account
 	conv := f.conv(t)
 	prop, err := f.s.CreateMemoryProposal(f.ctx, nulUser, conv.ID, MemoryProposalParams{Content: "proposed\x00", Kind: "fact", Origin: "tool"})
 	if err != nil {

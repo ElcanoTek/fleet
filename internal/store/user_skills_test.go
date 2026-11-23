@@ -93,6 +93,7 @@ func TestUserSkillProposalFlow(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 	const me = "proposer@elcano.com"
+	seedAccount(t, s, me) // a proposal is written only for an existing account
 
 	prop, err := s.CreateUserSkillProposal(ctx, me, "weekly-pacing", "compile the weekly pacing report the way this user likes it", "1. Pull numbers.\n2. Format.")
 	if err != nil {

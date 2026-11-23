@@ -882,6 +882,20 @@ type PromptLibraryEntry struct {
 	UpdatedAt     time.Time `json:"updated_at"`
 }
 
+// ReleasedPromptOwnerPrefix starts the owner_username of a workspace-shared
+// prompt whose author's account was deleted (the prompt's id follows, since
+// prompt_library is unique on owner and name). No account owns such a prompt:
+// a prompt identity is a lower-cased email, "apikey:<id>" or "admin", so a
+// value with an upper-case letter is never one. Only admins can edit it; the
+// API reports it as owner_deleted.
+const ReleasedPromptOwnerPrefix = "Deleted account "
+
+// PromptOwnerDeleted reports whether owner is a released owner
+// (ReleasedPromptOwnerPrefix).
+func PromptOwnerDeleted(owner string) bool {
+	return strings.HasPrefix(owner, ReleasedPromptOwnerPrefix)
+}
+
 // TaskCreate is the request model for creating a new task.
 type TaskCreate struct {
 	// Name is an optional, human-readable label for the task (#238). It is the

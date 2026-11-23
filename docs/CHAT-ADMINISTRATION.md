@@ -60,6 +60,15 @@ view and pinned notes are [ADR-0117](adr/0117-helping-a-chats-people.md)). Opera
     sees the turn's full work, as for their own turns.
   - Stop is the owner's Stop. Transfer is the owner's transfer: one function,
     `transferConversation`, which both paths call.
+  - Deleting the administrator's account cancels their work no server has
+    picked up: a request still `pending` fails with "cancelled: the
+    requesting administrator's account was deleted", and an admin-mode
+    message still queued is cancelled. Work under way is left to finish —
+    a request a server has claimed (`running`) is carried out and settled as
+    usual, and an admin-mode message whose turn started runs to its end, as
+    the owner — so nothing is left half-done. Finished requests, the audit
+    log and the administrator's notes stay as history
+    ([IDENTITY.md](IDENTITY.md), "Deleting an account").
 - **Settings.** Title (manual rename path), model (not on a Lockdown chat) and
   approval mode (down to manual only), validated together before any is
   written. Archive is a server request, because it revokes a shared chat's

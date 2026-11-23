@@ -5,8 +5,6 @@ package httpapi
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -19,6 +17,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/ElcanoTek/fleet/internal/accountdelete"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/tools"
 )
@@ -206,9 +205,11 @@ func (s *Server) handleWorkspaceFile(w http.ResponseWriter, r *http.Request, con
 // paths, goes to the log.
 var errWorkspaceUnavailable = errors.New("workspace unavailable")
 
+// participantDigest names a participant's private workspace tree: the one
+// digest account deletion and its maintenance sweep remove by
+// (accountdelete.Digest).
 func participantDigest(userEmail string) string {
-	sum := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(userEmail))))
-	return hex.EncodeToString(sum[:])[:32]
+	return accountdelete.Digest(userEmail)
 }
 
 func (s *Server) privateWorkspaceStashRoot() (string, error) {
@@ -218,7 +219,7 @@ func (s *Server) privateWorkspaceStashRoot() (string, error) {
 			if err != nil {
 				return "", err
 			}
-			return filepath.Join(filepath.Clean(abs), "multiplayer-private"), nil
+			return accountdelete.PrivateWorkspaceRoot(filepath.Clean(abs)), nil
 		}
 	}
 	wsRoot, err := filepath.Abs(tools.WorkspaceDirForConversation(""))

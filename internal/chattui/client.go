@@ -516,7 +516,9 @@ const forbiddenPrefix = "server rejected the request (403)"
 // keyed on the body each fleet refusal writes: the key check answers
 // {"error":"not_a_user_key"} for a key that names no user,
 // membershipMiddleware {"error":"not_a_member"} for a key whose account is
-// not an enabled user, rejectViewerWrites {"error":"read_only"} for a viewer,
+// not an enabled user and {"error":"key_predates_account"} for a key bound to
+// an earlier account under its email, rejectViewerWrites
+// {"error":"read_only"} for a viewer,
 // and the IP filter a plain-text "Access denied" (it is the outermost
 // middleware and /healthz skips it, so Ping passes and only CheckIdentity and
 // the turn fail). Advice is given only for a body that names its cause.
@@ -536,6 +538,8 @@ func forbiddenMessage(email string, body []byte) string {
 		return readOnlyMessage(email)
 	case "not_a_user_key":
 		return forbiddenPrefix + ": this API key names no user; the chat API takes a user key (`fleet sched apikey create <name> --type user --user <you@example.com>`)"
+	case "key_predates_account":
+		return fmt.Sprintf("%s: this API key was minted for an earlier account under %s, or before that account existed; an admin can mint a new key for the account with `fleet sched apikey create <name> --type user --user <email>`", forbiddenPrefix, email)
 	}
 	switch text := strings.TrimSpace(string(body)); text {
 	case "Access denied":

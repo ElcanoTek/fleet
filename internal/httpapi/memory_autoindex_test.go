@@ -23,6 +23,7 @@ func TestAutoIndexMemories_DedupAndPropose(t *testing.T) {
 	s := serverFixture(t)
 	ctx := context.Background()
 	const user = "alice@x.com"
+	seedUser(t, s.concreteStore(t), user) // a proposal is written only for an existing account
 
 	conv, err := s.store.CreateConversation(ctx, user, "hi", "victoria", "openrouter/auto", false)
 	if err != nil {
@@ -118,6 +119,7 @@ func TestAutoIndexMemories_SupersedeCandidate(t *testing.T) {
 	s := serverFixture(t)
 	ctx := context.Background()
 	const user = "bob@x.com"
+	seedUser(t, s.concreteStore(t), user) // a proposal is written only for an existing account
 
 	conv, err := s.store.CreateConversation(ctx, user, "hi", "victoria", "openrouter/auto", false)
 	if err != nil {

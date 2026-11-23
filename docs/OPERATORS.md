@@ -19,8 +19,10 @@ streams replies from the running server's chat API (or `fleet chat --message
 "…"` for a one-shot, scriptable turn) — same governed run loop and sandbox as the
 web chat, just a CLI front-end for power users. **It authenticates with a user
 API key** (ADR-0108): mint one on the box with `fleet sched apikey create
-my-cli --type user --user you@org`, save it to `~/.config/fleet/api-key` (mode
-0600), and run `fleet chat`. The key is read from `--key-file`, else
+my-cli --type user --user you@org` (for an existing account: the key is
+bound to it, and a later account under the same email is not its — such a
+key is refused with `key_predates_account` and needs a new one), save it to
+`~/.config/fleet/api-key` (mode 0600), and run `fleet chat`. The key is read from `--key-file`, else
 `$FLEET_API_KEY`, else that file, and is never accepted on argv; the server
 acts as the key's account (`--email` only checks it). The server address is
 still read from the server's env file (`$FLEET_ENV_FILE`, else `.env.local`,

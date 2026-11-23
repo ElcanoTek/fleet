@@ -120,6 +120,7 @@ func TestUserPersonaProposals(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 	const me = "me@elcano.com"
+	seedAccount(t, s, me) // a proposal is written only for an existing account
 
 	draft, err := s.ProposeUserPersona(ctx, me, validPersonaInput("twin"))
 	if err != nil {

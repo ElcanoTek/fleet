@@ -135,6 +135,18 @@ type Server struct {
 	// apiKeys validates the user API keys the listener's own port accepts
 	// (edge.go); nil accepts none.
 	apiKeys keyValidator
+	// accounts tracks each account's requests in flight, so deleting the
+	// account can stop them first (account_gate.go).
+	accounts accountGate
+	// afterAccountWorkStopped is a test seam: it runs in an account deletion
+	// right after the account's work stopped, before the rows go.
+	afterAccountWorkStopped func()
+	// accountDrain overrides how long an account deletion waits for the
+	// account's work to stop (tests); 0 is defaultAccountDrainTimeout.
+	accountDrain time.Duration
+	// accountDeleteLimit overrides how long an account deletion may run once
+	// the account's work is stopped (tests); 0 is defaultAccountDeleteTimeout.
+	accountDeleteLimit time.Duration
 
 	// inflight tracks the currently-running turn for each conversation.
 	// Lets the server keep generating after the SSE connection drops

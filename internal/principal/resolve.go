@@ -39,6 +39,12 @@ var (
 	ErrNoIdentity = errors.New("principal: no identity")
 )
 
+// ErrKeyPredatesAccount means a user API key is bound to another account than
+// the one its email names now: it was minted for an account since deleted, or
+// before this account was created. Backends answer 403
+// {"error":"key_predates_account"}; the fix is a new key for this account.
+var ErrKeyPredatesAccount = errors.New("principal: key predates account")
+
 // Admit is a plane's membership rule over the account row: chat admits an
 // enabled account, the Operations Center one with Operations Center access
 // (or, on the Prompt Library, any enabled account). nil admits any row.
@@ -50,7 +56,9 @@ type Admit func(*identity.User) bool
 // with the row itself (for the plane's own model of the user).
 //
 // Membership outranks the session: a deleted or refused account gets
-// ErrNotMember, the verdict the UI can act on, never "sign in again". Any
+// ErrNotMember, the verdict the UI can act on, never "sign in again". A user
+// API key bound to another account than the one its email names now gets
+// ErrKeyPredatesAccount (Principal.KeyAccountID). Any
 // other error is a lookup failure, which a backend answers 500 — an
 // unreachable database says nothing about the session, and the revoked
 // verdict would delete a valid cookie over a blip.
@@ -73,6 +81,12 @@ func Resolve(ctx context.Context, dir Directory, p Principal, admit Admit) (Prin
 	}
 	if admit != nil && !admit(u) {
 		return p, u, ErrNotMember
+	}
+	// A user API key names its account by email and is bound to its id. An
+	// account under that email with another id is a later account (the one
+	// the key was minted for was deleted), and the key does not act as it.
+	if p.KeyAccountID != "" && p.KeyAccountID != u.ID.String() {
+		return p, u, ErrKeyPredatesAccount
 	}
 	if p.AuthMethod == MethodSession && p.Session.Epoch != "" {
 		live := u.SessionEpoch

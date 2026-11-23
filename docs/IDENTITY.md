@@ -156,6 +156,124 @@ advises on each demoted split admin, unknown role and duplicate username in it.
   store open migrates chat, core and sched together, so it always exists by
   the time a verb runs. (Before M6 such a verb, run first on a fresh database,
   stopped with "the identity table (core.users) does not exist yet".)
+- **Deleting an account.** Settings → Admin → Users (`DELETE
+  /admin/users/{email}`), `fleet admin rm` and `fleet chat user del` all run
+  `accountdelete.Delete`, so they delete the same things, and a later account
+  created under the same email starts with none of them:
+  - in the database (`store.DeleteUser`, one transaction): the account row,
+    its chats, memories, connectors with their stored sign-ins, connector
+    preferences, skills (team-visible ones too), personas, personal projects,
+    chat orders, sidebar layout and pins; its queued messages, approvals,
+    schedules and auto-submit countdowns in other people's chats; its place
+    in their multiplayer lists; its Autonomous-mode acceptance, browser push
+    subscriptions, the connectors other people shared with it, its central
+    sign-in session generations (which ends its fleet sessions from central
+    Auth) and its private prompts. Its workspace-shared prompts stay readable
+    by everyone, shown as **Shared by a deleted account** (`owner_deleted`
+    in the API), and only admins can edit them. Chat-administration work the
+    account asked for and no server has picked up is cancelled: a pending
+    request fails with a fixed reason and a queued admin-mode message it
+    sent is cancelled; a request a server is already carrying out, and an
+    admin-mode turn already running, finish as usual
+    ([CHAT-ADMINISTRATION.md](CHAT-ADMINISTRATION.md));
+  - in the API-key store (`api_keys.json`): the user API keys that act as it
+    (each key is also bound to its account's id, see
+    [PRINCIPAL.md](PRINCIPAL.md));
+  - on disk, under `EMAIL_ATTACHMENT_DIR`: its uploads and its private
+    workspace files in multiplayer chats. Its chats' workspace directories are
+    reaped by the orphan-workspace sweep.
+
+  **Work in flight.** The web route first refuses what the deletion would
+  refuse (no such account: 404; a team-shared project still owned: 409),
+  without touching anything. Then it stops the account's work in this
+  process before the rows go: its requests are cancelled and new ones
+  refused (`not_a_member`) until the deletion is over, and the turns it runs
+  — in its own chats and as a multiplayer participant — are cancelled; it
+  waits up to 15 seconds for both. It answers 503 and deletes nothing if its
+  own request ends first (the client left, or the administrator deleting is
+  being deleted) — though by then the account's requests in flight and its
+  turns have already been cancelled. Once the work is stopped the deletion
+  runs to its end even if the client leaves, within two minutes. If the
+  deletion then fails (a project shared with a team after the preflight, a
+  database error, the two minutes), the account's requests were already
+  refused for its duration and its turns cancelled; the account itself is
+  untouched. Writes that a turn or request still makes for the account after
+  that take a key-share lock on the account's row before any chat row — the
+  order the deletion takes them in — and so either commit before the
+  deletion starts (and are removed by it) or wait for it and are refused:
+  memory, skill and persona proposals (`store.withAccountRow`); queued,
+  direct and Stop-recorded messages (`EnqueueInput`, `ClaimDirectInput`,
+  `CancelInputKey`); approval cards (`CreateApproval`); and every write
+  checked by `lockAndVerifyOwnedOrMultiplayerTx` (schedules created or
+  fired, approvals decided). The lock is taken for every sender, a chat's
+  owner included; an address with no account is refused unless it owns the
+  chat (a chat a webhook started may belong to one, and can still write).
+  Other writes are removed by the hourly maintenance pass.
+
+  **Steps left.** The database deletion alone decides whether the account is
+  deleted. A later step that does not complete (the key store, a file) is
+  reported — and so is work still running after the 15 seconds: the web
+  route answers 200 `{"warnings": [...]}` instead of 204
+  (not an error status — the account is gone, and a retry would only get
+  404), and Settings → Admin → Users shows the warnings above the table; the
+  CLI verbs print them and exit 6. The CLI verbs use the key store and
+  attachment directory of the `fleet.service` unit (as `fleet sched apikey`
+  does), stop with nothing deleted when the key store cannot be read, and
+  report an attachment directory that does not exist.
+
+  **The hourly maintenance pass** (`RunMaintenance`, not the post-turn pass)
+  removes what names
+  an address with no account: rows in the tables only a signed-in account
+  writes (Autonomous-mode acceptances, push subscriptions, auto-submit
+  countdowns, the memory graph, private prompts not owned by an API key or
+  the admin key, a participant's queued messages, approvals and schedules in
+  someone else's chat, and central sign-in session generations older than
+  the longest session they could still back — only addresses stored in
+  normalized form, so the prompts the identity merge quarantined under a
+  losing duplicate username stay; of the queue, approvals and schedules
+  only live rows — waiting, pending, active or paused — are read), upload and private workspace
+  trees under the attachment directory whose digest is no account's, and the
+  in-memory approve/deny-all decisions of such addresses. That covers
+  accounts deleted before deletion reached these, a deletion from the CLI
+  while the server runs (a turn in flight can write a private workspace tree
+  back as it ends, and the CLI cannot reach the server's memory), and a CLI
+  that resolved another attachment directory. Connector share grants are not
+  swept: granting a connector to an address before its account exists is
+  allowed.
+
+  **Kept on purpose:** usage records (`turn_metrics`); the
+  chat-administration audit log, finished admin requests and administrators'
+  notes on chats; admin-set budgets —
+  a user budget is matched by email, so the limit and the spend already
+  counted in its current window apply to a later account under the same
+  email until an admin removes the budget; authorship labels on workspace
+  data; Operations Center tasks and datasets (they record the account's id,
+  which a later account does not share); and central Auth's last applied
+  state for its subject. A webhook trigger whose notify address
+  (`NotifyUser`, in the bundle's trigger configuration) names a deleted
+  account keeps creating chats under that address — operator
+  configuration, which deletion does not edit — and a later account created
+  with that email sees them. When you delete an account, check the bundle's
+  webhook triggers for its address and point them at another account (or
+  remove them) before the address is given to someone else. Team-visible skills go with the account while
+  workspace-shared prompts stay: a skill is loaded by the agent into other
+  people's turns as instructions they do not see each time, so one left
+  without an author would keep steering turns with nobody to answer for it;
+  a prompt is text a person reads in their draft before sending it.
+
+  **Not foreign keys.** These tables match an account by its email without
+  a foreign key to `core.users`, and the deletion lists them by hand. A
+  foreign key on the raw email would turn any writer that normalizes the
+  address differently into a failed write, and existing rows of accounts
+  deleted earlier would make adding a validated one fail at upgrade; so the
+  list is kept honest by tests instead. `TestEveryAccountColumnHasADeletionRule`
+  (`internal/store/account_delete_test.go`) lists every column that can name
+  an account with what deletion does to it and why, and fails on a new one
+  until it is listed; `TestDeleteUserLeavesNoRowNamingTheAccount` seeds every
+  deleted or scrubbed column and checks nothing names the account afterwards;
+  `TestEveryAccountDeletionGoesThroughDelete` fails on code outside
+  `accountdelete` and the store that reaches `DeleteUser` or deletes from the
+  identity table.
 - Grants are exact strings: `admin`, `client`, `readonly`, `none`, `view`,
   `run`. Padded or re-cased values (`" none "`, `Admin`) are refused, not
   trimmed.

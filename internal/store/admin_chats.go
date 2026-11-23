@@ -834,7 +834,7 @@ func (s *Store) CreateAdminRequest(ctx context.Context, in AdminRequestInput) (A
 	now := time.Now().Unix()
 	r := AdminRequest{
 		ID: uuid.NewString(), CreatedAt: now, UpdatedAt: now,
-		Actor: strings.ToLower(strings.TrimSpace(in.Actor.Email)), Via: in.Actor.Via,
+		Actor: normalizeEmail(in.Actor.Email), Via: in.Actor.Via,
 		Kind: in.Kind, ConversationID: chat.ID, Payload: pgtext.Content(payload), Reason: why,
 		State: AdminRequestPending,
 	}

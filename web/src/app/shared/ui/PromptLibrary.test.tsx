@@ -45,6 +45,24 @@ describe("PromptLibrary", () => {
     expect(screen.queryByRole("dialog", { name: "Prompt library" })).not.toBeInTheDocument();
   });
 
+  it("says a shared prompt's author was deleted instead of naming an owner", async () => {
+    const released = {
+      ...gitPrompt,
+      id: "released-1",
+      name: "Team checklist",
+      source: "workspace" as const,
+      visibility: "workspace" as const,
+      read_only: false,
+      owned_by_caller: false,
+      owner_deleted: true,
+    };
+    vi.mocked(orchestratorApi.prompts).mockResolvedValue([released]);
+    render(<PromptLibrary currentText="" onInsert={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Open prompt library" }));
+    await screen.findAllByText("Team checklist");
+    expect(screen.getByText("Shared by a deleted account")).toBeInTheDocument();
+  });
+
   it("asks in the app's confirm before deleting an owned prompt", async () => {
     const mine = {
       ...gitPrompt,

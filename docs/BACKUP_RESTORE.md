@@ -4,7 +4,7 @@ fleet keeps **two stores in one Postgres database**, each in its own schema
 ([ONE-DATABASE.md](ONE-DATABASE.md)):
 
 - **chat** (schema `chat`) — conversations, turn events, chat users (the `internal/store` pool).
-- **sched** (schema `sched`) — scheduled tasks, API keys, orchestrator users (the `internal/sched/db` pool).
+- **sched** (schema `sched`) — scheduled tasks and the Operations Center's data (the `internal/sched/db` pool).
 
 Losing the chat store loses every conversation; losing the sched store loses
 every scheduled task. There is no other copy. Back both up.
@@ -20,6 +20,17 @@ data dir at its original path (see [`CUTOVER.md`](CUTOVER.md) step 6). Include
 those directories in your file-level backups alongside the DB dumps —
 restoring the DBs alone brings back the conversations and tasks but not the
 files they reference (history replay silently drops a missing file).
+
+**API keys are a file too.** Every API key — the Operations Center's keys and
+the user keys `fleet chat`, `fleet acp` and fleet-bench sign in with — lives
+in `<data dir>/api_keys.json` (with its `audit_log.jsonl`), not in any schema,
+and no dump includes it. Back it up beside the dump. A user key is bound to
+its account's id ([PRINCIPAL.md](PRINCIPAL.md)), so after restoring an older
+database, or rebuilding one whose accounts were created again (new ids), the
+user keys of those accounts answer 403 `key_predates_account`; `fleet sched
+apikey list` shows which account each key is bound to. The remedy is to mint
+new keys for those accounts (`fleet sched apikey create <name> --type user
+--user <email>`) and delete the old ones.
 
 `fleet backup` / `fleet restore` wrap `pg_dump -Fc` (PostgreSQL
 custom format) and `pg_restore`. (These are operator-CLI verbs of the unified

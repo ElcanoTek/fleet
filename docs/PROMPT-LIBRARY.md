@@ -10,7 +10,13 @@ Center task form. It deliberately combines two ownership models:
 - **Workspace prompts** are created in the UI and stored in the scheduler
   database. Their author chooses private (only the author) or workspace-shared
   (readable by authenticated workspace members). Only the author or an admin can
-  edit or delete one.
+  edit or delete one. Deleting the author's account deletes their private
+  prompts; their workspace-shared prompts stay, readable by everyone, and are
+  then owned by no account: the API reports `owner_deleted: true` (and no
+  `owner_username`), the picker says **Shared by a deleted account**, only an
+  admin can edit or delete them, and a later account created under the same
+  email does not own them. (Team-visible skills, by contrast, go with the
+  account: see [IDENTITY.md](IDENTITY.md), "Deleting an account".)
 
 The picker supports search, inserting an entry into the current chat/task draft,
 filling in a Git entry's [form](#form-prompts) instead of editing placeholders by
