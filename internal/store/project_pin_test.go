@@ -11,6 +11,7 @@ func TestProjectPin_PatchAndOwnerScope(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "u@x.com")
 	ctx := context.Background()
 	pinned := true
 
@@ -47,6 +48,7 @@ func TestSetConversationProject_UnpinsOnFile(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "u@x.com")
 	ctx := context.Background()
 	const user = "u@x.com"
 

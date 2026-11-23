@@ -116,6 +116,7 @@ func TestChatCancel_PersistsPartialTurn(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "alice@x.com")
 	const user = "alice@x.com"
 	// Pre-create the conversation so postChat takes the existing-conversation
 	// branch and we know the ID to cancel + read history from.
@@ -200,6 +201,7 @@ func TestChatClientDisconnect_TurnSurvives(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "bob@x.com")
 	const user = "bob@x.com"
 	conv, err := s.store.CreateConversation(t.Context(), user, "hi", "victoria", "openrouter/auto", false)
 	if err != nil {

@@ -377,13 +377,27 @@ func (s *Store) RecordPanicEvent(ctx context.Context, event PanicEventRecord) er
 // separate "New lockdown chat" affordance and the bit can never be
 // mutated afterward — matches how persona is locked after the first
 // turn.
+//
+// userEmail must be an account (lockAccountTx: ErrUserNotFound otherwise); a
+// chat a webhook starts for an address with no account is created by
+// CreateWebhookConversation instead.
 func (s *Store) CreateConversation(ctx context.Context, userEmail, title, persona, model string, lockdown bool) (*Conversation, error) {
-	return insertConversation(ctx, s.db, newConversationID(ctx), userEmail, title, persona, model, lockdown)
+	var conv *Conversation
+	err := s.withAccountRow(ctx, userEmail, func(tx *sql.Tx) error {
+		var err error
+		conv, err = insertConversation(ctx, tx, newConversationID(ctx), userEmail, title, persona, model, lockdown)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return conv, nil
 }
 
 // insertConversation is CreateConversation's body against any executor, so a
 // caller can make the insert part of its own transaction
-// (CreateWebhookConversation).
+// (CreateConversation, under the account-row lock; CreateWebhookConversation,
+// whose owner may have no account).
 func insertConversation(ctx context.Context, db interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
 }, id, userEmail, title, persona, model string, lockdown bool) (*Conversation, error) {
@@ -656,6 +670,9 @@ func (s *Store) BranchConversation(ctx context.Context, userEmail, parentConvID 
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if err := lockAccountTx(ctx, tx, userEmail); err != nil {
+		return nil, err
+	}
 	var projectArg any // NULL keeps the column's created-without-project state
 	if projectID != "" {
 		projectArg = projectID

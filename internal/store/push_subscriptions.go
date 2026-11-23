@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"time"
 
@@ -37,17 +38,20 @@ func (s *Store) UpsertPushSubscription(ctx context.Context, userEmail, endpoint,
 		return errors.New("push subscription requires user, endpoint, and keys")
 	}
 	now := time.Now().Unix()
-	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO push_subscriptions (id, user_email, endpoint, keys_auth, keys_p256dh, created_at, last_active_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $6)
-		 ON CONFLICT (endpoint) DO UPDATE SET
-		   user_email = EXCLUDED.user_email,
-		   keys_auth = EXCLUDED.keys_auth,
-		   keys_p256dh = EXCLUDED.keys_p256dh,
-		   last_active_at = EXCLUDED.last_active_at`,
-		uuid.NewString(), userEmail, endpoint, keysAuth, keysP256dh, now,
-	)
-	return err
+	// Only an account subscribes (withAccountRow: ErrUserNotFound otherwise).
+	return s.withAccountRow(ctx, userEmail, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx,
+			`INSERT INTO push_subscriptions (id, user_email, endpoint, keys_auth, keys_p256dh, created_at, last_active_at)
+			 VALUES ($1, $2, $3, $4, $5, $6, $6)
+			 ON CONFLICT (endpoint) DO UPDATE SET
+			   user_email = EXCLUDED.user_email,
+			   keys_auth = EXCLUDED.keys_auth,
+			   keys_p256dh = EXCLUDED.keys_p256dh,
+			   last_active_at = EXCLUDED.last_active_at`,
+			uuid.NewString(), userEmail, endpoint, keysAuth, keysP256dh, now,
+		)
+		return err
+	})
 }
 
 // ListPushSubscriptions returns every stored subscription for userEmail (all

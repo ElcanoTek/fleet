@@ -5134,6 +5134,7 @@
   "the API-key store was not available, so the user API keys acting as {0} were not deleted; list them with `fleet sched apikey list` and delete them with `fleet sched apikey delete <key_id>`": "o armazenamento de chaves de API não estava disponível, pelo que as chaves de API de utilizador que atuam como {0} não foram eliminadas; liste-as com `fleet sched apikey list` e elimine-as com `fleet sched apikey delete <key_id>`",
   "the attachment directory {0} could not be read ({1}), so no upload or private workspace file was removed there; the server's maintenance pass removes them from the directory it uses": "não foi possível ler o diretório de anexos {0} ({1}), pelo que nenhum ficheiro carregado nem ficheiro privado do espaço de trabalho foi removido aí; a passagem de manutenção do servidor remove-os do diretório que utiliza",
   "the API-key store is busy with another change; try again in a few seconds": "o armazenamento de chaves de API está ocupado com outra alteração; tente novamente dentro de alguns segundos",
+  "this account no longer exists": "esta conta já não existe",
   "this action cannot be narrowed: approve or decline it whole": "Esta ação não pode ser limitada: aprove-a ou recuse-a por completo",
   "this action cannot be stopped once it runs": "Esta ação não pode ser parada depois de iniciada",
   "this action is not running: decline it instead": "Esta ação não está em execução: recuse-a",

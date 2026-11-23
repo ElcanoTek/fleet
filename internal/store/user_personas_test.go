@@ -29,6 +29,7 @@ func TestUserPersonasCRUD(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "me@elcano.com", "other@elcano.com")
 	ctx := context.Background()
 	const me = "Me@Elcano.com"
 	const other = "other@elcano.com"
@@ -185,6 +186,7 @@ func TestUserPersonaCapacity(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "cap@elcano.com")
 	ctx := context.Background()
 	const me = "cap@elcano.com"
 	for i := 0; i < MaxUserPersonas; i++ {
@@ -208,6 +210,7 @@ func TestUserChatDigest(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "digest@elcano.com", "someone@elcano.com")
 	ctx := context.Background()
 	const me = "digest@elcano.com"
 

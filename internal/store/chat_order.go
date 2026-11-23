@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -155,13 +156,19 @@ func (s *Store) SetChatOrder(ctx context.Context, userEmail, scope string, ids [
 	if err != nil {
 		return nil, err
 	}
-	if _, err := s.db.ExecContext(ctx,
-		`INSERT INTO conversation_order (user_email, scope, conversation_ids, updated_at)
-		 VALUES ($1, $2, $3::jsonb, $4)
-		 ON CONFLICT (user_email, scope) DO UPDATE
-		   SET conversation_ids = EXCLUDED.conversation_ids, updated_at = EXCLUDED.updated_at`,
-		userEmail, scope, string(raw), time.Now().Unix(),
-	); err != nil {
+	if err := s.withAccountRow(ctx, userEmail, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx,
+			`INSERT INTO conversation_order (user_email, scope, conversation_ids, updated_at)
+			 VALUES ($1, $2, $3::jsonb, $4)
+			 ON CONFLICT (user_email, scope) DO UPDATE
+			   SET conversation_ids = EXCLUDED.conversation_ids, updated_at = EXCLUDED.updated_at`,
+			userEmail, scope, string(raw), time.Now().Unix(),
+		)
+		return err
+	}); err != nil {
+		if errors.Is(err, ErrUserNotFound) {
+			return nil, err
+		}
 		return nil, fmt.Errorf("save chat order: %w", err)
 	}
 	return kept, nil

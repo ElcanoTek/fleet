@@ -153,13 +153,21 @@ func (s *Store) CreateMemory(ctx context.Context, userEmail, content, source, ki
 	kind = NormalizeMemoryKind(kind)
 	id := uuid.NewString()
 	now := time.Now().Unix()
-	row := s.db.QueryRowContext(ctx,
-		`INSERT INTO memories (id, user_email, content, source, kind, origin, learned_at, created_at, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, 'manual', $6, $6, $6)
-		 RETURNING `+memoryColumns,
-		id, normalizeEmail(userEmail), content, source, kind, now,
-	)
-	return scanMemory(row)
+	var m *Memory
+	err := s.withAccountRow(ctx, userEmail, func(tx *sql.Tx) error {
+		var err error
+		m, err = scanMemory(tx.QueryRowContext(ctx,
+			`INSERT INTO memories (id, user_email, content, source, kind, origin, learned_at, created_at, updated_at)
+			 VALUES ($1, $2, $3, $4, $5, 'manual', $6, $6, $6)
+			 RETURNING `+memoryColumns,
+			id, normalizeEmail(userEmail), content, source, kind, now,
+		))
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return m, nil
 }
 
 // ListMemories returns every memory for the user — active first (pinned, then

@@ -4,6 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -376,12 +383,14 @@ func accountSeedParentsSQL(sql, gone, mate string) string {
 	return strings.NewReplacer("$1", q(gone), "$2", q(mate)).Replace(sql)
 }
 
-// seedAccount creates an account for a test that writes rows only an existing
-// account may have (a proposal).
-func seedAccount(t *testing.T, s *Store, email string) {
+// seedAccount creates accounts for a test that writes rows only an existing
+// account may have (every row DeleteUser removes by the address: lockAccountTx).
+func seedAccount(t testing.TB, s *Store, emails ...string) {
 	t.Helper()
-	if _, err := s.CreateUser(context.Background(), email, "seed-password-1"); err != nil && !errors.Is(err, ErrUserExists) {
-		t.Fatalf("seed account %s: %v", email, err)
+	for _, email := range emails {
+		if _, err := s.CreateUser(context.Background(), email, "seed-password-1"); err != nil && !errors.Is(err, ErrUserExists) {
+			t.Fatalf("seed account %s: %v", email, err)
+		}
 	}
 }
 
@@ -760,7 +769,8 @@ func TestParticipantInputAndApprovalRacingAccountDeletionAreRefused(t *testing.T
 	if _, _, err := s.EnqueueInput(ctx, InputQueueRow{ID: "owner-input", ConversationID: conv.ID, UserEmail: mate, ClientInputID: "own", Message: "m", Attachments: "[]", Mode: InputModeQueued}); err != nil {
 		t.Errorf("the owner's input: %v", err)
 	}
-	hook, err := s.CreateConversation(ctx, "hook@x.com", "t", "victoria", "", false)
+	// As CreateWebhookConversation files it: the owner needs no account.
+	hook, err := insertConversation(ctx, s.db, newConversationID(ctx), "hook@x.com", "t", "victoria", "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -868,5 +878,338 @@ func TestDeleteUserTakesAdminRequestsBeforeChats(t *testing.T) {
 	}
 	if err := <-deleted; err != nil {
 		t.Fatalf("DeleteUser: %v", err)
+	}
+}
+
+// accountLockCalls take the account-row lock before a write: lockAccountTx
+// and the helpers built on it, and the Operations Center's prompt-owner lock.
+var accountLockCalls = map[string]bool{
+	"lockAccountTx": true, "withAccountRow": true, "lockWriterAccountTx": true,
+	"lockAndVerifyOwnedOrMultiplayerTx": true, "lockPromptOwnerTx": true,
+}
+
+// accountWriteHelpers insert into such a table against their caller's
+// transaction: each caller is checked as if it held the INSERT.
+var accountWriteHelpers = map[string]bool{"insertConversation": true, "insertInputTx": true}
+
+// accountWriterExempt are the functions that insert into a table DeleteUser
+// clears by the account's address (or call an accountWriteHelpers helper)
+// without taking the account-row lock, keyed "<path>:<function>", each with
+// the reason.
+var accountWriterExempt = map[string]string{
+	"internal/store/store.go:insertConversation":                     "a helper (accountWriteHelpers): its callers are checked",
+	"internal/store/input_queue.go:insertInputTx":                    "a helper (accountWriteHelpers): its callers are checked",
+	"internal/store/webhook_deliveries.go:CreateWebhookConversation": "a webhook's chat may belong to an address with no account",
+	"internal/store/admin_chats.go:QueueAdminMessage":                "the message is the chat owner's and is written under the chat's row lock: deleting the owner deletes the chat",
+	"internal/store/approval_resume.go:ClaimApprovalResume":          "writes under the chat's row lock, which DeleteUser takes first for every chat the account has approvals in (lockParticipantChatsTx)",
+	"internal/store/autonomous.go:sweepOneUIAutoSubmit":              "writes under the chat's row lock, which DeleteUser takes first for every chat the account has countdowns in (lockParticipantChatsTx)",
+	"internal/store/remote_mcp_shares.go:ShareRemoteMCPServer":       "a connector may be shared with an address before its account exists",
+	"internal/store/users.go:ExternalSessionEpoch":                   "central sign-in, which may come before the person's account exists",
+	"internal/store/users.go:RevokeExternalSessions":                 "a central sign-out: the generation it writes only ends sessions",
+	"internal/store/access_provisioning.go:ApplyExternalAccess":      "provisions the account itself, in the same transaction",
+	"internal/store/import.go:ImportConversation":                    "the one-time legacy import (docs/LEGACY-IMPORT.md) copies the source system's rows as they were",
+	"internal/store/import.go:ImportMemory":                          "the one-time legacy import (docs/LEGACY-IMPORT.md) copies the source system's rows as they were",
+}
+
+// accountTablesWithForeignKey reference core.users(email), so an insert for a
+// missing account fails on its own and waits on the same row lock.
+var accountTablesWithForeignKey = map[string]bool{"shared_conversation_pins": true, "project_user_state": true}
+
+// accountTableConstants are the Go constants an INSERT names its table by.
+var accountTableConstants = map[string]string{"chatSchedulesTable": "chat_schedules"}
+
+// TestAccountKeyedWritersTakeTheAccountLock: every function in cmd/ or
+// internal/ that inserts into a table DeleteUser clears by the account's
+// address (accountColumns' "deleted" rules) takes the account-row lock in the
+// same function (accountLockCalls), or is listed in accountWriterExempt with
+// the reason. Without the lock a write still in flight when the account is
+// deleted — a turn, a request, a server running while the CLI deletes — could
+// commit after the deletion and be found by a later account under the email.
+func TestAccountKeyedWritersTakeTheAccountLock(t *testing.T) {
+	t.Parallel()
+	guarded := map[string]bool{}
+	for col, rule := range accountColumns {
+		parts := strings.SplitN(col, ".", 3)
+		if rule.kind == "deleted" && parts[0]+"."+parts[1] != "core.users" && !accountTablesWithForeignKey[parts[1]] {
+			guarded[parts[1]] = true
+		}
+	}
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fset := token.NewFileSet()
+	var offenders []string
+	seenExempt := map[string]bool{}
+	for _, top := range []string{"cmd", "internal"} {
+		err := filepath.WalkDir(filepath.Join(root, top), func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if d.IsDir() {
+				if d.Name() == "testdata" || d.Name() == "node_modules" || d.Name() == "migrations" {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+				return nil
+			}
+			src, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			f, err := parser.ParseFile(fset, path, src, 0)
+			if err != nil {
+				return err
+			}
+			rel, _ := filepath.Rel(root, path)
+			for _, decl := range f.Decls {
+				fn, ok := decl.(*ast.FuncDecl)
+				if !ok || fn.Body == nil {
+					continue
+				}
+				key := filepath.ToSlash(rel) + ":" + fn.Name.Name
+				body := string(src[fset.Position(fn.Body.Pos()).Offset:fset.Position(fn.Body.End()).Offset])
+				writes, unknown := accountKeyedWrites(fn, body, guarded)
+				for _, u := range unknown {
+					offenders = append(offenders, key+": INSERT INTO a table named by "+u+": add it to accountTableConstants")
+				}
+				switch {
+				case len(writes) == 0:
+				case accountWriterExempt[key] != "":
+					seenExempt[key] = true
+				case !callsAny(fn.Body, accountLockCalls):
+					offenders = append(offenders, key+" inserts into "+strings.Join(writes, ", "))
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(offenders) > 0 {
+		t.Errorf("inserts into tables account deletion clears, without the account-row lock (take lockAccountTx / withAccountRow, or list the function in accountWriterExempt with the reason):\n%s", strings.Join(offenders, "\n"))
+	}
+	for key := range accountWriterExempt {
+		if !seenExempt[key] {
+			t.Errorf("accountWriterExempt lists %s, which no longer inserts into such a table", key)
+		}
+	}
+}
+
+// accountInsertRe matches an INSERT's table, written out or named by a Go
+// constant (`INSERT INTO `+chatSchedulesTable).
+var accountInsertRe = regexp.MustCompile("(?i)insert\\s+into\\s+(?:(?:chat|core|sched)\\.)?(\\w+)|(?i)insert\\s+into\\s*`\\s*\\+\\s*(\\w+)")
+
+// accountKeyedWrites lists the guarded tables fn's body inserts into, and the
+// accountWriteHelpers it calls; unknown names the table constants it cannot
+// read.
+func accountKeyedWrites(fn *ast.FuncDecl, body string, guarded map[string]bool) (writes, unknown []string) {
+	for _, m := range accountInsertRe.FindAllStringSubmatch(body, -1) {
+		table := strings.ToLower(m[1])
+		if m[2] != "" {
+			if table = accountTableConstants[m[2]]; table == "" {
+				unknown = append(unknown, m[2])
+				continue
+			}
+		}
+		if guarded[table] {
+			writes = append(writes, table)
+		}
+	}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		if name := calledName(n); accountWriteHelpers[name] {
+			writes = append(writes, name+"()")
+		}
+		return true
+	})
+	return writes, unknown
+}
+
+// callsAny reports whether body calls a function named in names.
+func callsAny(body *ast.BlockStmt, names map[string]bool) bool {
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		found = found || names[calledName(n)]
+		return !found
+	})
+	return found
+}
+
+// calledName is the called function's name when n is a call, else "".
+func calledName(n ast.Node) string {
+	call, ok := n.(*ast.CallExpr)
+	if !ok {
+		return ""
+	}
+	switch f := call.Fun.(type) {
+	case *ast.Ident:
+		return f.Name
+	case *ast.SelectorExpr:
+		return f.Sel.Name
+	}
+	return ""
+}
+
+// Writes of an account's own rows made while the account is being deleted —
+// by a request or turn still in flight, or by a server while the CLI deletes
+// the account — are refused and leave no row: each waits on the account row
+// DeleteUser holds, then finds no account. A participant's countdown in
+// someone else's chat and a project memory it writes are refused the same
+// way. Not parallel: it uses DeleteUser's seam.
+func TestAccountWritesRacingDeletionLeaveNoRow(t *testing.T) {
+	s := newTestStoreWithCipher(t)
+	ctx := context.Background()
+	const gone, mate = "racing-writer@x.com", "racing-mate@x.com"
+	seedAccount(t, s, gone, mate)
+	mateConv, err := s.CreateConversation(ctx, mate, "t", "victoria", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE chat.conversations SET multiplayer = TRUE WHERE id = $1`, mateConv.ID); err != nil {
+		t.Fatal(err)
+	}
+	mateSrv, err := s.CreateRemoteMCPServer(ctx, sampleServerInput(mate))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mateProject, err := s.CreateProject(ctx, &Project{OwnerEmail: mate, Name: "shared"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writes := map[string]func() error{
+		"Autonomous-mode acceptance": func() error { return s.AcceptAutonomousPolicy(ctx, gone, 0) },
+		"push subscription": func() error {
+			return s.UpsertPushSubscription(ctx, gone, "https://push.example/late", "a", "k")
+		},
+		"chat":   func() error { _, err := s.CreateConversation(ctx, gone, "t", "victoria", "", false); return err },
+		"memory": func() error { _, err := s.CreateMemory(ctx, gone, "a late fact", "manual", ""); return err },
+		"project memory": func() error {
+			_, err := s.CreateProjectMemory(ctx, mateProject.ID, gone, "a late fact", "")
+			return err
+		},
+		"skill": func() error { _, err := s.CreateUserSkill(ctx, gone, "late-skill", "d", "b"); return err },
+		"persona": func() error {
+			_, err := s.CreateUserPersona(ctx, gone, UserPersonaInput{Name: "late-persona", DisplayName: "Late", Instructions: "i"})
+			return err
+		},
+		"connector preference": func() error {
+			return s.SetConnectorPref(ctx, gone, ConnectorPref{Kind: ConnectorKindBundled, ConnectorID: "x", Enabled: true})
+		},
+		"sidebar layout": func() error { _, err := s.SetSidebarLayout(ctx, gone, []byte(`{}`), 0); return err },
+		"project":        func() error { _, err := s.CreateProject(ctx, &Project{OwnerEmail: gone, Name: "late"}); return err },
+		"connector": func() error {
+			in := sampleServerInput(gone)
+			_, err := s.CreateRemoteMCPServer(ctx, in)
+			return err
+		},
+		"connector sign-in": func() error {
+			return s.BeginOAuthFlow(ctx, "late-state", mateSrv.ID, gone, "verifier", time.Minute)
+		},
+		"countdown in a teammate's chat": func() error {
+			_, err := s.CreateUIAutoSubmit(ctx, UIAutoSubmit{ConversationID: mateConv.ID, UserEmail: gone, CallID: "c", ActionID: "a", ValuesJSON: "{}"})
+			return err
+		},
+	}
+	results := make(map[string]chan error, len(writes))
+	for what := range writes {
+		results[what] = make(chan error, 1)
+	}
+	deleteUserAfterGuard = func() {
+		deleteUserAfterGuard = nil
+		for what, write := range writes {
+			go func() { results[what] <- write() }()
+		}
+		// Give the writes every chance to land before the deletion goes on.
+		time.Sleep(300 * time.Millisecond)
+	}
+	t.Cleanup(func() { deleteUserAfterGuard = nil })
+	if err := s.DeleteUser(ctx, gone); err != nil {
+		t.Fatalf("DeleteUser: %v", err)
+	}
+	for what, ch := range results {
+		if err := <-ch; err == nil {
+			t.Errorf("%s: written for the account while it was being deleted", what)
+		}
+	}
+	for _, table := range []string{"chat.autonomous_acceptances", "chat.push_subscriptions", "chat.conversations", "chat.memories",
+		"chat.user_skills", "chat.user_personas", "chat.user_connector_prefs", "chat.sidebar_layouts", "chat.remote_mcp_servers",
+		"chat.remote_mcp_oauth_flow", "chat.ui_autosubmits"} {
+		var n int
+		if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM `+table+` WHERE user_email = $1`, gone).Scan(&n); err != nil {
+			t.Fatalf("%s: %v", table, err)
+		}
+		if n != 0 {
+			t.Errorf("%s: %d rows outlived the account", table, n)
+		}
+	}
+	var projects int
+	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM chat.projects WHERE owner_email = $1`, gone).Scan(&projects); err != nil {
+		t.Fatal(err)
+	}
+	if projects != 0 {
+		t.Errorf("%d projects outlived the account", projects)
+	}
+	// After the deletion the same writes are refused at once.
+	for what, write := range writes {
+		if err := write(); err == nil {
+			t.Errorf("%s: written for an account that no longer exists", what)
+		}
+	}
+}
+
+// A writer that turns a participant's approval into a queued message while
+// holding only the chat row (an approval resume, a countdown firing) and an
+// account deletion: the deletion locks the chat first, so the message is
+// removed with the rest of the account's rows instead of outliving it.
+func TestChatFirstWriterRacingDeletionLeavesNoQueuedMessage(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	ctx := context.Background()
+	const gone, mate = "resumed-participant@x.com", "resume-owner@x.com"
+	seedAccount(t, s, gone, mate)
+	conv, err := s.CreateConversation(ctx, mate, "t", "victoria", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE chat.conversations SET multiplayer = TRUE WHERE id = $1`, conv.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO chat.approvals (id, conversation_id, user_email, tool_name, args_json, status, created_at) VALUES ('armed-card', $1, $2, 't', '{}', 'approved', 1)`, conv.ID, gone); err != nil {
+		t.Fatal(err)
+	}
+	// The writer, as ClaimApprovalResume runs: the chat row, then the message.
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `SELECT 1 FROM chat.conversations WHERE id = $1 FOR UPDATE`, conv.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.insertInputTx(ctx, tx, InputQueueRow{ID: "resume-input", ConversationID: conv.ID, UserEmail: gone, ClientInputID: "approval-resume:armed-card", Message: "m", Attachments: "[]", Mode: InputModeResume, State: InputStateQueued}); err != nil {
+		t.Fatal(err)
+	}
+	deleted := make(chan error, 1)
+	go func() { deleted <- s.DeleteUser(ctx, gone) }()
+	select {
+	case err := <-deleted:
+		t.Fatalf("the deletion finished (err %v) while a writer held a chat the account has an approval in", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-deleted; err != nil {
+		t.Fatalf("DeleteUser: %v", err)
+	}
+	var n int
+	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM chat.chat_input_queue WHERE user_email = $1`, gone).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("%d queued messages outlived the participant's account", n)
 	}
 }

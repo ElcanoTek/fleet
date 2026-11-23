@@ -25,6 +25,7 @@ func TestCreateAndGetConversation(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "u@x.com")
 	ctx := context.Background()
 
 	c, err := s.CreateConversation(ctx, "u@x.com", "hello", "victoria", "", false)
@@ -54,6 +55,7 @@ func TestGet_WrongUserReturnsNil(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "owner@x.com")
 	ctx := context.Background()
 	c, _ := s.CreateConversation(ctx, "owner@x.com", "", "victoria", "", false)
 
@@ -70,6 +72,7 @@ func TestList_PinnedFirstThenRecent(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "u@x.com")
 	ctx := context.Background()
 
 	a, _ := s.CreateConversation(ctx, "u@x.com", "A (older)", "victoria", "", false)
@@ -110,6 +113,7 @@ func TestAppendAndLoadHistory(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "u@x.com")
 	ctx := context.Background()
 	c, _ := s.CreateConversation(ctx, "u@x.com", "", "victoria", "", false)
 
@@ -146,6 +150,7 @@ func TestContainedPanicPair_DBAppendLoadRoundTrip(t *testing.T) {
 		secret = "Authorization: Bearer fake-db-panic-secret"
 	)
 	s := newTestStore(t)
+	seedAccount(t, s, "u@x.com")
 	ctx := context.Background()
 	conversation, err := s.CreateConversation(ctx, "u@x.com", "panic pair", "victoria", "", false)
 	if err != nil {
@@ -204,6 +209,7 @@ func TestDelete_CascadesMessages(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "u@x.com")
 	ctx := context.Background()
 	c, _ := s.CreateConversation(ctx, "u@x.com", "", "victoria", "", false)
 	_, _ = s.AppendHistory(ctx, c.ID, []agent.HistoryEntry{textEntry("user", "x")})
@@ -225,6 +231,7 @@ func TestSweep_TTL(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "u@x.com")
 	ctx := context.Background()
 	c, _ := s.CreateConversation(ctx, "u@x.com", "", "victoria", "", false)
 
@@ -252,6 +259,7 @@ func TestSweep_TTLRespectsPin(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "u@x.com")
 	ctx := context.Background()
 	c, _ := s.CreateConversation(ctx, "u@x.com", "", "victoria", "", false)
 	_ = s.SetPinned(ctx, "u@x.com", c.ID, true)
@@ -278,6 +286,7 @@ func TestSweep_UnpinnedCap(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "u@x.com")
 	ctx := context.Background()
 
 	// Create 6 unpinned conversations. Cap at 3 — expect 3 evicted. Assign
@@ -318,6 +327,7 @@ func TestSweep_UnpinnedCapPerUser(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "c@x.com", "a@x.com", "b@x.com")
 	ctx := context.Background()
 
 	// a@x.com: 5 conversations (2 over a cap of 3)
@@ -375,6 +385,7 @@ func TestSetPinned_WrongUser(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "owner@x.com")
 	ctx := context.Background()
 	c, _ := s.CreateConversation(ctx, "owner@x.com", "", "victoria", "", false)
 
@@ -391,6 +402,7 @@ func TestReplaceSummary_HappyPath(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "u@x.com")
 	ctx := context.Background()
 	c, _ := s.CreateConversation(ctx, "u@x.com", "", "victoria", "", false)
 	ids, _ := s.AppendHistory(ctx, c.ID, []agent.HistoryEntry{
@@ -446,6 +458,7 @@ func TestReplaceSummary_RejectsWrongType(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "u@x.com")
 	ctx := context.Background()
 	c, _ := s.CreateConversation(ctx, "u@x.com", "", "victoria", "", false)
 
@@ -460,6 +473,7 @@ func TestReplaceSummary_WrongUser(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "owner@x.com")
 	ctx := context.Background()
 	c, _ := s.CreateConversation(ctx, "owner@x.com", "", "victoria", "", false)
 
@@ -478,6 +492,7 @@ func TestReplaceSummary_RefusesWhenHistoryMovedOn(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "u@x.com")
 	ctx := context.Background()
 	c, _ := s.CreateConversation(ctx, "u@x.com", "", "victoria", "", false)
 	ids, err := s.AppendHistory(ctx, c.ID, []agent.HistoryEntry{
@@ -540,6 +555,7 @@ func TestReplaceSummary_WaitsOutAnOpenAppend(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "u@x.com")
 	ctx := context.Background()
 	c, _ := s.CreateConversation(ctx, "u@x.com", "", "victoria", "", false)
 	ids, err := s.AppendHistory(ctx, c.ID, []agent.HistoryEntry{textEntry("user", "hi")})
@@ -585,6 +601,7 @@ func TestReplaceSummary_RefusesAfterTruncate(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "u@x.com")
 	ctx := context.Background()
 	c, _ := s.CreateConversation(ctx, "u@x.com", "", "victoria", "", false)
 	ids, err := s.AppendHistory(ctx, c.ID, []agent.HistoryEntry{
@@ -619,6 +636,7 @@ func TestReplaceSummary_WaitsOutAnOpenTruncate(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "u@x.com")
 	ctx := context.Background()
 	c, _ := s.CreateConversation(ctx, "u@x.com", "", "victoria", "", false)
 	if _, err := s.AppendHistory(ctx, c.ID, []agent.HistoryEntry{textEntry("user", "hi"), textEntry("assistant", "bye")}); err != nil {

@@ -269,11 +269,16 @@ func (s *Server) membershipMiddleware(next http.Handler) http.Handler {
 			p.KeyID != "" && p.KeyAccountID == "" && (err == nil || errors.Is(err, principal.ErrNotMember)) {
 			// A user key minted before keys named their account, on its first
 			// use: bind it to the account its email has now, or record that it
-			// has none, in which case it acts as no one from now on.
-			// A key store another process keeps locked leaves the key unbound
-			// for now (this request is still judged by its email; a later one
-			// binds it); any other failure is the server's.
-			if bindErr := s.bindUserKey(ctx, p.KeyID, account); bindErr != nil && !errors.Is(bindErr, apikeys.ErrStoreLocked) {
+			// has none, in which case it acts as no one from now on. The key
+			// is admitted only once that is written: while another process
+			// keeps the key store locked the request is answered 503 with
+			// Retry-After (a later one binds it); any other failure is the
+			// server's.
+			if bindErr := s.bindUserKey(ctx, p.KeyID, account); bindErr != nil {
+				if errors.Is(bindErr, apikeys.ErrStoreLocked) {
+					writeKeyStoreBusy(w)
+					return
+				}
 				http.Error(w, "membership check failed", http.StatusInternalServerError)
 				return
 			}
@@ -315,6 +320,20 @@ func (s *Server) bindUserKey(ctx context.Context, keyID string, account *identit
 		return err
 	}
 	return nil
+}
+
+// errKeyStoreBusy is the answer to a not-yet-bound user key whose binding
+// could not be written because another process keeps the key store locked.
+var errKeyStoreBusy = errors.New("the API-key store is busy with another change; try again in a few seconds")
+
+// writeKeyStoreBusy answers 503 {"error":"key_store_busy"} with Retry-After:
+// the key is fine, its first-use binding is not written yet.
+func writeKeyStoreBusy(w http.ResponseWriter) {
+	w.Header().Set("Retry-After", "5")
+	writeJSONStatus(w, nil, http.StatusServiceUnavailable, map[string]string{
+		"error":   "key_store_busy",
+		"message": errKeyStoreBusy.Error(),
+	})
 }
 
 // errKeyPredatesAccount is the refusal of a user API key that does not act as

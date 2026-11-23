@@ -145,9 +145,12 @@ func (s *Server) accountEmails(ctx context.Context) ([]string, error) {
 // this process's memory), and a CLI that resolved another attachment
 // directory.
 //
-// The directories are read first and the accounts listed once afterwards, so
-// an account created while the pass runs is either listed or had no
-// directory yet: its files are never taken for a deleted account's.
+// The directories are read first and the accounts listed afterwards, so an
+// account created while the pass runs is either listed or had no directory
+// yet. A tree that looks orphaned is checked against the accounts once more
+// right before it goes (accountdelete.RemoveOrphanTree), so an account created
+// since under an address whose old tree is still there keeps what it wrote;
+// the approvals are judged against a listing taken after the files.
 func (s *Server) sweepDeletedAccounts(ctx context.Context) {
 	if s.store == nil {
 		return
@@ -174,12 +177,14 @@ func (s *Server) sweepDeletedAccounts(ctx context.Context) {
 		logging.From(ctx).Error("maintenance: listing accounts failed", "err", err)
 		return
 	}
-	liveEmails := make(map[string]bool, len(emails))
 	liveDigests := make(map[string]bool, len(emails))
 	for _, e := range emails {
-		liveEmails[e] = true
 		liveDigests[accountdelete.Digest(e)] = true
 	}
+	if s.afterAccountSnapshot != nil {
+		s.afterAccountSnapshot()
+	}
+	live := accountdelete.LiveDigests(func() ([]string, error) { return s.accountEmails(ctx) })
 	var orphans []string
 	for _, d := range uploads {
 		if !liveDigests[d] {
@@ -187,22 +192,35 @@ func (s *Server) sweepDeletedAccounts(ctx context.Context) {
 		}
 	}
 	if len(orphans) > 0 {
-		if n, err := accountdelete.RemoveUploads(s.cfg.EmailAttachmentDir, orphans); err != nil {
+		if n, err := accountdelete.RemoveUploads(s.cfg.EmailAttachmentDir, orphans, live); err != nil {
 			logging.From(ctx).Error("maintenance: deleted-account upload sweep failed", "err", err)
 		} else if n > 0 {
 			logging.From(ctx).Info("maintenance: removed uploads of deleted accounts", "removed", n)
 		}
 	}
-	s.removeOrphanParticipantStashes(ctx, stashes, liveDigests)
+	s.removeOrphanParticipantStashes(ctx, stashes, liveDigests, live)
+	emails, err = s.accountEmails(ctx)
+	if err != nil {
+		logging.From(ctx).Error("maintenance: listing accounts failed", "err", err)
+		return
+	}
+	liveEmails := make(map[string]bool, len(emails))
+	for _, e := range emails {
+		liveEmails[e] = true
+	}
 	s.sessionApprovals.ForgetUsersExcept(liveEmails)
 }
 
 // participantStash is one participants/<digest> tree in a conversation's
-// private workspace stash.
-type participantStash struct{ convID, digest string }
+// private workspace stash; aside marks a tree an interrupted removal left set
+// aside (accountdelete.RemoveAside), which is removed whatever its digest.
+type participantStash struct {
+	convID, name string
+	aside        bool
+}
 
 // participantStashes lists every participants/<digest> tree in the private
-// workspace stashes.
+// workspace stashes, and the trees a removal left set aside there.
 func (s *Server) participantStashes() []participantStash {
 	root, err := s.privateWorkspaceStashRoot()
 	if err != nil || root == "" {
@@ -223,8 +241,11 @@ func (s *Server) participantStashes() []participantStash {
 			continue
 		}
 		for _, e := range entries {
-			if e.IsDir() && accountdelete.IsDigest(e.Name()) {
-				out = append(out, participantStash{convID, e.Name()})
+			switch {
+			case e.IsDir() && accountdelete.IsDigest(e.Name()):
+				out = append(out, participantStash{convID: convID, name: e.Name()})
+			case accountdelete.IsAside(e.Name()):
+				out = append(out, participantStash{convID: convID, name: e.Name(), aside: true})
 			}
 		}
 	}
@@ -232,27 +253,36 @@ func (s *Server) participantStashes() []participantStash {
 }
 
 // removeOrphanParticipantStashes removes the trees among stashes whose digest
-// is no account's. Each removal holds the conversation's swap lock and marks
-// a participant turn still running for that digest, so it does not move the
-// tree back as it ends.
-func (s *Server) removeOrphanParticipantStashes(ctx context.Context, stashes []participantStash, liveDigests map[string]bool) {
+// is no account's: not in liveDigests, and still not live right before the
+// removal (accountdelete.RemoveOrphanTree). Each removal holds the
+// conversation's swap lock and marks a participant turn still running for
+// that digest, so it does not move the tree back as it ends.
+func (s *Server) removeOrphanParticipantStashes(ctx context.Context, stashes []participantStash, liveDigests map[string]bool, live func(string) (bool, error)) {
 	root, err := s.privateWorkspaceStashRoot()
 	if err != nil || root == "" {
 		return
 	}
 	removed := 0
 	for _, c := range stashes {
-		if liveDigests[c.digest] {
+		dir := filepath.Join(root, c.convID, "participants")
+		if c.aside {
+			_ = os.RemoveAll(filepath.Join(dir, c.name))
+			continue
+		}
+		if liveDigests[c.name] {
 			continue
 		}
 		unlock := s.workspaceSwapLocks.lock(c.convID)
 		s.inflightMu.Lock()
 		active := s.activeParticipantWorkspaces[c.convID]
 		s.inflightMu.Unlock()
-		if active != "" && accountdelete.Digest(active) == c.digest {
+		gone, err := accountdelete.RemoveOrphanTree(filepath.Join(dir, c.name), c.name, live)
+		if gone && active != "" && accountdelete.Digest(active) == c.name {
 			s.markParticipantWorkspacePurged(c.convID, active)
 		}
-		if err := os.RemoveAll(filepath.Join(root, c.convID, "participants", c.digest)); err == nil {
+		if err != nil {
+			logging.From(ctx).Error("maintenance: removing private workspace files of a deleted account failed", "err", err)
+		} else if gone {
 			removed++
 		}
 		unlock()

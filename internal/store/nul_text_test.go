@@ -20,6 +20,7 @@ import (
 func TestTextWithNULIsStoredWithoutIt(t *testing.T) {
 	t.Parallel()
 	f := &nulFixture{s: newTestStore(t), ctx: context.Background()}
+	seedAccount(t, f.s, "u@example.com")
 	if !f.s.searchEnabled {
 		t.Fatal("search must be on, as by default")
 	}

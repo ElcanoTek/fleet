@@ -15,6 +15,7 @@ func TestCountUserMessagesAfterResolution_SameSecond(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "alice@x.com")
 	ctx := context.Background()
 	const owner = "alice@x.com"
 	conv, err := s.CreateConversation(ctx, owner, "t", "victoria", "m-1", false)
@@ -74,6 +75,7 @@ func TestCountUserMessagesAfterResolution_RowWithNULSequence(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "alice@x.com")
 	ctx := context.Background()
 	conv, err := s.CreateConversation(ctx, "alice@x.com", "t", "victoria", "m-1", false)
 	if err != nil {

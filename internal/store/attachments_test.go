@@ -348,6 +348,7 @@ func TestDeleteUnpinnedOlderThan_SparesProtectedRows(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "u@x.com")
 	ctx := context.Background()
 	old := time.Now().Add(-90 * 24 * time.Hour).Unix()
 
@@ -393,6 +394,7 @@ func TestStorageConversationStats_CountsReclaimable(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "u@x.com")
 	ctx := context.Background()
 	old := time.Now().Add(-90 * 24 * time.Hour).Unix()
 
@@ -437,6 +439,7 @@ func TestConversationStorageMetaByIDs(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "u@x.com")
 	ctx := context.Background()
 
 	c, err := s.CreateConversation(ctx, "u@x.com", "big analysis", "victoria", "", false)

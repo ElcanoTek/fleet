@@ -460,7 +460,7 @@ func TestWebhookHonorsLockdownOnly(t *testing.T) {
 		SandboxImage:       "fleet-sandbox:test", // makes LockdownAvailable() true
 	}
 	srv := New(cfg, engine, st)
-	srv.isMember = allowAllMembers
+	srv.isMember = allowAllMembers(st)
 	srv.clientConfig = &clientconfig.Bundle{
 		WebhookTriggers: []clientconfig.WebhookTriggerDef{{
 			Slug:          "gh",

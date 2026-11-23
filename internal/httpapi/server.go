@@ -141,6 +141,10 @@ type Server struct {
 	// afterAccountWorkStopped is a test seam: it runs in an account deletion
 	// right after the account's work stopped, before the rows go.
 	afterAccountWorkStopped func()
+	// afterAccountSnapshot is a test seam: it runs in the maintenance pass's
+	// account step right after the accounts are listed, before anything that
+	// listing marks as orphaned is removed.
+	afterAccountSnapshot func()
 	// accountDrain overrides how long an account deletion waits for the
 	// account's work to stop (tests); 0 is defaultAccountDrainTimeout.
 	accountDrain time.Duration

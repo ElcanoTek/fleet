@@ -11,6 +11,7 @@ func TestListExecutingApprovalsExcludesCompletedBodies(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "alice@example.com")
 	ctx := context.Background()
 	const user = "alice@example.com"
 	const sentinel = "Approved — executing…"
@@ -121,6 +122,7 @@ func TestListResolvedApprovals_ReturnsResolvedRowsOldestFirst(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "alice@example.com")
 	ctx := context.Background()
 	const user = "alice@example.com"
 

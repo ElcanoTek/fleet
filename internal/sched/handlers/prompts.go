@@ -183,6 +183,8 @@ func (h *Handlers) PromptLibraryCollection(w http.ResponseWriter, r *http.Reques
 			writeError(w, http.StatusBadRequest, err.Error())
 		case errors.Is(err, storage.ErrPromptConflict):
 			writeError(w, http.StatusConflict, "a prompt with that name already exists")
+		case errors.Is(err, storage.ErrPromptOwnerGone):
+			writeError(w, http.StatusForbidden, "this account no longer exists")
 		default:
 			writeError(w, http.StatusInternalServerError, "failed to create prompt")
 		}

@@ -20,6 +20,7 @@ func TestRemoteMCPSeatsCreateDefaultAndUniqueness(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStoreWithCipher(t)
+	seedAccount(t, s, "u@x.com", "other@x.com")
 	ctx := context.Background()
 	const email = "u@x.com"
 
@@ -68,6 +69,7 @@ func TestRemoteMCPSeatsSetDefaultRenameAndDeletePromotion(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStoreWithCipher(t)
+	seedAccount(t, s, "u@x.com")
 	ctx := context.Background()
 	const email = "u@x.com"
 
@@ -124,6 +126,7 @@ func TestRemoteMCPSeatsShareIsPerSeat(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStoreWithCipher(t)
+	seedAccount(t, s, "owner@x.com")
 	ctx := context.Background()
 	const owner, mate = "owner@x.com", "mate@x.com"
 	work, err := s.CreateRemoteMCPServer(ctx, seatInput(owner, "github", "work"))

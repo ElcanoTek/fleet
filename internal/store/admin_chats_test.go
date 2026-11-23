@@ -25,6 +25,7 @@ var cliAdmin = AdminActor{Email: "robbie@ops.example", Via: AdminViaCLI}
 func TestAdminChats_ListGetAndFilters(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
+	seedAccount(t, s, "a@client.example", "b@client.example")
 	ctx := context.Background()
 
 	a, err := s.CreateConversation(ctx, "a@client.example", "Opti Workbench", "victoria", "m1", false)
@@ -79,6 +80,7 @@ func TestAdminChats_ListGetAndFilters(t *testing.T) {
 func TestAdminUpdateChat(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
+	seedAccount(t, s, "owner@client.example")
 	ctx := context.Background()
 	owner := "owner@client.example"
 	c, err := s.CreateConversation(ctx, owner, "Old title", "victoria", "m1", false)
@@ -130,6 +132,7 @@ func TestAdminUpdateChat(t *testing.T) {
 func TestAdminRequests_MessageQueuesAsOwnerWithSender(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
+	seedAccount(t, s, "owner@client.example")
 	ctx := context.Background()
 	owner := "owner@client.example"
 	c, err := s.CreateConversation(ctx, owner, "Workbench", "victoria", "m1", false)
@@ -194,6 +197,7 @@ func TestAdminRequests_MessageQueuesAsOwnerWithSender(t *testing.T) {
 func TestAdminRequests_ArchivedChatAndSettling(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
+	seedAccount(t, s, "owner@client.example")
 	ctx := context.Background()
 	owner := "owner@client.example"
 	c, err := s.CreateConversation(ctx, owner, "Workbench", "victoria", "m1", false)
@@ -235,6 +239,7 @@ func TestAdminRequests_ArchivedChatAndSettling(t *testing.T) {
 func TestAdminChatTranscriptAndNotice(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
+	seedAccount(t, s, "owner@client.example")
 	ctx := context.Background()
 	owner := "owner@client.example"
 	c, err := s.CreateConversation(ctx, owner, "T", "victoria", "m1", false)
@@ -280,6 +285,7 @@ func TestAdminChatTranscriptAndNotice(t *testing.T) {
 func TestAdminSetChatScheduleStatus(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
+	seedAccount(t, s, "owner@client.example")
 	ctx := context.Background()
 	owner := "owner@client.example"
 	c, err := s.CreateConversation(ctx, owner, "W", "victoria", "m1", false)
@@ -325,6 +331,7 @@ func TestAdminSetChatScheduleStatus(t *testing.T) {
 func TestAdminUpdateChat_ValidatesFirstAndRenamesLockedTitles(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
+	seedAccount(t, s, "owner@client.example")
 	ctx := context.Background()
 	owner := "owner@client.example"
 	c, err := s.CreateConversation(ctx, owner, "Auto title", "victoria", "m1", false)
@@ -358,6 +365,7 @@ func TestAdminUpdateChat_ValidatesFirstAndRenamesLockedTitles(t *testing.T) {
 func TestAdminRequests_ClaimAndStale(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
+	seedAccount(t, s, "owner@client.example")
 	ctx := context.Background()
 	c, err := s.CreateConversation(ctx, "owner@client.example", "W", "victoria", "m1", false)
 	if err != nil {
@@ -407,6 +415,7 @@ func TestAdminRequests_ClaimAndStale(t *testing.T) {
 func TestAdminRecycleBin(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
+	seedAccount(t, s, "owner@client.example")
 	ctx := context.Background()
 	owner := "owner@client.example"
 	c, err := s.CreateConversation(ctx, owner, "Kartik's fork", "victoria", "m1", false)

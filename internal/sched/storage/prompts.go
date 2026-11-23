@@ -20,7 +20,37 @@ var (
 	ErrPromptInvalid  = errors.New("invalid prompt")
 	ErrPromptNotFound = errors.New("prompt not found")
 	ErrPromptConflict = errors.New("prompt name already exists")
+	// ErrPromptOwnerGone refuses a prompt saved for an account that does
+	// not exist (lockPromptOwnerTx).
+	ErrPromptOwnerGone = errors.New("the prompt's owner has no account")
 )
+
+// promptOwnerIsAccount reports whether owner names an account (a signed-in
+// person's email) rather than an API key ("apikey:…"), the admin key
+// ("admin") or no account (models.ReleasedPromptOwnerPrefix) — the same
+// split the deleted-account sweep makes (store.SweepDeletedAccountRows).
+func promptOwnerIsAccount(owner string) bool {
+	return owner != "admin" && !strings.HasPrefix(owner, "apikey:") && !strings.HasPrefix(owner, models.ReleasedPromptOwnerPrefix)
+}
+
+// lockPromptOwnerTx takes, first in tx, a key-share lock on the account row
+// of a prompt's owner when the owner is an account, and refuses the write
+// with ErrPromptOwnerGone when that account does not exist. Deleting an
+// account (store.DeleteUser) locks the same row FOR UPDATE first and removes
+// the account's private prompts, so a prompt saved for an account being
+// deleted either commits first and is removed with it, or waits and is
+// refused: a later account under the same email never finds it.
+func lockPromptOwnerTx(ctx context.Context, tx *sql.Tx, owner string) error {
+	if !promptOwnerIsAccount(owner) {
+		return nil
+	}
+	var one int
+	err := tx.QueryRowContext(ctx, `SELECT 1 FROM core.users WHERE email = $1 FOR KEY SHARE`, owner).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrPromptOwnerGone
+	}
+	return err
+}
 
 func validatePromptLibraryEntry(name, description, content, visibility string) error {
 	name = strings.TrimSpace(name)
@@ -68,11 +98,21 @@ func (s *Storage) CreatePromptLibrary(ctx context.Context, owner, name, descript
 	}
 	now := time.Now().UTC()
 	p := &models.PromptLibraryEntry{ID: uuid.New(), OwnerUsername: owner, Name: name, Description: description, Content: content, Visibility: visibility, CreatedAt: now, UpdatedAt: now}
-	_, err := s.db.Conn().ExecContext(ctx, `
-		INSERT INTO prompt_library (id, owner_username, name, description, content, visibility, created_at, updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$7)`, p.ID, owner, name, description, content, visibility, now)
+	tx, err := s.db.Conn().BeginTx(ctx, nil)
 	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := lockPromptOwnerTx(ctx, tx, owner); err != nil {
+		return nil, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO prompt_library (id, owner_username, name, description, content, visibility, created_at, updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$7)`, p.ID, owner, name, description, content, visibility, now); err != nil {
 		return nil, promptLibraryDBError(err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
 	}
 	return p, nil
 }

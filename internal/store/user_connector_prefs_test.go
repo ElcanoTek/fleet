@@ -13,6 +13,7 @@ func TestConnectorPrefs(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "brad@elcano.com")
 	ctx := context.Background()
 	const email = "Brad@Elcano.com"
 

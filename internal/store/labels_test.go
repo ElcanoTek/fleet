@@ -31,6 +31,7 @@ func TestListFiltered_Labels(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "u@x.com")
 	ctx := context.Background()
 	const u = labelTestUser
 
@@ -64,6 +65,7 @@ func TestLabels_ArrayRoundTrip(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "u@x.com")
 	ctx := context.Background()
 
 	labels := []string{`a,b`, `he said "hi"`, `back\slash`, `{braces}`, `NULL`, `héllo→`}
@@ -103,6 +105,7 @@ func TestLabels_EmptyAndUnset(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "u@x.com")
 	ctx := context.Background()
 
 	unset := seedConv(t, s, "unset", nil)

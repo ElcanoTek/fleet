@@ -21,6 +21,7 @@ func TestConversationShare_EndToEnd(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "alice@x.com")
 	st := s.concreteStore(t)
 	ctx := context.Background()
 
@@ -100,6 +101,7 @@ func TestSharedConversation_ExpiredToken404(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "alice@x.com")
 	st := s.concreteStore(t)
 	ctx := context.Background()
 	conv, err := st.CreateConversation(ctx, "alice@x.com", "expiring chat", "victoria", "m", false)
@@ -122,6 +124,7 @@ func TestSharedConversation_PerTokenRateLimit(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "alice@x.com")
 	s.shareRL = ratelimit.New(3, 0) // 3/min for the test
 	st := s.concreteStore(t)
 	ctx := context.Background()
@@ -152,6 +155,7 @@ func TestSharedConversation_InvalidTokensCreateNoBuckets(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "alice@x.com")
 	s.shareRL = ratelimit.New(3, 0)
 	st := s.concreteStore(t)
 	ctx := context.Background()

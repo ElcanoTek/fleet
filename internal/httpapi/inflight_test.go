@@ -154,6 +154,7 @@ func TestCancelEndpoint_OwnerScoped(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "alice@x.com")
 	conv, err := s.store.CreateConversation(t.Context(), "alice@x.com", "hi", "victoria", "", false)
 	if err != nil {
 		t.Fatalf("CreateConversation: %v", err)
@@ -194,6 +195,7 @@ func TestCancelEndpoint_TurnTargeted(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "alice@x.com")
 	conv, err := s.store.CreateConversation(t.Context(), "alice@x.com", "hi", "victoria", "", false)
 	if err != nil {
 		t.Fatalf("CreateConversation: %v", err)
@@ -231,6 +233,7 @@ func TestCancelEndpoint_InputTargeted(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "alice@x.com")
 	conv, err := s.store.CreateConversation(t.Context(), "alice@x.com", "hi", "victoria", "", false)
 	if err != nil {
 		t.Fatalf("CreateConversation: %v", err)
@@ -265,6 +268,7 @@ func TestCancelEndpoint_InputTargetedInjectedSteer(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "alice@x.com")
 	conv, err := s.store.CreateConversation(t.Context(), "alice@x.com", "hi", "victoria", "", false)
 	if err != nil {
 		t.Fatalf("CreateConversation: %v", err)
@@ -303,6 +307,7 @@ func TestCancelEndpoint_NoInflightStillReturns204(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "alice@x.com")
 	conv, err := s.store.CreateConversation(t.Context(), "alice@x.com", "hi", "victoria", "", false)
 	if err != nil {
 		t.Fatalf("CreateConversation: %v", err)
@@ -322,6 +327,7 @@ func TestInflightEndpoint_ReportsStatus(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "alice@x.com")
 	conv, err := s.store.CreateConversation(t.Context(), "alice@x.com", "hi", "victoria", "", false)
 	if err != nil {
 		t.Fatalf("CreateConversation: %v", err)
@@ -374,6 +380,7 @@ func TestInflightEndpoint_OwnerScoped(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "alice@x.com")
 	conv, err := s.store.CreateConversation(t.Context(), "alice@x.com", "hi", "victoria", "", false)
 	if err != nil {
 		t.Fatal(err)
@@ -392,6 +399,7 @@ func TestStreamEndpoint_ReplaysFromLastEventID(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "alice@x.com")
 	conv, err := s.store.CreateConversation(t.Context(), "alice@x.com", "hi", "victoria", "", false)
 	if err != nil {
 		t.Fatal(err)

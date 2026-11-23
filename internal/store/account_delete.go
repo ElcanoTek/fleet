@@ -48,6 +48,28 @@ func cancelPendingAdminWorkTx(ctx context.Context, tx *sql.Tx, email string) err
 	return nil
 }
 
+// lockParticipantChatsTx locks, inside DeleteUser's transaction and before it
+// removes any of the account's rows, the chats in which the account has an
+// approval card or an auto-submit countdown. Two writers turn those into a
+// new queued message for the account while holding only the chat row — an
+// approval resume (ClaimApprovalResume) and a countdown that fires
+// (sweepOneUIAutoSubmit) — so with the chat locked here first such a message
+// either commits before the deletion reads the queue (and is removed with
+// the rest) or is written after it, when the cards and countdowns it comes
+// from are gone. New ones cannot appear meanwhile: creating either takes the
+// account-row lock this transaction holds.
+func lockParticipantChatsTx(ctx context.Context, tx *sql.Tx, email string) error {
+	if _, err := tx.ExecContext(ctx,
+		`SELECT 1 FROM chat.conversations
+		  WHERE id IN (SELECT conversation_id FROM chat.approvals WHERE user_email = $1
+		               UNION SELECT conversation_id FROM chat.ui_autosubmits WHERE user_email = $1)
+		  ORDER BY id
+		  FOR UPDATE`, email); err != nil {
+		return fmt.Errorf("lock the account's chats: %w", err)
+	}
+	return nil
+}
+
 // deleteAccountKeyedRowsTx removes, inside DeleteUser's transaction, the rows
 // that name the account by email and that nothing else in DeleteUser reaches:
 // tables with no foreign key to core.users, so neither the users row nor the
@@ -112,26 +134,40 @@ func deleteAccountKeyedRowsTx(ctx context.Context, tx *sql.Tx, email string) err
 	return nil
 }
 
-// withAccountRow runs fn in a transaction that first takes a key-share lock
-// on the account's row, and returns ErrUserNotFound without running fn when
-// the account does not exist. The writes a turn makes for its user after it
-// has finished — memory, skill and persona proposals — go through it, so a
-// turn that outlives its account's deletion cannot re-create the account's
-// rows: DeleteUser locks the same row FOR UPDATE first, so the write either
-// commits before the deletion starts (and the deletion removes it) or waits
-// for the deletion and finds no account.
+// lockAccountTx takes, first in the caller's transaction, a key-share lock on
+// the account row of email, and returns ErrUserNotFound when the address has
+// no account. Every write of a row that DeleteUser removes by the account's
+// address takes it (directly, through withAccountRow, or through
+// lockWriterAccountTx / lockAndVerifyOwnedOrMultiplayerTx where a chat's
+// owner may have no account): DeleteUser locks the same row FOR UPDATE before
+// anything else, so such a write either commits before the deletion starts —
+// and the deletion removes the row — or waits for the deletion and is
+// refused. A later account under the same email therefore never finds a row
+// written for the deleted one. TestAccountKeyedWritersTakeTheAccountLock
+// keeps new writers on it.
+func lockAccountTx(ctx context.Context, tx *sql.Tx, email string) error {
+	var one int
+	err := tx.QueryRowContext(ctx, `SELECT 1 FROM core.users WHERE email = $1 FOR KEY SHARE`, normalizeEmail(email)).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrUserNotFound
+	}
+	return err
+}
+
+// withAccountRow runs fn in a transaction that first takes the account-row
+// lock (lockAccountTx), and returns ErrUserNotFound without running fn when
+// the account does not exist. The account-keyed writes that need no other
+// transaction go through it — settings, subscriptions, consents, and the
+// memory, skill and persona proposals a turn makes after it has finished — so
+// a request or turn that outlives its account's deletion cannot re-create the
+// account's rows.
 func (s *Store) withAccountRow(ctx context.Context, email string, fn func(tx *sql.Tx) error) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	var one int
-	err = tx.QueryRowContext(ctx, `SELECT 1 FROM core.users WHERE email = $1 FOR KEY SHARE`, email).Scan(&one)
-	if errors.Is(err, sql.ErrNoRows) {
-		return ErrUserNotFound
-	}
-	if err != nil {
+	if err := lockAccountTx(ctx, tx, email); err != nil {
 		return err
 	}
 	if err := fn(tx); err != nil {
@@ -150,12 +186,8 @@ func (s *Store) withAccountRow(ctx context.Context, email string, fn func(tx *sq
 // refused. Take it before any chat row lock.
 func lockWriterAccountTx(ctx context.Context, tx *sql.Tx, email, convID string) error {
 	email = normalizeEmail(email)
-	var one int
-	err := tx.QueryRowContext(ctx, `SELECT 1 FROM core.users WHERE email = $1 FOR KEY SHARE`, email).Scan(&one)
-	if err == nil {
-		return nil
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
+	err := lockAccountTx(ctx, tx, email)
+	if !errors.Is(err, ErrUserNotFound) {
 		return err
 	}
 	var owner string

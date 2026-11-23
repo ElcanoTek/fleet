@@ -17,6 +17,7 @@ func TestConversationBranch_EndToEnd(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "alice@x.com")
 	st := s.concreteStore(t)
 	ctx := context.Background()
 

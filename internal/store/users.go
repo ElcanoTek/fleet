@@ -1000,6 +1000,9 @@ func (s *Store) DeleteUser(ctx context.Context, email string) error {
 	if err := cancelPendingAdminWorkTx(ctx, tx, email); err != nil {
 		return err
 	}
+	if err := lockParticipantChatsTx(ctx, tx, email); err != nil {
+		return err
+	}
 
 	if _, err := tx.ExecContext(ctx,
 		`DELETE FROM conversations WHERE user_email = $1`, email); err != nil {

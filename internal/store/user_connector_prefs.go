@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
@@ -57,13 +58,15 @@ func (s *Store) SetConnectorPref(ctx context.Context, userEmail string, p Connec
 		// are governed by availability alone.
 		return fmt.Errorf("%w: auto_enable applies only to bundled connectors", ErrConnectorPrefInvalid)
 	}
-	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO user_connector_prefs (user_email, connector_kind, connector_id, enabled, auto_enable, default_account, updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7)
-		ON CONFLICT (user_email, connector_kind, connector_id)
-		DO UPDATE SET enabled = EXCLUDED.enabled, auto_enable = EXCLUDED.auto_enable, default_account = EXCLUDED.default_account, updated_at = EXCLUDED.updated_at`,
-		email, kind, id, p.Enabled, p.AutoEnable, strings.TrimSpace(p.DefaultAccount), time.Now().Unix())
-	return err
+	return s.withAccountRow(ctx, email, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `
+			INSERT INTO user_connector_prefs (user_email, connector_kind, connector_id, enabled, auto_enable, default_account, updated_at)
+			VALUES ($1,$2,$3,$4,$5,$6,$7)
+			ON CONFLICT (user_email, connector_kind, connector_id)
+			DO UPDATE SET enabled = EXCLUDED.enabled, auto_enable = EXCLUDED.auto_enable, default_account = EXCLUDED.default_account, updated_at = EXCLUDED.updated_at`,
+			email, kind, id, p.Enabled, p.AutoEnable, strings.TrimSpace(p.DefaultAccount), time.Now().Unix())
+		return err
+	})
 }
 
 // DeleteConnectorPref removes an explicit choice, reverting the connector to

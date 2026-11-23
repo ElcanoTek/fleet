@@ -35,7 +35,7 @@ func mockServer(t *testing.T) *Server {
 		},
 		store:    st,
 		inflight: make(map[string]inflightEntry),
-		isMember: allowAllMembers,
+		isMember: allowAllMembers(st),
 	}
 	t.Cleanup(func() { stopServerFixture(t, srv, st) })
 	return srv

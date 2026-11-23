@@ -13,6 +13,7 @@ func TestRolloutConversationModel(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "alice@example.com", "bob@example.com", "carol@example.com", "dave@example.com")
 	ctx := context.Background()
 
 	// 1. Active conversation with messages on Argon -> updated + notified, updated_at preserved.

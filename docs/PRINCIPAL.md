@@ -70,8 +70,10 @@ spells `X-User-Email`, `X-User-Session-Epoch`, `X-User-Session-Source`,
   not look its account up — to the account its email has then; one whose
   email has no account then is marked `account_missing`, acts as no one and
   is answered `key_predates_account` too, also once an account is created
-  under that email. Every write of `api_keys.json`, by the server or the
-  CLI, holds an advisory lock on `api_keys.json.lock` beside it (a write
+  under that email. A first use is admitted only once that binding is
+  written: while another process keeps the key store locked it is answered
+  503 `key_store_busy` with `Retry-After`. Every write of `api_keys.json`,
+  by the server or the CLI, holds an advisory lock on `api_keys.json.lock` beside it (a write
   that cannot get it within five seconds fails; a key check never waits for
   it); where that file cannot be opened or locked, writes go on without it
   and the server logs that once — a revocation lost to such a race is

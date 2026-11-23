@@ -14,6 +14,7 @@ func TestTitleLocking(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "u@x.com")
 	ctx := context.Background()
 	c, _ := s.CreateConversation(ctx, "u@x.com", "initial", "victoria", "", false)
 

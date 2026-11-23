@@ -48,7 +48,7 @@ func serverFixture(t *testing.T) *Server {
 		// Cross-user isolation is still exercised at the handler level
 		// (a different user reaches the handler and gets 404). The gate
 		// itself is covered by membership_test against the real store.
-		isMember: allowAllMembers,
+		isMember: allowAllMembers(st),
 		// The key store every server has (cmd/fleet wires one): deleting an
 		// account deletes its user keys from it.
 		apiKeys: newTestKeyStore(t),
@@ -69,9 +69,23 @@ func newTestKeyStore(t *testing.T) *apikeys.Manager {
 }
 
 // allowAllMembers is the test override for Server.isMember: every
-// authenticated email is treated as a chat member. membership_test sets
-// isMember back to nil to exercise the real store.IsUser path.
-func allowAllMembers(context.Context, string) (bool, error) { return true, nil }
+// authenticated email is treated as a chat member, and is given an account
+// in st the first time it is seen — as a signed-in person always has one,
+// and the store refuses a write of an account's own rows for an address
+// with none (store.lockAccountTx); an in-memory fake store gets nothing.
+// membership_test sets isMember back to nil to exercise the real lookup.
+func allowAllMembers(cs chatStore) func(context.Context, string) (bool, error) {
+	return func(ctx context.Context, email string) (bool, error) {
+		st, ok := cs.(*store.Store)
+		if !ok || st == nil {
+			return true, nil
+		}
+		if _, err := st.CreateUser(context.WithoutCancel(ctx), email, "test-password-123"); err != nil && !errors.Is(err, store.ErrUserExists) {
+			return false, err
+		}
+		return true, nil
+	}
+}
 
 // concreteStore returns the Postgres store behind a DB-backed fixture. Server
 // holds the chatStore interface (so the always-on tests can inject an in-memory
@@ -95,6 +109,16 @@ func seedUser(t *testing.T, st *store.Store, email string) {
 	if _, err := st.CreateUser(context.Background(), email, "test-password-123"); err != nil &&
 		!errors.Is(err, store.ErrUserExists) {
 		t.Fatalf("seed user %s: %v", email, err)
+	}
+}
+
+// seedUsers provisions accounts for emails in s's store (seedUser), for a
+// test that writes an account's rows through the store directly.
+func seedUsers(t *testing.T, s *Server, emails ...string) {
+	t.Helper()
+	st := s.concreteStore(t)
+	for _, e := range emails {
+		seedUser(t, st, e)
 	}
 }
 
@@ -583,6 +607,7 @@ func TestSummarize_LockdownDelistedModelRunsOnTheDefault(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "alice@x.com")
 	s.cfg.SandboxImage = "ghcr.io/x/y:1"
 	s.cfg.LockdownAllowedModels = []string{"a/b", "c/d"}
 	const user = "alice@x.com"
@@ -631,6 +656,7 @@ func TestLockdownMigration_StaleEchoIsRecognisedAfterTheEventIsMissed(t *testing
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "alice@x.com")
 	s.cfg.SandboxImage = "ghcr.io/x/y:1"
 	s.cfg.LockdownAllowedModels = []string{"a/b", "c/d"}
 	const user = "alice@x.com"
@@ -735,6 +761,7 @@ func TestSummarize_LockdownStaleEchoAfterMigration(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "alice@x.com")
 	s.cfg.SandboxImage = "ghcr.io/x/y:1"
 	s.cfg.LockdownAllowedModels = []string{"a/b", "c/d"}
 	const user = "alice@x.com"

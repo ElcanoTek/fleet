@@ -325,10 +325,13 @@ func (s *Store) CreateUserPersona(ctx context.Context, userEmail string, in User
 	}
 	now := time.Now().Unix()
 	id := uuid.NewString()
-	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO user_personas (id, user_email, name, display_name, description, instructions, base_persona, kind, autonomy, patrols, status, replaces_name, created_at, updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,'',$12,$12)`,
-		id, email, in.Name, in.DisplayName, in.Description, in.Instructions, in.BasePersona, in.Kind, in.Autonomy, patrols, UserPersonaStatusActive, now)
+	err = s.withAccountRow(ctx, email, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `
+			INSERT INTO user_personas (id, user_email, name, display_name, description, instructions, base_persona, kind, autonomy, patrols, status, replaces_name, created_at, updated_at)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,'',$12,$12)`,
+			id, email, in.Name, in.DisplayName, in.Description, in.Instructions, in.BasePersona, in.Kind, in.Autonomy, patrols, UserPersonaStatusActive, now)
+		return err
+	})
 	if err != nil {
 		if pgUniqueViolation(err) {
 			return nil, fmt.Errorf("%w: you already have a persona named %q", ErrUserPersonaInvalid, in.Name)

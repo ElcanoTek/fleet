@@ -94,6 +94,7 @@ func TestLookupKeysWithNULMatchNoAccount(t *testing.T) {
 func TestIdentityWritesRefuseControlCharacterEmails(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
+	seedAccount(t, s, "owner@example.com")
 	ctx := context.Background()
 	conv, err := s.CreateConversation(ctx, "owner@example.com", "t", "", "m", false)
 	if err != nil {
@@ -200,6 +201,7 @@ func TestMultiplayerListsWithNULSequenceFailClosed(t *testing.T) {
 func TestCapabilityLookupsWithNULMatchNothing(t *testing.T) {
 	t.Parallel()
 	s := newTestStoreWithCipher(t)
+	seedAccount(t, s, "alice@example.com")
 	ctx := context.Background()
 	conv, err := s.CreateConversation(ctx, "alice@example.com", "t", "", "m", false)
 	if err != nil {

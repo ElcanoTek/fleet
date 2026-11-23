@@ -12,6 +12,7 @@ func TestPushSubscriptions_UpsertListDelete(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "u@x.com")
 	ctx := context.Background()
 
 	if err := s.UpsertPushSubscription(ctx, "u@x.com", "https://push.example/ep1", "fake-auth-one", "fake-p256dh-one"); err != nil {
@@ -119,6 +120,7 @@ func TestPushSubscriptions_HasUser(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "u@x.com", "other@x.com")
 	ctx := context.Background()
 	const ep = "https://push.example/held"
 
@@ -158,6 +160,7 @@ func TestPushSubscriptions_Renew(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "u@x.com")
 	ctx := context.Background()
 	const oldEP, newEP = "https://push.example/old-key", "https://push.example/new-key"
 	if err := s.UpsertPushSubscription(ctx, "u@x.com", oldEP, "fake-auth-old", "fake-p256dh-old"); err != nil {
@@ -205,6 +208,7 @@ func TestPushSubscriptions_RenewOntoAStoredEndpoint(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "u@x.com", "other@x.com")
 	ctx := context.Background()
 	const oldEP, newEP, othersEP = "https://push.example/r-old", "https://push.example/r-new", "https://push.example/r-others"
 	for _, row := range [][2]string{{"u@x.com", oldEP}, {"u@x.com", newEP}, {"other@x.com", othersEP}} {

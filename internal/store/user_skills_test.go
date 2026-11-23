@@ -13,6 +13,7 @@ func TestUserSkills(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "me@elcano.com", "other@elcano.com")
 	ctx := context.Background()
 	const me = "me@elcano.com"
 	const other = "other@elcano.com"
@@ -177,6 +178,7 @@ func TestUserSkillsWorkspaceSharing(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "author@elcano.com")
 	ctx := context.Background()
 	const author = "author@elcano.com"
 	const teammate = "teammate@elcano.com"

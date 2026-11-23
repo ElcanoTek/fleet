@@ -192,6 +192,7 @@ func TestPatrols_ListsTheCallersPatrols(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "hub@x.com", "someone@x.com", "teammate@x.com")
 	ctx := context.Background()
 	const me = "hub@x.com"
 	conv := seedConv(t, s, me)
@@ -319,6 +320,7 @@ func TestPatrols_RevokedRowsDoNotCrowdOut(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "owner@x.com")
 	ctx := context.Background()
 	const me, owner = "crowd@x.com", "owner@x.com"
 	seedUser(t, s.concreteStore(t), me)
@@ -377,6 +379,7 @@ func TestPatrols_AccessCheckErrorIs5xx(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "errowner@x.com")
 	ctx := context.Background()
 	const me, owner = "err@x.com", "errowner@x.com"
 	seedUser(t, s.concreteStore(t), me)
@@ -417,6 +420,7 @@ func TestPatrols_AccessChecksOncePerTeammateChat(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "costowner@x.com")
 	ctx := context.Background()
 	const me, owner = "cost@x.com", "costowner@x.com"
 	seedUser(t, s.concreteStore(t), me)
@@ -464,6 +468,7 @@ func TestPatrols_ListsPatrolsSharedWithTheCaller(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "mate@x.com")
 	ctx := context.Background()
 	const me, mate = "viewer@x.com", "mate@x.com"
 	seedUser(t, s.concreteStore(t), me)
@@ -583,6 +588,7 @@ func TestPatrols_OneSharedPatrolOpensPastTheListingCap(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "busy-mate@x.com")
 	ctx := context.Background()
 	const me, mate = "reader@x.com", "busy-mate@x.com"
 	seedUser(t, s.concreteStore(t), me)

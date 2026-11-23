@@ -153,15 +153,18 @@ func (s *Store) AcceptAutonomousPolicy(ctx context.Context, userEmail string, ve
 		version = CurrentAutonomousPolicyVersion
 	}
 	now := time.Now().Unix()
-	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO chat.autonomous_acceptances (user_email, policy_version, accepted_at)
-		 VALUES ($1, $2, $3)
-		 ON CONFLICT (user_email) DO UPDATE
-		    SET policy_version = GREATEST(chat.autonomous_acceptances.policy_version, EXCLUDED.policy_version),
-		        accepted_at = EXCLUDED.accepted_at`,
-		email, version, now,
-	)
-	return err
+	// Only an account accepts (withAccountRow: ErrUserNotFound otherwise).
+	return s.withAccountRow(ctx, email, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx,
+			`INSERT INTO chat.autonomous_acceptances (user_email, policy_version, accepted_at)
+			 VALUES ($1, $2, $3)
+			 ON CONFLICT (user_email) DO UPDATE
+			    SET policy_version = GREATEST(chat.autonomous_acceptances.policy_version, EXCLUDED.policy_version),
+			        accepted_at = EXCLUDED.accepted_at`,
+			email, version, now,
+		)
+		return err
+	})
 }
 
 // CreateUIAutoSubmit arms a pending auto-submit countdown for a show_ui card
@@ -196,6 +199,10 @@ func (s *Store) CreateUIAutoSubmit(ctx context.Context, row UIAutoSubmit) (UIAut
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	// The arming person's account row before the chat's (lockWriterAccountTx).
+	if err := lockWriterAccountTx(ctx, tx, row.UserEmail, row.ConversationID); err != nil {
+		return UIAutoSubmit{}, err
+	}
 	if err := lockInputQueueConversation(ctx, tx, row.ConversationID); err != nil {
 		return UIAutoSubmit{}, err
 	}

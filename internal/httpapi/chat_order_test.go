@@ -18,6 +18,7 @@ func TestConversationOrder(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "rail@x.com", "someone@x.com")
 	ctx := context.Background()
 	const me = "rail@x.com"
 	a := seedConv(t, s, me)

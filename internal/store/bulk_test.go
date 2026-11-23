@@ -28,6 +28,7 @@ func TestDeleteByIDs_TargetedHardDelete(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "u@x.com")
 	ctx := context.Background()
 	ids := createNConvs(t, s, "u@x.com", 3)
 
@@ -74,6 +75,7 @@ func TestDeleteByIDs_ForeignIDRejected(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			s := newTestStore(t)
+			seedAccount(t, s, "owner@x.com", "intruder@x.com")
 			ctx := context.Background()
 			ownerIDs := createNConvs(t, s, "owner@x.com", 2)
 			otherIDs := createNConvs(t, s, "intruder@x.com", 2)
@@ -104,6 +106,7 @@ func TestDeleteByIDs_SoftDelete(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "u@x.com")
 	s.SetSoftDelete(true)
 	ctx := context.Background()
 	ids := createNConvs(t, s, "u@x.com", 2)
@@ -149,6 +152,7 @@ func TestBulkPatch_AdditiveFields(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "u@x.com")
 	ctx := context.Background()
 	ids := createNConvs(t, s, "u@x.com", 3)
 
@@ -178,6 +182,7 @@ func TestBulkPatch_NilFieldsUntouched(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "u@x.com")
 	ctx := context.Background()
 	ids := createNConvs(t, s, "u@x.com", 1)
 
@@ -206,6 +211,7 @@ func TestBulkPatch_ForeignIDRejected(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "owner@x.com", "intruder@x.com")
 	ctx := context.Background()
 	ownerIDs := createNConvs(t, s, "owner@x.com", 1)
 	_ = createNConvs(t, s, "intruder@x.com", 1)
@@ -235,6 +241,7 @@ func TestDeleteAllMatching_Label(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "u@x.com")
 	ctx := context.Background()
 
 	mk := func(labels []string) string {
@@ -273,6 +280,7 @@ func TestSweepExpired_SoftDeletePurge(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "u@x.com")
 	s.SetSoftDelete(true)
 	ctx := context.Background()
 

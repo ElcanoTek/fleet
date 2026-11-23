@@ -14,6 +14,7 @@ func TestAutonomousAcceptanceRoundTrip(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "alice@example.com")
 	ctx := context.Background()
 
 	ver, ok, err := s.GetAutonomousAcceptance(ctx, "alice@example.com")
@@ -41,6 +42,7 @@ func TestUIAutoSubmitStoreLifecycleAndSingleClaimer(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "alice@example.com")
 	ctx := context.Background()
 
 	if err := s.AcceptAutonomousPolicy(ctx, "alice@example.com", CurrentAutonomousPolicyVersion); err != nil {
@@ -226,6 +228,7 @@ func verifyReusedCallIDAndNewerUserActivity(ctx context.Context, t *testing.T, s
 func TestRecoverUIAutoSubmitsAndAtomicInputCancel(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
+	seedAccount(t, s, "alice@example.com")
 	ctx := context.Background()
 
 	conv, err := s.CreateConversation(ctx, "alice@example.com", "Boot Recovery", "default", "m1", false)

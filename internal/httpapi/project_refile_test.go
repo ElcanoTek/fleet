@@ -28,6 +28,7 @@ func TestConversationProjectRefileAndUnfile(t *testing.T) {
 	t.Parallel()
 
 	srv := serverFixture(t)
+	seedUsers(t, srv, "u@x.com")
 	st := srv.store.(*store.Store)
 	ctx := context.Background()
 	const user = "u@x.com"
@@ -71,6 +72,7 @@ func TestConversationProjectRefileNonMember(t *testing.T) {
 	t.Parallel()
 
 	srv := serverFixture(t)
+	seedUsers(t, srv, "owner@x.com", "caller@x.com")
 	st := srv.store.(*store.Store)
 	ctx := context.Background()
 	const owner = "owner@x.com"
@@ -108,6 +110,7 @@ func TestConversationProjectRefileForeignConversation(t *testing.T) {
 	ctx := context.Background()
 	const victim = "victim@x.com"
 	const attacker = "attacker@x.com"
+	seedUsers(t, srv, attacker, victim)
 
 	proj, err := st.CreateProject(ctx, &store.Project{OwnerEmail: attacker, Name: "Mine"})
 	if err != nil {

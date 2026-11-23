@@ -181,6 +181,7 @@ type resumeHarness struct {
 func newResumeHarness(t *testing.T, policy agentcore.AgentPolicy, debounce time.Duration) *resumeHarness {
 	t.Helper()
 	s := serverFixture(t)
+	seedUsers(t, s, "alice@x.com")
 	agentcore.ConfigureAgentPolicy(policy)
 	t.Cleanup(func() { agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{}) })
 	prev := approvalResumeDebounce

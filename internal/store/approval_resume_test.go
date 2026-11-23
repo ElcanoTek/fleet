@@ -118,6 +118,7 @@ func TestClaimApprovalResume_ClaimsSettledCardsIntoOneInput(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "alice@example.com")
 	ctx := context.Background()
 	conv := resumeConv(t, s)
 	a1 := stageResume(t, s, conv.ID, "mcp_deals_update_deal", true)
@@ -171,6 +172,7 @@ func TestClaimApprovalResume_ConcurrentClaimsEnqueueOnce(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "alice@example.com")
 	conv := resumeConv(t, s)
 	a := stageResume(t, s, conv.ID, "mcp_deals_update_deal", true)
 	approveWithResult(t, s, a.ID, true)
@@ -202,6 +204,7 @@ func TestClaimApprovalResume_WaitsForOutstandingCards(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "alice@example.com")
 	ctx := context.Background()
 	conv := resumeConv(t, s)
 	a := stageResume(t, s, conv.ID, "mcp_deals_update_deal", true)
@@ -249,6 +252,7 @@ func TestClaimApprovalResume_SentinelCardStaysArmed(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "alice@example.com")
 	ctx := context.Background()
 	conv := resumeConv(t, s)
 	a := stageResume(t, s, conv.ID, "mcp_deals_update_deal", true)
@@ -273,6 +277,7 @@ func TestClaimApprovalResume_CapAndQueueFullSkipWithANote(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "alice@example.com")
 	ctx := context.Background()
 	for name, tc := range map[string]struct {
 		maxPerHour, maxPending  int
@@ -324,6 +329,7 @@ func TestClaimApprovalResume_DeletedConversation(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "alice@example.com")
 	conv := resumeConv(t, s)
 	a := stageResume(t, s, conv.ID, "mcp_deals_update_deal", true)
 	approveWithResult(t, s, a.ID, false)
@@ -344,6 +350,7 @@ func TestClaimApprovalResume_UnarmedAndSupersededNeverResume(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "alice@example.com")
 	ctx := context.Background()
 	conv := resumeConv(t, s)
 	plain := stageResume(t, s, conv.ID, "mcp_deals_update_deal", false)
@@ -384,6 +391,7 @@ func TestClaimApprovalResume_PatrolTimeoutSkipsResume(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "alice@example.com")
 	ctx := context.Background()
 	conv := resumeConv(t, s)
 	if _, err := s.CreateChatSchedule(ctx, ChatScheduleInput{
@@ -416,6 +424,7 @@ func TestClaimApprovalResume_TimeoutOfResumeStagedCardSkipsResume(t *testing.T) 
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "alice@example.com")
 	ctx := context.Background()
 	conv := resumeConv(t, s)
 	timeOut := func(a *Approval) {
@@ -469,6 +478,7 @@ func TestStageEnableMCPConnectorsApproval_RecordsStagedByResume(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "alice@example.com")
 	ctx := context.Background()
 	conv := resumeConv(t, s)
 	a, _, err := s.StageEnableMCPConnectorsApproval(ctx, resumeUser, conv.ID, "enable_mcp_connectors", "call_1", `{}`, 0, true, nil)
@@ -491,6 +501,7 @@ func TestDropApprovalResumesAtBoot(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "alice@example.com")
 	ctx := context.Background()
 	convA := resumeConv(t, s)
 	due := stageResume(t, s, convA.ID, "mcp_deals_update_deal", true)

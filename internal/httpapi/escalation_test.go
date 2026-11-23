@@ -209,6 +209,7 @@ func TestEscalateAfterTurn_SignalStagesAndRecords(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "struggler@x.com")
 	s.agent = &fakeTurnEngine{}
 	s.cfg.EscalationSignalsEnabled = true
 	s.cfg.EscalationClassifierMode = config.EscalationClassifierSuggest
@@ -263,6 +264,7 @@ func TestEscalateAfterTurn_ClassifierModes(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "observer@x.com")
 	s.agent = &fakeTurnEngine{}
 	const user = "observer@x.com"
 	conv := seedConv(t, s, user)
@@ -294,6 +296,7 @@ func TestEscalateAfterTurn_AdvancedModelRecordsOnly(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "advanced@x.com")
 	s.agent = &fakeTurnEngine{}
 	s.cfg.EscalationSignalsEnabled = true
 	const user = "advanced@x.com"
@@ -342,6 +345,7 @@ func TestEscalateAfterTurn_LateClassifierRecordsWithoutCard(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "late@x.com")
 	s.agent = &fakeTurnEngine{}
 	const user = "late@x.com"
 	conv := seedConv(t, s, user)
@@ -370,6 +374,7 @@ func TestEscalateAfterTurn_LateClassifierRecordsWithoutCard(t *testing.T) {
 // with the turn so far as context.
 func TestEscalateAfterTurn_ClassifiesMidTurnSteer(t *testing.T) {
 	s := serverFixture(t)
+	seedUsers(t, s, "steer@x.com")
 	s.agent = &fakeTurnEngine{}
 	s.cfg.OpenRouterAPIKey = "sk-or-test"
 	s.cfg.EscalationClassifierMode = config.EscalationClassifierSuggest
@@ -420,6 +425,7 @@ func counterValue(t *testing.T, series string) float64 {
 // is counted once by its eventual outcome.
 func TestEscalateAfterTurn_CountsEachLateCheck(t *testing.T) {
 	s := serverFixture(t)
+	seedUsers(t, s, "twolate@x.com")
 	s.agent = &fakeTurnEngine{}
 	s.cfg.OpenRouterAPIKey = "sk-or-test"
 	s.cfg.EscalationClassifierMode = config.EscalationClassifierObserve
@@ -459,6 +465,7 @@ func TestEscalateAfterTurn_CancelledTurnCountsCheck(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "stopped@x.com")
 	s.agent = &fakeTurnEngine{}
 	const user = "stopped@x.com"
 	conv := seedConv(t, s, user)
@@ -532,6 +539,7 @@ func TestEscalateAfterTurn_SuppressesCardWhenTurnStagedApproval(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "jeanne@x.com")
 	s.agent = &fakeTurnEngine{}
 	s.cfg.EscalationSignalsEnabled = true
 	const user = "jeanne@x.com"
@@ -562,6 +570,7 @@ func TestEscalateAfterTurn_SuppressesCardOnBackgroundTurn(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "brendan@x.com")
 	s.agent = &fakeTurnEngine{}
 	s.cfg.EscalationSignalsEnabled = true
 	const user = "brendan@x.com"

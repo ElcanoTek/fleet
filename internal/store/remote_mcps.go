@@ -298,7 +298,8 @@ func (s *Store) CreateRemoteMCPServer(ctx context.Context, in RemoteMCPServerInp
 	// seat is the default iff no other seat of this name already holds it. The
 	// partial unique index makes a concurrent double-insert fail loudly rather
 	// than yield two defaults.
-	_, err = s.db.ExecContext(ctx, `
+	err = s.withAccountRow(ctx, email, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `
 		INSERT INTO remote_mcp_servers (
 			id, user_email, name, url, resource, transport, status, status_detail,
 			issuer, authorization_endpoint, token_endpoint, registration_endpoint, revocation_endpoint,
@@ -311,10 +312,12 @@ func (s *Store) CreateRemoteMCPServer(ctx context.Context, in RemoteMCPServerInp
 			NOT EXISTS (SELECT 1 FROM remote_mcp_servers d WHERE d.user_email = $2 AND d.name = $3 AND d.is_default),
 			$25::jsonb,
 			$21,$21)`,
-		id, email, in.Name, in.URL, in.Transport, status,
-		in.Issuer, in.AuthorizationEndpoint, in.TokenEndpoint, in.RegistrationEndpoint, in.RevocationEndpoint,
-		in.Scopes, in.AuthMethods, in.ClientID, secretEnc, regEnc,
-		authKind, in.APIKeyHeader, in.APIKeyQuery, apiKeyEnc, now, account, strings.TrimSpace(in.Resource), in.APIKeyPrefix, customToolsJSON)
+			id, email, in.Name, in.URL, in.Transport, status,
+			in.Issuer, in.AuthorizationEndpoint, in.TokenEndpoint, in.RegistrationEndpoint, in.RevocationEndpoint,
+			in.Scopes, in.AuthMethods, in.ClientID, secretEnc, regEnc,
+			authKind, in.APIKeyHeader, in.APIKeyQuery, apiKeyEnc, now, account, strings.TrimSpace(in.Resource), in.APIKeyPrefix, customToolsJSON)
+		return err
+	})
 	if err != nil {
 		if pgUniqueViolation(err) {
 			if account == "" {
@@ -911,11 +914,14 @@ func (s *Store) BeginOAuthFlow(ctx context.Context, state, serverID, userEmail, 
 		return fmt.Errorf("encrypt code verifier: %w", err)
 	}
 	now := time.Now()
-	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO remote_mcp_oauth_flow (state, server_id, user_email, code_verifier_enc, created_at, expires_at)
-		VALUES ($1,$2,$3,$4,$5,$6)`,
-		state, serverID, email, verEnc, now.Unix(), now.Add(ttl).Unix())
-	return err
+	// Only an account signs in to a connector (withAccountRow).
+	return s.withAccountRow(ctx, email, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `
+			INSERT INTO remote_mcp_oauth_flow (state, server_id, user_email, code_verifier_enc, created_at, expires_at)
+			VALUES ($1,$2,$3,$4,$5,$6)`,
+			state, serverID, email, verEnc, now.Unix(), now.Add(ttl).Unix())
+		return err
+	})
 }
 
 // OAuthFlowState is a consumed authorization flow record.

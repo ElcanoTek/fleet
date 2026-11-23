@@ -117,18 +117,25 @@ func (s *Store) SidebarLayoutRev(ctx context.Context, userEmail string) (int64, 
 }
 
 func (s *Store) putSidebarLayout(ctx context.Context, email, layout string, rev int64) (bool, error) {
-	res, err := s.db.ExecContext(ctx,
-		`INSERT INTO chat.sidebar_layouts (user_email, layout, updated_at, rev)
-		 VALUES ($1, $2::jsonb, $3, $4)
-		 ON CONFLICT (user_email) DO UPDATE
-		   SET layout = EXCLUDED.layout, updated_at = EXCLUDED.updated_at, rev = EXCLUDED.rev
-		   WHERE EXCLUDED.rev = 0 OR chat.sidebar_layouts.rev < EXCLUDED.rev`,
-		email, layout, time.Now().Unix(), rev,
-	)
-	if err != nil {
-		return false, fmt.Errorf("save sidebar layout: %w", err)
+	var n int64
+	err := s.withAccountRow(ctx, email, func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx,
+			`INSERT INTO chat.sidebar_layouts (user_email, layout, updated_at, rev)
+			 VALUES ($1, $2::jsonb, $3, $4)
+			 ON CONFLICT (user_email) DO UPDATE
+			   SET layout = EXCLUDED.layout, updated_at = EXCLUDED.updated_at, rev = EXCLUDED.rev
+			   WHERE EXCLUDED.rev = 0 OR chat.sidebar_layouts.rev < EXCLUDED.rev`,
+			email, layout, time.Now().Unix(), rev,
+		)
+		if err != nil {
+			return err
+		}
+		n, err = res.RowsAffected()
+		return err
+	})
+	if errors.Is(err, ErrUserNotFound) {
+		return false, err
 	}
-	n, err := res.RowsAffected()
 	if err != nil {
 		return false, fmt.Errorf("save sidebar layout: %w", err)
 	}

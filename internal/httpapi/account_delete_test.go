@@ -11,10 +11,13 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/ElcanoTek/fleet/internal/accountdelete"
 	"github.com/ElcanoTek/fleet/internal/chattui"
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/identity"
+	"github.com/ElcanoTek/fleet/internal/sched/apikeys"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
@@ -117,6 +120,78 @@ func TestUnboundUserKeyWithoutAccountActsAsNoOne(t *testing.T) {
 	}
 	if k := mgr.GetKey(key.KeyID); !k.AccountMissing || k.AccountID != "" {
 		t.Fatalf("key = %+v, want marked as having no account", k)
+	}
+}
+
+// A key minted before keys named their account is admitted only once its
+// binding is written: while another process keeps the key store locked, its
+// first use is answered 503 with Retry-After and reaches no handler; once the
+// lock is free the next request binds it and is admitted.
+func TestUnboundUserKeyWaitsForItsBinding(t *testing.T) {
+	t.Parallel()
+	s := memberFixture(t, "u@x.com")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "api_keys.json")
+	mgr, err := apikeys.NewManager(path, filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, raw, err := mgr.CreateUserKey(context.Background(), "cli", "u@x.com", 0, nil, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mgr.SetFileLockWait(50 * time.Millisecond)
+	s.apiKeys = mgr
+	srv := httptest.NewServer(s.Routes())
+	defer srv.Close()
+	// me returns GET /me's status, Retry-After and "error" code.
+	me := func() (int, string, string) {
+		t.Helper()
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL+"/me", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("X-API-Key", raw)
+		resp, err := srv.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		var body struct {
+			Error string `json:"error"`
+		}
+		_ = json.NewDecoder(resp.Body).Decode(&body)
+		return resp.StatusCode, resp.Header.Get("Retry-After"), body.Error
+	}
+
+	holder, err := os.Open(path + ".lock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Close()
+	if err := unix.Flock(int(holder.Fd()), unix.LOCK_EX); err != nil {
+		t.Fatal(err)
+	}
+	if status, retry, code := me(); status != http.StatusServiceUnavailable || retry == "" || code != "key_store_busy" {
+		t.Fatalf("first use with the key store locked: status %d, Retry-After %q, error %q; want 503 key_store_busy with Retry-After",
+			status, retry, code)
+	}
+	if k := mgr.GetKey(key.KeyID); k.AccountID != "" || k.AccountMissing {
+		t.Fatalf("key = %+v, want still unbound", k)
+	}
+
+	if err := unix.Flock(int(holder.Fd()), unix.LOCK_UN); err != nil {
+		t.Fatal(err)
+	}
+	if status, _, _ := me(); status != http.StatusOK {
+		t.Fatalf("first use with the key store free: status %d, want 200", status)
+	}
+	u, err := s.concreteStore(t).GetUser(context.Background(), "u@x.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if k := mgr.GetKey(key.KeyID); k.AccountID != u.ID {
+		t.Fatalf("key = %+v, want bound to %s", k, u.ID)
 	}
 }
 
@@ -284,7 +359,11 @@ func TestMaintenanceSweepsDeletedAccounts(t *testing.T) {
 		}
 		s.sessionApprovals.RegisterForUser("conv-1", e, "run_python", SessionApprovalPolicy{Mode: "approve"})
 	}
-	if err := s.concreteStore(t).UpsertPushSubscription(ctx, "gone@x.com", "https://push.example/gone", "a", "k"); err != nil {
+	// A row an account deleted before deletion reached its table left behind
+	// (no account writes one for an address without an account any more).
+	if _, err := s.concreteStore(t).Identity().DB().ExecContext(ctx,
+		`INSERT INTO chat.push_subscriptions (id, user_email, endpoint, keys_auth, keys_p256dh, created_at, last_active_at)
+		 VALUES ('left-behind', 'gone@x.com', 'https://push.example/gone', 'a', 'k', 1, 1)`); err != nil {
 		t.Fatal(err)
 	}
 	s.sweepDeletedAccounts(ctx)
@@ -306,6 +385,46 @@ func TestMaintenanceSweepsDeletedAccounts(t *testing.T) {
 	}
 	if subs, _ := s.concreteStore(t).ListPushSubscriptions(ctx, "gone@x.com"); len(subs) != 0 {
 		t.Errorf("%d push subscriptions of an address with no account survived", len(subs))
+	}
+}
+
+// An account created under an address after the maintenance pass listed the
+// accounts, while the address's old upload and private workspace trees are
+// still there, keeps both trees with what it wrote since, and its approvals.
+func TestMaintenanceKeepsAnAccountCreatedDuringTheSweep(t *testing.T) {
+	t.Parallel()
+	s := memberFixture(t, "live@x.com")
+	s.sessionApprovals = NewSessionApprovalRegistry()
+	att := t.TempDir()
+	s.cfg.EmailAttachmentDir = att
+	ctx := context.Background()
+	uploads := accountdelete.UploadsDir(att, "back@x.com")
+	stash := filepath.Join(accountdelete.PrivateWorkspaceRoot(att), "conv-1", "participants", accountdelete.Digest("back@x.com"))
+	for _, d := range []string{filepath.Join(uploads, "old-tok"), stash} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	freshUpload := filepath.Join(uploads, "fresh-tok")
+	freshStash := filepath.Join(stash, "notes.txt")
+	s.afterAccountSnapshot = func() {
+		seedUser(t, s.concreteStore(t), "back@x.com")
+		if err := os.MkdirAll(freshUpload, 0o700); err != nil {
+			t.Error(err)
+		}
+		if err := os.WriteFile(freshStash, []byte("x"), 0o600); err != nil {
+			t.Error(err)
+		}
+		s.sessionApprovals.RegisterForUser("conv-1", "back@x.com", "run_python", SessionApprovalPolicy{Mode: "approve"})
+	}
+	s.sweepDeletedAccounts(ctx)
+	for _, f := range []string{freshUpload, freshStash} {
+		if _, err := os.Stat(f); err != nil {
+			t.Errorf("%s of the account created during the sweep was removed: %v", f, err)
+		}
+	}
+	if _, ok := s.sessionApprovals.MatchForUser("conv-1", "back@x.com", "run_python", "{}"); !ok {
+		t.Error("the approval of the account created during the sweep was dropped")
 	}
 }
 

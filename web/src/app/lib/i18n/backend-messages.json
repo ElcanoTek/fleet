@@ -396,6 +396,7 @@
     "the turn journal lost a write; refusing to record success for an incompletely journaled turn",
     "thinking_budget_tokens must be \u003e= 0 (0 = off, omit to inherit the default)",
     "this API key was minted for an earlier account under this email, or before the account existed; mint a new key for the account (fleet sched apikey create \u003cname\u003e --type user --user \u003cemail\u003e)",
+    "this account no longer exists",
     "this action cannot be narrowed: approve or decline it whole",
     "this action cannot be stopped once it runs",
     "this action is not running: decline it instead",

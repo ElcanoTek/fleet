@@ -17,6 +17,7 @@ func TestClaimApproval_OnlyOneWinner(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "alice@example.com")
 	ctx := context.Background()
 
 	conv, err := s.CreateConversation(ctx, "alice@example.com", "t", "victoria", "m", false)
@@ -69,6 +70,7 @@ func TestClaimApproval_UserScopedAndValidated(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "alice@example.com")
 	ctx := context.Background()
 
 	conv, err := s.CreateConversation(ctx, "alice@example.com", "t", "victoria", "m", false)
@@ -92,6 +94,7 @@ func TestSetApprovalResult_UpdatesClaimedRow(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "alice@example.com")
 	ctx := context.Background()
 
 	conv, err := s.CreateConversation(ctx, "alice@example.com", "t", "victoria", "m", false)
@@ -168,6 +171,7 @@ func TestClaimApprovalAndSetModel_AtomicAndRetryable(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "alice@example.com")
 	ctx := context.Background()
 	const user = "alice@example.com"
 

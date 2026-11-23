@@ -76,6 +76,7 @@ func TestUsageByUserDay(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "alice@example.com", "bob@example.com")
 	seedChatUsage(t, s)
 	ctx := context.Background()
 
@@ -119,6 +120,7 @@ func TestUsageSummaryGroupByPrincipal(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "alice@example.com", "bob@example.com")
 	ctx := context.Background()
 	seedChatUsage(t, s)
 
@@ -175,6 +177,7 @@ func TestUsageSummarySurvivesConversationDeletion(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "admin@example.com")
 	ctx := context.Background()
 	s.softDelete = false
 
@@ -214,6 +217,7 @@ func TestUsageSummaryGroupByDimensions(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "alice@example.com", "bob@example.com")
 	ctx := context.Background()
 	seedChatUsage(t, s)
 
@@ -283,6 +287,7 @@ func TestUsageSummaryRangeFiltering(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "alice@example.com", "bob@example.com")
 	ctx := context.Background()
 	seedChatUsage(t, s)
 

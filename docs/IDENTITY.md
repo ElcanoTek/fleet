@@ -197,18 +197,39 @@ advises on each demoted split admin, unknown role and duplicate username in it.
   deletion then fails (a project shared with a team after the preflight, a
   database error, the two minutes), the account's requests were already
   refused for its duration and its turns cancelled; the account itself is
-  untouched. Writes that a turn or request still makes for the account after
-  that take a key-share lock on the account's row before any chat row — the
-  order the deletion takes them in — and so either commit before the
-  deletion starts (and are removed by it) or wait for it and are refused:
-  memory, skill and persona proposals (`store.withAccountRow`); queued,
-  direct and Stop-recorded messages (`EnqueueInput`, `ClaimDirectInput`,
-  `CancelInputKey`); approval cards (`CreateApproval`); and every write
-  checked by `lockAndVerifyOwnedOrMultiplayerTx` (schedules created or
-  fired, approvals decided). The lock is taken for every sender, a chat's
-  owner included; an address with no account is refused unless it owns the
-  chat (a chat a webhook started may belong to one, and can still write).
-  Other writes are removed by the hourly maintenance pass.
+  untouched. Every write of a row the deletion removes by the account's
+  address takes a key-share lock on the account's row first, before any chat
+  row — the order the deletion takes them in — so a write still made for
+  the account by a turn or request in this process, or by a server while
+  the CLI deletes the account, either commits before the deletion starts
+  (and is removed by it) or waits for it and is refused
+  (`store.lockAccountTx`):
+  chats (created, branched, filed into a project), projects, memories
+  (personal and project, and the proposals a turn makes), skills, personas,
+  connectors and connector sign-ins, connector preferences, chat orders,
+  the sidebar layout, the Autonomous-mode acceptance, browser push
+  subscriptions and private prompts (`store.withAccountRow`, and for prompts
+  the Operations Center's `lockPromptOwnerTx`); queued, direct and
+  Stop-recorded messages (`EnqueueInput`, `ClaimDirectInput`,
+  `CancelInputKey`), approval cards (`CreateApproval`) and auto-submit
+  countdowns (`CreateUIAutoSubmit`); and every write checked by
+  `lockAndVerifyOwnedOrMultiplayerTx` (schedules created or fired,
+  approvals decided). For the writes in a chat the lock is taken for every
+  sender, the chat's owner included, and an address with no account is
+  refused unless it owns the chat (a chat a webhook started may belong to
+  one, and can still write). An approval resume and a countdown that fires
+  queue a message for the person behind the card while holding only the
+  chat's row, so the deletion first locks every chat in which the account
+  has an approval card or a countdown: such a message is written before the
+  deletion reads the queue, and removed with the rest, or after it, when its
+  cards are gone. Four writes do not need an account and are left as they
+  are: a connector shared with an address and an address added to a
+  multiplayer chat's participants (both allowed before its account exists),
+  a central sign-in session generation (written at central sign-in, also
+  before the account exists, and by a central sign-out, which only ends
+  sessions), and the one-time legacy import. A guard test
+  (`TestAccountKeyedWritersTakeTheAccountLock`) fails when a new insert into
+  such a table takes neither the lock nor a reviewed exemption.
 
   **Steps left.** The database deletion alone decides whether the account is
   deleted. A later step that does not complete (the key store, a file) is
@@ -232,8 +253,11 @@ advises on each demoted split admin, unknown role and duplicate username in it.
   normalized form, so the prompts the identity merge quarantined under a
   losing duplicate username stay; of the queue, approvals and schedules
   only live rows — waiting, pending, active or paused — are read), upload and private workspace
-  trees under the attachment directory whose digest is no account's, and the
-  in-memory approve/deny-all decisions of such addresses. That covers
+  trees under the attachment directory whose digest is no account's (each
+  checked against the accounts once more right before it goes, and moved
+  aside before it is removed, so an account created under the address in
+  the meantime keeps the files it wrote), and the in-memory approve/deny-all
+  decisions of such addresses. That covers
   accounts deleted before deletion reached these, a deletion from the CLI
   while the server runs (a turn in flight can write a private workspace tree
   back as it ends, and the CLI cannot reach the server's memory), and a CLI

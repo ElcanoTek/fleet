@@ -141,6 +141,7 @@ func TestTypedMemoryLifecycle(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "typed@example.com")
 	ctx := context.Background()
 	user := "typed@example.com"
 

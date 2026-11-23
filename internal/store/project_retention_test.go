@@ -31,6 +31,7 @@ func TestSweep_ProjectChatExemptFromTTL(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "u@x.com")
 	ctx := context.Background()
 	c := projectChat(ctx, t, s, "u@x.com")
 	backdate(ctx, t, s, c.ID, 30*24*time.Hour)
@@ -54,6 +55,7 @@ func TestSweep_ProjectChatExemptFromCap(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "u@x.com")
 	ctx := context.Background()
 
 	active := make([]string, 4)
@@ -95,6 +97,7 @@ func TestAutoArchive_ProjectChatExempt(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "u@x.com")
 	ctx := context.Background()
 	c := projectChat(ctx, t, s, "u@x.com")
 	backdate(ctx, t, s, c.ID, 60*24*time.Hour)

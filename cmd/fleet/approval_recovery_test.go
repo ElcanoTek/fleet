@@ -23,6 +23,10 @@ func TestBootRecoveryOrdersApprovalOutcomeAfterOriginatingTurn(t *testing.T) {
 	t.Cleanup(func() { _ = st.Close() })
 	ctx := context.Background()
 	const user = "recovery-test@example.com"
+	// A chat is an account's: CreateConversation needs one.
+	if _, err := st.CreateUser(ctx, user, "seed-password-1"); err != nil {
+		t.Fatal(err)
+	}
 	conv, err := st.CreateConversation(ctx, user, "recovery order", "", "m", false)
 	if err != nil {
 		t.Fatal(err)

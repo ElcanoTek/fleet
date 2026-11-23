@@ -30,6 +30,7 @@ package accountdelete
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -244,30 +245,109 @@ func UploadDigests(attachmentDir string) ([]string, error) {
 }
 
 // RemoveUploads removes the upload trees named by digests under
-// attachmentDir and returns how many it removed.
-func RemoveUploads(attachmentDir string, digests []string) (int, error) {
+// attachmentDir — each through RemoveOrphanTree, so one whose address has an
+// account again by then (live) stays — and the trees a removal left set aside
+// (asidePrefix). It returns how many digest trees it removed.
+func RemoveUploads(attachmentDir string, digests []string, live func(digest string) (bool, error)) (int, error) {
+	dir := filepath.Join(attachmentDir, "uploads")
+	RemoveAside(dir)
 	removed := 0
 	var firstErr error
 	for _, d := range digests {
 		if !IsDigest(d) {
 			continue
 		}
-		if err := os.RemoveAll(filepath.Join(attachmentDir, "uploads", d)); err != nil {
+		ok, err := RemoveOrphanTree(filepath.Join(dir, d), d, live)
+		if err != nil {
 			if firstErr == nil {
 				firstErr = err
 			}
 			continue
 		}
-		removed++
+		if ok {
+			removed++
+		}
 	}
 	return removed, firstErr
+}
+
+// asidePrefix names a tree RemoveOrphanTree moved aside to remove it. Nothing
+// reads such a name (it is not a Digest), so one left by an interrupted
+// removal is removed by the next sweep (RemoveAside).
+const asidePrefix = ".removing-"
+
+// RemoveOrphanTree removes path, the tree of the address whose Digest is
+// digest, unless live reports an account for it now. live is asked
+// immediately before the removal rather than taken from the caller's earlier
+// listing, so an account created under the address since keeps the files it
+// has written; and the tree is first renamed aside, so a file written after
+// that check lands in a fresh tree instead of the one being removed. It
+// reports whether it removed the tree (a tree already gone is not an error).
+func RemoveOrphanTree(path, digest string, live func(digest string) (bool, error)) (bool, error) {
+	ok, err := live(digest)
+	if err != nil {
+		return false, err
+	}
+	if ok {
+		return false, nil
+	}
+	var suffix [8]byte
+	if _, err := rand.Read(suffix[:]); err != nil {
+		return false, err
+	}
+	aside := filepath.Join(filepath.Dir(path), asidePrefix+digest+"-"+hex.EncodeToString(suffix[:]))
+	if err := os.Rename(path, aside); err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, os.RemoveAll(aside)
+}
+
+// IsAside reports whether name is a tree RemoveOrphanTree moved aside.
+func IsAside(name string) bool {
+	return strings.HasPrefix(name, asidePrefix) && filepath.IsLocal(name) && !strings.ContainsAny(name, `/\`)
+}
+
+// RemoveAside removes the trees under dir that a RemoveOrphanTree moved aside
+// and did not finish removing.
+func RemoveAside(dir string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if IsAside(e.Name()) {
+			_ = os.RemoveAll(filepath.Join(dir, e.Name()))
+		}
+	}
+}
+
+// LiveDigests is the live check RemoveOrphanTree takes: whether some account's
+// email has the given Digest, by listing the accounts afresh on every call.
+func LiveDigests(accounts func() ([]string, error)) func(digest string) (bool, error) {
+	return func(digest string) (bool, error) {
+		emails, err := accounts()
+		if err != nil {
+			return false, err
+		}
+		for _, e := range emails {
+			if Digest(e) == digest {
+				return true, nil
+			}
+		}
+		return false, nil
+	}
 }
 
 // SweepOrphanUploads removes the upload trees under attachmentDir that belong
 // to no account: those of accounts deleted before deletion removed them, or by
 // a CLI that resolved another attachment directory. It reads the directory
 // BEFORE listing the accounts, so an account created while it runs is either
-// in the list or had no directory yet. It returns how many it removed.
+// in the list or had no directory yet, and asks once more right before each
+// removal (RemoveOrphanTree), so a tree whose address has an account again by
+// then stays. It returns how many it removed.
 func SweepOrphanUploads(attachmentDir string, accounts func() ([]string, error)) (int, error) {
 	digests, err := UploadDigests(attachmentDir)
 	if err != nil || len(digests) == 0 {
@@ -287,5 +367,5 @@ func SweepOrphanUploads(attachmentDir string, accounts func() ([]string, error))
 			orphans = append(orphans, d)
 		}
 	}
-	return RemoveUploads(attachmentDir, orphans)
+	return RemoveUploads(attachmentDir, orphans, LiveDigests(accounts))
 }

@@ -23,6 +23,7 @@ func TestSetArchived_HidesFromListAndUnpins(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "u@x.com")
 	ctx := context.Background()
 
 	c, _ := s.CreateConversation(ctx, "u@x.com", "to archive", "victoria", "", false)
@@ -64,6 +65,7 @@ func TestSetArchived_WrongUser(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "owner@x.com")
 	ctx := context.Background()
 	c, _ := s.CreateConversation(ctx, "owner@x.com", "", "victoria", "", false)
 
@@ -83,6 +85,7 @@ func TestAutoArchiveOlderThan(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "u@x.com")
 	ctx := context.Background()
 
 	stale, _ := s.CreateConversation(ctx, "u@x.com", "stale", "victoria", "", false)
@@ -129,6 +132,7 @@ func TestSweep_ArchivedExemptFromTTL(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "u@x.com")
 	ctx := context.Background()
 	c, _ := s.CreateConversation(ctx, "u@x.com", "", "victoria", "", false)
 	if err := s.SetArchived(ctx, "u@x.com", c.ID, true); err != nil {
@@ -159,6 +163,7 @@ func TestSweep_ArchivedExemptFromCap(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "u@x.com")
 	ctx := context.Background()
 
 	// 4 active unpinned, oldest→newest by deterministic updated_at.
@@ -217,6 +222,7 @@ func TestDeleteAllUnpinned_SkipsArchived(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "u@x.com")
 	ctx := context.Background()
 
 	plain, _ := s.CreateConversation(ctx, "u@x.com", "plain unpinned", "victoria", "", false)

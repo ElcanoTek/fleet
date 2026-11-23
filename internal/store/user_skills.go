@@ -203,10 +203,13 @@ func (s *Store) createUserSkill(ctx context.Context, userEmail, name, descriptio
 		Description: strings.TrimSpace(description), Body: body,
 		Status: status, Visibility: visibility, CreatedAt: now, UpdatedAt: now,
 	}
-	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO user_skills (id, user_email, name, description, body, status, visibility, created_at, updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$8)`,
-		sk.ID, sk.UserEmail, sk.Name, sk.Description, sk.Body, sk.Status, sk.Visibility, now)
+	err := s.withAccountRow(ctx, email, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `
+			INSERT INTO user_skills (id, user_email, name, description, body, status, visibility, created_at, updated_at)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$8)`,
+			sk.ID, sk.UserEmail, sk.Name, sk.Description, sk.Body, sk.Status, sk.Visibility, now)
+		return err
+	})
 	if err != nil {
 		if pgUniqueViolation(err) {
 			return nil, fmt.Errorf("%w: you already have a skill named %q", ErrUserSkillInvalid, name)

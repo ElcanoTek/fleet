@@ -14,6 +14,7 @@ func TestConversationExport_Formats(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "alice@x.com")
 	const user = "alice@x.com"
 	conv := seedConv(t, s, user) // "failed tasks": one user turn, one assistant turn
 	h := s.Routes()
@@ -85,6 +86,7 @@ func TestConversationExport_IncludeScope(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "alice@x.com")
 	const user = "alice@x.com"
 	conv := seedConvWithToolCall(t, s, user)
 	h := s.Routes()

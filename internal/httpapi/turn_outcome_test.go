@@ -167,6 +167,7 @@ func TestTurnOutcomeEndpoint_ReportsAFailureWithNoReply(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "alice@x.com")
 	conv, err := s.store.CreateConversation(t.Context(), "alice@x.com", "hi", "victoria", "", false)
 	if err != nil {
 		t.Fatalf("CreateConversation: %v", err)
@@ -240,6 +241,7 @@ func TestTurnOutcomeEndpoint_RunningTurnHasNoOutcomeYet(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "alice@x.com")
 	conv, err := s.store.CreateConversation(t.Context(), "alice@x.com", "hi", "victoria", "", false)
 	if err != nil {
 		t.Fatalf("CreateConversation: %v", err)
@@ -280,6 +282,7 @@ func TestTurnOutcomeEndpoint_ScopedAndAbsent(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "alice@x.com")
 	conv, err := s.store.CreateConversation(t.Context(), "alice@x.com", "hi", "victoria", "", false)
 	if err != nil {
 		t.Fatalf("CreateConversation: %v", err)

@@ -119,6 +119,7 @@ func TestBranchStripsLegacyInlineInjectedContext(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "alice@example.com")
 	ctx := context.Background()
 	const owner = "alice@example.com"
 	conv, err := s.CreateConversation(ctx, owner, "Legacy", "victoria", "", false)
@@ -177,6 +178,7 @@ func TestBranchKeepsMarkerLikeTextWrittenByTheUser(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "alice@example.com")
 	ctx := context.Background()
 	const owner = "alice@example.com"
 	conv, err := s.CreateConversation(ctx, owner, "Docs", "victoria", "", false)

@@ -39,6 +39,7 @@ func TestShareToken_RoundTrip(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "alice@example.com")
 	ctx := context.Background()
 	conv := seedSharedConv(t, s, "alice@example.com")
 
@@ -109,6 +110,7 @@ func TestShareToken_ExpiredRevokedUnknown(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "alice@example.com")
 	ctx := context.Background()
 	conv := seedSharedConv(t, s, "alice@example.com")
 	now := time.Now().Unix()
@@ -156,6 +158,7 @@ func TestSweepExpired_PreservesSharedConversation(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "alice@example.com")
 	ctx := context.Background()
 	backdate := time.Now().Add(-30 * 24 * time.Hour).Unix()
 

@@ -13,6 +13,7 @@ func TestSetApprovalResultCard(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "alice@example.com")
 	ctx := context.Background()
 	const user, card = "alice@example.com", `{"outcome":"done","title":"Created 1 deal","items":[]}`
 	conv, err := s.CreateConversation(ctx, user, "t", "victoria", "m", false)
