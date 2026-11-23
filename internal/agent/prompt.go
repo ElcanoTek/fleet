@@ -17,6 +17,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/sandbox"
 	"github.com/ElcanoTek/fleet/internal/tools"
 	trunc "github.com/ElcanoTek/fleet/internal/truncate"
+	"github.com/ElcanoTek/fleet/internal/worktree"
 )
 
 // appendAgentNotes concatenates the admin-curated knowledge base after the
@@ -722,27 +723,45 @@ func (m *Manager) buildSystemPrompt(persona string, layer *UserPersonaLayer, con
 		sb.WriteString("\n")
 	}
 
-	// 6. per-conversation absolute workspace path. Native tools
-	// (bash, run_python) already cwd into this dir, so the agent can
-	// use bare relative paths there. MCP subprocesses do NOT inherit
-	// the per-conv cwd — they stay at the server root — so any MCP tool
-	// that writes files needs to receive this ABSOLUTE path as
-	// output_dir. Otherwise "./foo.csv" lands in the read-only server
-	// root and the call fails.
+	// 6. per-conversation absolute workspace path (writeWorkingDirectory).
 	if conversationID != "" {
-		if abs, err := filepath.Abs(tools.WorkspaceDirForConversation(conversationID)); err == nil {
-			fmt.Fprintf(&sb, "## Working directory\n\nYour per-conversation scratch directory for this turn is:\n\n    %s\n\n", abs)
-			sb.WriteString(
-				"Whenever an MCP tool takes an `output_dir` (or equivalent output-path) argument, pass this absolute path. " +
-					"MCP subprocesses run from the server root, not your scratch directory, and their built-in default output " +
-					"locations are read-only on production hosts (systemd ProtectSystem=strict), so a missing `output_dir` " +
-					"fails with `[Errno 30] Read-only file system`. " +
-					"Bash and run_python already cwd into this dir — bare relative paths work there.\n\n",
-			)
-		}
+		// Persistent conversation sandboxes mount only the conversation's own
+		// directory, so the root repository is mentioned only when every turn
+		// sandbox mounts the whole root (persistent REPL off).
+		wholeRoot := m.config == nil || !m.config.PersistentPythonREPL()
+		writeWorkingDirectory(&sb, conversationID, wholeRoot)
 	}
 
 	return sb.String(), nil
+}
+
+// writeWorkingDirectory writes the per-conversation absolute workspace path.
+// Native tools (bash, run_python) already cwd into this dir, so the agent can
+// use bare relative paths there. MCP subprocesses do NOT inherit the per-conv
+// cwd — they stay at the server root — so any MCP tool that writes files
+// needs to receive this ABSOLUTE path as output_dir. Otherwise "./foo.csv"
+// lands in the read-only server root and the call fails.
+func writeWorkingDirectory(sb *strings.Builder, conversationID string, wholeRoot bool) {
+	abs, err := filepath.Abs(tools.WorkspaceDirForConversation(conversationID))
+	if err != nil {
+		return
+	}
+	fmt.Fprintf(sb, "## Working directory\n\nYour per-conversation scratch directory for this turn is:\n\n    %s\n\n", abs)
+	sb.WriteString(
+		"Whenever an MCP tool takes an `output_dir` (or equivalent output-path) argument, pass this absolute path. " +
+			"MCP subprocesses run from the server root, not your scratch directory, and their built-in default output " +
+			"locations are read-only on production hosts (systemd ProtectSystem=strict), so a missing `output_dir` " +
+			"fails with `[Errno 30] Read-only file system`. " +
+			"Bash and run_python already cwd into this dir — bare relative paths work there.\n\n",
+	)
+	// When the workspace root was a git repository at startup (the startup
+	// record, worktree.Pin) and this turn's sandbox mounts the whole root,
+	// the root's .git is read-only there (ADR-0118): say so once, so a commit
+	// there is not retried. Absent otherwise, which keeps the prompt
+	// unchanged on most deployments.
+	if wholeRoot && worktree.Pin(filepath.Dir(abs)).IsRepo() {
+		fmt.Fprintf(sb, "The workspace root above this directory (%s) is a git repository whose .git is read-only from the sandbox: git commands that write to it (commit, stash, switch, branch) fail there with `Read-only file system`. If you need a repository, create one inside this directory.\n\n", filepath.Dir(abs))
+	}
 }
 
 // Day precision only — any finer granularity would change the system prompt

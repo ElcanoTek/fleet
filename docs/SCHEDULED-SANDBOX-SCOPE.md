@@ -28,6 +28,15 @@ sandboxes can still read a job's files, but can no longer write, rename or
 replace anything under `tasks/` — which is what would let one swap another
 job's directory in for a scoped job's between the scope check and the mount.
 
+Since [ADR-0118](adr/0118-host-git-and-workspace-git-dirs.md) the same
+whole-root sandboxes also get `<root>/mcp-shared/` read-only, and — when the
+workspace root is a git repository at boot — the root repository's
+`<root>/.git` and `<root>/.fleet-worktrees/` as their own read-only bind
+mounts. A worktree run takes `sandbox.Pool.TakeWorktree` (always a cold
+start), which adds, writable and nested in them, only what its git writes:
+its checkout, its `.git/worktrees/<id>` record, and `.git/objects`,
+`.git/refs` and `.git/logs` (with `objects/info` read-only again).
+
 Not mounted: the root itself, every other `tasks/<lineage>/`, every chat
 conversation directory, `mcp-shared/`, and every other occurrence's
 `mcp-runs/task-<id>/`. `ls ..` from the job directory therefore shows only the
@@ -94,7 +103,9 @@ no path there to follow.
   decision this change does not make.
 - **Worktree runs.** A `worktree_config` run keeps the whole-root mount: the
   workspace root is the git repository, and the worktree's `.git` file points
-  into the root's `.git/worktrees/`, which a scoped mount would hide.
+  into the root's `.git/worktrees/`, which a scoped mount would hide. Since
+  ADR-0118 it cold-starts through `TakeWorktree`, the one whole-root take with
+  the parts of `.git` and `.fleet-worktrees/` its git writes made writable.
 - **`FLEET_SCHEDULED_SHARED_WORKSPACE=1`.** The operator asked for the shared
   root, so the run gets the whole-root mount.
 

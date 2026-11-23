@@ -104,7 +104,7 @@ const uiAutoSubmitSweepInterval = 1 * time.Second
 const maintenanceInterval = httpapi.DefaultMaintenanceInterval
 
 // maintenancePassTimeout bounds ONE maintenance iteration. The pass walks
-// filesystem trees and runs host git, either of which can be slow on a large,
+// filesystem trees, which can be slow on a large,
 // slow-storage box; without a ceiling one pathological iteration would wedge
 // the loop and silently stop every later one. Generously longer than a healthy
 // pass, which is seconds. An overrun aborts the remaining steps and the next
@@ -1586,6 +1586,9 @@ func buildInteractiveEngine(
 	chatStore *store.Store,
 	openRouterKey string,
 ) (*agent.Manager, error) {
+	// The serving process reclaims sandboxes a crashed prior server left
+	// before it records the workspace repository (agent.ManagerOptions).
+	opts.ReclaimOrphanSandboxes = true
 	opts.LLMProviders = bundleProviders
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -1980,8 +1983,8 @@ func startMaintenanceLoop(ctx context.Context, cfg *config.Config, h *handlers.H
 }
 
 // pruneStaleWorktrees reclaims per-run git worktrees that no run will clean up:
-// a process crash between `git worktree add` and its deferred removal, a task
-// with auto_cleanup off, or a `git worktree remove` that failed. Each is a full
+// a process crash between registering a worktree and its deferred removal, a task
+// with auto_cleanup off, or a removal that failed. Each is a full
 // checkout of the workspace repository, so on a box that uses worktree
 // isolation this is usually the largest single reclaimer in the pass.
 //
@@ -2047,7 +2050,7 @@ func runMaintenancePass(ctx context.Context, cfg *config.Config, h *handlers.Han
 	}
 
 	// Git worktrees orphaned by a crash, by a task with auto_cleanup off, or by
-	// a `git worktree remove` that failed after the run. The age bound is
+	// a removal that failed after the run. The age bound is
 	// generous on purpose: a worktree younger than it may belong to a task
 	// still running.
 	pruneStaleWorktrees(passCtx, cfg)

@@ -342,15 +342,28 @@ func (p *Pool) TakeContainerWithOverrides(ctx context.Context, ov ResourceOverri
 		// warmContainerConfig, so the sealed posture holds warm or cold.
 		return p.Take(ctx)
 	}
-	return p.coldContainer(ctx, ov, noNetwork, nil)
+	return p.coldContainer(ctx, ov, noNetwork, mountShape{})
+}
+
+// mountShape is how a cold take's workspace mounts differ from the pool's:
+// an optional scope (TakeScoped) or a worktree run's writable parts
+// (TakeWorktree). The zero value is the pool's own whole-root shape.
+type mountShape struct {
+	scope    *WorkspaceScope
+	worktree *WorktreeMount
+}
+
+func (m mountShape) applyTo(cfg ContainerConfig) ContainerConfig {
+	cfg.Scope = m.scope
+	cfg.Worktree = m.worktree
+	return cfg
 }
 
 // coldContainer cold-starts one container with the given overrides, network
-// posture and optional workspace scope. The shared tail of
-// TakeContainerWithOverrides and TakeScoped.
-func (p *Pool) coldContainer(ctx context.Context, ov ResourceOverride, noNetwork bool, scope *WorkspaceScope) (*Sandbox, func(), error) {
-	cfg := p.cfg.Container
-	cfg.Scope = scope
+// posture and mount shape. The shared tail of TakeContainerWithOverrides,
+// TakeScoped and TakeWorktree.
+func (p *Pool) coldContainer(ctx context.Context, ov ResourceOverride, noNetwork bool, shape mountShape) (*Sandbox, func(), error) {
+	cfg := shape.applyTo(p.cfg.Container)
 	cfg.BridgeScript = p.cfg.BridgeScript
 	// Network sealing is enforced HERE rather than upstream so the lockdown
 	// contract is impossible to bypass via a bad caller.
@@ -449,13 +462,13 @@ func (p *Pool) TakeContainerWithEgress(ctx context.Context, ov ResourceOverride,
 		// boot too; this is the can't-bypass-it backstop.
 		return nil, func() {}, errors.New("allowlisted network mode is not supported by the kubernetes sandbox backend (fail-closed)")
 	}
-	return p.egressContainer(ctx, ov, allowlist, nil)
+	return p.egressContainer(ctx, ov, allowlist, mountShape{})
 }
 
-// egressContainer cold-starts one allowlisted-egress container with an
-// optional workspace scope. The shared tail of TakeContainerWithEgress and
-// TakeScoped; callers have already refused the kubernetes backend.
-func (p *Pool) egressContainer(ctx context.Context, ov ResourceOverride, allowlist []string, scope *WorkspaceScope) (*Sandbox, func(), error) {
+// egressContainer cold-starts one allowlisted-egress container with the given
+// mount shape. The shared tail of TakeContainerWithEgress, TakeScoped and
+// TakeWorktree; callers have already refused the kubernetes backend.
+func (p *Pool) egressContainer(ctx context.Context, ov ResourceOverride, allowlist []string, shape mountShape) (*Sandbox, func(), error) {
 	if p.cfg.EgressProxy == nil {
 		return nil, func() {}, errors.New("allowlisted network mode requested but no egress proxy is configured (fail-closed)")
 	}
@@ -463,8 +476,7 @@ func (p *Pool) egressContainer(ctx context.Context, ov ResourceOverride, allowli
 	if err != nil {
 		return nil, func() {}, fmt.Errorf("register egress allowlist: %w", err)
 	}
-	cfg := p.cfg.Container
-	cfg.Scope = scope
+	cfg := shape.applyTo(p.cfg.Container)
 	cfg.BridgeScript = p.cfg.BridgeScript
 	cfg.StorageOptSupported = p.storageOptSupported(ctx)
 	// Allowlisted needs slirp transport (NoNetwork=false) to reach the proxy;
@@ -544,9 +556,9 @@ func (p *Pool) TakeScoped(ctx context.Context, req ScopedTake) (*Sandbox, func()
 			// unreachable from a pod on another node.
 			return nil, func() {}, errors.New("allowlisted network mode is not supported by the kubernetes sandbox backend (fail-closed)")
 		}
-		sb, cleanup, err = p.egressContainer(ctx, req.Override, req.Allowlist, scope)
+		sb, cleanup, err = p.egressContainer(ctx, req.Override, req.Allowlist, mountShape{scope: scope})
 	} else {
-		sb, cleanup, err = p.coldContainer(ctx, req.Override, req.NoNetwork, scope)
+		sb, cleanup, err = p.coldContainer(ctx, req.Override, req.NoNetwork, mountShape{scope: scope})
 	}
 	if err != nil {
 		return sb, cleanup, err
@@ -558,6 +570,103 @@ func (p *Pool) TakeScoped(ctx context.Context, req ScopedTake) (*Sandbox, func()
 		}
 	}
 	return sb, cleanup, nil
+}
+
+// WorktreeTake is one TakeWorktree request: the run's worktree, plus the
+// network posture and resource overrides, as for ScopedTake but without a
+// scope (a worktree run mounts the whole root).
+type WorktreeTake struct {
+	// Worktree is the run's checkout and its record in the root repository.
+	Worktree WorktreeMount
+	// Override carries per-task resource limits (#205); zero = pool defaults.
+	Override ResourceOverride
+	// NoNetwork seals egress (--network=none). Ignored when Allowlisted.
+	NoNetwork bool
+	// Allowlisted routes egress through the host proxy, restricted to
+	// Allowlist (#211).
+	Allowlisted bool
+	Allowlist   []string
+}
+
+// TakeWorktree cold-starts a whole-root sandbox for a worktree_config run.
+// It mounts exactly what every whole-root sandbox mounts — the root
+// repository's .git and .fleet-worktrees read-only among it — plus, writable,
+// the parts the run's in-sandbox git writes: its own checkout and record and
+// the repository's object store, refs and reflogs (ContainerConfig.Worktree).
+// Each is its own bind mount, so the run can change what is inside them but
+// not swap the directories themselves. The warm inventory has none of the
+// writable parts, which is why this always cold-starts.
+//
+// The take fails closed when the root's git directories were not recorded at
+// boot (the root was not a git repository then) or when the worktree's
+// checkout or record is not a real directory in the expected place.
+//
+// Returns ErrContainerUnavailable when the pool has no container backend
+// (host/mock pools), like the other container takes.
+func (p *Pool) TakeWorktree(ctx context.Context, req WorktreeTake) (*Sandbox, func(), error) {
+	if p == nil {
+		return nil, func() {}, ErrContainerUnavailable
+	}
+	if p.isClosed() {
+		return nil, func() {}, ErrClosed
+	}
+	if p.cfg.Container.Image == "" || (p.cfg.Mode != ModeContainer && p.cfg.Mode != ModeKubernetes) {
+		return nil, func() {}, ErrContainerUnavailable
+	}
+	if err := checkWorktreeMount(p.cfg.Container, req.Worktree); err != nil {
+		return nil, func() {}, err
+	}
+	wt := req.Worktree
+	shape := mountShape{worktree: &wt}
+	if req.Allowlisted {
+		if p.cfg.Mode == ModeKubernetes {
+			// Same refusal as TakeContainerWithEgress: the proxy is
+			// unreachable from a pod on another node.
+			return nil, func() {}, errors.New("allowlisted network mode is not supported by the kubernetes sandbox backend (fail-closed)")
+		}
+		return p.egressContainer(ctx, req.Override, req.Allowlist, shape)
+	}
+	return p.coldContainer(ctx, req.Override, req.NoNetwork, shape)
+}
+
+// checkWorktreeMount validates a worktree run's mount request against the
+// pool's recorded git directories: the root's .git and .fleet-worktrees were
+// recorded at boot, the checkout is a real directory directly under
+// .fleet-worktrees, the record one directly under .git/worktrees, and
+// .git/objects/info (which gets its own read-only mount) exists.
+func checkWorktreeMount(cfg ContainerConfig, wt WorktreeMount) error {
+	gitDir, worktreesDir := "", ""
+	for _, dir := range cfg.wholeRootGitDirs() {
+		switch filepath.Base(dir) {
+		case ".git":
+			gitDir = dir
+		case ".fleet-worktrees":
+			worktreesDir = dir
+		}
+	}
+	if gitDir == "" || worktreesDir == "" {
+		return errors.New("worktree sandbox: the workspace root was not a git repository when fleet started; worktree runs need it to be one at startup (fail-closed)")
+	}
+	if !isDirectChild(worktreesDir, wt.Path) {
+		return fmt.Errorf("worktree sandbox: checkout %q is not directly under %q (fail-closed)", wt.Path, worktreesDir)
+	}
+	if !isDirectChild(filepath.Join(gitDir, "worktrees"), wt.AdminDir) {
+		return fmt.Errorf("worktree sandbox: record %q is not directly under %q (fail-closed)", wt.AdminDir, filepath.Join(gitDir, "worktrees"))
+	}
+	// objects/info carries its own read-only mount inside the writable object
+	// store (without it the run could create alternates there); objects, refs
+	// and logs are the writable mounts its git needs (without logs, creating
+	// the run's branch fails inside the read-only .git).
+	for _, dir := range []string{
+		wt.Path, wt.AdminDir,
+		filepath.Join(gitDir, "objects"), filepath.Join(gitDir, "objects", "info"),
+		filepath.Join(gitDir, "refs"), filepath.Join(gitDir, "logs"),
+	} {
+		if _, err := pinNoSymlinks(cfg.WorkspaceHostDir, dir); err != nil {
+			return fmt.Errorf("worktree sandbox: %q is not a real directory beneath the root (fail-closed): %w", dir, err)
+		}
+	}
+	return nil
 }
 
 // verifyScopedMount closes the window between resolveWorkspaceScope's pinned

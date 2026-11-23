@@ -36,6 +36,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/ElcanoTek/fleet/internal/diskguard"
 	"github.com/ElcanoTek/fleet/internal/systemd"
+	"github.com/ElcanoTek/fleet/internal/worktree"
 )
 
 // Status is a check verdict. warn does not fail the box; fail does; skip
@@ -100,6 +101,10 @@ type Options struct {
 	// otherwise the check parses FLEET_TRUSTED_PROXIES from the environment.
 	TrustedProxies     []net.IP
 	HaveTrustedProxies bool
+	// WorkspaceRoot is the workspace root whose repository worktree tasks
+	// use; empty falls back to FLEET_WORKSPACE_ROOT, else ./workspace
+	// (worktree.ResolveWorkspaceRoot).
+	WorkspaceRoot string
 	// Deep additionally launches a throwaway sandbox container
 	// (`podman run --rm --network=none <image> true`) — the definitive smoke,
 	// but seconds-slow, so the UI requests it explicitly.
@@ -145,6 +150,7 @@ func Run(ctx context.Context, opts Options) *Report {
 	}
 	add(checkRetiredWebTier(ctx))
 	add(checkBackups(ctx))
+	add(CheckWorktreeGit(ctx, worktree.ResolveWorkspaceRoot(opts.WorkspaceRoot)))
 
 	for _, c := range r.Checks {
 		switch c.Status {

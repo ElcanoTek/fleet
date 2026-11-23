@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -240,6 +241,30 @@ type ContainerConfig struct {
 	// (a persistent conversation sandbox), so it never widens what those see.
 	WholeRootReadOnly []string
 
+	// WholeRootGitDirs lists the directories directly inside WorkspaceHostDir
+	// that the host's worktree code and the sweep act on: the root repository's
+	// .git and the per-run worktree directory (.fleet-worktrees). The pool
+	// sets it at boot, and only when the root's .git is a real directory then
+	// (agent.buildSandboxPool). A sandbox mounting the WHOLE root gets each one
+	// as its own read-only bind mount, so it can neither change their contents
+	// nor rename, replace or remove the directories. Like WholeRootReadOnly it
+	// is ignored by a scoped sandbox and by one whose WorkspaceHostDir no
+	// longer contains the entry. An entry that is not a real directory when a
+	// sandbox starts (removed on the host since boot) gets no mount.
+	WholeRootGitDirs []string
+
+	// Worktree, set only by Pool.TakeWorktree, is the worktree run this
+	// sandbox serves. On top of the read-only WholeRootGitDirs it gets, as
+	// their own writable bind mounts, exactly what its in-sandbox git writes:
+	// its checkout (Worktree.Path, under .fleet-worktrees), its record
+	// (Worktree.AdminDir, under .git/worktrees — index, HEAD, its reflog), and
+	// the repository's object store, refs and reflogs (.git/objects,
+	// .git/refs, .git/logs). .git/objects/info (where alternates live) is
+	// read-only again inside the object store. Everything else in .git —
+	// config, hooks, info/, HEAD, packed-refs, commondir, the other worktrees'
+	// records — stays read-only (gitDirMounts).
+	Worktree *WorktreeMount
+
 	// Scope, when non-nil, narrows what of WorkspaceHostDir this sandbox
 	// mounts (#1897): Scope.Dir replaces the whole root as the read-write
 	// workspace mount and the working directory, and the read-only set is
@@ -300,14 +325,25 @@ type WorkspaceScope struct {
 // The podman argument list, the kubernetes pod spec and the fileop anchor all
 // read it, so what a sandbox can reach and what its file tools trust cannot
 // drift apart.
+//
+// The read-only set includes WholeRootGitDirs for every whole-root sandbox
+// but a worktree run's, whether or not they exist right now, so the fileop
+// anchor treats them as read-only regardless; the backends mount only the
+// ones that exist (gitDirMounts), each skipping them in its read-only loop. A
+// worktree run's file tools work inside its checkout, a writable mount nested
+// in .fleet-worktrees, so its anchors leave the git directories to the mounts
+// themselves.
 func (cfg ContainerConfig) workspaceMounts() (rw string, ro []string) {
 	if cfg.Scope == nil {
-		ro = make([]string, 0, len(cfg.ReadOnlyMounts)+len(cfg.WholeRootReadOnly))
+		ro = make([]string, 0, len(cfg.ReadOnlyMounts)+len(cfg.WholeRootReadOnly)+len(cfg.WholeRootGitDirs))
 		ro = append(ro, cfg.ReadOnlyMounts...)
 		for _, dir := range cfg.WholeRootReadOnly {
 			if dir != "" && strictlyWithin(cfg.WorkspaceHostDir, dir) {
 				ro = append(ro, dir)
 			}
+		}
+		if cfg.Worktree == nil {
+			ro = append(ro, cfg.wholeRootGitDirs()...)
 		}
 		return cfg.WorkspaceHostDir, ro
 	}
@@ -329,6 +365,102 @@ func (cfg ContainerConfig) workspaceMounts() (rw string, ro []string) {
 	}
 	ro = append(ro, cfg.Scope.ReadOnly...)
 	return cfg.Scope.Dir, ro
+}
+
+// wholeRootGitDirs is WholeRootGitDirs restricted to the entries strictly
+// inside the mounted root: empty for a scoped sandbox (whose plan never
+// reaches this) and for one whose WorkspaceHostDir no longer contains them.
+func (cfg ContainerConfig) wholeRootGitDirs() []string {
+	var out []string
+	for _, dir := range cfg.WholeRootGitDirs {
+		if dir != "" && strictlyWithin(cfg.WorkspaceHostDir, dir) {
+			out = append(out, filepath.Clean(dir))
+		}
+	}
+	return out
+}
+
+// WorktreeMount is a worktree run's checkout and its record in the root
+// repository, as Pool.TakeWorktree mounts them.
+type WorktreeMount struct {
+	// Path is the checkout: <root>/.fleet-worktrees/<name>.
+	Path string
+	// AdminDir is the repository's record of it: <root>/.git/worktrees/<id>.
+	AdminDir string
+}
+
+// gitDirMount is one bind mount of the root repository's directories.
+type gitDirMount struct {
+	path     string
+	readOnly bool
+}
+
+// gitDirMounts returns the bind mounts of the root repository's directories
+// this sandbox gets, parents before children: WholeRootGitDirs read-only and,
+// for a worktree run, the writable parts listed on ContainerConfig.Worktree
+// with .git/objects/info read-only inside them. Each one is mounted only if it
+// is a real directory beneath the root right now (walked without following a
+// symlink). The pool records WholeRootGitDirs at boot, before any sandbox
+// exists, and every whole-root sandbox started since has them as mount
+// points it cannot replace, so the directory checked here is the one
+// mounted; an entry removed or replaced on the host since boot is skipped
+// rather than followed.
+func (cfg ContainerConfig) gitDirMounts() []gitDirMount {
+	if cfg.Scope != nil {
+		return nil
+	}
+	var planned []gitDirMount
+	gitDir, worktreesDir := "", ""
+	for _, dir := range cfg.wholeRootGitDirs() {
+		planned = append(planned, gitDirMount{path: dir, readOnly: true})
+		switch filepath.Base(dir) {
+		case ".git":
+			gitDir = dir
+		case ".fleet-worktrees":
+			worktreesDir = dir
+		}
+	}
+	if wt := cfg.Worktree; wt != nil && gitDir != "" && worktreesDir != "" {
+		for _, sub := range []string{"objects", "refs", "logs"} {
+			planned = append(planned, gitDirMount{path: filepath.Join(gitDir, sub)})
+		}
+		if isDirectChild(filepath.Join(gitDir, "worktrees"), wt.AdminDir) {
+			planned = append(planned, gitDirMount{path: filepath.Clean(wt.AdminDir)})
+		}
+		if isDirectChild(worktreesDir, wt.Path) {
+			planned = append(planned, gitDirMount{path: filepath.Clean(wt.Path)})
+		}
+		planned = append(planned, gitDirMount{path: filepath.Join(gitDir, "objects", "info"), readOnly: true})
+	}
+	var out []gitDirMount
+	for _, m := range planned {
+		if _, err := pinNoSymlinks(cfg.WorkspaceHostDir, m.path); err != nil {
+			continue
+		}
+		out = append(out, m)
+	}
+	// Parents before children, so every nested mount lands on top of the one
+	// it overrides, whatever order a runtime applies them in.
+	slices.SortStableFunc(out, func(a, b gitDirMount) int {
+		return strings.Count(a.path, string(filepath.Separator)) - strings.Count(b.path, string(filepath.Separator))
+	})
+	return out
+}
+
+// isDirectChild reports, lexically, whether path is exactly one component
+// below parent.
+func isDirectChild(parent, path string) bool {
+	if parent == "" || path == "" {
+		return false
+	}
+	rel, err := filepath.Rel(filepath.Clean(parent), filepath.Clean(path))
+	return err == nil && rel != "." && filepath.IsLocal(rel) && !strings.Contains(rel, string(filepath.Separator))
+}
+
+// isWholeRootGitDir reports whether dir is one of WholeRootGitDirs, which the
+// backends mount from gitDirMounts rather than from the read-only loop.
+func (cfg ContainerConfig) isWholeRootGitDir(dir string) bool {
+	return slices.Contains(cfg.wholeRootGitDirs(), filepath.Clean(dir))
 }
 
 // strictlyWithin reports, lexically, whether path lies strictly beneath root.
@@ -740,7 +872,7 @@ func (c *containerImpl) start(ctx context.Context) error {
 	// the agent should never write to these from a turn. See the field's
 	// doc on ReadOnlyMounts for the lockdown bug this closes.
 	for _, dir := range workspaceRO {
-		if dir == "" {
+		if dir == "" || c.cfg.isWholeRootGitDir(dir) {
 			continue
 		}
 		if _, err := os.Stat(dir); err != nil {
@@ -760,6 +892,17 @@ func (c *containerImpl) start(ctx context.Context) error {
 		// personas/foo.yaml` fails inside it. Shared label is also what
 		// podman docs explicitly recommend for read-only volumes.
 		args = append(args, fmt.Sprintf("--volume=%s:%s:ro,z", dir, dir))
+	}
+	// The root repository's .git and .fleet-worktrees, each its own read-only
+	// bind mount, plus a worktree run's writable parts nested in them (see
+	// ContainerConfig.WholeRootGitDirs and Worktree): mount points in every
+	// whole-root sandbox, so none can swap a directory host-side code acts on.
+	for _, m := range c.cfg.gitDirMounts() {
+		mode := "rw"
+		if m.readOnly {
+			mode = "ro"
+		}
+		args = append(args, fmt.Sprintf("--volume=%s:%s:%s,z", m.path, m.path, mode))
 	}
 	args = append(args, networkArgs(c.cfg.NoNetwork, c.cfg.ProxyURL)...)
 	if c.cfg.Runtime != "" {

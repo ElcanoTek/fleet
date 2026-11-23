@@ -55,7 +55,7 @@ func TestRunWorkerChecksRequirementsBeforeModelSetup(t *testing.T) {
 		models.ExecutionRequirementsMarker + "\nnull",
 	} {
 		task := &models.Task{Prompt: prompt}
-		session, _, _, err := (&Runner{}).runWorker(context.Background(), task, "", nil, "")
+		session, _, _, err := (&Runner{}).runWorker(context.Background(), task, "", nil, nil)
 		if err == nil || !strings.Contains(err.Error(), "execution requirements:") || session != nil {
 			t.Fatalf("late/missing preflight: %v %v", session, err)
 		}

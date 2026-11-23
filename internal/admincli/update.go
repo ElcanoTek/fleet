@@ -20,6 +20,7 @@ import (
 	"golang.org/x/sys/unix"
 	"golang.org/x/term"
 
+	"github.com/ElcanoTek/fleet/internal/hostgit"
 	"github.com/ElcanoTek/fleet/internal/release"
 	"github.com/ElcanoTek/fleet/internal/version"
 )
@@ -144,8 +145,9 @@ func updateCheck() int {
 	git := func(args ...string) (string, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
-		//nolint:gosec // G204: fixed "git" binary; args are literal git subcommands, root is operator-config (FLEET_ROOT / the checkout dir), never request input.
-		out, err := exec.CommandContext(ctx, "git", append([]string{"-C", root}, args...)...).Output()
+		// The fleet checkout is the operator's own: hostgit keeps its
+		// credential helpers and transports (see the hostgit package doc).
+		out, err := hostgit.Output(ctx, root, args...)
 		return strings.TrimSpace(string(out)), err
 	}
 	if _, err := git("rev-parse", "--is-inside-work-tree"); err != nil {
@@ -236,8 +238,7 @@ func clientBundleCheck() bool {
 	git := func(args ...string) (string, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
-		//nolint:gosec // G204: fixed "git" binary; args are literal git subcommands, dir is operator config (env / bootstrap state file), never request input.
-		out, err := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...).Output()
+		out, err := hostgit.Output(ctx, dir, args...)
 		return strings.TrimSpace(string(out)), err
 	}
 	if _, err := git("rev-parse", "--is-inside-work-tree"); err != nil {

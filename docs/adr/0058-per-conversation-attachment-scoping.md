@@ -8,6 +8,12 @@
   the one host-side read of a CLIENT-NAMED upload path (vision input, via
   `agent.loadImageAttachments` and its documented caller contract) gains an
   ownership gate. No exception class is added, and no host read moves.
+- **Amended by:** [ADR-0118](0118-host-git-and-workspace-git-dirs.md) — the
+  whole-root workspace mount keeps the root repository's `.git` and
+  `.fleet-worktrees/`, and `mcp-shared/`, read-only (a worktree run's
+  sandbox gets only its own checkout and record and the object store, refs
+  and reflogs writable), and the host runs no git in the workspace
+  repository.
 - **Relates to:** [ADR-0049](0049-kubernetes-backend-split-control-plane.md)
   (which already staged attachments into the workspace claim on that backend —
   this generalizes it), [ADR-0057](0057-team-shared-chats-live-in-team-shared-projects.md)
@@ -172,7 +178,8 @@ an empty bubble standing in for content the copy is not allowed to carry.
   (decision 1), and the branch strip removes them from copies, but an export of
   an old conversation still shows them.
 - **Cross-conversation workspace visibility remains, unchanged by this ADR.**
-  The workspace root is one read-write mount shared by every sandbox, with a
+  The workspace root is one read-write mount shared by every sandbox (minus
+  the read-only directories ADR-0097 and ADR-0118 overlay on it), with a
   directory per conversation inside it, so `bash`/`run_python` in conversation B
   can still read `<workspace>/<conversation A>/…` — including A's staged
   attachments — and can enumerate the conversation directories with `ls`. That

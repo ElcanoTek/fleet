@@ -37,7 +37,7 @@ var conversationPathUses = map[string]reviewedUse{
 	// The path is handed to the sandbox, a prompt or a message — resolved in
 	// the sandbox's own mount namespace, or not opened at all.
 	"internal/agent/manager.go:Manager.configureTurnWorkspace":                {2, "EnsureWorkspaceDir refuses a link; the path binds the sandbox file-op root and the turn's MCP scope"},
-	"internal/agent/prompt.go:Manager.buildSystemPrompt":                      {1, "prompt text only"},
+	"internal/agent/prompt.go:writeWorkingDirectory":                          {1, "prompt text only; its parent is looked up in the startup record (worktree.Pin), not opened"},
 	"internal/httpapi/approval_execute.go:Server.approvalMCPScope":            {1, "checked with OpenConversationDir first; the path goes to the connector scope"},
 	"internal/httpapi/approval_execute.go:Server.resolveStagedFileReferences": {1, "BindFileOpRoot: resolved inside the sandbox"},
 	"internal/tools/bash.go:resolveBashWorkingDir":                            {1, "EnsureWorkspaceDir refuses a link; the path is the sandbox working directory"},

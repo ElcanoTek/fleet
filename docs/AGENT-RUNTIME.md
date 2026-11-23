@@ -1624,8 +1624,9 @@ jobs' directories, chat conversation directories and other occurrences' MCP
 run directories do not exist inside the container, so `bash` and `run_python`
 cannot list, read or write them (the file tools were already confined). The
 take always cold-starts, on both sandbox backends. Every sandbox that still
-mounts the whole root (chat, worktree runs) gets `tasks/` read-only, so it
-can read a job's files but not change, rename or replace them. Worktree runs and
+mounts the whole root (chat, worktree runs) gets `tasks/` and `mcp-shared/`
+read-only, so it can read a job's files but not change, rename or replace
+them. Worktree runs and
 `FLEET_SCHEDULED_SHARED_WORKSPACE=1` keep the whole-root mount. See ADR-0097
 and [`SCHEDULED-SANDBOX-SCOPE.md`](SCHEDULED-SANDBOX-SCOPE.md).
 
@@ -1674,4 +1675,69 @@ after the run (optionally after `cleanup_delay_seconds`); with `false` the branc
 is left in place for inspection or a manual push. Orphans from a crashed run (the
 process died between worktree creation and cleanup) are reclaimed by an operator
 with `fleet worktree prune --older-than <dur>` (and `fleet worktree
-list` shows all registered worktrees).
+list` lists the per-run worktree directories under `.fleet-worktrees` with
+what fleet can prove about their records).
+
+**The root repository: no host git, read-only mounts (ADR-0118).** The
+workspace repository is written from sandboxes, so the host runs no git in it.
+fleet registers the worktree itself (`worktree.CreateWorktree`): it writes the
+record under `.git/worktrees` (`gitdir`, `commondir`, an unborn `HEAD` on the
+run's branch, with a `locked` file while it does) and the checkout's `.git`
+file, through directories opened without following a link — both directories
+are read-only to every sandbox; a name already taken fails the run and is
+left alone. The run's first worker pass runs
+`git -c core.hooksPath=/dev/null switch --no-track --create <branch> <base>`
+in its sandbox (base `main-worktree/HEAD` unless `base_branch` is set), so
+the base is resolved, and the branch and the checkout are written, there.
+`--create` never resets an existing branch of that name (the run fails,
+naming it); `--no-track` keeps a remote-tracking base such as `origin/main`
+from writing an upstream into the read-only `.git/config`; and the
+repository's hooks are off for this one command, so a failing hook (a
+git-lfs `post-checkout` without git-lfs in the image) cannot fail the run —
+the run's own git commands run hooks as usual. A base that does not name a
+commit fails the run with the base named ("the workspace repository has no
+commits" for the default base on an empty repository). The sandbox image
+needs git 2.23 or later (`git switch`); the version is checked first and an
+older one is named in the run's error. The run's cleanup deletes the branch
+only when this checkout created it, and keeps a worktree the run locked
+(`git worktree lock`) whole: checkout, record and branch. A `base_branch`
+of `HEAD`, `@` or a pseudo-ref such as `FETCH_HEAD` means the repository's. Listing, removing and reclaiming
+worktrees and deleting the run's branch also run no git: `internal/worktree`
+deletes the checkout, its record (by the id the run's setup gave it, or, in
+the sweep, only when the checkout and the record name each other) and the
+branch's loose ref and reflog through no-follow `os.Root` handles, rewrites
+`packed-refs` under its lock, and reads only regular files that are not
+links, with non-blocking opens. fleet acts only on the `.git` the root had at
+startup (`worktree.PinAtStartup`), and only while it points nowhere else (no
+`commondir`, no alternates, real `worktrees`/`logs`/`objects/info`, no
+reftable): a root not recorded or made a repository later, a replaced `.git`,
+a gitfile or symlinked `.git`, or a reftable repository gets no worktree
+tasks, and the doctor says so. On the sandbox side, when the root is a
+repository at boot, `.git` and `.fleet-worktrees/` are their own read-only
+bind mounts in every whole-root sandbox; a worktree run's sandbox
+(`sandbox.Pool.TakeWorktree`, always a cold start) additionally gets its own
+checkout and record and `.git/objects`, `.git/refs` and `.git/logs` writable,
+with `objects/info` read-only — enough for commits, creating branches,
+fetches and pushes, while config, hooks, `HEAD`, `packed-refs` and other
+worktrees stay read-only. Git in the run prints
+`error: Unable to create '…/packed-refs.lock': Read-only file system` after
+most ref updates and still succeeds; deleting or renaming any branch,
+`git gc` / `pack-refs` and `git config` writes fail, so `git push -u` cannot
+record an upstream, a branch made from a remote-tracking ref needs
+`--no-track`, and submodules cannot be initialised (`.git/config` and
+`.git/modules` are read-only). The run's task prompt says so. Worktree runs share the repository's refs: a run can move or
+delete `main` or another run's branch, which changes the next run's base.
+In a whole-root chat sandbox, git commands that write to the root
+repository (commit, stash, switch, branch) fail; the root's files are not
+read-only. A persistent conversation sandbox does not mount the root.
+fleet's only host-side git — `fleet update --check` and the client-bundle
+residue note, on the operator's own checkouts — goes through
+`internal/hostgit`, which keeps the operator's credential helpers and
+transports, switches off hooks and fsmonitor, bounds each command to two
+minutes, and clears the variables that would point git at another
+repository; it runs in the checkout the operator configured and does not
+itself check where that lies (keeping operator checkouts out of the
+workspace root is the operator's to do; a separate change adds checks for
+the operator commands). A guard test fails on any other process start that runs git. Operator-authored host
+commands (a task's `run_if` gate, the scripts `fleet update` and
+`fleet doctor` run) are outside it by design.

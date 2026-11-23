@@ -92,6 +92,8 @@ El asistente hace el trabajo en lugar de limitarse a describirlo. Tiene un espac
 
 Ese espacio de trabajo es un **entorno aislado** obligatorio: cada comando, cada línea de Python y cada archivo que el asistente lee o escribe se procesan dentro de él, aislados de la máquina donde se ejecuta la plataforma. Las credenciales de los sistemas conectados nunca entran en él.
 
+Si tu operador ha convertido el propio espacio de trabajo compartido en un repositorio git, los comandos de git que escriben en ese repositorio (commit, stash, cambiar o crear ramas) fallan en el entorno aislado del asistente con «Read-only file system» (con algunas configuraciones de la instalación el entorno aislado ni siquiera muestra el repositorio). Un repositorio que el asistente crea en la carpeta de la propia conversación funciona con normalidad.
+
 ## 2. Cómo leer la pantalla
 
 Hay tres zonas: la barra izquierda contiene tus conversaciones, la transcripción central contiene el trabajo y el editor inferior es donde escribes tus peticiones.

@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/ElcanoTek/fleet/internal/sched/models"
+	"github.com/ElcanoTek/fleet/internal/worktree"
 )
 
 // initGitRepo creates a git repo with one commit in a fresh temp dir and returns
@@ -33,7 +34,21 @@ func initGitRepo(t *testing.T) string {
 			t.Fatalf("git %v: %v\n%s", args, err, out)
 		}
 	}
+	// What fleet serve does at startup: record the workspace repository and
+	// create the directories host code and sandboxes rely on.
+	worktree.PinAtStartup(dir)
+	if err := worktree.PrepareRepoAtStartup(context.Background(), dir); err != nil {
+		t.Fatalf("PrepareRepoAtStartup: %v", err)
+	}
 	return dir
+}
+
+// sandboxCheckout does in wt what checkoutInSandbox has the run's sandbox do:
+// create the run's branch from its base and fill the worktree.
+func sandboxCheckout(t *testing.T, run *runWorktree) {
+	t.Helper()
+	gitOut(t, run.path, "-c", "core.hooksPath=/dev/null", "switch", "--quiet", "--no-track", "--create", run.branch, run.base)
+	run.checkedOut.Store(true)
 }
 
 func gitOut(t *testing.T, dir string, args ...string) string {
@@ -53,19 +68,19 @@ func worktreeTask(wc *models.WorktreeConfig) *models.Task {
 func TestPrepareWorktree_DisabledReturnsEmpty(t *testing.T) {
 	ctx := context.Background()
 	// nil config
-	wt, branch, cleanup, err := prepareWorktree(ctx, t.TempDir(), worktreeTask(nil), "run1")
+	wt, cleanup, err := prepareWorktree(ctx, t.TempDir(), worktreeTask(nil), "run1")
 	if err != nil {
 		t.Fatalf("nil config: unexpected error: %v", err)
 	}
-	if wt != "" || branch != "" {
-		t.Fatalf("nil config: want empty wtPath/branch, got %q/%q", wt, branch)
+	if wt != nil || wt.dir() != "" {
+		t.Fatalf("nil config: want no worktree, got %+v", wt)
 	}
 	cleanup() // must be a safe no-op
 
 	// explicitly disabled
-	wt, _, cleanup, err = prepareWorktree(ctx, t.TempDir(), worktreeTask(&models.WorktreeConfig{Enabled: false}), "run1")
-	if err != nil || wt != "" {
-		t.Fatalf("disabled: want empty/no-error, got %q / %v", wt, err)
+	wt, cleanup, err = prepareWorktree(ctx, t.TempDir(), worktreeTask(&models.WorktreeConfig{Enabled: false}), "run1")
+	if err != nil || wt != nil {
+		t.Fatalf("disabled: want no worktree/no error, got %+v / %v", wt, err)
 	}
 	cleanup()
 }
@@ -75,12 +90,13 @@ func TestPrepareWorktree_NonRepoRejected(t *testing.T) {
 		t.Skip("git not available")
 	}
 	dir := t.TempDir() // not a git repo
-	_, _, _, err := prepareWorktree(context.Background(), dir, worktreeTask(&models.WorktreeConfig{Enabled: true}), "run1")
+	worktree.PinAtStartup(dir)
+	_, _, err := prepareWorktree(context.Background(), dir, worktreeTask(&models.WorktreeConfig{Enabled: true}), "run1")
 	if err == nil {
 		t.Fatal("expected error for non-git workspace, got nil")
 	}
-	if !strings.Contains(err.Error(), "not a git repository") {
-		t.Fatalf("error should mention non-git repo, got: %v", err)
+	if !strings.Contains(err.Error(), "had no .git") {
+		t.Fatalf("error should say the workspace had no .git, got: %v", err)
 	}
 }
 
@@ -90,21 +106,40 @@ func TestPrepareWorktree_SubdirOfRepoRejected(t *testing.T) {
 	if err := os.MkdirAll(sub, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	_, _, _, err := prepareWorktree(context.Background(), sub, worktreeTask(&models.WorktreeConfig{Enabled: true}), "run1")
+	worktree.PinAtStartup(sub)
+	_, _, err := prepareWorktree(context.Background(), sub, worktreeTask(&models.WorktreeConfig{Enabled: true}), "run1")
 	if err == nil {
 		t.Fatal("expected error for non-root subdir, got nil")
 	}
-	if !strings.Contains(err.Error(), "not its root") {
-		t.Fatalf("error should mention non-root, got: %v", err)
+	// A subdirectory of a repository has no .git of its own: it is refused
+	// before git is asked anything.
+	if !strings.Contains(err.Error(), "had no .git") {
+		t.Fatalf("error should say the workspace has no .git of its own, got: %v", err)
 	}
 }
 
 func TestPrepareWorktree_CreatesIsolatedWorktree(t *testing.T) {
 	repo := initGitRepo(t)
 	task := worktreeTask(&models.WorktreeConfig{Enabled: true})
-	wt, branch, cleanup, err := prepareWorktree(context.Background(), repo, task, "abc123")
+	run, cleanup, err := prepareWorktree(context.Background(), repo, task, "abc123")
 	if err != nil {
 		t.Fatalf("prepareWorktree: %v", err)
+	}
+	wt, branch := run.path, run.branch
+	// The host only registers the worktree; the run's sandbox creates the
+	// branch and fills it (checkoutInSandbox). Do here what the sandbox does.
+	if entries, _ := os.ReadDir(wt); len(entries) != 1 || entries[0].Name() != ".git" {
+		t.Fatalf("host-created worktree should hold only its .git file, got %v", entries)
+	}
+	if refs := gitOut(t, repo, "for-each-ref", "refs/heads/"+branch); strings.TrimSpace(refs) != "" {
+		t.Fatalf("the host created the branch: %q", refs)
+	}
+	if run.base != "main-worktree/HEAD" {
+		t.Fatalf("default base = %q, want the repository's HEAD (main-worktree/HEAD)", run.base)
+	}
+	sandboxCheckout(t, run)
+	if want := filepath.Join(repo, ".git", "worktrees", filepath.Base(wt)); run.adminDir != want {
+		t.Fatalf("adminDir = %q, want %q", run.adminDir, want)
 	}
 
 	// Worktree path is under <repo>/.fleet-worktrees/<task>-<run>.
@@ -170,11 +205,13 @@ func TestPrepareWorktree_CustomPrefixAndBase(t *testing.T) {
 	gitOut(t, repo, "checkout", "-q", initBranch)
 
 	task := worktreeTask(&models.WorktreeConfig{Enabled: true, BranchPrefix: "iso/", BaseBranch: "develop"})
-	wt, branch, cleanup, err := prepareWorktree(context.Background(), repo, task, "run9")
+	run, cleanup, err := prepareWorktree(context.Background(), repo, task, "run9")
 	if err != nil {
 		t.Fatalf("prepareWorktree: %v", err)
 	}
 	defer cleanup()
+	wt, branch := run.path, run.branch
+	sandboxCheckout(t, run)
 
 	if !strings.HasPrefix(branch, "iso/") {
 		t.Fatalf("branch %q should use custom prefix iso/", branch)
@@ -188,7 +225,7 @@ func TestPrepareWorktree_CustomPrefixAndBase(t *testing.T) {
 func TestEnsureWorktreeExcluded_Idempotent(t *testing.T) {
 	repo := initGitRepo(t)
 	for i := 0; i < 3; i++ {
-		if err := ensureWorktreeExcluded(repo); err != nil {
+		if err := ensureWorktreeExcluded(context.Background(), repo); err != nil {
 			t.Fatalf("iteration %d: %v", i, err)
 		}
 	}
@@ -198,5 +235,108 @@ func TestEnsureWorktreeExcluded_Idempotent(t *testing.T) {
 	}
 	if n := strings.Count(string(data), worktreeSubdir+"/"); n != 1 {
 		t.Fatalf("exclude line should appear exactly once, found %d:\n%s", n, data)
+	}
+}
+
+// TestPrepareWorktree_ACollisionLeavesTheExistingWorktree: when a run's
+// worktree name is already taken, prepareWorktree fails and leaves the
+// worktree, record and branch already there exactly as they were.
+func TestPrepareWorktree_ACollisionLeavesTheExistingWorktree(t *testing.T) {
+	repo := initGitRepo(t)
+	task := worktreeTask(&models.WorktreeConfig{Enabled: true})
+	first, cleanup, err := prepareWorktree(context.Background(), repo, task, "run1")
+	if err != nil {
+		t.Fatalf("prepareWorktree: %v", err)
+	}
+	defer cleanup()
+	sandboxCheckout(t, first)
+	gitOut(t, first.path, "commit", "--allow-empty", "-q", "-m", "work")
+	tip := strings.TrimSpace(gitOut(t, repo, "rev-parse", first.branch))
+
+	if _, again, err := prepareWorktree(context.Background(), repo, task, "run1"); err == nil {
+		again()
+		t.Fatal("a second worktree under the same name was created")
+	}
+	for _, p := range []string{filepath.Join(first.path, ".git"), filepath.Join(first.adminDir, "gitdir")} {
+		if _, err := os.Stat(p); err != nil {
+			t.Errorf("the existing worktree lost %s: %v", p, err)
+		}
+	}
+	if got := strings.TrimSpace(gitOut(t, repo, "rev-parse", first.branch)); got != tip {
+		t.Errorf("the existing branch is at %s, want %s", got, tip)
+	}
+}
+
+// TestPrepareWorktree_CleanupDeletesOnlyTheRunsOwnBranch: cleanup deletes the
+// run's branch once the run's sandbox created it, and leaves a branch of that
+// name alone when the checkout never happened (the branch was there before,
+// or the run failed first).
+func TestPrepareWorktree_CleanupDeletesOnlyTheRunsOwnBranch(t *testing.T) {
+	repo := initGitRepo(t)
+	task := worktreeTask(&models.WorktreeConfig{Enabled: true})
+	wt, cleanup, err := prepareWorktree(context.Background(), repo, task, "run1")
+	if err != nil {
+		t.Fatalf("prepareWorktree: %v", err)
+	}
+	gitOut(t, repo, "branch", wt.branch)
+	cleanup()
+	if out := gitOut(t, repo, "branch", "--list", wt.branch); !strings.Contains(out, wt.branch) {
+		t.Fatalf("cleanup deleted a branch the run did not create")
+	}
+	gitOut(t, repo, "branch", "-D", wt.branch)
+
+	wt, cleanup, err = prepareWorktree(context.Background(), repo, task, "run2")
+	if err != nil {
+		t.Fatalf("prepareWorktree: %v", err)
+	}
+	sandboxCheckout(t, wt)
+	cleanup()
+	if out := gitOut(t, repo, "branch", "--list", wt.branch); strings.Contains(out, wt.branch) {
+		t.Fatalf("cleanup kept the branch the run created")
+	}
+}
+
+// TestWorktreeBase: an empty base, HEAD, "@" and per-worktree pseudo-refs
+// mean the repository's, read through main-worktree/; other bases are kept.
+func TestWorktreeBase(t *testing.T) {
+	for in, want := range map[string]string{
+		"":             "main-worktree/HEAD",
+		"  ":           "main-worktree/HEAD",
+		"@":            "main-worktree/HEAD",
+		"HEAD":         "main-worktree/HEAD",
+		"FETCH_HEAD":   "main-worktree/FETCH_HEAD",
+		"ORIG_HEAD":    "main-worktree/ORIG_HEAD",
+		"main":         "main",
+		"origin/main":  "origin/main",
+		"HEADquarters": "HEADquarters",
+		"release_HEAD": "release_HEAD",
+	} {
+		if got := worktreeBase(in); got != want {
+			t.Errorf("worktreeBase(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestPrepareWorktree_CleanupKeepsALockedWorktree: when the run locked its
+// worktree, cleanup removes nothing — checkout, record and branch stay, so
+// the run's commit keeps its ref.
+func TestPrepareWorktree_CleanupKeepsALockedWorktree(t *testing.T) {
+	repo := initGitRepo(t)
+	wt, cleanup, err := prepareWorktree(context.Background(), repo, worktreeTask(&models.WorktreeConfig{Enabled: true}), "run1")
+	if err != nil {
+		t.Fatalf("prepareWorktree: %v", err)
+	}
+	sandboxCheckout(t, wt)
+	gitOut(t, wt.path, "commit", "--allow-empty", "-q", "-m", "work")
+	gitOut(t, wt.path, "worktree", "lock", "--reason", "keep", ".")
+	tip := strings.TrimSpace(gitOut(t, repo, "rev-parse", wt.branch))
+	cleanup()
+	for _, p := range []string{filepath.Join(wt.path, ".git"), wt.adminDir, filepath.Join(wt.adminDir, "locked")} {
+		if _, err := os.Lstat(p); err != nil {
+			t.Errorf("cleanup removed %s from a locked worktree: %v", p, err)
+		}
+	}
+	if got := strings.TrimSpace(gitOut(t, repo, "rev-parse", wt.branch)); got != tip {
+		t.Errorf("the locked worktree's branch is at %q, want %q", got, tip)
 	}
 }

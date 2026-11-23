@@ -5,9 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"os/exec"
 	"os/signal"
-	"strings"
 	"syscall"
 
 	"github.com/ElcanoTek/fleet/internal/worktree"
@@ -20,10 +18,9 @@ import (
 //	fleet worktree prune  [--workspace DIR] [--older-than DUR] [--dry-run]
 //
 // Worktrees are created under <workspace>/.fleet-worktrees/<task>-<run>. A run
-// that crashes between `git worktree add` and its cleanup leaves an orphan;
-// prune reclaims orphans without needing manual host access. It runs host git
-// directly (there is no DB/storage seam for worktrees), mirroring the
-// bootstrap/status host-command pattern.
+// that crashes between registering its worktree and its cleanup leaves an orphan;
+// prune reclaims orphans without needing manual host access. Neither runs git
+// (see internal/worktree, ADR-0118).
 
 // cmdWorktree dispatches `fleet worktree list|prune`.
 func cmdWorktree(argv []string) int {
@@ -40,8 +37,10 @@ func cmdWorktree(argv []string) int {
 	}
 }
 
-// worktreeList prints `git worktree list --porcelain` for the configured
-// workspace repo, so operators can see every registered worktree.
+// worktreeList prints the per-run worktrees under the workspace's
+// .fleet-worktrees and what fleet can prove about their records, without
+// running git (worktree.List). Text a run could write (a lock reason) is
+// printed through worktree.SanitizeForTerminal.
 func worktreeList(argv []string) int {
 	fs := flag.NewFlagSet("worktree list", flag.ContinueOnError)
 	ws := fs.String("workspace", "", "workspace repo root (default: $FLEET_WORKSPACE_ROOT, else ./workspace)")
@@ -53,13 +52,27 @@ func worktreeList(argv []string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	out, err := gitOutput(ctx, root, "worktree", "list", "--porcelain")
+	// Like `fleet worktree prune`, this one-off process records the
+	// workspace repository as it finds it now (see worktree.Pin).
+	worktree.PinAtStartup(root)
+	entries, err := worktree.List(ctx, root)
 	if err != nil {
-		return errf(5, "git worktree list (workspace %s): %v\n%s", root, err, out)
+		return errf(5, "worktree list (workspace %s): %v", root, err)
 	}
-	fmt.Print(out)
-	if !strings.HasSuffix(out, "\n") {
-		fmt.Println()
+	if len(entries) == 0 {
+		fmt.Printf("no per-run worktrees under %s\n", worktree.SanitizeForTerminal(root))
+		return 0
+	}
+	for _, e := range entries {
+		record := "no proven record"
+		if e.RecordID != "" {
+			record = "record " + worktree.SanitizeForTerminal(e.RecordID)
+		}
+		line := worktree.SanitizeForTerminal(e.Path) + "  " + record
+		if e.Locked != "" {
+			line += "  locked: " + worktree.SanitizeForTerminal(e.Locked)
+		}
+		fmt.Println(line)
 	}
 	return 0
 }
@@ -81,12 +94,18 @@ func worktreePrune(argv []string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	// This one-off process records the workspace repository as it finds it
+	// now: the sweep then treats it the way the server treats the repository
+	// it recorded at its own start (see worktree.Pin).
+	worktree.PinAtStartup(root)
 	res, err := worktree.PruneStale(ctx, root, *olderThan, *dryRun)
+	// Warnings and paths can carry text a run wrote (a lock reason, a
+	// directory name): printed with control characters replaced.
 	for _, w := range res.Warnings {
-		fmt.Fprintf(os.Stderr, "warning: %s\n", w)
+		fmt.Fprintf(os.Stderr, "warning: %s\n", worktree.SanitizeForTerminal(w))
 	}
 	if err != nil {
-		return errf(5, "worktree prune: %v", err)
+		return errf(5, "worktree prune: %s", worktree.SanitizeForTerminal(err.Error()))
 	}
 
 	verb := "removed"
@@ -94,7 +113,7 @@ func worktreePrune(argv []string) int {
 		verb = "would remove"
 	}
 	for _, path := range res.Removed {
-		fmt.Printf("%s %s\n", verb, path)
+		fmt.Printf("%s %s\n", verb, worktree.SanitizeForTerminal(path))
 	}
 	fmt.Printf("%s %d worktree dir(s); kept %d newer than %s\n", verb, res.Count(), res.Kept, olderThan.String())
 	return 0
@@ -105,13 +124,4 @@ func worktreePrune(argv []string) int {
 // never disagree about which tree they are reclaiming.
 func resolveWorkspaceRoot(flagVal string) string {
 	return worktree.ResolveWorkspaceRoot(flagVal)
-}
-
-// gitOutput runs host git in dir and returns combined stdout+stderr.
-func gitOutput(ctx context.Context, dir string, args ...string) (string, error) {
-	full := append([]string{"-C", dir}, args...)
-	//nolint:gosec // G204: fixed "git" binary; args are fixed subcommands + an operator-supplied workspace path / worktree paths derived from a ReadDir of that workspace, passed as separate argv with no shell interpolation.
-	cmd := exec.CommandContext(ctx, "git", full...)
-	out, err := cmd.CombinedOutput()
-	return string(out), err
 }

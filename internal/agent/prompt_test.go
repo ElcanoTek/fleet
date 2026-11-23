@@ -12,6 +12,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/mcp"
+	"github.com/ElcanoTek/fleet/internal/worktree"
 )
 
 // TestBuildSystemPrompt_AgentNotesInjection verifies the admin-curated notes
@@ -654,5 +655,53 @@ func TestBuildSystemPrompt_AvailableOptionalMCPConnectors(t *testing.T) {
 	}
 	if strings.Contains(hiddenPrompt, "Available Optional MCP Connectors") {
 		t.Errorf("expected section to be omitted when enable_mcp_connectors is hidden")
+	}
+}
+
+// TestBuildSystemPrompt_WorkspaceRepositoryNote: when the workspace root was a
+// git repository at startup, the working-directory section says it is
+// read-only from the sandbox; otherwise the prompt says nothing about it.
+func TestBuildSystemPrompt_WorkspaceRepositoryNote(t *testing.T) {
+	m := fixtureManager(t)
+	for _, repo := range []bool{false, true} {
+		root := t.TempDir()
+		t.Setenv("FLEET_WORKSPACE_ROOT", root)
+		if repo {
+			if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		worktree.PinAtStartup(root)
+		prompt, err := m.buildSystemPrompt("victoria", nil, "conv-repo-note", nil, "", nil, nil, nil, hostedMCPRoster{}, nil)
+		if err != nil {
+			t.Fatalf("buildSystemPrompt: %v", err)
+		}
+		if got := strings.Contains(prompt, "is a git repository whose .git is read-only"); got != repo {
+			t.Errorf("repository root=%v: note present=%v", repo, got)
+		}
+		// A persistent conversation sandbox mounts only the conversation's
+		// own directory: the root is not there to mention.
+		persistent := fixtureManager(t)
+		persistent.config.PythonREPLMode = "persistent"
+		prompt, err = persistent.buildSystemPrompt("victoria", nil, "conv-repo-note", nil, "", nil, nil, nil, hostedMCPRoster{}, nil)
+		if err != nil {
+			t.Fatalf("buildSystemPrompt: %v", err)
+		}
+		if strings.Contains(prompt, "is a git repository") {
+			t.Errorf("persistent sandboxes: the root repository is mentioned")
+		}
+	}
+	// A root nothing recorded at startup is not mentioned, whatever it holds.
+	unrecorded := t.TempDir()
+	t.Setenv("FLEET_WORKSPACE_ROOT", unrecorded)
+	if err := os.Mkdir(filepath.Join(unrecorded, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	prompt, err := m.buildSystemPrompt("victoria", nil, "conv-repo-note", nil, "", nil, nil, nil, hostedMCPRoster{}, nil)
+	if err != nil {
+		t.Fatalf("buildSystemPrompt: %v", err)
+	}
+	if strings.Contains(prompt, "is a git repository") {
+		t.Error("an unrecorded root was mentioned as a repository")
 	}
 }

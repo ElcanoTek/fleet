@@ -51,6 +51,13 @@ func TestHandleDoctor(t *testing.T) {
 	if chat == nil || chat.Status != boxdoctor.StatusOK {
 		t.Errorf("chat database check = %+v, want ok via the stub store", chat)
 	}
+	// The worktree check looks at the server's workspace root (./workspace
+	// when none is configured), never "no workspace root configured".
+	for _, c := range got.Checks {
+		if c.Name == "workspace repository for worktree tasks" && c.Detail == "no workspace root configured" {
+			t.Errorf("worktree check = %+v, want the server's workspace root checked", c)
+		}
+	}
 
 	// Method gate.
 	rr = httptest.NewRecorder()

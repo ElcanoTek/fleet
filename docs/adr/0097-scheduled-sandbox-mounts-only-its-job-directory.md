@@ -1,6 +1,11 @@
 # ADR-0097: A scheduled job's sandbox mounts only its own directory of the workspace root
 
 Status: accepted; amends ADR-0069 (per-job scheduled workspaces).
+Amended by [ADR-0118](0118-host-git-and-workspace-git-dirs.md): whole-root
+sandboxes also get `mcp-shared/` and the root repository's `.git` and
+`.fleet-worktrees/` read-only, and a worktree run takes `Pool.TakeWorktree`
+(always cold-started, with only its own checkout and record and the object
+store, refs and reflogs writable).
 
 ## Context
 
