@@ -53,7 +53,7 @@ var conversationPathUses = map[string]reviewedUse{
 	"internal/httpapi/admin_chats.go:Server.adminPurge":                   {1, "workspace root (empty id), for the orphan sweep after a permanent delete"},
 	"internal/httpapi/admin_storage.go:Server.handleAdminStorage":         {1, "workspace root (empty id)"},
 	"internal/httpapi/admin_storage.go:Server.handleAdminStorageCleanup":  {1, "workspace root (empty id)"},
-	"internal/httpapi/maintenance.go:Server.RunMaintenance":               {3, "workspace root (empty id)"},
+	"internal/httpapi/maintenance.go:Server.maintenancePass":              {3, "workspace root (empty id)"},
 	"internal/httpapi/workspace_file.go:Server.privateWorkspaceStashRoot": {1, "workspace root (empty id)"},
 	"internal/sched/handlers/workspace.go:Handlers.loadWorkspaceTask":     {1, "workspace root (empty id) for OpenRunDir"},
 
