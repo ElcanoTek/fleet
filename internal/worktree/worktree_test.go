@@ -1264,3 +1264,85 @@ func TestRemoveWorktreeKeepsTheRecordOfACheckoutItCannotRemove(t *testing.T) {
 		t.Errorf("the record went while the checkout survived: %v", err)
 	}
 }
+
+// TestDeleteBranchWithPackedAndLooseValues: a branch packed at an older
+// commit and then advanced as a loose ref is fully deleted; with
+// packed-refs.lock held by another writer, nothing is removed and the
+// branch still reads as its newer value.
+func TestDeleteBranchWithPackedAndLooseValues(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	gitRepo(t, root)
+	gitIn := func(args ...string) string {
+		t.Helper()
+		out, err := exec.Command("git", append([]string{"-C", root, "-c", "user.email=t@t.t", "-c", "user.name=t"}, args...)...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	// setup packs branch at the current commit, then advances it as a loose
+	// ref to a newer one, and returns the newer commit.
+	setup := func(branch string) string {
+		t.Helper()
+		gitIn("branch", branch)
+		older := gitIn("rev-parse", branch)
+		gitIn("pack-refs", "--all")
+		newer := gitIn("commit-tree", "-p", older, "-m", "newer", older+"^{tree}")
+		gitIn("update-ref", "-m", "advance", "refs/heads/"+branch, newer)
+		if _, err := os.Stat(filepath.Join(root, ".git", "refs", "heads", branch)); err != nil {
+			t.Fatalf("no loose ref after the advance: %v", err)
+		}
+		return newer
+	}
+	loose := func(branch string) string { return filepath.Join(root, ".git", "refs", "heads", branch) }
+	reflog := func(branch string) string { return filepath.Join(root, ".git", "logs", "refs", "heads", branch) }
+	packed := filepath.Join(root, ".git", "packed-refs")
+
+	newer := setup("fleet/held")
+	before, _ := os.ReadFile(packed)
+	lock := filepath.Join(root, ".git", "packed-refs.lock")
+	if err := os.WriteFile(lock, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	prev := packedRefsLockWait
+	packedRefsLockWait = 100 * time.Millisecond
+	err := DeleteBranch(ctx, root, "fleet/held")
+	packedRefsLockWait = prev
+	if err == nil || !strings.Contains(err.Error(), "nothing was removed") {
+		t.Fatalf("with the lock held: err = %v, want a refusal that removed nothing", err)
+	}
+	for _, p := range []string{loose("fleet/held"), reflog("fleet/held")} {
+		if _, err := os.Stat(p); err != nil {
+			t.Errorf("%s was removed while the lock was held: %v", p, err)
+		}
+	}
+	if after, _ := os.ReadFile(packed); string(after) != string(before) {
+		t.Error("packed-refs changed while the lock was held")
+	}
+	if got := gitIn("rev-parse", "fleet/held"); got != newer {
+		t.Errorf("the branch reads %s, want its newer value %s", got, newer)
+	}
+	if err := os.Remove(lock); err != nil {
+		t.Fatal(err)
+	}
+
+	setup("fleet/both")
+	if err := DeleteBranch(ctx, root, "fleet/both"); err != nil {
+		t.Fatalf("DeleteBranch: %v", err)
+	}
+	for _, p := range []string{loose("fleet/both"), reflog("fleet/both")} {
+		if _, err := os.Lstat(p); !os.IsNotExist(err) {
+			t.Errorf("%s survived (lstat err %v)", p, err)
+		}
+	}
+	if b, _ := os.ReadFile(packed); strings.Contains(string(b), "refs/heads/fleet/both") {
+		t.Errorf("packed-refs still names the branch:\n%s", b)
+	}
+	if out, err := exec.Command("git", "-C", root, "rev-parse", "--verify", "--quiet", "refs/heads/fleet/both").CombinedOutput(); err == nil {
+		t.Errorf("the branch still resolves: %s", out)
+	}
+	if _, err := os.Stat(lock); !os.IsNotExist(err) {
+		t.Errorf("packed-refs.lock left behind (stat err %v)", err)
+	}
+}

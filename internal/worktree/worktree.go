@@ -354,6 +354,16 @@ func PrepareRepoAtStartup(ctx context.Context, root string) error {
 // packed-refs sits in .git itself, which no sandbox can write, so it is
 // rewritten in place under git's packed-refs.lock. The repository must be
 // the one recorded at startup.
+//
+// The order never shows an older value of the branch. packed-refs.lock is
+// taken first; if it cannot be (another writer holds it past
+// packedRefsLockWait), nothing is removed and the error says so. With the
+// lock held, the packed line goes first (the rewritten file replaces
+// packed-refs, which releases the lock), and only then the loose ref and
+// its reflog: while a loose ref exists it is what git reads, so removing it
+// before the packed line would expose the older packed value. When nothing
+// is packed for the branch, the loose ref and reflog are removed while the
+// lock is still held.
 func DeleteBranch(ctx context.Context, root, branch string) error {
 	clean := filepath.Clean(branch)
 	if clean == "." || !filepath.IsLocal(clean) || strings.ContainsAny(branch, "\x00\n") {
@@ -362,9 +372,42 @@ func DeleteBranch(ctx context.Context, root, branch string) error {
 	if err := Pin(root).Check(ctx, root); err != nil {
 		return err
 	}
+	gitDir, err := tools.OpenWorkspaceDir(ctx, root, filepath.Join(root, ".git"))
+	if err != nil {
+		return err
+	}
+	defer gitDir.Close()
+	lock, err := takePackedRefsLock(ctx, gitDir.Root)
+	if err != nil {
+		return fmt.Errorf("delete branch %s: %w; nothing was removed", branch, err)
+	}
+	held := true
+	release := func() {
+		if held {
+			_ = lock.Close()
+			_ = gitDir.Remove("packed-refs.lock")
+			held = false
+		}
+	}
+	defer release()
+	replaced, err := dropPackedRef(gitDir.Root, lock, "refs/heads/"+filepath.ToSlash(clean))
+	if err != nil {
+		return fmt.Errorf("delete branch %s: packed-refs: %w; nothing was removed", branch, err)
+	}
+	if replaced {
+		held = false // the lock file is packed-refs now
+	}
+	errs := removeLooseRef(ctx, root, clean)
+	release()
+	return errors.Join(errs...)
+}
+
+// removeLooseRef removes refs/heads/<branch> and logs/refs/heads/<branch>,
+// each relative to its directory opened without following a link.
+func removeLooseRef(ctx context.Context, root, branch string) []error {
 	var errs []error
 	for _, base := range []string{filepath.Join(".git", "refs", "heads"), filepath.Join(".git", "logs", "refs", "heads")} {
-		dir := filepath.Join(root, base, filepath.Dir(clean))
+		dir := filepath.Join(root, base, filepath.Dir(branch))
 		d, err := tools.OpenWorkspaceDir(ctx, root, dir)
 		if errors.Is(err, fs.ErrNotExist) {
 			continue
@@ -373,56 +416,35 @@ func DeleteBranch(ctx context.Context, root, branch string) error {
 			errs = append(errs, err)
 			continue
 		}
-		if rmErr := d.Remove(filepath.Base(clean)); rmErr != nil && !errors.Is(rmErr, fs.ErrNotExist) {
+		if rmErr := d.Remove(filepath.Base(branch)); rmErr != nil && !errors.Is(rmErr, fs.ErrNotExist) {
 			errs = append(errs, rmErr)
 		}
 		_ = d.Close()
 	}
-	if err := dropPackedRef(ctx, root, "refs/heads/"+filepath.ToSlash(clean)); err != nil {
-		errs = append(errs, err)
-	}
-	return errors.Join(errs...)
+	return errs
 }
 
-// packedRefsLockWait bounds how long dropPackedRef waits for another
+// packedRefsLockWait bounds how long DeleteBranch waits for another
 // writer's packed-refs.lock, like git's core.packedRefsTimeout (1s).
 var packedRefsLockWait = time.Second
 
 // dropPackedRef removes ref (and its peeled line) from .git/packed-refs, if
-// listed. It takes packed-refs.lock first, as git does, and only then reads
-// the file, so an operator's `git pack-refs` or a concurrent cleanup cannot
-// slip a write in between (and have it undone). A lock held by someone else
-// is waited for up to packedRefsLockWait.
-func dropPackedRef(ctx context.Context, root, ref string) error {
-	gitDir, err := tools.OpenWorkspaceDir(ctx, root, filepath.Join(root, ".git"))
-	if err != nil {
-		return err
-	}
-	defer gitDir.Close()
-	if _, err := gitDir.Lstat("packed-refs"); errors.Is(err, fs.ErrNotExist) {
-		return nil
-	}
-	lock, err := takePackedRefsLock(ctx, gitDir.Root)
-	if err != nil {
-		return err
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = lock.Close()
-			_ = gitDir.Remove("packed-refs.lock")
-		}
-	}()
-	data, err := readRegularNoFollow(gitDir.Root, "packed-refs", 256<<20)
+// listed, with packed-refs.lock already held through lock (DeleteBranch);
+// it reads the file only now, so an operator's `git pack-refs` or a
+// concurrent cleanup cannot slip a write in between (and have it undone).
+// It reports whether it replaced packed-refs with the rewritten lock file,
+// which releases the lock; when ref is not listed it writes nothing.
+func dropPackedRef(gitDir *os.Root, lock *os.File, ref string) (bool, error) {
+	data, err := readRegularNoFollow(gitDir, "packed-refs", 256<<20)
 	if errors.Is(err, fs.ErrNotExist) {
-		return nil
+		return false, nil
 	}
 	if err != nil {
-		return err
+		return false, err
 	}
 	info, err := gitDir.Lstat("packed-refs")
 	if err != nil {
-		return err
+		return false, err
 	}
 	lines := strings.SplitAfter(string(data), "\n")
 	kept := make([]string, 0, len(lines))
@@ -440,27 +462,26 @@ func dropPackedRef(ctx context.Context, root, ref string) error {
 		kept = append(kept, line)
 	}
 	if !dropped {
-		return nil
+		return false, nil
 	}
 	// The new file keeps the old one's permissions and is on disk before it
 	// replaces it, so a crash leaves either the old file or the new one.
 	if err := lock.Chmod(info.Mode().Perm()); err != nil {
-		return err
+		return false, err
 	}
 	if _, err := lock.WriteString(strings.Join(kept, "")); err != nil {
-		return err
+		return false, err
 	}
 	if err := lock.Sync(); err != nil {
-		return err
+		return false, err
 	}
 	if err := lock.Close(); err != nil {
-		return err
+		return false, err
 	}
 	if err := gitDir.Rename("packed-refs.lock", "packed-refs"); err != nil {
-		return err
+		return false, err
 	}
-	committed = true
-	return nil
+	return true, nil
 }
 
 // takePackedRefsLock creates .git/packed-refs.lock exclusively (O_EXCL never

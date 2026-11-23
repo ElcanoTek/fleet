@@ -144,11 +144,14 @@ user cannot search), the record and the branch stay too, so the run's
 commits keep a ref and a later cleanup or the sweep finishes once the
 checkout can go. The sweep likewise removes a record only with, or after,
 its checkout. The run's branch is deleted, only when
-its own sandbox created it, by unlinking `refs/heads/<branch>` and `logs/refs/heads/<branch>`
-relative to directories opened without following a link, and by rewriting
-`packed-refs` (which no sandbox can write) after taking `packed-refs.lock`;
-the new file keeps the old one's permissions and is synced before it
-replaces it.
+its own sandbox created it: `packed-refs.lock` is taken first (when
+another writer holds it past a second, nothing is removed and cleanup
+reports it), then `packed-refs` (which no sandbox can write) is rewritten
+without the branch — the new file keeps the old one's permissions and is
+synced before it replaces it — and only then are `refs/heads/<branch>` and
+`logs/refs/heads/<branch>` unlinked, relative to directories opened without
+following a link. While a loose ref exists git reads it, so this order never
+shows an older packed value of the branch.
 Every host read of a file a sandbox can write (a record's `gitdir` and
 `locked`, a checkout's `.git`, `packed-refs`, `info/exclude`) Lstats the
 entry (a link or anything but a regular file is refused — `os.Root` would
