@@ -170,7 +170,7 @@ func (h *Handlers) lookupTaskOwner(ctx context.Context, username string) (*model
 		return nil, nil
 	}
 	candidates := []string{username}
-	if lower := strings.ToLower(username); lower != username {
+	if lower := pgtext.EmailKey(username); lower != username {
 		candidates = append(candidates, lower)
 	}
 	for _, name := range candidates {

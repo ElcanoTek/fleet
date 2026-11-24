@@ -12,6 +12,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/cron"
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
 
@@ -696,8 +697,8 @@ func scanUserPatrol(row rowScanner, caller string) (UserPatrol, error) {
 	if lastRun.Valid {
 		p.LastRunAt = &lastRun.Int64
 	}
-	p.Mine = strings.EqualFold(creator, caller)
-	p.OwnsChat = strings.EqualFold(p.ConversationOwner, caller)
+	p.Mine = pgtext.SameEmail(creator, caller)
+	p.OwnsChat = pgtext.SameEmail(p.ConversationOwner, caller)
 	if !p.Mine {
 		p.OwnerEmail = creator
 	}

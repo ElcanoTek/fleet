@@ -18,6 +18,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/ElcanoTek/fleet/internal/accountdelete"
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/tools"
 )
@@ -62,7 +63,7 @@ func (s *Server) handleWorkspaceFile(w http.ResponseWriter, r *http.Request, con
 	// absolute and NUL paths are rejected up front, and a symlink is followed
 	// only while it stays inside the directory, so a `ln -s /etc/passwd p`
 	// the agent wrote answers 400 rather than serving a host file.
-	isOwner := strings.EqualFold(conv.UserEmail, user) || conv.UserEmail == ""
+	isOwner := pgtext.SameEmail(conv.UserEmail, user) || conv.UserEmail == ""
 	swapUnlock := s.workspaceSwapLocks.lock(convID)
 	swapUnlocked := false
 	releaseSwap := func() {
@@ -81,7 +82,7 @@ func (s *Server) handleWorkspaceFile(w http.ResponseWriter, r *http.Request, con
 		if conv, ok = s.conversationOr404(w, r, user, convID, true, "conversation not found"); !ok {
 			return
 		}
-		isOwner = strings.EqualFold(conv.UserEmail, user) || conv.UserEmail == ""
+		isOwner = pgtext.SameEmail(conv.UserEmail, user) || conv.UserEmail == ""
 	}
 	rawWsDir := tools.WorkspaceDirForConversation(convID)
 	baseRawDir := rawWsDir
@@ -260,7 +261,7 @@ func (s *Server) removeConversationPrivateStash(convID string) {
 // and removed by the maintenance pass once its digest is no account's
 // (removeOrphanParticipantStashes).
 func (s *Server) purgeParticipantPrivateStashes(userEmail string, live func(digest string) (bool, error)) error {
-	userEmail = strings.ToLower(strings.TrimSpace(userEmail))
+	userEmail = pgtext.EmailKey(userEmail)
 	if userEmail == "" {
 		return nil
 	}
@@ -272,7 +273,7 @@ func (s *Server) purgeParticipantPrivateStashes(userEmail string, live func(dige
 	if theirs {
 		s.inflightMu.Lock()
 		for convID, activeUser := range s.activeParticipantWorkspaces {
-			if strings.EqualFold(activeUser, userEmail) {
+			if pgtext.SameEmail(activeUser, userEmail) {
 				if s.purgedParticipantWorkspaces == nil {
 					s.purgedParticipantWorkspaces = make(map[string]bool)
 				}
@@ -331,14 +332,14 @@ func (s *Server) purgeParticipantPrivateStashes(userEmail string, live func(dige
 // moved, the undo that clears every mark it set (called when the deletion
 // does not commit), and the first failure.
 func (s *Server) setAsideParticipantStashes(userEmail string) ([]accountdelete.AsideTree, func(), error) {
-	userEmail = strings.ToLower(strings.TrimSpace(userEmail))
+	userEmail = pgtext.EmailKey(userEmail)
 	if userEmail == "" {
 		return nil, nil, nil
 	}
 	var marked []string
 	s.inflightMu.Lock()
 	for convID, activeUser := range s.activeParticipantWorkspaces {
-		if strings.EqualFold(activeUser, userEmail) {
+		if pgtext.SameEmail(activeUser, userEmail) {
 			marked = append(marked, convID)
 		}
 	}
@@ -397,7 +398,7 @@ func firstErrOf(a, b error) error {
 }
 
 func (s *Server) markParticipantWorkspacePurged(convID, userEmail string) {
-	userKey := strings.ToLower(strings.TrimSpace(userEmail))
+	userKey := pgtext.EmailKey(userEmail)
 	if convID == "" || userKey == "" {
 		return
 	}
@@ -410,7 +411,7 @@ func (s *Server) markParticipantWorkspacePurged(convID, userEmail string) {
 }
 
 func (s *Server) takeParticipantWorkspacePurged(convID, userEmail string) bool {
-	userKey := strings.ToLower(strings.TrimSpace(userEmail))
+	userKey := pgtext.EmailKey(userEmail)
 	if convID == "" || userKey == "" {
 		return false
 	}
@@ -423,14 +424,13 @@ func (s *Server) takeParticipantWorkspacePurged(convID, userEmail string) bool {
 }
 
 func (s *Server) isActiveParticipantUser(convID, userEmail string) bool {
-	userKey := strings.ToLower(strings.TrimSpace(userEmail))
-	if convID == "" || userKey == "" {
+	if convID == "" || strings.TrimSpace(userEmail) == "" {
 		return false
 	}
 	s.inflightMu.Lock()
 	active := s.activeParticipantWorkspaces[convID]
 	s.inflightMu.Unlock()
-	return active != "" && strings.EqualFold(active, userKey)
+	return active != "" && pgtext.SameEmail(active, userEmail)
 }
 
 func (s *Server) setParticipantWorkspaceActive(convID, user string, unlock func()) {
@@ -465,10 +465,10 @@ func (s *Server) isParticipantWorkspaceActiveInMemory(convID, ownerEmail string)
 	s.inflightMu.Lock()
 	user := s.activeParticipantWorkspaces[convID]
 	s.inflightMu.Unlock()
-	if user != "" && (ownerEmail == "" || !strings.EqualFold(user, ownerEmail)) {
+	if user != "" && (ownerEmail == "" || !pgtext.SameEmail(user, ownerEmail)) {
 		return true
 	}
-	if entry, ok := s.getInflight(convID); ok && entry.IsRunning() && entry.steer != nil && entry.steer.user != "" && !strings.EqualFold(entry.steer.user, ownerEmail) {
+	if entry, ok := s.getInflight(convID); ok && entry.IsRunning() && entry.steer != nil && entry.steer.user != "" && !pgtext.SameEmail(entry.steer.user, ownerEmail) {
 		return true
 	}
 	return false
@@ -574,7 +574,7 @@ func (s *Server) activateTurnPrivateWorkspace(conv *store.Conversation, user str
 		unlock()
 		return err
 	}
-	if conv.UserEmail == "" || strings.EqualFold(conv.UserEmail, user) {
+	if conv.UserEmail == "" || pgtext.SameEmail(conv.UserEmail, user) {
 		s.setParticipantWorkspaceActive(conv.ID, "", unlock)
 		return nil
 	}
@@ -609,7 +609,7 @@ func (s *Server) activateTurnPrivateWorkspace(conv *store.Conversation, user str
 			return fmt.Errorf("stash owner %s: %w", dirName, err)
 		}
 	}
-	if err := writeStashMarker(stashRoot, "active-participant", strings.ToLower(strings.TrimSpace(user))); err != nil {
+	if err := writeStashMarker(stashRoot, "active-participant", pgtext.EmailKey(user)); err != nil {
 		_ = rollbackOwnerStash(ws.Root, stashRoot)
 		s.clearParticipantWorkspaceActive(conv.ID)
 		return err
@@ -635,7 +635,7 @@ func (s *Server) restoreTurnPrivateWorkspace(conv *store.Conversation, user stri
 	}
 	swapUnlock := s.workspaceSwapLocks.lock(conv.ID)
 	defer swapUnlock()
-	if conv.UserEmail != "" && !strings.EqualFold(conv.UserEmail, user) {
+	if conv.UserEmail != "" && !pgtext.SameEmail(conv.UserEmail, user) {
 		if stashRoot, err := s.privateWorkspaceStashDir(conv.ID); err == nil {
 			if ws, werr := tools.EnsureConversationDir(context.Background(), conv.ID); werr == nil {
 				_ = restoreParticipantWorkspaceToOwner(ws.Root, stashRoot, s.stashOwner(user))

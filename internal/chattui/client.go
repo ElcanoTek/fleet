@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 )
 
 // Event is one parsed SSE frame from POST /chat. Name is the `event:` field
@@ -984,7 +986,7 @@ func (c *Client) CheckIdentity(ctx context.Context) error {
 		// The key names the account; --email / $FLEET_USER_EMAIL only says
 		// which account the caller expects, so a key for another one is
 		// refused before any turn runs as the wrong person.
-		got := strings.ToLower(strings.TrimSpace(me.Email))
+		got := pgtext.EmailKey(me.Email)
 		c.emailMu.Lock()
 		expect := c.cfg.Email
 		if expect == "" {

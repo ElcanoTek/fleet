@@ -22,6 +22,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/chattui"
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/identity"
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 	"github.com/ElcanoTek/fleet/internal/sched/apikeys"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/tools"
@@ -46,7 +47,7 @@ func TestAdminDeleteRemovesTheAccountsUserKeys(t *testing.T) {
 		t.Fatalf("delete: status %d (body %s)", w.Code, w.Body.String())
 	}
 	for _, k := range mgr.ListKeys() {
-		if strings.EqualFold(k.UserEmail, "u@x.com") {
+		if pgtext.SameEmail(k.UserEmail, "u@x.com") {
 			t.Errorf("user key %s for the deleted account is still in the key store", k.KeyID)
 		}
 	}

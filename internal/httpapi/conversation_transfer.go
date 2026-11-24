@@ -8,10 +8,10 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/logging"
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/tools"
@@ -40,7 +40,7 @@ func (s *Server) handleConversationTransfer(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "transfer failed", http.StatusInternalServerError)
 		return
 	}
-	if conv == nil || (!strings.EqualFold(conv.UserEmail, user) && !s.callerIsAdmin(ctx)) {
+	if conv == nil || (!pgtext.SameEmail(conv.UserEmail, user) && !s.callerIsAdmin(ctx)) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}

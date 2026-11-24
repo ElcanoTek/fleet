@@ -150,7 +150,7 @@ func (h *HMAC) Mint(email, epoch string) (string, error) {
 		return "", errNoSecret
 	}
 	exp, idle := freshDeadlines(h.now().Unix())
-	return h.encode(payload{Email: strings.ToLower(email), Exp: exp, Idle: idle, Epoch: epoch})
+	return h.encode(payload{Email: pgtext.EmailKey(email), Exp: exp, Idle: idle, Epoch: epoch})
 }
 
 // MintOIDC mints a session for an identity proven by central Auth.
@@ -160,7 +160,7 @@ func (h *HMAC) MintOIDC(email, epoch, issuer, subject string) (string, error) {
 	}
 	exp, idle := freshDeadlines(h.now().Unix())
 	return h.encode(payload{
-		Email: strings.ToLower(email), Exp: exp, Idle: idle, Epoch: epoch,
+		Email: pgtext.EmailKey(email), Exp: exp, Idle: idle, Epoch: epoch,
 		Source: string(SourceOIDC), Issuer: issuer, Subject: subject,
 	})
 }

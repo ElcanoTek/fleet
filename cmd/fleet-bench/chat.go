@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/config/envreg"
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 )
 
 // chatOptions holds the resolved chat-load configuration.
@@ -73,7 +74,7 @@ func runChat(argv []string) error {
 }
 
 func checkBenchIdentity(opts chatOptions) error {
-	want := strings.ToLower(strings.TrimSpace(opts.email))
+	want := pgtext.EmailKey(opts.email)
 	if want == "" {
 		return nil
 	}
@@ -101,7 +102,7 @@ func checkBenchIdentity(opts chatOptions) error {
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&me); err != nil {
 		return fmt.Errorf("decode /me: %w", err)
 	}
-	got := strings.ToLower(strings.TrimSpace(me.Email))
+	got := pgtext.EmailKey(me.Email)
 	if got != "" && got != want {
 		return fmt.Errorf("this API key acts as %s, not %s; use a key for %s, or drop --email", got, want, want)
 	}

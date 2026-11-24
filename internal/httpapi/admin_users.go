@@ -19,6 +19,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/accountdelete"
 	"github.com/ElcanoTek/fleet/internal/identity"
 	"github.com/ElcanoTek/fleet/internal/logging"
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/sched/apikeys"
 	"github.com/ElcanoTek/fleet/internal/store"
@@ -126,7 +127,7 @@ func (s *Server) handleAdminUserCreate(w http.ResponseWriter, r *http.Request) {
 // admin cannot lock themselves out mid-session.
 func (s *Server) handleAdminUserDelete(w http.ResponseWriter, r *http.Request, email string) {
 	actor := userFromCtx(r.Context())
-	if sameAccount(email, actor) {
+	if pgtext.SameEmail(email, actor) {
 		http.Error(w, "refusing to delete your own account", http.StatusBadRequest)
 		return
 	}
@@ -416,11 +417,4 @@ func (s *Server) handleAdminTeamRename(w http.ResponseWriter, r *http.Request) {
 	s.reconcileAllMultiplayerAccess(r.Context(), affectedConvIDs...)
 	logging.From(r.Context()).Info("admin teams: team renamed", "from", body.From, "to", body.To, "users", usersN, "projects", projectsN, "actor", userFromCtx(r.Context()))
 	writeJSON(w, r, map[string]any{"users_updated": usersN, "projects_updated": projectsN})
-}
-
-// sameAccount reports whether a and b name the same account: equal once
-// normalised the way the store keys accounts (identity.NormalizeEmail).
-// strings.EqualFold would answer for a different notion of equality.
-func sameAccount(a, b string) bool {
-	return identity.NormalizeEmail(a) == identity.NormalizeEmail(b)
 }

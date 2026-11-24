@@ -18,6 +18,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/mcpoauth"
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 	"github.com/ElcanoTek/fleet/internal/playwrightrunner"
 	"github.com/ElcanoTek/fleet/internal/redact"
 	"github.com/ElcanoTek/fleet/internal/remotemcp"
@@ -51,7 +52,7 @@ type uiSecretStash struct {
 }
 
 func uiSecretKey(userEmail, convID string) string {
-	return strings.ToLower(strings.TrimSpace(userEmail)) + "\x00" + strings.TrimSpace(convID)
+	return pgtext.EmailKey(userEmail) + "\x00" + strings.TrimSpace(convID)
 }
 
 func retireExpiredSecretBucket(b *uiSecretBucket) {
@@ -571,10 +572,10 @@ func historyEntryAuthoredByCaller(tc agent.TextContent, userEmail, convOwnerEmai
 		return false
 	}
 	if sender := strings.TrimSpace(tc.SenderEmail); sender != "" {
-		return strings.EqualFold(sender, caller)
+		return pgtext.SameEmail(sender, caller)
 	}
 	if owner := strings.TrimSpace(convOwnerEmail); owner != "" {
-		return strings.EqualFold(owner, caller)
+		return pgtext.SameEmail(owner, caller)
 	}
 	return true
 }

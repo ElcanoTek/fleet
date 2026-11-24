@@ -11,6 +11,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/genui"
 	"github.com/ElcanoTek/fleet/internal/logging"
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/tools"
@@ -310,7 +311,7 @@ func (s *Server) newShowUIDisplayedHandler(
 		if unattendedTurn(inputKind) {
 			return
 		}
-		if !strings.EqualFold(ownerEmail, user) {
+		if !pgtext.SameEmail(ownerEmail, user) {
 			return
 		}
 		if turnStager == nil || !turnStager.isAutonomous() {

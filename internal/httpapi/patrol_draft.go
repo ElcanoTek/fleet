@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
@@ -85,7 +86,7 @@ func (s *Server) handlePatrolDraft(w http.ResponseWriter, r *http.Request) {
 		in.Connectors = append(in.Connectors, agent.PatrolDraftConnector{Name: c.Name, Description: c.Description})
 	}
 
-	user := strings.ToLower(userFromCtx(r.Context()))
+	user := pgtext.EmailKey(userFromCtx(r.Context()))
 	// The memories the draft must respect are the ones a patrol turn will
 	// actually receive: read them here and render them as the turn does
 	// (memoryContents — active only, pinned first, capped at 50, each with its
@@ -169,7 +170,7 @@ func (s *Server) handlePatrols(w http.ResponseWriter, r *http.Request) {
 			if len(out) == patrolsIndexMax {
 				break
 			}
-			if !strings.EqualFold(p.ConversationOwner, user) {
+			if !pgtext.SameEmail(p.ConversationOwner, user) {
 				ok, seen := canOpen[p.ConversationID]
 				if !seen {
 					conv, err := s.store.GetMultiplayerConversation(r.Context(), user, p.ConversationID)

@@ -3,6 +3,7 @@ package agentcore
 import (
 	"strings"
 
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 	"github.com/ElcanoTek/fleet/internal/usertoken"
 )
 
@@ -75,7 +76,7 @@ func NewMCPUserIdentity(email string) MCPUserIdentity {
 // Sanitized returns u with every field that fails validation cleared. The
 // credential owner calls it on the identity it receives over the wire.
 func (u MCPUserIdentity) Sanitized() MCPUserIdentity {
-	if email := strings.ToLower(strings.TrimSpace(u.Email)); ValidMCPUserEmail(email) {
+	if email := pgtext.EmailKey(u.Email); ValidMCPUserEmail(email) {
 		return MCPUserIdentity{Email: email}
 	}
 	return MCPUserIdentity{}

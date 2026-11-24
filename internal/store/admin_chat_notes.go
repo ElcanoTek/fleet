@@ -218,7 +218,7 @@ func (s *Store) AckAdminNote(ctx context.Context, convID, userEmail string, vers
 	if _, err := s.db.ExecContext(ctx,
 		`UPDATE chat.admin_notes SET seen_at = $2, seen_by = $3
 		  WHERE conversation_id = $1 AND seen_at IS NULL AND version = $4`,
-		convID, time.Now().Unix(), strings.ToLower(strings.TrimSpace(userEmail)), version); err != nil {
+		convID, time.Now().Unix(), normalizeEmail(userEmail), version); err != nil {
 		return nil, err
 	}
 	return s.GetAdminNote(ctx, convID)

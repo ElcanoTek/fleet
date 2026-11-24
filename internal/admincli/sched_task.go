@@ -488,7 +488,7 @@ func setTaskOwnerWithOptions(ctx context.Context, st taskOwnerStore, w io.Writer
 	// lowercased form could be another, ASCII account.
 	names := []string{username}
 	if _, ok := pgtext.CheckedEmail(username); ok {
-		names = append(names, strings.ToLower(username))
+		names = append(names, pgtext.EmailKey(username))
 	}
 	for _, name := range names {
 		user, err := st.GetUserByUsernameWithContext(ctx, name)

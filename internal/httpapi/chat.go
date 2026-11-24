@@ -230,7 +230,7 @@ func (s *Server) applyTurnConversationFlags(w http.ResponseWriter, r *http.Reque
 		}
 	}
 	ownerEmail := convOwnerEmail(conv, user)
-	isOwner := strings.EqualFold(ownerEmail, user)
+	isOwner := pgtext.SameEmail(ownerEmail, user)
 	if approvalMode != nil && isOwner && parsedMode == store.ConversationApprovalAutonomous {
 		if !s.requireAutonomousAcceptance(w, r, ownerEmail) {
 			return false
@@ -548,7 +548,7 @@ func (s *Server) resolveExistingChatConversation(w http.ResponseWriter, r *http.
 		return nil, unlockFirst, false
 	}
 	if strings.TrimSpace(req.InputID) != "" &&
-		((conv.UserEmail != "" && !strings.EqualFold(conv.UserEmail, user)) || strings.HasPrefix(strings.TrimSpace(req.InputID), multiplayerInputKeyPrefix)) {
+		((conv.UserEmail != "" && !pgtext.SameEmail(conv.UserEmail, user)) || strings.HasPrefix(strings.TrimSpace(req.InputID), multiplayerInputKeyPrefix)) {
 		req.InputID = effectiveMultiplayerInputID(user, req.InputID)
 	}
 	unlockFirst = s.lockUserScopedKey(user, *req)
@@ -583,7 +583,7 @@ func (s *Server) applyInitialTurnPersona(ctx context.Context, user string, conv 
 		return true
 	}
 	ownerEmail := convOwnerEmail(conv, user)
-	if !strings.EqualFold(ownerEmail, user) {
+	if !pgtext.SameEmail(ownerEmail, user) {
 		return true
 	}
 	persona := strings.TrimSpace(reqPersona)
@@ -1110,7 +1110,7 @@ func buildUserMessageEvent(message, inputKind, injected string, conv *store.Conv
 	if injected != "" {
 		userEvent["injected_context"] = injected
 	}
-	if conv != nil && (conv.Multiplayer || (conv.UserEmail != "" && !strings.EqualFold(conv.UserEmail, user))) && user != "" {
+	if conv != nil && (conv.Multiplayer || (conv.UserEmail != "" && !pgtext.SameEmail(conv.UserEmail, user))) && user != "" {
 		userEvent["sender_email"] = user
 	}
 	if adminSender != "" {
@@ -1613,7 +1613,7 @@ func (s *Server) prepareTurnExecutionContext(
 
 	var turnPersona string
 	var personaLayer *agent.UserPersonaLayer
-	if strings.EqualFold(conv.UserEmail, user) || conv.UserEmail == "" {
+	if pgtext.SameEmail(conv.UserEmail, user) || conv.UserEmail == "" {
 		turnPersona, personaLayer = s.resolveTurnPersona(turnCtx, conv)
 	} else {
 		callerConv := *conv
@@ -1634,7 +1634,7 @@ func (s *Server) prepareTurnExecutionContext(
 	// countdown on a patrol turn.
 	turnCtx = tools.WithShowUIDisplayedHandler(turnCtx, s.newShowUIDisplayedHandler(conv, user, inputKind, userInput, buf, turnStager, userCommitted))
 	senderEmail := ""
-	if conv.Multiplayer || (conv.UserEmail != "" && !strings.EqualFold(conv.UserEmail, user)) {
+	if conv.Multiplayer || (conv.UserEmail != "" && !pgtext.SameEmail(conv.UserEmail, user)) {
 		senderEmail = user
 	}
 	promptConv := conv
@@ -1652,7 +1652,7 @@ func (s *Server) prepareTurnExecutionContext(
 
 func (s *Server) appendTurnApprovalModeContext(ctx context.Context, injectedContext string, conv *store.Conversation, user, inputKind string) string {
 	ownerEmail := convOwnerEmail(conv, user)
-	if conv == nil || !strings.EqualFold(ownerEmail, user) {
+	if conv == nil || !pgtext.SameEmail(ownerEmail, user) {
 		return injectedContext
 	}
 	if inputKind == agent.InputKindAdminMessage {
@@ -1709,7 +1709,7 @@ func (s *Server) revalidateOwnerTurnAccess(
 		fail(http.StatusInternalServerError, err)
 		return false
 	}
-	if rechecked != nil && strings.EqualFold(rechecked.UserEmail, user) {
+	if rechecked != nil && pgtext.SameEmail(rechecked.UserEmail, user) {
 		return true
 	}
 	if queued != nil {
@@ -1728,7 +1728,7 @@ func (s *Server) revalidateOwnerTurnAccess(
 // cards on the same stream under the same timeouts.
 func (s *Server) newTurnStager(ctx context.Context, conv *store.Conversation, user string, buf *turnBuffer) *approvalStager {
 	ownerEmail := convOwnerEmail(conv, user)
-	isOwner := strings.EqualFold(ownerEmail, user)
+	isOwner := pgtext.SameEmail(ownerEmail, user)
 	initialMode := store.ConversationApprovalManual
 	if isOwner {
 		initialMode = s.effectiveOwnerApprovalMode(ctx, ownerEmail, conv)
@@ -1792,7 +1792,7 @@ func (s *Server) revalidateMultiplayerTurnAccess(
 	if conv == nil || conv.UserEmail == "" {
 		return true
 	}
-	if strings.EqualFold(conv.UserEmail, user) {
+	if pgtext.SameEmail(conv.UserEmail, user) {
 		return s.revalidateOwnerTurnAccess(ctx, user, conv, steer, queued, releaseSlot, fail)
 	}
 	steer.nonOwner = true

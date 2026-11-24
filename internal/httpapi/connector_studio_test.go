@@ -12,6 +12,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 	"github.com/ElcanoTek/fleet/internal/remotemcp"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/tools"
@@ -126,7 +127,7 @@ func (m *memRemoteMCPStore) GetRemoteMCPServer(_ context.Context, _, id string) 
 func (m *memRemoteMCPStore) ListRemoteMCPServers(_ context.Context, email string) ([]store.RemoteMCPServer, error) {
 	var out []store.RemoteMCPServer
 	for _, r := range m.servers {
-		if strings.EqualFold(r.UserEmail, email) {
+		if pgtext.SameEmail(r.UserEmail, email) {
 			out = append(out, *r)
 		}
 	}

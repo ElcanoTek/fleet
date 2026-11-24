@@ -32,6 +32,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/mcpoauth"
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
@@ -1130,7 +1131,7 @@ func (s *Service) Complete(ctx context.Context, email, state, code string) (*sto
 	}
 	// CSRF / account-linking defense: the browser session completing the flow
 	// MUST be the same user that initiated it.
-	if !strings.EqualFold(flow.UserEmail, strings.ToLower(strings.TrimSpace(email))) {
+	if !pgtext.SameEmail(flow.UserEmail, email) {
 		return nil, fmt.Errorf("oauth callback user mismatch")
 	}
 	server, err := s.store.GetRemoteMCPServer(ctx, flow.UserEmail, flow.ServerID)

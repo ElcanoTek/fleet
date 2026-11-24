@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 	"github.com/ElcanoTek/fleet/internal/tools"
 )
 
@@ -206,7 +207,7 @@ func redactHistoryForSender(entries []agent.HistoryEntry, callerEmail, convOwner
 				}
 			}
 		}
-		if sender != "" && !strings.EqualFold(callerEmail, sender) {
+		if sender != "" && !pgtext.SameEmail(callerEmail, sender) {
 			if e.Type == "turn_summary" {
 				e.Content = replayTurnSummaryOfOtherSender(e.Content)
 			}
@@ -295,7 +296,7 @@ func historyForParticipant(entries []agent.HistoryEntry, viewerEmail, convOwnerE
 		sharedCards = sharedCardEntries(entries)
 	}
 	for i, e := range entries {
-		if viewerEmail != "" && e.Type == "summary" && convOwnerEmail != "" && !strings.EqualFold(viewerEmail, convOwnerEmail) {
+		if viewerEmail != "" && e.Type == "summary" && convOwnerEmail != "" && !pgtext.SameEmail(viewerEmail, convOwnerEmail) {
 			out = append(out, historyEntryResponse{
 				ID:      e.ID,
 				Role:    e.Role,
@@ -345,7 +346,7 @@ func historyForParticipant(entries []agent.HistoryEntry, viewerEmail, convOwnerE
 					}
 				}
 			}
-			if sender != "" && !strings.EqualFold(viewerEmail, sender) {
+			if sender != "" && !pgtext.SameEmail(viewerEmail, sender) {
 				switch {
 				case e.Type == "turn_summary":
 					redacted, ok := redactTurnSummaryForOtherParticipant(e.Content)

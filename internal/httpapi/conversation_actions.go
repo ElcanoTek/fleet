@@ -20,6 +20,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/logging"
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
@@ -288,7 +289,7 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, u
 	// A teammate's branch carries where it came from and which shared files
 	// were copied in (ADR-0079) — the branch banner and its "Your copy"
 	// labels. Display data: a failed read degrades to no banner.
-	isOwner := strings.EqualFold(conv.UserEmail, user) || conv.UserEmail == ""
+	isOwner := pgtext.SameEmail(conv.UserEmail, user) || conv.UserEmail == ""
 	if !isOwner {
 		conv = s.withViewerPin(r.Context(), user, conv)
 	}
@@ -777,7 +778,7 @@ func (s *Server) handleConversationExport(w http.ResponseWriter, r *http.Request
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	isOwner := strings.EqualFold(conv.UserEmail, user) || conv.UserEmail == ""
+	isOwner := pgtext.SameEmail(conv.UserEmail, user) || conv.UserEmail == ""
 	exportConv := conv
 	exportHistory := redactHistoryForSender(history, user, conv.UserEmail)
 	historyPayload := historyForParticipant(history, user, conv.UserEmail)
@@ -904,7 +905,7 @@ func decodeConversationCancelBody(r *http.Request) (scope, turnID, inputID strin
 // (or cancel the active turn via `turn_id` / `scope=turn` without sweeping
 // other participants' queued inputs).
 func (s *Server) handleConversationCancel(w http.ResponseWriter, r *http.Request, user, id string, conv *store.Conversation) {
-	isOwner := conv == nil || conv.UserEmail == "" || strings.EqualFold(conv.UserEmail, user)
+	isOwner := conv == nil || conv.UserEmail == "" || pgtext.SameEmail(conv.UserEmail, user)
 	scope, turnID, inputID := decodeConversationCancelBody(r)
 	if len(inputID) > maxInputIDLen {
 		http.Error(w, fmt.Sprintf("input_id is limited to %d bytes", maxInputIDLen), http.StatusBadRequest)
@@ -917,7 +918,7 @@ func (s *Server) handleConversationCancel(w http.ResponseWriter, r *http.Request
 	if turnID != "" {
 		if !isOwner {
 			entry, ok := s.getInflight(id)
-			if !ok || entry.turnID != turnID || entry.steer == nil || !strings.EqualFold(entry.steer.user, user) {
+			if !ok || entry.turnID != turnID || entry.steer == nil || !pgtext.SameEmail(entry.steer.user, user) {
 				http.Error(w, "only the conversation owner or the active turn's sender can stop this turn", http.StatusForbidden)
 				return
 			}
@@ -975,7 +976,7 @@ func (s *Server) handleConversationCancelByInputID(w http.ResponseWriter, r *htt
 				return
 			}
 			if rawExisting != nil {
-				if !strings.EqualFold(rawExisting.UserEmail, user) {
+				if !pgtext.SameEmail(rawExisting.UserEmail, user) {
 					http.Error(w, "only the conversation owner or the message sender can cancel this input", http.StatusForbidden)
 					return
 				}
@@ -997,7 +998,7 @@ func (s *Server) handleConversationCancelByInputID(w http.ResponseWriter, r *htt
 
 func (s *Server) handleNonOwnerConversationCancel(w http.ResponseWriter, r *http.Request, user, id, scope string) {
 	stoppedOwnTurn := false
-	if entry, ok := s.getInflight(id); ok && entry.IsRunning() && entry.steer != nil && strings.EqualFold(entry.steer.user, user) {
+	if entry, ok := s.getInflight(id); ok && entry.IsRunning() && entry.steer != nil && pgtext.SameEmail(entry.steer.user, user) {
 		_ = s.cancelInflightTurn(id, entry.turnID)
 		stoppedOwnTurn = true
 	}

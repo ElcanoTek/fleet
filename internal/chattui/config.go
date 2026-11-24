@@ -16,6 +16,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/ElcanoTek/fleet/internal/creds"
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 )
 
 // Config is the resolved connection identity for `fleet chat`. The APIKey is
@@ -210,7 +211,7 @@ func Resolve(f Flags, env getenv, rf readFile, evf envValuesReader) (Config, err
 	// Email (optional) — the account the caller expects the key to act as.
 	// Never inferred from $USER or the shared env file: the key is the
 	// identity, and this is only a check on it (CheckIdentity).
-	cfg.Email = strings.ToLower(strings.TrimSpace(firstNonEmpty(f.Email, env("FLEET_USER_EMAIL"))))
+	cfg.Email = pgtext.EmailKey(firstNonEmpty(f.Email, env("FLEET_USER_EMAIL")))
 
 	if cfg.APIKey == "" {
 		// The shared server token this used to read from the env file is

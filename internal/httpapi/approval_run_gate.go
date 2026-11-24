@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 	"sync"
+
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 )
 
 // DrainApprovalRuns stops admitting approved executions and blocks until
@@ -41,7 +43,7 @@ func (r *executingApprovalRegistry) register(parent context.Context, convID, use
 	ctx, cancel := context.WithCancel(parent)
 	r.m[approvalID] = executingApprovalEntry{
 		convID:     strings.TrimSpace(convID),
-		userEmail:  strings.ToLower(strings.TrimSpace(userEmail)),
+		userEmail:  pgtext.EmailKey(userEmail),
 		approvalID: approvalID,
 		ctx:        ctx,
 		cancel:     cancel,
@@ -74,7 +76,7 @@ func (r *executingApprovalRegistry) convIDs() []string {
 }
 
 func (r *executingApprovalRegistry) cancelUnauthorized(convID, ownerEmail string, allowed map[string]bool, stops *approvalStopRegistry) []string {
-	ownerKey := strings.ToLower(strings.TrimSpace(ownerEmail))
+	ownerKey := pgtext.EmailKey(ownerEmail)
 	r.mu.Lock()
 	var toCancel []executingApprovalEntry
 	for _, e := range r.m {

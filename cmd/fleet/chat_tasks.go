@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/ElcanoTek/fleet/internal/httpapi"
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 	"github.com/ElcanoTek/fleet/internal/sched/budget"
 	scheddb "github.com/ElcanoTek/fleet/internal/sched/db"
 	schedmodels "github.com/ElcanoTek/fleet/internal/sched/models"
@@ -380,7 +381,7 @@ func taskSchedulerProvider(schedStorage *storage.Storage, budgetGate *budget.Enf
 // accountOwnerID is the UUID of email's enabled account in the one identity
 // table, or nil when there is none.
 func accountOwnerID(ctx context.Context, schedStorage *storage.Storage, email string) *uuid.UUID {
-	email = strings.ToLower(strings.TrimSpace(email))
+	email = pgtext.EmailKey(email)
 	if email == "" {
 		return nil
 	}

@@ -348,7 +348,7 @@ func selectApprovalResumeUserTx(ctx context.Context, tx *sql.Tx, req ApprovalRes
 		if req.IgnoreOutstanding != nil && req.IgnoreOutstanding(id) {
 			continue
 		}
-		uKey := strings.ToLower(strings.TrimSpace(uEmail))
+		uKey := normalizeEmail(uEmail)
 		outstandingByUser[uKey] = append(outstandingByUser[uKey], id)
 		allOutstanding = append(allOutstanding, id)
 	}
@@ -381,7 +381,7 @@ func selectApprovalResumeUserTx(ctx context.Context, tx *sql.Tx, req ApprovalRes
 			return "", nil, err
 		}
 		anyArmed = true
-		uKey := strings.ToLower(strings.TrimSpace(uEmail))
+		uKey := normalizeEmail(uEmail)
 		if len(outstandingByUser[uKey]) == 0 {
 			resumeUser = uEmail
 			break

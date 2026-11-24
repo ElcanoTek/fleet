@@ -1,6 +1,10 @@
 package pgtext
 
-import "testing"
+import (
+	"strings"
+	"testing"
+	"unicode"
+)
 
 func TestContent(t *testing.T) {
 	t.Parallel()
@@ -154,6 +158,95 @@ func TestEmailKey(t *testing.T) {
 	} {
 		if got := EmailKey(c.in); got != c.want {
 			t.Errorf("EmailKey(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestSameEmail(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		a, b string
+		want bool
+	}{
+		// One account, written in other capitals or with spaces around it.
+		{"alice@example.com", "alice@example.com", true},
+		{"Alice@Example.COM", "alice@example.com", true},
+		{" alice@example.com\t", "alice@example.com", true},
+		{"ÉMILE@example.com", "émile@example.com", true},
+		{"Σ@example.com", "σ@example.com", true}, // capital sigma lowercases to σ
+		{"", "", true},
+		// Two lowercase addresses Unicode case folding calls the same letter:
+		// each can be an account of its own, so they never match.
+		{"σ@example.com", "ς@example.com", false},
+		{"Σ@example.com", "ς@example.com", false},
+		{"µ@example.com", "μ@example.com", false}, // MICRO SIGN, GREEK SMALL LETTER MU
+		{"ϐ@example.com", "β@example.com", false},
+		{"ϑ@example.com", "θ@example.com", false},
+		{"ϕ@example.com", "φ@example.com", false},
+		{"ϖ@example.com", "π@example.com", false},
+		{"ϰ@example.com", "κ@example.com", false},
+		{"ϱ@example.com", "ρ@example.com", false},
+		{"ϵ@example.com", "ε@example.com", false},
+		{"ẛ@example.com", "ṡ@example.com", false},
+		{"ᲀ@example.com", "в@example.com", false},
+		{"ᲁ@example.com", "д@example.com", false},
+		{"ᲂ@example.com", "о@example.com", false},
+		{"ᲃ@example.com", "с@example.com", false},
+		{"ᲄ@example.com", "т@example.com", false},
+		{"ᲅ@example.com", "т@example.com", false},
+		{"ᲆ@example.com", "ъ@example.com", false},
+		{"ᲇ@example.com", "ѣ@example.com", false},
+		{"ᲈ@example.com", "ꙋ@example.com", false},
+		// Look-alikes of ASCII letters stay exact, so they match no ASCII
+		// account (and an old stored ſ address matches only itself).
+		{"Kate@example.com", "kate@example.com", false},
+		{"Kate@example.com", "Kate@example.com", false},
+		{"ſam@example.com", "sam@example.com", false},
+		{"ſam@example.com", "ſam@example.com", true},
+		{"İvan@example.com", "ivan@example.com", false},
+		{"alice@example.com", "bob@example.com", false},
+		{"alice@example.com", "", false},
+	} {
+		if got := SameEmail(c.a, c.b); got != c.want {
+			t.Errorf("SameEmail(%q, %q) = %v, want %v", c.a, c.b, got, c.want)
+		}
+		if got := SameEmail(c.b, c.a); got != c.want {
+			t.Errorf("SameEmail(%q, %q) = %v, want %v (not symmetric)", c.b, c.a, got, c.want)
+		}
+	}
+}
+
+// TestSameEmailAcrossEveryFoldPair walks every simple case-fold orbit in
+// Unicode: two letters strings.EqualFold equates are the same account under
+// SameEmail exactly when lowercasing maps them to one letter and neither is a
+// look-alike of an ASCII letter. Each ASCII letter still matches its capital.
+func TestSameEmailAcrossEveryFoldPair(t *testing.T) {
+	t.Parallel()
+	addr := func(r rune) string { return "a" + string(r) + "@example.com" }
+	distinct := 0
+	for r := rune(0); r <= unicode.MaxRune; r++ {
+		if r >= 0xD800 && r <= 0xDFFF {
+			continue
+		}
+		for f := unicode.SimpleFold(r); f != r; f = unicode.SimpleFold(f) {
+			if !strings.EqualFold(addr(r), addr(f)) {
+				t.Fatalf("EqualFold(%U, %U) = false inside one fold orbit", r, f)
+			}
+			want := unicode.ToLower(r) == unicode.ToLower(f) && !HasASCIILookalike(string(r)) && !HasASCIILookalike(string(f))
+			if got := SameEmail(addr(r), addr(f)); got != want {
+				t.Errorf("SameEmail(%q, %q) = %v, want %v", addr(r), addr(f), got, want)
+			}
+			if !want {
+				distinct++
+			}
+		}
+	}
+	if distinct == 0 {
+		t.Fatal("no fold pair kept apart: the walk compared nothing")
+	}
+	for r := 'a'; r <= 'z'; r++ {
+		if !SameEmail(addr(r), addr(unicode.ToUpper(r))) {
+			t.Errorf("SameEmail(%q, %q) = false for one ASCII letter", addr(r), addr(unicode.ToUpper(r)))
 		}
 	}
 }

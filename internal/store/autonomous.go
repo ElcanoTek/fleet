@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 )
 
 // CurrentAutonomousPolicyVersion is the active policy version a user must
@@ -830,7 +832,7 @@ func (s *Store) sweepOneUIAutoSubmit(ctx context.Context, id, convID string, now
 	if strings.TrimSpace(ownerEmail) == "" {
 		ownerEmail = row.UserEmail
 	}
-	if !strings.EqualFold(strings.TrimSpace(ownerEmail), strings.TrimSpace(row.UserEmail)) {
+	if !pgtext.SameEmail(ownerEmail, row.UserEmail) {
 		return cancelInTx()
 	}
 	effectiveMode := (&Conversation{AutoApprove: autoApprove, ApprovalMode: approvalMode}).EffectiveApprovalMode()

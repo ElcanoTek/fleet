@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/logging"
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/google/uuid"
@@ -49,7 +50,7 @@ func (s *Server) replayAcceptedInput(w http.ResponseWriter, r *http.Request, use
 	if existing == nil {
 		return false
 	}
-	if existing.UserEmail != "" && !strings.EqualFold(existing.UserEmail, user) {
+	if existing.UserEmail != "" && !pgtext.SameEmail(existing.UserEmail, user) {
 		http.Error(w, "input_id belongs to another user in this conversation", http.StatusConflict)
 		return true
 	}

@@ -325,6 +325,36 @@ list rule admits; any other value is only deleted from the lists. The admin rout
 the signed-in admin by the same normalised form, so a look-alike cannot slip
 past the guards against deleting or demoting yourself.
 
+**Two emails name the same account exactly when their store keys are equal**
+(`pgtext.SameEmail`: `pgtext.EmailKey` of each side). The owner, sender,
+viewer and participant checks use it — the chat and its turn stream, history
+and live events, workspace files, approvals (an email to the owner alone),
+patrols, projects, conversation transfer, the Autonomous auto-submit sweep,
+the remote MCP OAuth user match and the admin self-guards. The in-memory keys
+an email is filed under (session approval rules, running approvals, a
+multiplayer chat's allowed set, live stream viewers, a co-piloted browser
+session's owner, participant workspace purge marks, rate-limit buckets) go
+through `pgtext.EmailKey` too, as do the emails written out: session cookies,
+admin audit rows, and the `active-participant` marker file a participant
+turn leaves in the conversation's workspace stash.
+An address in other capitals or with spaces around it (`Alice@Example.com`,
+`ÉMILE@example.com`, a row an older release stored that way) is still the same
+account. Two different lowercase addresses never are, even where Unicode case
+folding calls their letters the same: `σ@x.com` and `ς@x.com`, `µ@x.com`
+(MICRO SIGN) and `μ@x.com`, `ϑ`/`θ`, `ϰ`/`κ` and the other symbol forms, and
+the Cyrillic small letters U+1C80–U+1C88 are each their own account, which
+`strings.EqualFold` used to treat as one. A guard test
+(`pgtext.TestIdentityEmailsAreNotCaseFolded`) fails on any new
+`strings.EqualFold`/`bytes.EqualFold`, comparison of two `strings.ToLower`
+results, or `strings.ToLower`/`ToUpper` of a value named like an email,
+owner, sender, viewer or user, in production code unless it is listed with
+the reason its values are not accounts (URL hosts, header and mode keywords,
+connector names, team labels — a team restated in another case form, such as
+`Πωλησεις` as `ΠΩΛΗΣΕΙΣ`, must not move or unshare anyone, so team labels
+keep `strings.EqualFold`). The name check is a heuristic: it sees the usual
+spellings (`userEmail`, `conv.UserEmail`, `entry.steer.user`, `user_name`),
+not a value called `r`.
+
 What this does not do:
 
 - `messages.content` is `TEXT` holding JSON, so a NUL in a chat message is
@@ -342,11 +372,19 @@ What this does not do:
   everybody — by the shared-chat listing and search. Account deletion still
   removes the deleted account from such a list, decoding it in Go. The lists
   themselves are not rewritten.
-- The owner and sender comparisons that use `strings.EqualFold` (chat,
-  workspace files, the turn stream, history, the remote MCP OAuth user match)
-  are covered for ASCII look-alikes only: `strings.EqualFold` also equates
-  some non-ASCII pairs that lowercasing keeps apart (µ and μ, ς and σ, …),
-  and identities holding those are not refused.
+- Some SQL filters still lowercase an email themselves
+  (`lower(user_email) = lower($n)`: the approval and resume queries, the
+  admin chat and patrol listings, account deletion's chat orders), and their
+  Go side passes the value trimmed, not through `pgtext.EmailKey`.
+  Lowercasing never merges two different lowercase addresses, and for every
+  address that can sign in or is stored it gives the same key as
+  `pgtext.EmailKey`; the two differ only for a value holding a look-alike of
+  an ASCII letter and a capital (U+0130 and U+212A are capitals themselves),
+  which sign-in refuses and no stored email holds. The one value that can
+  hold one is an admin's own filter text in the admin chat and patrol
+  listings, which list every chat to that admin anyway.
+- Web pages compare emails for display only (which chat is "mine"); the
+  server decides access.
 - Free-form fields not in the content table are stored as given and fail on
   U+0000, for example: the turn journal's tool input (kept byte for byte as
   the record of what ran), a chat patrol's own title and prompt, a task's

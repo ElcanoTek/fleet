@@ -12,6 +12,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/tools"
 )
@@ -65,7 +66,7 @@ func (s *enableMCPTestStore) SupersedePendingApprovals(_ context.Context, userEm
 	defer s.mu.Unlock()
 	var n int64
 	for _, a := range s.approvals {
-		if a.ConversationID == convID && a.ToolName == toolName && a.Status == "pending" && (userEmail == "" || strings.EqualFold(a.UserEmail, userEmail)) {
+		if a.ConversationID == convID && a.ToolName == toolName && a.Status == "pending" && (userEmail == "" || pgtext.SameEmail(a.UserEmail, userEmail)) {
 			a.Status = "superseded"
 			n++
 		}

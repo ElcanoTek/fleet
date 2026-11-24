@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
@@ -167,7 +168,7 @@ func cliAdminActor(as string) store.AdminActor {
 		}
 		a = name + "@" + host
 	}
-	return store.AdminActor{Email: strings.ToLower(a), Via: store.AdminViaCLI}
+	return store.AdminActor{Email: pgtext.EmailKey(a), Via: store.AdminViaCLI}
 }
 
 func fmtTime(unix int64) string {
