@@ -62,7 +62,7 @@ async function mockPatrolChat(
       json: { schedules, auto_approve: true, approval_mode: "auto" },
     });
   });
-  await page.route("**/api/conversations/conv-patrol", (r: Route) => {
+  await page.route(/\/api\/conversations\/conv-patrol(?:\?|$)/, (r: Route) => {
     if (r.request().method() !== "GET") return r.fulfill({ json: {} });
     return r.fulfill({
       json: {
@@ -216,7 +216,7 @@ test("starting a patrol in an Autonomous chat asks once, then creates it", async
       },
     });
   });
-  await page.route("**/api/conversations/conv-patrol", (r: Route) => {
+  await page.route(/\/api\/conversations\/conv-patrol(?:\?|$)/, (r: Route) => {
     if (r.request().method() !== "GET") return r.fulfill({ json: {} });
     return r.fulfill({
       json: {
@@ -373,7 +373,7 @@ test("pausing two patrols at once leaves both paused", async ({ page }) => {
     inFlight -= 1;
     await r.fulfill({ json: { schedules: snapshot, auto_approve: true, approval_mode: "auto" } });
   });
-  await page.route("**/api/conversations/conv-patrol", (r: Route) => {
+  await page.route(/\/api\/conversations\/conv-patrol(?:\?|$)/, (r: Route) => {
     if (r.request().method() !== "GET") return r.fulfill({ json: {} });
     return r.fulfill({
       json: {

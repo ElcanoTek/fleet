@@ -144,7 +144,7 @@ const REFERENCE_CARD_HISTORY = [
 
 async function openConversationWithCard(page: Page, history: unknown[] = INLINE_CARD_HISTORY) {
   await mockChatBoot(page, { conversations: [{ id: "conv-genui", title: "Campaign setup" }] });
-  await page.route("**/api/conversations/conv-genui", (r: Route) => {
+  await page.route(/\/api\/conversations\/conv-genui(?:\?|$)/, (r: Route) => {
     if (r.request().method() !== "GET") return r.fulfill({ json: {} });
     return r.fulfill({
       json: {

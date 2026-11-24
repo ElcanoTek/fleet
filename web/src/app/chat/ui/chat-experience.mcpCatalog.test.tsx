@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { ChatExperience, type ConversationSummary, type MCPServerInfo } from "./chat-experience";
 import { clearChatSession } from "./chatSessionStore";
+import { withoutHistoryWindow } from "./historyWindow.testing";
 
 // The Tools picker's catalog loads race (#2025): opening chat A then chat B
 // (or the new-chat preview landing after a conversation's catalog) used to
@@ -34,7 +35,7 @@ let held: Deferred[] = [];
 function mockBackend() {
   const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
   const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-    const url = String(input);
+    const url = withoutHistoryWindow(String(input));
     if (url === "/api/mcp-servers" || /^\/api\/conversations\/conv-[ab]\/mcp-servers$/.test(url)) {
       return new Promise<Response>((resolve) => {
         held.push({ url, resolve: (body) => resolve(json(body)) });
@@ -139,7 +140,7 @@ describe("Tools picker connector saves", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-        const url = String(input);
+        const url = withoutHistoryWindow(String(input));
         if (init?.method === "POST" && url === "/api/conversations/conv-a/mcp-servers") {
           const body = JSON.parse(String(init.body)) as { enabled_optional: string[] };
           return new Promise<Response>((resolve) => {
@@ -247,7 +248,7 @@ describe("Tools picker connector saves", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-        const url = String(input);
+        const url = withoutHistoryWindow(String(input));
         if (init?.method === "POST" && url === "/api/conversations/conv-a/mcp-servers") {
           const body = JSON.parse(String(init.body)) as { enabled_optional: string[]; accounts: Record<string, string> };
           return new Promise<Response>((resolve) => {
@@ -314,7 +315,7 @@ describe("Tools picker connector saves", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-        const url = String(input);
+        const url = withoutHistoryWindow(String(input));
         if (init?.method === "POST" && url === "/api/conversations/conv-a/mcp-servers") {
           const body = (JSON.parse(String(init.body)) as { enabled_optional: string[] }).enabled_optional;
           sentBodies.push(body);

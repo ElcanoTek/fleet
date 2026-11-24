@@ -130,6 +130,9 @@ type out struct {
 	// via script-src 'self') rather than untrusted active content (chat export
 	// or workspace file), so secureContentType omits the `sandbox` CSP directive.
 	firstPartyHTML bool
+	// gzip lets a GET row of the chat table compress its JSON body for a
+	// browser that accepts it (gzip.go).
+	gzip bool
 }
 
 // Header allowlists the Next funnels re-emitted.
@@ -143,7 +146,7 @@ var (
 )
 
 // textJSON is the common shape: Content-Type only, application/json fallback.
-var textJSON = out{headers: contentTypeOnly, ctFallback: "application/json"}
+var textJSON = out{headers: contentTypeOnly, ctFallback: "application/json", gzip: true}
 
 // passthroughJSON is chatServerPassthrough / proxyToOrchestrator.
 var passthroughJSON = out{headers: forwardedHeaders, ctFallback: "application/json"}

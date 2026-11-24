@@ -188,7 +188,7 @@ test("Home opens when fleet is opened, and only then", async ({ page }) => {
       home: "s-board",
     },
   });
-  const opened = page.waitForRequest((r) => r.url().endsWith("/api/conversations/c5") && r.method() === "GET");
+  const opened = page.waitForRequest((r) => new URL(r.url()).pathname === "/api/conversations/c5" && r.method() === "GET");
   await page.goto("/chat");
   await opened;
   await expect(page.getByTestId("rail-shortcut")).toHaveAttribute("aria-current", "page");
@@ -205,9 +205,9 @@ test("a link to a chat wins over Home", async ({ page }) => {
   });
   const homeReads: string[] = [];
   page.on("request", (r) => {
-    if (r.url().endsWith("/api/conversations/c5")) homeReads.push(r.url());
+    if (new URL(r.url()).pathname === "/api/conversations/c5") homeReads.push(r.url());
   });
-  const opened = page.waitForRequest((r) => r.url().endsWith("/api/conversations/c4"));
+  const opened = page.waitForRequest((r) => new URL(r.url()).pathname === "/api/conversations/c4");
   await page.goto("/chat?c=c4");
   await opened;
   await page.waitForTimeout(400);

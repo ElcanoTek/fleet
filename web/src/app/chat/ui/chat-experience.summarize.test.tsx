@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { ChatExperience, type ConversationSummary } from "./chat-experience";
 import { clearChatSession } from "./chatSessionStore";
+import { withoutHistoryWindow } from "./historyWindow.testing";
 
 // "Summarize earlier messages" streams for a while (#1999). The stream belongs
 // to the chat it summarizes: switching chats mid-stream must NOT abort it (the
@@ -30,7 +31,7 @@ let readerCancelled = false;
 function mockBackend() {
   const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = String(input);
+    const url = withoutHistoryWindow(String(input));
     if (url === "/api/conversations/conv-a/summarize" && init?.method === "POST") {
       summarizeCalled = true;
       summarizeSignal = init.signal ?? undefined;

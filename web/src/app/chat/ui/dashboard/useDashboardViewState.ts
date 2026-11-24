@@ -27,6 +27,7 @@ export function useDashboardViewState({
   dashboardConvId,
   dashboardJustCreated,
   messages,
+  cardMessages,
   isStreaming,
   setSidebarOpen,
 }: {
@@ -37,6 +38,12 @@ export function useDashboardViewState({
   /** The open conversation was just created by Share from the blank slot. */
   dashboardJustCreated: boolean;
   messages: Message[];
+  /**
+   * What the board is derived from: `messages`, preceded by the cards older
+   * than the loaded part of the conversation (docs/CHAT-HISTORY-WINDOW.md).
+   * The same array when the conversation is loaded whole.
+   */
+  cardMessages: Message[];
   isStreaming: boolean;
   setSidebarOpen: Dispatch<SetStateAction<boolean>>;
 }) {
@@ -83,13 +90,13 @@ export function useDashboardViewState({
     dashboardJustCreated,
   );
   const dashboardGenUi = useMemo(
-    () => (dashboardActive ? deriveGenUiState(messages) : null),
-    [dashboardActive, messages],
+    () => (dashboardActive ? deriveGenUiState(cardMessages) : null),
+    [dashboardActive, cardMessages],
   );
   const board = useMemo(
     () =>
-      dashboardGenUi ? deriveBoard(messages, dashboardGenUi, boardPrefs) : null,
-    [dashboardGenUi, messages, boardPrefs],
+      dashboardGenUi ? deriveBoard(cardMessages, dashboardGenUi, boardPrefs) : null,
+    [dashboardGenUi, cardMessages, boardPrefs],
   );
   const dashboardStatus = useMemo(
     () => boardStatus(messages, isStreaming),

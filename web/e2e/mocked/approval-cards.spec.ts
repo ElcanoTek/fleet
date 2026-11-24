@@ -26,7 +26,7 @@ async function mockConversationWithApprovals(page: Page) {
   await mockChatBoot(page, {
     conversations: [{ id: "conv-cards", title: "Pages deploy thread" }],
   });
-  await page.route("**/api/conversations/conv-cards", (r: Route) => {
+  await page.route(/\/api\/conversations\/conv-cards(?:\?|$)/, (r: Route) => {
     if (r.request().method() !== "GET") return r.fulfill({ json: {} });
     return r.fulfill({
       json: {
@@ -137,7 +137,7 @@ test("a per-call tool's pending card has no apply-all checkbox; other cards keep
   await mockChatBoot(page, {
     conversations: [{ id: "conv-per-call", title: "Per-call thread" }],
   });
-  await page.route("**/api/conversations/conv-per-call", (r: Route) => {
+  await page.route(/\/api\/conversations\/conv-per-call(?:\?|$)/, (r: Route) => {
     if (r.request().method() !== "GET") return r.fulfill({ json: {} });
     return r.fulfill({
       json: {
@@ -202,7 +202,7 @@ test("a described card renders in plain words, pending and resolved", async ({ p
   await mockChatBoot(page, {
     conversations: [{ id: "conv-readable", title: "Readable thread" }],
   });
-  await page.route("**/api/conversations/conv-readable", (r: Route) => {
+  await page.route(/\/api\/conversations\/conv-readable(?:\?|$)/, (r: Route) => {
     if (r.request().method() !== "GET") return r.fulfill({ json: {} });
     return r.fulfill({
       json: {
@@ -273,7 +273,7 @@ async function mockGroupedConversation(page: Page, conv: string) {
   await mockChatBoot(page, {
     conversations: [{ id: conv, title: "Plan thread" }],
   });
-  await page.route(`**/api/conversations/${conv}`, (r: Route) => {
+  await page.route(new RegExp(`/api/conversations/${conv}(?:\\?|$)`), (r: Route) => {
     if (r.request().method() !== "GET") return r.fulfill({ json: {} });
     return r.fulfill({
       json: {
@@ -367,7 +367,7 @@ test("a running card shows its progress and settles on its own when the call end
   await mockChatBoot(page, {
     conversations: [{ id: "conv-progress", title: "Plan run" }],
   });
-  await page.route("**/api/conversations/conv-progress", (r: Route) => {
+  await page.route(/\/api\/conversations\/conv-progress(?:\?|$)/, (r: Route) => {
     if (r.request().method() !== "GET") return r.fulfill({ json: {} });
     return r.fulfill({
       json: {
@@ -429,7 +429,7 @@ test("a call staged for approval shows a neutral chip, a failed call stays red",
   const staged =
     "APPROVAL_REQUIRED: mcp_deals_execute_plan is a critical action and has been staged for explicit user approval (approval_id=ap-staged-1). Do NOT retry.";
   await mockChatBoot(page, { conversations: [{ id: "conv-chips", title: "Staged chips" }] });
-  await page.route("**/api/conversations/conv-chips", (r: Route) => {
+  await page.route(/\/api\/conversations\/conv-chips(?:\?|$)/, (r: Route) => {
     if (r.request().method() !== "GET") return r.fulfill({ json: {} });
     return r.fulfill({
       json: {
@@ -481,7 +481,7 @@ test("a settled card reads its result card, and Retry failed sends a user turn",
     items: [{ label: "Elcano_ChatTest_IX_BidSwitch_Display_US", settings: [{ label: "Floor", value: "$1.00" }] }],
   };
   await mockChatBoot(page, { conversations: [{ id: "conv-result", title: "Result thread" }] });
-  await page.route("**/api/conversations/conv-result", (r: Route) => {
+  await page.route(/\/api\/conversations\/conv-result(?:\?|$)/, (r: Route) => {
     if (r.request().method() !== "GET") return r.fulfill({ json: {} });
     return r.fulfill({
       json: {
@@ -602,7 +602,7 @@ test("a settled card reads its result card, and Retry failed sends a user turn",
 test("a narrowable card leaves an unticked deal out and approves the rest in one click", async ({ page }) => {
   const conv = "conv-narrow";
   await mockChatBoot(page, { conversations: [{ id: conv, title: "Floor change" }] });
-  await page.route(`**/api/conversations/${conv}`, (r: Route) => {
+  await page.route(new RegExp(`/api/conversations/${conv}(?:\\?|$)`), (r: Route) => {
     if (r.request().method() !== "GET") return r.fulfill({ json: {} });
     return r.fulfill({
       json: {
@@ -670,7 +670,7 @@ test("a narrowable card leaves an unticked deal out and approves the rest in one
 test("a running card stops after its current item and offers to run the rest", async ({ page }) => {
   const conv = "conv-stop";
   await mockChatBoot(page, { conversations: [{ id: conv, title: "Plan run" }] });
-  await page.route(`**/api/conversations/${conv}`, (r: Route) => {
+  await page.route(new RegExp(`/api/conversations/${conv}(?:\\?|$)`), (r: Route) => {
     if (r.request().method() !== "GET") return r.fulfill({ json: {} });
     return r.fulfill({
       json: {

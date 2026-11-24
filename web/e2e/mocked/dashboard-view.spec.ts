@@ -110,7 +110,7 @@ async function openDashboardChat(page: Page) {
     }
   });
   await mockChatBoot(page, { conversations: [{ id: "conv-dash", title: "Revenue cockpit" }] });
-  await page.route("**/api/conversations/conv-dash", (r: Route) => {
+  await page.route(/\/api\/conversations\/conv-dash(?:\?|$)/, (r: Route) => {
     if (r.request().method() !== "GET") return r.fulfill({ json: {} });
     return r.fulfill({
       json: {

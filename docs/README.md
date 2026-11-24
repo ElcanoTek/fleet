@@ -289,6 +289,7 @@ above fails otherwise.
 - [`CHAT-EXPORT.md`](CHAT-EXPORT.md) — Downloading a chat
 - [`CHAT-PATROLS.md`](CHAT-PATROLS.md) — In-Chat Patrols & Timers (`chat_patrol`)
 - [`CHAT-TRANSFER.md`](CHAT-TRANSFER.md) — Transferring a chat, with its dashboard and patrols, to another person
+- [`CHAT-HISTORY-WINDOW.md`](CHAT-HISTORY-WINDOW.md) — opening a long conversation on its newest turns: the windowed `GET /conversations/{id}` (`limit`/`before`/`from`, `history_page`), **Load earlier messages**, and gzip for the JSON reads
 - [`CHAT-ORDER.md`](CHAT-ORDER.md) — your own order for pinned chats and for each project's chats, and the Temporary sort (Reorder mode; `GET`/`PUT /api/conversations/order`)
 - [`SIDEBAR.md`](SIDEBAR.md) — the sidebar: one frame that scrolls as a whole and is the same on every page; top items, Pinned, Projects and Chats; one status per row; the Patrols page; Customize, the start page and presets; the admin workspace default; what the November 2026 redesign shipped, left out and changed on the server (`/api/sidebar`, `/api/admin/sidebar`, `GET /api/patrols`, `GET /api/patrols/{id}`)
 - [`SIDEBAR-SEARCH.md`](SIDEBAR-SEARCH.md) — the rail's search looks everywhere: own, team, project and archived chats in one list of results, whatever sections are hidden or folded

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { ChatExperience, type ConversationSummary } from "./chat-experience";
 import { clearChatSession, writeChatSession } from "./chatSessionStore";
+import { withoutHistoryWindow } from "./historyWindow.testing";
 
 // Opening one chat and then another before the first has loaded (#2043): the
 // load that started LAST owns the view. The older response used to switch the
@@ -23,7 +24,7 @@ let chatBodies: Array<Record<string, unknown>> = [];
 function mockBackend(heldConv = /^\/api\/conversations\/(conv-[bc])$/) {
   const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = String(input);
+    const url = withoutHistoryWindow(String(input));
     const method = init?.method ?? "GET";
     if (method === "POST" && url === "/api/chat") {
       chatBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
@@ -157,7 +158,7 @@ describe("loadConversation supersession (#2043)", () => {
     let releaseInflight: (() => void) | null = null;
     const base = vi.mocked(fetch).getMockImplementation()!;
     vi.mocked(fetch).mockImplementation(async (input, init) => {
-      const url = String(input);
+      const url = withoutHistoryWindow(String(input));
       // A backend-down session answer skips the warm background revalidation.
       if (url === "/api/session") return new Response("", { status: 503 });
       if (url === "/api/conversations/conv-a/inflight") {
@@ -208,7 +209,7 @@ describe("loadConversation supersession (#2043)", () => {
     const composer = await screen.findByRole("textbox", { name: /message/i });
     fireEvent.change(composer, { target: { value: "keep going" } });
     fireEvent.keyDown(composer, { key: "Enter" });
-    const calls = () => vi.mocked(fetch).mock.calls.map(([u, i]) => `${i?.method ?? "GET"} ${String(u)}`);
+    const calls = () => vi.mocked(fetch).mock.calls.map(([u, i]) => `${i?.method ?? "GET"} ${withoutHistoryWindow(String(u))}`);
     await waitFor(() => expect(calls()).toContain("POST /api/chat"));
     await act(async () => {
       await new Promise((r) => setTimeout(r, 50));

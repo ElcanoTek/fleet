@@ -91,6 +91,11 @@
       "rule": "go/reflected-xss",
       "file": "internal/webui/brand.go",
       "reason": "brandWriter.Write forwards the bundle's logo/share image from the in-process chat handler; CodeQL attributes the handler's writes to this wrapper. Its WriteHeader admits a body only when the upstream Content-Type is in a fixed image allowlist (logo: PNG/JPEG/WebP/SVG/ICO; share image: PNG/JPEG/WebP), re-sets that exact type, X-Content-Type-Options: nosniff and Content-Security-Policy: default-src 'none' ... sandbox; anything else (HTML, a non-2xx, no type) is discarded and answered with a 307 to fleet's own static asset, carrying no upstream bytes. Script in an SVG cannot run under the sandbox CSP, and no markup type is ever forwarded. Pinned by TestBrandAssetsAllowlistAndFallback."
+    },
+    {
+      "rule": "go/reflected-xss",
+      "file": "internal/webui/gzip.go",
+      "reason": "gzipResponseWriter wraps the outer http.ResponseWriter around proxyWriter on GET chat routes with out.gzip enabled (textJSON/jsonForced); CodeQL attributes echoed handler writes to gzipResponseWriter.body because it cannot see the Content-Type already enforced by proxyWriter.WriteHeader via secureContentType (X-Content-Type-Options: nosniff, application/json or text/plain, never text/html). gzipResponseWriter never alters Content-Type and only compresses 200 application/json responses above gzipMinBytes, so no reflected value can execute as script on this origin. Pinned by TestGzipJSONRoutes and TestProxyWriterContentTypeGuarantees."
     }
   ]
 }

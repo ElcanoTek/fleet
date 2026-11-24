@@ -12,7 +12,7 @@ test("finishing a delayed restore keeps an opened mobile drawer; user navigation
   let release!: () => void;
   const held = new Promise<void>(resolve => { release = resolve; });
   let requested = false;
-  await page.route("**/api/conversations/restore-first", async route => {
+  await page.route(/\/api\/conversations\/restore-first(?:\?|$)/, async route => {
     requested = true;
     await held;
     await route.fulfill({ json: {

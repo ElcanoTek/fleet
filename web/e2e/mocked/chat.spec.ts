@@ -196,7 +196,7 @@ test("a stopped turn still reads as stopped after a reload", async ({ page, cont
     if (r.request().method() !== "GET") return r.fulfill({ json: {} });
     return r.fulfill({ json: { conversations: sent ? [conversation] : [] } });
   });
-  await page.route("**/api/conversations/conv-stop", (r: Route) => {
+  await page.route(/\/api\/conversations\/conv-stop(?:\?|$)/, (r: Route) => {
     if (r.request().method() !== "GET") return r.fulfill({ json: {} });
     return r.fulfill({
       json: {
@@ -291,7 +291,7 @@ test("only the latest turn offers Retry; an older stopped turn keeps its label",
     },
     { id: first + 3, role: "assistant", type: "turn_summary", content: { cost_usd: 0.001, cancelled: true } },
   ];
-  await page.route("**/api/conversations/conv-mixed", (r: Route) => {
+  await page.route(/\/api\/conversations\/conv-mixed(?:\?|$)/, (r: Route) => {
     if (r.request().method() !== "GET") return r.fulfill({ json: {} });
     return r.fulfill({
       json: {

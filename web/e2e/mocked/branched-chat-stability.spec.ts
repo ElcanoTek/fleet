@@ -15,7 +15,7 @@ test("a teammate branch with unavailable generated images settles at the bottom 
     { id: i * 3 + 2, role: "user", type: "text", content: { text: "" } },
     { id: i * 3 + 3, role: "assistant", type: "text", content: { text: `## Report ${i + 1}\n\nThe generated chart shows our progress.\n\n![Generated chart ${i + 1}](chart-${i + 1}.png)\n\nReview the chart with the team.` } },
   ]).flat();
-  await page.route("**/api/conversations/branched-images", route => route.fulfill({ json: { conversation, history } }));
+  await page.route(/\/api\/conversations\/branched-images(?:\?|$)/, route => route.fulfill({ json: { conversation, history } }));
   let imageRequests = 0;
   await page.route("**/api/conversations/branched-images/workspace/**", async route => {
     imageRequests++;
