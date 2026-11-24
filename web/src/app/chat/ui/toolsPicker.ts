@@ -1,5 +1,6 @@
 import { bundleText } from "@/app/lib/i18n";
 import { t as tr } from "@/app/lib/i18n";
+import { selectedAccounts } from "./mcpAccounts";
 // The Tools picker's rules, shared by the composer popover (ToolsPopover) and
 // the library modal (ToolsLibrary): what status a connection is in, what
 // counts as on, how search matches and ranks, and how rows group under the
@@ -21,6 +22,9 @@ export type PickerConnector = {
   accounts?: string[];
   default_account?: string;
   account?: string;
+  /** The whole choice when the connector runs as several accounts in this
+   *  chat (mcpAccounts.ts); absent on one account. */
+  selected_accounts?: string[];
   /** A picker category ID; absent or unknown lands in Misc Tools. */
   category?: string;
   /** Server-side availability; absent = available. */
@@ -365,9 +369,15 @@ export function seatOptions(c: PickerConnector, appName: string): SeatOption[] {
   ];
 }
 
+/**
+ * What the account pill reads: the account's name, or the first one and how
+ * many more when the connector runs as several ("Raptive +3").
+ */
 export function seatLabel(c: PickerConnector, appName: string): string {
   const opts = seatOptions(c, appName);
-  return (opts.find((o) => o.value === (c.account ?? "")) ?? opts[0]).label;
+  const chosen = selectedAccounts(c);
+  const first = (opts.find((o) => o.value === chosen[0]) ?? opts[0]).label;
+  return chosen.length > 1 ? tr("{0} +{1}", [first, chosen.length - 1]) : first;
 }
 
 /** True on a touch-first screen. */

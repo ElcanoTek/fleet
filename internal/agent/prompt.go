@@ -650,6 +650,7 @@ func (m *Manager) buildSystemPrompt(persona string, layer *UserPersonaLayer, con
 	//    nothing, so the model is told to say the connector is unavailable
 	//    right now instead.
 	writeHostedSkipNotice(&sb, hosted.skipped)
+	writeMultiAccountNotice(&sb, hosted.multiAccount)
 	m.appendAvailableOptionalConnectors(&sb, persona, enabledOptionalMCPServers, hosted, hidden)
 	// Connectors the bundle declares but whose credentials are not set on this
 	// box ("Needs setup" in the Tools picker). Without this the model only sees

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"slices"
+	"strings"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/store"
@@ -131,6 +132,45 @@ func bundledPrefFor(prefs map[string]store.ConnectorPref, info agent.OptionalSer
 	return p.Enabled, p.Enabled && p.AutoEnable, seat
 }
 
+// bundledTurnAccounts resolves the accounts a bundled connector runs as in one
+// conversation: the conversation's own choice (#988, a single account or a
+// list, docs/MULTI-ACCOUNT-CHATS.md) checked against the live catalog, with ""
+// in the choice standing for prefSeat, the user's connections-page default
+// ("" again when they have none: the deployment's own account). The result is
+// never empty and never repeats an account; its first entry is the account
+// every single-account path has always used.
+//
+// A named account that is no longer provisioned is left out, the same posture
+// as a stale pref, and a choice with nothing left falls back to the default
+// account, so the turn still runs. The list is also cut to the cap here, in
+// case a row was written by something other than cleanMCPAccounts.
+func bundledTurnAccounts(info agent.OptionalServerInfo, override, prefSeat string) []string {
+	override = strings.TrimSpace(override)
+	// The whole value is one provisioned account: the shape every row had
+	// before lists existed.
+	if override != "" && slices.Contains(info.Accounts, override) {
+		return []string{override}
+	}
+	out := make([]string, 0, 1)
+	seen := map[string]bool{}
+	for _, a := range store.SplitMCPAccounts(override) {
+		if a == "" {
+			a = prefSeat
+		} else if !slices.Contains(info.Accounts, a) {
+			continue
+		}
+		if seen[a] || len(out) >= store.MaxMCPAccountsPerConnector {
+			continue
+		}
+		seen[a] = true
+		out = append(out, a)
+	}
+	if len(out) == 0 {
+		return []string{prefSeat}
+	}
+	return out
+}
+
 // applyConnectorPrefs filters a conversation's opted-in bundled servers by the
 // user's availability prefs and resolves each connector's credential-account
 // seat for the turn: the conversation's own override (#988) when it names a
@@ -139,7 +179,13 @@ func bundledPrefFor(prefs map[string]store.ConnectorPref, info agent.OptionalSer
 // Names not in the bundled catalog (remote-overlay entries) pass through
 // untouched except for their override, which the overlay pins; a remote name
 // without one mounts the seat its owner flagged default.
-func (s *Server) applyConnectorPrefs(ctx context.Context, user string, enabled []string, overrides map[string]string) ([]string, map[string]string) {
+//
+// A bundled connector the conversation runs as several accounts
+// (docs/MULTI-ACCOUNT-CHATS.md) has its first account in the returned seat map,
+// exactly where a single account goes, and the rest in extra, in order. extra
+// is nil unless some connector has a second account, so a conversation that
+// never asked for one takes the path it always took.
+func (s *Server) applyConnectorPrefs(ctx context.Context, user string, enabled []string, overrides map[string]string) (kept []string, accountDefaults map[string]string, extra map[string][]string) {
 	prefs, err := s.store.ListConnectorPrefs(ctx, user)
 	if err != nil {
 		prefs = nil
@@ -148,8 +194,7 @@ func (s *Server) applyConnectorPrefs(ctx context.Context, user string, enabled [
 	for _, info := range s.agent.MCPServerCatalog() {
 		byName[info.Name] = info
 	}
-	kept := make([]string, 0, len(enabled))
-	var accountDefaults map[string]string
+	kept = make([]string, 0, len(enabled))
 	set := func(name, seat string) {
 		if seat == "" {
 			return
@@ -176,10 +221,14 @@ func (s *Server) applyConnectorPrefs(ctx context.Context, user string, enabled [
 		kept = append(kept, name)
 		// A stale override (seat since de-provisioned) degrades to the user's
 		// default seat — same posture as a stale pref — so the turn still runs.
-		if o := overrides[name]; o != "" && slices.Contains(info.Accounts, o) {
-			seat = o
+		accounts := bundledTurnAccounts(info, overrides[name], seat)
+		set(name, accounts[0])
+		if len(accounts) > 1 {
+			if extra == nil {
+				extra = map[string][]string{}
+			}
+			extra[name] = accounts[1:]
 		}
-		set(name, seat)
 	}
-	return kept, accountDefaults
+	return kept, accountDefaults, extra
 }

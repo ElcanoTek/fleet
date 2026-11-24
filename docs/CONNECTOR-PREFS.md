@@ -124,3 +124,7 @@ naming the dropped connectors is the operator's.
   default (tasks pin their own). Hosted connections use the same picker: their
   default is the seat flagged default on the connections page — see
   `docs/REMOTE-MCP-MULTI-LOGIN.md`.
+- A conversation can run one bundled connector as several accounts at once
+  (the picker's account menu is a checklist) — see
+  `docs/MULTI-ACCOUNT-CHATS.md`. The connections-page default stays a single
+  account.

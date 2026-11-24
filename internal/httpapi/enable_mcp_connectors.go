@@ -61,12 +61,14 @@ func (s *Server) availableOptionalConnectorsForUser(ctx context.Context, user st
 		if !avail {
 			continue
 		}
-		if o := strings.TrimSpace(overrides[info.Name]); o != "" && slices.Contains(info.Accounts, o) {
-			seat = o
-		} else if o := strings.TrimSpace(overrides[key]); o != "" && slices.Contains(info.Accounts, o) {
-			seat = o
+		// The first account of the conversation's choice: these rows describe
+		// connectors that are still off, and one account's tool names are
+		// enough to tell whether the persona may use the connector at all.
+		override := overrides[info.Name]
+		if strings.TrimSpace(override) == "" {
+			override = overrides[key]
 		}
-		info.SelectedAccount = seat
+		info.SelectedAccount = bundledTurnAccounts(info, override, seat)[0]
 		seen[key] = true
 		out = append(out, info)
 	}

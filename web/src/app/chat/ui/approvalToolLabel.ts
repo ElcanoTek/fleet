@@ -28,6 +28,30 @@ export function connectorNames(rows: readonly { name: string; display_name?: str
   return out;
 }
 
+/**
+ * Connector id → what its default account is called, for the connectors the
+ * open chat runs as SEVERAL accounts (docs/MULTI-ACCOUNT-CHATS.md). A card on
+ * a named account has always said so; one on the default account said nothing,
+ * because there was nothing to tell apart. Beside another account's card for
+ * the same connector there is, so the seat badge reads this to name the
+ * default too. Empty for a chat with one account per connector, whose cards
+ * are then unchanged.
+ */
+export const DefaultAccountLabelsContext = createContext<ReadonlyMap<string, string>>(new Map());
+
+/** The map DefaultAccountLabelsContext carries, from catalog rows. The default
+ *  account is called what the picker calls it: the deployment's name. */
+export function defaultAccountLabels(
+  rows: readonly { name: string; enabled: boolean; selected_accounts?: string[] }[],
+  appName: string,
+): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const r of rows) {
+    if (r.enabled && (r.selected_accounts?.length ?? 0) > 1) out.set(r.name, appName);
+  }
+  return out;
+}
+
 function humanize(token: string): string {
   const spaced = token.replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
   return spaced ? spaced.charAt(0).toUpperCase() + spaced.slice(1) : "";

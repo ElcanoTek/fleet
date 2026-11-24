@@ -7,10 +7,12 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
-	"slices"
 	"sort"
 	"strings"
 
@@ -469,6 +471,47 @@ func (s *Server) remoteSeatCatalog(ctx context.Context, user string) map[string]
 	return out
 }
 
+// mcpAccountChoice is one connector's account choice as a client sends it: a
+// single account name (the shape since #988) or a list of them when the
+// conversation runs the connector as several accounts
+// (docs/MULTI-ACCOUNT-CHATS.md). "" in a list is the default account.
+type mcpAccountChoice []string
+
+// UnmarshalJSON accepts a JSON string or an array of strings.
+func (c *mcpAccountChoice) UnmarshalJSON(data []byte) error {
+	if string(bytes.TrimSpace(data)) == "null" {
+		*c = nil
+		return nil
+	}
+	var one string
+	if err := json.Unmarshal(data, &one); err == nil {
+		*c = mcpAccountChoice{one}
+		return nil
+	}
+	var many []string
+	if err := json.Unmarshal(data, &many); err != nil {
+		return errors.New("an account choice must be an account name or a list of account names")
+	}
+	*c = mcpAccountChoice(many)
+	return nil
+}
+
+// mcpAccountsWire renders a stored seat map for a response: a connector on one
+// account keeps the string it always had, and one on several accounts is the
+// list, so a client that predates lists reads the same payload for every
+// conversation that does not use them.
+func mcpAccountsWire(accounts map[string]string) map[string]any {
+	out := make(map[string]any, len(accounts))
+	for name, value := range accounts {
+		if store.IsMCPAccountList(value) {
+			out[name] = store.SplitMCPAccounts(value)
+			continue
+		}
+		out[name] = value
+	}
+	return out
+}
+
 // cleanMCPAccounts validates a per-conversation seat map (#988): each key must
 // be an optional connector the user can pick (bundled catalog or their hosted
 // connections, matched lowercased like the opt-in list) and each value a seat
@@ -477,7 +520,14 @@ func (s *Server) remoteSeatCatalog(ctx context.Context, user string) map[string]
 // default"). Unlike the opt-in list, an unknown seat is an ERROR, not a silent
 // drop: a user who believes they picked "personal" must not quietly run as
 // "work".
-func (s *Server) cleanMCPAccounts(ctx context.Context, user string, accounts map[string]string) (map[string]string, error) {
+//
+// A bundled connector may name several accounts, at most
+// store.MaxMCPAccountsPerConnector, "" among them for the default account. The
+// result holds them in one canonical order (the default first, then the
+// catalog's order) encoded by store.JoinMCPAccounts, so the same choice always
+// stores, binds and prompts identically whatever order it was ticked in. A
+// hosted connection mounts one seat per conversation and refuses a list.
+func (s *Server) cleanMCPAccounts(ctx context.Context, user string, accounts map[string]mcpAccountChoice) (map[string]string, error) {
 	clean := map[string]string{}
 	if len(accounts) == 0 {
 		return clean, nil
@@ -489,17 +539,38 @@ func (s *Server) cleanMCPAccounts(ctx context.Context, user string, accounts map
 		}
 	}
 	var remote map[string]map[string]bool
-	for rawName, rawAcct := range accounts {
+	for rawName, choice := range accounts {
 		name := strings.ToLower(strings.TrimSpace(rawName))
-		acct := strings.TrimSpace(rawAcct)
-		if name == "" || acct == "" {
+		if name == "" {
+			continue
+		}
+		wanted := map[string]bool{}
+		for _, a := range choice {
+			wanted[strings.TrimSpace(a)] = true
+		}
+		// Only the default account (or nothing) is no override at all.
+		if len(wanted) == 0 || (len(wanted) == 1 && wanted[""]) {
 			continue
 		}
 		if info, ok := bundled[name]; ok {
-			if !slices.Contains(info.Accounts, acct) {
-				return nil, fmt.Errorf("unknown account %q for connector %q", rawAcct, rawName)
+			if len(wanted) > store.MaxMCPAccountsPerConnector {
+				return nil, fmt.Errorf("connector %q can run as at most %d accounts in one chat", rawName, store.MaxMCPAccountsPerConnector)
 			}
-			clean[info.Name] = acct
+			ordered := make([]string, 0, len(wanted))
+			if wanted[""] {
+				ordered = append(ordered, "")
+			}
+			for _, a := range info.Accounts {
+				if wanted[a] {
+					ordered = append(ordered, a)
+					delete(wanted, a)
+				}
+			}
+			delete(wanted, "")
+			for a := range wanted {
+				return nil, fmt.Errorf("unknown account %q for connector %q", a, rawName)
+			}
+			clean[info.Name] = store.JoinMCPAccounts(ordered)
 			continue
 		}
 		if remote == nil {
@@ -509,16 +580,32 @@ func (s *Server) cleanMCPAccounts(ctx context.Context, user string, accounts map
 		if !ok {
 			return nil, fmt.Errorf("unknown connector %q", rawName)
 		}
+		if len(wanted) > 1 {
+			return nil, fmt.Errorf("connection %q runs as one account per chat", rawName)
+		}
+		var acct string
+		for a := range wanted {
+			acct = a
+		}
 		label, err := store.CanonicalRemoteMCPAccount(acct)
 		if err != nil {
 			return nil, err
 		}
 		if label == "" || !seats[label] {
-			return nil, fmt.Errorf("unknown account %q for connection %q", rawAcct, rawName)
+			return nil, fmt.Errorf("unknown account %q for connection %q", acct, rawName)
 		}
 		clean[name] = label
 	}
 	return clean, nil
+}
+
+// primaryMCPAccount is the first account of a stored choice, the one a row's
+// `account` field has always carried ("" = the default account).
+func primaryMCPAccount(value string) string {
+	if list := store.SplitMCPAccounts(value); len(list) > 0 {
+		return list[0]
+	}
+	return ""
 }
 
 // optionalServerWhitelist returns the set of server names a conversation may
@@ -634,7 +721,7 @@ func (s *Server) handleConversationMCPServersGet(w http.ResponseWriter, r *http.
 			// user disabled it (then it stays visible so it can be turned off).
 			continue
 		}
-		servers = append(servers, map[string]any{
+		row := map[string]any{
 			"name":         info.Name,
 			"display_name": info.DisplayName,
 			"description":  info.Description,
@@ -648,11 +735,18 @@ func (s *Server) handleConversationMCPServersGet(w http.ResponseWriter, r *http.
 			// Seat pick (#988): provisioned seats + this conversation's
 			// override ("" = the user's connections-page default).
 			"accounts":        info.Accounts,
-			"account":         conv.MCPAccounts[info.Name],
+			"account":         primaryMCPAccount(conv.MCPAccounts[info.Name]),
 			"default_account": seat,
 			"category":        categoryFor(cats, info.Name),
 			"status":          optionalConnectorStatus(info),
-		})
+		}
+		// Several accounts in this conversation (docs/MULTI-ACCOUNT-CHATS.md):
+		// the whole choice, "" for the default account. Absent on one account,
+		// so that row is the payload it always was.
+		if selected := store.SplitMCPAccounts(conv.MCPAccounts[info.Name]); len(selected) > 1 {
+			row["selected_accounts"] = selected
+		}
+		servers = append(servers, row)
 	}
 	servers = append(servers, s.needsSetupCatalogEntries(servers)...)
 	// Per-user remote (hosted) MCP servers (#443): merge the caller's
@@ -683,7 +777,8 @@ func (s *Server) handleConversationMCPServersGet(w http.ResponseWriter, r *http.
 // handleConversationMCPServersSet serves POST /conversations/{id}/mcp-servers.
 //
 // Body: { "enabled_optional": ["gamma", ...], "accounts": {"gamma": "work"} }
-// — both full sets, replacing the previous opt-in list and the previous seat
+// (an account value may be a list, {"gamma": ["", "work"]}, to run a bundled
+// connector as several accounts: docs/MULTI-ACCOUNT-CHATS.md) — both full sets, replacing the previous opt-in list and the previous seat
 // overrides (#988). Unknown / non-optional server names are dropped
 // silently; the server's catalog is the authoritative whitelist. An unknown
 // SEAT, by contrast, is a 400: silently running as a different account is
@@ -692,8 +787,8 @@ func (s *Server) handleConversationMCPServersGet(w http.ResponseWriter, r *http.
 // the user's defaults).
 func (s *Server) handleConversationMCPServersSet(w http.ResponseWriter, r *http.Request, user, id string, conv *store.Conversation) {
 	var req struct {
-		EnabledOptional []string          `json:"enabled_optional"`
-		Accounts        map[string]string `json:"accounts"`
+		EnabledOptional []string                    `json:"enabled_optional"`
+		Accounts        map[string]mcpAccountChoice `json:"accounts"`
 	}
 	if !decodeJSONBody(w, r, &req) {
 		return
@@ -790,5 +885,5 @@ func (s *Server) handleConversationMCPServersSet(w http.ResponseWriter, r *http.
 		writeConversationMutationError(w, err)
 		return
 	}
-	writeJSON(w, r, map[string]any{"enabled_optional": clean, "accounts": accounts})
+	writeJSON(w, r, map[string]any{"enabled_optional": clean, "accounts": mcpAccountsWire(accounts)})
 }

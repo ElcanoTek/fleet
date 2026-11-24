@@ -35,7 +35,7 @@ func (m *Manager) mcpCatalogSnapshot() []mcp.ServerTool {
 	return nil
 }
 
-func (m *Manager) scopeSelection(optionalEnabled []string, defaults map[string]string) agentcore.MCPSelection {
+func (m *Manager) scopeSelection(optionalEnabled []string, defaults map[string]string, extra map[string][]string) agentcore.MCPSelection {
 	enabledOptional := make(map[string]bool, len(optionalEnabled))
 	for _, name := range optionalEnabled {
 		if name = strings.TrimSpace(name); name != "" {
@@ -49,9 +49,11 @@ func (m *Manager) scopeSelection(optionalEnabled []string, defaults map[string]s
 			continue
 		}
 		selection = append(selection, agentcore.MCPChoice{Server: name, Account: defaults[name]})
+		selection = appendExtraAccountChoices(selection, name, defaults[name], extra[name])
 	}
 	m.mcpGatingMu.RUnlock()
-	sort.Slice(selection, func(i, j int) bool { return selection[i].Server < selection[j].Server })
+	// Stable: one server's accounts keep the order the conversation chose.
+	sort.SliceStable(selection, func(i, j int) bool { return selection[i].Server < selection[j].Server })
 	return selection
 }
 

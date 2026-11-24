@@ -4,7 +4,14 @@ import { createPortal } from "react-dom";
 import { Icon } from "@/app/shared/ui/Icon";
 import { Switch } from "@/components/ui/switch";
 import {
+  MAX_ACCOUNTS_PER_CONNECTOR,
+  allowsSeveralAccounts,
+  selectedAccounts,
+  toggleAccount,
+} from "./mcpAccounts";
+import {
   highlightSegments,
+  seatLabel,
   seatOptions,
   type ConnectorStatus,
   type PickerConnector,
@@ -123,11 +130,19 @@ export function StatusIcon({ status }: { status: ConnectorStatus }) {
 }
 
 /**
- * Which account (credential seat) a connection uses in this chat. A styled
+ * Which accounts (credential seats) a connection uses in this chat. A styled
  * menu rather than a native select: the default seat reads as the deployment
- * ("Elcano") or the connection's named default, marked "Default", with a check
- * on the current choice. "compact" is the pill on a popover row; "field" is
- * the full-width control in the library detail pane.
+ * ("Elcano") or the connection's named default, marked "Default". "compact"
+ * is the pill on a popover row; "field" is the full-width control in the
+ * library detail pane.
+ *
+ * A bundled connector's menu is a checklist: it can run as several accounts
+ * at once (docs/MULTI-ACCOUNT-CHATS.md), so each row ticks or unticks one
+ * account and the menu stays open. The last ticked account cannot be
+ * unticked (the connector's switch turns it off), and no more than
+ * MAX_ACCOUNTS_PER_CONNECTOR can be ticked. The trigger reads the first
+ * account and how many more ("Raptive +3"). A hosted connection mounts one
+ * account per chat, so its menu picks one and closes, as before.
  *
  * The list is portalled to <body> and positioned from the trigger, so the
  * popover's scrolling list never clips it. Clicks and keys stop at the menu,
@@ -141,12 +156,16 @@ export function SeatMenu({
 }: {
   connector: PickerConnector;
   appName: string;
-  onChange: (account: string) => void;
+  onChange: (accounts: string[]) => void;
   variant: "compact" | "field";
 }) {
   const options = seatOptions(connector, appName);
-  const current = connector.account ?? "";
-  const selected = options.find((o) => o.value === current) ?? options[0];
+  const several = allowsSeveralAccounts(connector);
+  const chosen = selectedAccounts(connector);
+  const isChosen = (value: string) => chosen.includes(value);
+  const selected = options.find((o) => o.value === chosen[0]) ?? options[0];
+  const triggerLabel = seatLabel(connector, appName);
+  const atCap = chosen.length >= MAX_ACCOUNTS_PER_CONNECTOR;
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
   const [pos, setPos] = useState<{ left: number; top?: number; bottom?: number; width: number } | null>(null);
@@ -202,10 +221,20 @@ export function SeatMenu({
     setActive(Math.max(0, options.indexOf(selected)));
     setOpen(true);
   };
+  // An option that a click would not change: the last ticked account, or an
+  // unticked one once the cap is reached.
+  const locked = (value: string) =>
+    several && (isChosen(value) ? chosen.length === 1 : atCap);
   const choose = (value: string) => {
+    if (several) {
+      // The checklist stays open: ticking a second account is the point.
+      const next = toggleAccount(chosen, value);
+      if (next.length !== chosen.length) onChange(next);
+      return;
+    }
     setOpen(false);
     triggerRef.current?.focus();
-    if (value !== current) onChange(value);
+    if (value !== chosen[0]) onChange([value]);
   };
 
   const onTriggerKey = (event: KeyboardEvent<HTMLButtonElement>) => {
@@ -244,7 +273,14 @@ export function SeatMenu({
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={open ? listId : undefined}
-        aria-label={tr("Account for {0}: {1}", [name, selected.label])}
+        aria-label={
+          chosen.length > 1
+            ? tr("Accounts for {0}: {1}", [
+                name,
+                chosen.map((v) => options.find((o) => o.value === v)?.label ?? v).join(", "),
+              ])
+            : tr("Account for {0}: {1}", [name, selected.label])
+        }
         data-testid={`mcp-seat-${connector.name}`}
         onClick={(event) => {
           event.stopPropagation();
@@ -261,8 +297,8 @@ export function SeatMenu({
         {variant === "field" ? (
           <Icon name="persona" className="size-3.5 shrink-0 text-[var(--color-text-subtle)]" />
         ) : null}
-        <span className="min-w-0 flex-1 truncate">{selected.label}</span>
-        {variant === "field" && selected.isDefault ? (
+        <span className="min-w-0 flex-1 truncate">{triggerLabel}</span>
+        {variant === "field" && chosen.length === 1 && selected.isDefault ? (
           <span className="shrink-0 text-[0.7rem] text-[var(--color-text-subtle)]">{tr("Default")}</span>
         ) : null}
         <Icon
@@ -276,9 +312,10 @@ export function SeatMenu({
               ref={listRef}
               id={listId}
               role="listbox"
+              aria-multiselectable={several || undefined}
               data-seat-menu=""
               tabIndex={-1}
-              aria-label={tr("Account for {0}", [name])}
+              aria-label={several ? tr("Accounts for {0}", [name]) : tr("Account for {0}", [name])}
               aria-activedescendant={`${listId}-${active}`}
               onKeyDown={onListKey}
               onClick={(event) => event.stopPropagation()}
@@ -286,34 +323,64 @@ export function SeatMenu({
               className="fixed z-[1300] grid max-h-64 max-w-[18rem] gap-[0.1rem] overflow-y-auto rounded-[var(--radius-md)] border border-[var(--color-selected-border)] bg-[var(--color-surface-2)] p-[0.3rem] shadow-[var(--shadow-popover)] outline-none motion-safe:animate-pop-up"
             >
               <div className="px-[0.55rem] pb-[0.2rem] pt-[0.15rem] font-[family-name:var(--font-code)] text-[0.62rem] uppercase tracking-[0.12em] text-[var(--color-text-subtle)]">
-                {tr("Account")}
+                {several ? tr("Accounts") : tr("Account")}
               </div>
               {options.map((o, i) => {
-                const isSel = o.value === current;
+                const isSel = isChosen(o.value);
+                const isLocked = locked(o.value);
                 return (
                   <div
                     key={o.value || "__default"}
                     id={`${listId}-${i}`}
                     role="option"
                     aria-selected={isSel}
+                    aria-disabled={isLocked || undefined}
                     tabIndex={-1}
                     onMouseEnter={() => setActive(i)}
                     onClick={() => choose(o.value)}
                     onKeyDown={() => undefined}
-                    className={`flex cursor-pointer items-center gap-2 rounded-[0.45rem] px-[0.55rem] py-[0.35rem] text-[0.78rem] any-pointer-coarse:min-h-11 ${
-                      i === active ? "bg-[var(--color-selected-bg)]" : ""
-                    } ${isSel ? "text-[var(--color-text-primary)]" : "text-[var(--color-text-secondary)]"}`}
+                    title={
+                      !isLocked
+                        ? undefined
+                        : isSel
+                          ? tr("At least one account stays on. Use the switch to turn the connector off.")
+                          : tr("Up to {0} accounts at once.", [MAX_ACCOUNTS_PER_CONNECTOR])
+                    }
+                    className={`flex items-center gap-2 rounded-[0.45rem] px-[0.55rem] py-[0.35rem] text-[0.78rem] any-pointer-coarse:min-h-11 ${
+                      isLocked && !isSel ? "cursor-not-allowed opacity-55" : "cursor-pointer"
+                    } ${i === active ? "bg-[var(--color-selected-bg)]" : ""} ${
+                      isSel ? "text-[var(--color-text-primary)]" : "text-[var(--color-text-secondary)]"
+                    }`}
                   >
+                    {several ? (
+                      <span
+                        aria-hidden="true"
+                        className={`flex size-3.5 shrink-0 items-center justify-center rounded-[3px] border ${
+                          isSel
+                            ? "border-[var(--color-accent)] bg-[var(--color-status-running-bg)] text-[var(--color-accent)]"
+                            : "border-[var(--color-pill-border)]"
+                        }`}
+                      >
+                        {isSel ? <Icon name="check" className="size-3" /> : null}
+                      </span>
+                    ) : null}
                     <span className="min-w-0 flex-1 truncate">{o.label}</span>
                     {o.isDefault ? (
                       <span className="shrink-0 text-[0.66rem] text-[var(--color-text-subtle)]">{tr("Default")}</span>
                     ) : null}
-                    <span className="flex size-3.5 shrink-0 items-center justify-center text-[var(--color-accent)]">
-                      {isSel ? <Icon name="check" className="size-3.5" /> : null}
-                    </span>
+                    {several ? null : (
+                      <span className="flex size-3.5 shrink-0 items-center justify-center text-[var(--color-accent)]">
+                        {isSel ? <Icon name="check" className="size-3.5" /> : null}
+                      </span>
+                    )}
                   </div>
                 );
               })}
+              {several && atCap ? (
+                <div className="px-[0.55rem] pb-[0.15rem] pt-[0.3rem] text-[0.66rem] text-[var(--color-text-subtle)]">
+                  {tr("Up to {0} accounts at once.", [MAX_ACCOUNTS_PER_CONNECTOR])}
+                </div>
+              ) : null}
             </div>,
             document.body,
           )

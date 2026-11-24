@@ -117,6 +117,7 @@
     "a turn is currently running on this conversation; wait for it to finish before summarizing",
     "a turn is running in this chat; stop it or wait for it to finish, then transfer",
     "agent manager unavailable",
+    "an account choice must be an account name or a list of account names",
     "an administrator has turned off writing shared files from chats on this server (Settings → Admin → Features)",
     "an archived or Lockdown chat can't be transferred",
     "answering a task is limited to its creator or an admin credential",
@@ -941,6 +942,19 @@
       "message": "connect MCP server: {0}",
       "fields": [
         "%s"
+      ]
+    },
+    {
+      "message": "connection {0} runs as one account per chat",
+      "fields": [
+        "%q"
+      ]
+    },
+    {
+      "message": "connector {0} can run as at most {1} accounts in one chat",
+      "fields": [
+        "%q",
+        "%d"
       ]
     },
     {

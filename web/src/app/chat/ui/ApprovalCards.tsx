@@ -38,7 +38,7 @@ import {
   selectedCountText,
   useNarrowing,
 } from "./approvalNarrowing";
-import { applyAllText, approvalToolLabel, ConnectorNamesContext, knownConnectorLabel, mcpToolServer } from "./approvalToolLabel";
+import { applyAllText, approvalToolLabel, ConnectorNamesContext, DefaultAccountLabelsContext, knownConnectorLabel, mcpToolServer } from "./approvalToolLabel";
 import { Icon } from "./Icon";
 import { useApprovalProgressPoll } from "./useApprovalProgressPoll";
 import { EmailSendResult, parseEmailSendPayload } from "./ToolChips";
@@ -119,7 +119,10 @@ function formatCountdown(totalSeconds: number): string {
 // under (#167). An approval card outlives the turn that staged it, and the
 // server reopens that turn's {server, account} seat to execute it — so when the
 // turn was on a named account, the user is told which one BEFORE they click
-// Send. The default seat renders nothing: there is no ambiguity to resolve.
+// Send. The default seat renders nothing: there is no ambiguity to resolve —
+// unless the chat runs this connector as several accounts
+// (docs/MULTI-ACCOUNT-CHATS.md), when a card that names no account would be
+// the one card the user has to guess about, so the default is named as well.
 // The verb defaults to the email card's "Sending as"; the generic action card
 // passes "Runs as" since not every critical tool sends anything.
 export function ApprovalSeatBadge({ server, account, verb = tr("Sending as") }: {
@@ -128,7 +131,10 @@ export function ApprovalSeatBadge({ server, account, verb = tr("Sending as") }: 
   verb?: string;
 }) {
   const names = useContext(ConnectorNamesContext);
-  if (!server || !account) return null;
+  const defaultLabels = useContext(DefaultAccountLabelsContext);
+  if (!server) return null;
+  const defaultLabel = account ? undefined : defaultLabels.get(server);
+  if (!account && !defaultLabel) return null;
   // The connector by its human name when one is known ("on Index
   // Exchange"), as the apply-all checkbox names it; the id, as code,
   // otherwise.
@@ -140,7 +146,9 @@ export function ApprovalSeatBadge({ server, account, verb = tr("Sending as") }: 
       style={{ color: "var(--color-card-text-muted)" }}
     >
       <span>
-        {verb} <span className="font-mono">{account}</span> {tr("on")}{" "}
+        {verb}{" "}
+        {account ? <span className="font-mono">{account}</span> : <>{defaultLabel} {tr("(default account)")}</>}{" "}
+        {tr("on")}{" "}
         {named ? named : <span className="font-mono">{server}</span>}
       </span>
     </div>

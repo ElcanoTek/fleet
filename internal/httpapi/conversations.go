@@ -53,10 +53,10 @@ type createConversationRequest struct {
 	// selections when a draft conversation is materialized before its first
 	// message turn (for example, when the user clicks Share in the composer on
 	// a brand-new chat).
-	EnabledOptional []string          `json:"enabled_optional,omitempty"`
-	MCPAccounts     map[string]string `json:"mcp_accounts,omitempty"`
-	AutoApprove     *bool             `json:"auto_approve,omitempty"`
-	ApprovalMode    *string           `json:"approval_mode,omitempty"`
+	EnabledOptional []string                    `json:"enabled_optional,omitempty"`
+	MCPAccounts     map[string]mcpAccountChoice `json:"mcp_accounts,omitempty"`
+	AutoApprove     *bool                       `json:"auto_approve,omitempty"`
+	ApprovalMode    *string                     `json:"approval_mode,omitempty"`
 }
 
 // seedMaxChars bounds a seeded first message so a pathological caller can't

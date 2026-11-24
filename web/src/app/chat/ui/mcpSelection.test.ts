@@ -183,4 +183,19 @@ describe("reconcileMcpAccounts", () => {
     expect(out.map((r) => r.account)).toEqual(["personal", "", undefined]);
     expect(out[2]).toBe(keep);
   });
+
+  it("applies a persisted list, and collapses a list the server no longer holds", () => {
+    type Row = { name: string; enabled: boolean; account?: string; selected_accounts?: string[]; accounts?: string[] };
+    const same: Row = { name: "ox", enabled: true, account: "", selected_accounts: ["", "twc"], accounts: ["twc"] };
+    const rows: Row[] = [
+      { name: "ix", enabled: true, account: "twc", accounts: ["arena", "twc"] },
+      { name: "pm", enabled: true, account: "", selected_accounts: ["", "twc"], accounts: ["twc"] },
+      same,
+    ];
+    const out = reconcileMcpAccounts(rows, { IX: ["", "arena", "twc"], ox: ["", "twc"] });
+    expect(out[0]).toMatchObject({ account: "", selected_accounts: ["", "arena", "twc"] });
+    expect(out[1].account).toBe("");
+    expect(out[1].selected_accounts).toBeUndefined();
+    expect(out[2]).toBe(same);
+  });
 });

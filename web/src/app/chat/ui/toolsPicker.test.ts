@@ -149,6 +149,9 @@ describe("seatOptions", () => {
     expect(seatOptions(ix, "Elcano").map((o) => o.label)).toEqual(["Elcano", "OMG_USD", "OMG_GBP"]);
     expect(seatLabel({ ...ix, account: "OMG_GBP" }, "Elcano")).toBe("OMG_GBP");
     expect(seatLabel(ix, "Reklaim")).toBe("Reklaim");
+    // Several accounts: the first one and how many more.
+    expect(seatLabel({ ...ix, account: "", selected_accounts: ["", "OMG_USD", "OMG_GBP"] }, "Elcano")).toBe("Elcano +2");
+    expect(seatLabel({ ...ix, account: "OMG_USD", selected_accounts: ["OMG_USD", "OMG_GBP"] }, "Elcano")).toBe("OMG_USD +1");
   });
 
   it("uses a named default and does not repeat it", () => {

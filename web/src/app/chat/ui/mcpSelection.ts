@@ -1,3 +1,4 @@
+import { sameAccounts, withSelectedAccounts, type AccountChoice, type AccountRow } from "./mcpAccounts";
 // The chat catalog contains two kinds of rows: optional connectors whose
 // enabled state belongs to this conversation, and locked always-on status rows.
 // Only the former may cross either persistence boundary (`enabled_optional` on
@@ -58,21 +59,23 @@ export function reconcileMcpSelection<T extends ChatConnectorSelectionRow>(
 
 /**
  * Fold the credential seats a save persisted (`accounts`: server name → seat,
- * default seats omitted) back into the local rows, so a catalog read that
- * landed while the save was in flight cannot leave an older seat on screen.
- * A row keeps its identity when its seat already matches; names compare
- * case-insensitively, as above.
+ * or a list of seats for a connector on several accounts; default seats
+ * omitted) back into the local rows, so a catalog read that landed while the
+ * save was in flight cannot leave an older seat on screen. A row keeps its
+ * identity when its seats already match; names compare case-insensitively, as
+ * above.
  */
-export function reconcileMcpAccounts<T extends { name: string; account?: string }>(
+export function reconcileMcpAccounts<T extends AccountRow>(
   rows: readonly T[],
-  accounts: Readonly<Record<string, string>>,
+  accounts: Readonly<Record<string, AccountChoice>>,
 ): T[] {
   const byName = new Map(
     Object.entries(accounts).map(([name, seat]) => [name.toLowerCase(), seat]),
   );
   return rows.map((row) => {
     const seat = byName.get(row.name.toLowerCase()) ?? "";
-    return (row.account ?? "") === seat ? row : { ...row, account: seat };
+    const persisted = withSelectedAccounts(row, typeof seat === "string" ? [seat] : seat);
+    return sameAccounts(row, persisted) ? row : persisted;
   });
 }
 
