@@ -192,19 +192,26 @@ advises on each demoted split admin, unknown role and duplicate username in it.
     upload, so that chat keeps the message without the image — later turns
     replay the chat without it, as they do for an upload the cleanup removed.
 
-  **A new account under the same address.** The keys and files are reached
-  after the database deletion has committed, and the address may hold a new
-  account by then (the CLI deleting while someone signs up, say). Those steps
-  are limited to the deleted account: they remove only the keys bound to its
-  id (read before the deletion, and checked again by `store.DeleteAccount`
-  under the account row's lock, which refuses — `the account changed while
-  it was being deleted` — when the address holds another account by then),
-  so the new account keeps its keys and no unbound key is left for it to
-  adopt; and each file tree only while no account's address has its
-  digest (asked right before the tree is moved aside). A tree the new
-  account holds stays whole: the deleted account's files left in it are
-  referred to by none of the new account's chats, and the hourly attachment
-  cleanup removes them by age once no kept chat refers to them.
+  **A new account under the same address.** The address may hold a new
+  account the moment the database deletion commits (the CLI deleting while
+  someone signs up, say), before the steps after it run. So nothing of the
+  deleted account is left under the address for those steps to tell apart:
+  - its keys are bound to its id first, and only those go (the id is read
+    before the deletion and checked again by `store.DeleteAccount` under the
+    account row's lock, which refuses — `the account changed while it was
+    being deleted` — when the address holds another account by then);
+  - its upload tree and its private workspace trees are moved aside (a
+    `.removing-<digest>-…` name beside them) while the account still exists
+    and its work is stopped, then removed after the commit — or moved back
+    if the deletion does not commit. A new account's trees start empty. A
+    tree that could not be moved is removed after the commit only while no
+    account has its digest, and reported otherwise; if the server stops
+    between the move and the commit, the maintenance pass removes the trees
+    left aside (the account was being deleted);
+  - its in-memory approve/deny-all decisions, which are kept by address,
+    are forgotten while its work is stopped and again after the commit,
+    whatever holds the address by then (forgetting one only means approving
+    again).
 
   **Work in flight.** The web route first refuses what the deletion would
   refuse (no such account: 404; a team-shared project still owned: 409),

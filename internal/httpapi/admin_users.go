@@ -176,19 +176,22 @@ func (s *Server) handleAdminUserDelete(w http.ResponseWriter, r *http.Request, e
 	affectedConvIDs := s.activeMultiplayerAndPendingConvIDsBestEffort(ctx)
 	// The same deletion as `fleet admin rm`: the store cascade, the user API
 	// keys that act as the account, and its upload and private workspace trees.
+	// The account's in-memory approve/deny-all decisions go now, while its
+	// work is stopped and the account still holds the address, and again
+	// after the commit, whatever holds the address by then: they are keyed
+	// by address, and forgetting one only means approving again.
+	s.sessionApprovals.ForgetUser(email)
 	opts := accountdelete.Options{
 		Keys: s.apiKeys,
-		// In this process: forget the account's in-memory approvals, end its
-		// part in live multiplayer chats, and remove its private workspace
-		// trees under the locks a running turn takes.
-		// A new account created under the address since the commit keeps
-		// what is its own: its in-memory approvals and its trees.
+		// Before the rows go: move the account's private workspace trees
+		// aside under the locks a running turn takes.
+		ServerSetAside: s.setAsideParticipantStashes,
+		// After: forget the account's in-memory approvals, end its part in
+		// live multiplayer chats, and remove any private workspace tree still
+		// there (each only while no account has its digest).
 		ServerCleanup: func(email string, live func(digest string) (bool, error)) error {
-			s.reconcileAllMultiplayerAccess(ctx, affectedConvIDs...)
-			if again, err := live(accountdelete.Digest(email)); err == nil && again {
-				return nil
-			}
 			s.sessionApprovals.ForgetUser(email)
+			s.reconcileAllMultiplayerAccess(ctx, affectedConvIDs...)
 			return s.purgeParticipantPrivateStashes(email, live)
 		},
 	}

@@ -170,9 +170,19 @@ func TestDeleteReportsFailedRemovals(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	att := t.TempDir()
-	files := seedFiles(t, att, "gone@x.com")
-	st := &fakeStore{liveErr: errors.New("database unreachable")}
-	res, err := Delete(ctx, st, "gone@x.com", Options{Keys: &fakeKeys{}, AttachmentDir: att})
+	// Paths no tree can be moved from or removed at: "uploads" and a
+	// conversation's "participants" are files.
+	if err := os.WriteFile(filepath.Join(att, "uploads"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	conv := filepath.Join(PrivateWorkspaceRoot(att), "conv-1")
+	if err := os.MkdirAll(conv, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(conv, "participants"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	res, err := Delete(ctx, &fakeStore{}, "gone@x.com", Options{Keys: &fakeKeys{}, AttachmentDir: att})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,16 +196,37 @@ func TestDeleteReportsFailedRemovals(t *testing.T) {
 	if len(res.Problems) != 2 || !kinds[UploadsFailed] || !kinds[PrivateWorkspacesFailed] {
 		t.Fatalf("problems = %+v, want an upload and a private workspace failure", res.Problems)
 	}
+	// The server's own steps failing are reported the same way.
+	res, err = Delete(ctx, &fakeStore{}, "gone@x.com", Options{Keys: &fakeKeys{},
+		ServerSetAside: func(string) ([]AsideTree, error) { return nil, errors.New("read-only file system") },
+		ServerCleanup:  func(string, func(string) (bool, error)) error { return errors.New("read-only file system") }})
+	if err != nil || len(res.Problems) != 1 || res.Problems[0].Kind != PrivateWorkspacesFailed {
+		t.Fatalf("server step failure: %+v, %v", res, err)
+	}
+}
+
+// The account's trees are moved aside before the database deletion: a
+// deletion that does not commit moves them back, and leaves nothing aside.
+func TestDeleteThatDoesNotCommitPutsTheFilesBack(t *testing.T) {
+	t.Parallel()
+	att := t.TempDir()
+	files := seedFiles(t, att, "gone@x.com")
+	_, err := Delete(context.Background(), &fakeStore{err: errors.New("owns a team-shared project")}, "gone@x.com", Options{Keys: &fakeKeys{}, AttachmentDir: att})
+	if err == nil {
+		t.Fatal("the refused deletion reported success")
+	}
 	for _, f := range files {
 		if _, err := os.Stat(f); err != nil {
-			t.Errorf("%s was removed although its removal was reported as failed: %v", f, err)
+			t.Errorf("%s is not back where it was: %v", f, err)
 		}
 	}
-	// The server's own cleanup failing is reported the same way.
-	res, err = Delete(ctx, &fakeStore{}, "gone@x.com", Options{Keys: &fakeKeys{},
-		ServerCleanup: func(string, func(string) (bool, error)) error { return errors.New("read-only file system") }})
-	if err != nil || len(res.Problems) != 1 || res.Problems[0].Kind != PrivateWorkspacesFailed {
-		t.Fatalf("server cleanup failure: %+v, %v", res, err)
+	for _, dir := range []string{filepath.Join(att, "uploads"), filepath.Join(PrivateWorkspaceRoot(att), "conv-1", "participants"), filepath.Join(PrivateWorkspaceRoot(att), "conv-2", "participants")} {
+		entries, _ := os.ReadDir(dir)
+		for _, e := range entries {
+			if IsAside(e.Name()) {
+				t.Errorf("%s was left aside in %s", e.Name(), dir)
+			}
+		}
 	}
 }
 
@@ -444,12 +475,13 @@ func TestRemoveOrphanTree(t *testing.T) {
 }
 
 // After the database deletion commits, the address may hold a new account
-// before the keys and files are reached. That account keeps what is its own:
-// the user keys bound to its id, and the upload and private workspace trees
-// under its digest. A key minted before keys named their account is bound to
-// the deleted account before the deletion, so it goes with that account's
-// keys either way and is never the new account's. With no new account the
-// trees go too. Not parallel: it uses afterDatabaseDeletion.
+// before the keys and files are reached. That account keeps what is its own —
+// the user keys bound to its id, and what it writes under its digest — and
+// gets nothing of the deleted one: a key minted before keys named their
+// account is bound to the deleted account before the deletion and goes with
+// its keys, and the deleted account's trees were moved aside before the
+// commit, so the new account's trees start empty. Not parallel: it uses
+// afterDatabaseDeletion.
 func TestDeleteSparesAnAccountCreatedAfterTheCommit(t *testing.T) {
 	ctx := context.Background()
 	for _, recreated := range []bool{true, false} {
@@ -470,7 +502,17 @@ func TestDeleteSparesAnAccountCreatedAfterTheCommit(t *testing.T) {
 			t.Fatal(err)
 		}
 		var fresh *apikeys.APIKey
+		newFiles := []string{
+			filepath.Join(UploadsDir(att, "back@x.com"), "new-tok", "new.txt"),
+			filepath.Join(PrivateWorkspaceRoot(att), "conv-1", "participants", Digest("back@x.com"), "new.txt"),
+		}
 		afterDatabaseDeletion = func() {
+			// The deleted account's trees are aside already.
+			for _, f := range files {
+				if _, err := os.Stat(f); !os.IsNotExist(err) {
+					t.Errorf("recreated=%v: at the commit %s is still under the address (err %v)", recreated, f, err)
+				}
+			}
 			// Bound to the account being deleted before its rows went.
 			if k := mgr.GetKey(legacy.KeyID); k == nil || k.AccountID != "deleted-account-id" {
 				t.Errorf("recreated=%v: at the commit the unbound key is %+v, want bound to the deleted account", recreated, k)
@@ -481,6 +523,14 @@ func TestDeleteSparesAnAccountCreatedAfterTheCommit(t *testing.T) {
 			st.live[Digest("back@x.com")] = true
 			if fresh, _, err = mgr.CreateBoundUserKey(ctx, "new", "back@x.com", "new-account-id", 0, nil, ""); err != nil {
 				t.Error(err)
+			}
+			for _, f := range newFiles {
+				if err := os.MkdirAll(filepath.Dir(f), 0o700); err != nil {
+					t.Error(err)
+				}
+				if err := os.WriteFile(f, []byte("new"), 0o600); err != nil {
+					t.Error(err)
+				}
 			}
 		}
 		res, err := Delete(ctx, st, "back@x.com", Options{Keys: mgr, AttachmentDir: att})
@@ -498,12 +548,15 @@ func TestDeleteSparesAnAccountCreatedAfterTheCommit(t *testing.T) {
 			t.Error("the new account's key was deleted")
 		}
 		for _, f := range files {
-			_, err := os.Stat(f)
-			if recreated && err != nil {
-				t.Errorf("the new account's %s was removed: %v", f, err)
+			if _, err := os.Stat(f); !os.IsNotExist(err) {
+				t.Errorf("recreated=%v: the deleted account's %s survived (err %v)", recreated, f, err)
 			}
-			if !recreated && !os.IsNotExist(err) {
-				t.Errorf("the deleted account's %s survived (err %v)", f, err)
+		}
+		if recreated {
+			for _, f := range newFiles {
+				if _, err := os.Stat(f); err != nil {
+					t.Errorf("the new account's %s was removed: %v", f, err)
+				}
 			}
 		}
 	}

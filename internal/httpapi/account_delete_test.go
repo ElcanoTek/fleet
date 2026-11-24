@@ -632,11 +632,22 @@ func TestPurgeParticipantStashesSparesANewAccount(t *testing.T) {
 	}
 }
 
-// failingDigestStore is the real store whose account-digest lookup fails, so
-// every file removal after a deletion's commit fails.
-type failingDigestStore struct{ *store.Store }
+// lateStashStore is the real store whose account-digest lookup fails, and
+// whose deletion first writes a private workspace tree back — as a turn still
+// running could after the deletion moved the trees aside.
+type lateStashStore struct {
+	*store.Store
+	tree string
+}
 
-func (failingDigestStore) AccountDigestLive(context.Context, string) (bool, error) {
+func (l lateStashStore) DeleteAccount(ctx context.Context, email, expectedID string) (string, error) {
+	if err := os.MkdirAll(l.tree, 0o700); err != nil {
+		return "", err
+	}
+	return l.Store.DeleteAccount(ctx, email, expectedID)
+}
+
+func (lateStashStore) AccountDigestLive(context.Context, string) (bool, error) {
 	return false, errors.New("database unreachable")
 }
 
@@ -649,11 +660,8 @@ func TestAdminDeleteReportsAStashTreeItCouldNotRemove(t *testing.T) {
 	setRole(t, s, "boss@x.com", "admin", "")
 	s.cfg.EmailAttachmentDir = t.TempDir()
 	tree := filepath.Join(accountdelete.PrivateWorkspaceRoot(s.cfg.EmailAttachmentDir), "conv-1", "participants", accountdelete.Digest("u@x.com"))
-	if err := os.MkdirAll(tree, 0o700); err != nil {
-		t.Fatal(err)
-	}
 	st := s.concreteStore(t)
-	s.store = failingDigestStore{st}
+	s.store = lateStashStore{st, tree}
 	w := do(t, s.Routes(), http.MethodDelete, "/admin/users/u@x.com", nil, "boss@x.com")
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "private workspace files failed") {
 		t.Fatalf("status %d body %s, want 200 with a private workspace warning", w.Code, w.Body.String())
@@ -665,6 +673,110 @@ func TestAdminDeleteReportsAStashTreeItCouldNotRemove(t *testing.T) {
 	s.sweepDeletedAccounts(context.Background())
 	if _, err := os.Stat(tree); !os.IsNotExist(err) {
 		t.Fatalf("the maintenance pass left the deleted account's tree (err %v)", err)
+	}
+}
+
+// recreatingStore is the real store whose deletion creates the account again
+// under the same email the moment it commits, and runs then.
+type recreatingStore struct {
+	*store.Store
+	then func()
+}
+
+func (r recreatingStore) DeleteAccount(ctx context.Context, email, expectedID string) (string, error) {
+	id, err := r.Store.DeleteAccount(ctx, email, expectedID)
+	if err != nil {
+		return id, err
+	}
+	if _, err := r.CreateUser(ctx, email, "replacement-password-1"); err != nil {
+		return id, err
+	}
+	if r.then != nil {
+		r.then()
+	}
+	return id, nil
+}
+
+// An account created under the address the moment the deletion commits —
+// before the server's own steps after it run — gets nothing of the deleted
+// one: not its approve-all decisions, which are forgotten whatever holds the
+// address, and not its files, which were moved aside before the commit; what
+// it writes itself stays.
+func TestAdminDeleteGivesALaterAccountNothingOfTheDeletedOne(t *testing.T) {
+	t.Parallel()
+	s := memberFixture(t, "boss@x.com", "u@x.com")
+	setRole(t, s, "boss@x.com", "admin", "")
+	s.sessionApprovals = NewSessionApprovalRegistry()
+	att := t.TempDir()
+	s.cfg.EmailAttachmentDir = att
+	s.sessionApprovals.RegisterForUser("conv-1", "u@x.com", "run_python", SessionApprovalPolicy{Mode: "approve"})
+	old := []string{
+		filepath.Join(accountdelete.UploadsDir(att, "u@x.com"), "tok", "old.txt"),
+		filepath.Join(accountdelete.PrivateWorkspaceRoot(att), "conv-1", "participants", accountdelete.Digest("u@x.com"), "old.txt"),
+	}
+	fresh := filepath.Join(accountdelete.UploadsDir(att, "u@x.com"), "new-tok", "new.txt")
+	for _, f := range old {
+		if err := os.MkdirAll(filepath.Dir(f), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(f, []byte("old"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	st := s.concreteStore(t)
+	s.store = recreatingStore{st, func() {
+		// The new account uploads at once.
+		if err := os.MkdirAll(filepath.Dir(fresh), 0o700); err != nil {
+			t.Error(err)
+		}
+		if err := os.WriteFile(fresh, []byte("new"), 0o600); err != nil {
+			t.Error(err)
+		}
+	}}
+	if w := do(t, s.Routes(), http.MethodDelete, "/admin/users/u@x.com", nil, "boss@x.com"); w.Code != http.StatusNoContent {
+		t.Fatalf("delete: status %d (body %s)", w.Code, w.Body.String())
+	}
+	if _, ok := s.sessionApprovals.MatchForUser("conv-1", "u@x.com", "run_python", "{}"); ok {
+		t.Error("the account created after the commit inherited the deleted account's approve-all decision")
+	}
+	for _, f := range old {
+		if _, err := os.Stat(f); !os.IsNotExist(err) {
+			t.Errorf("the deleted account's %s is still under the address (err %v)", f, err)
+		}
+	}
+	if _, err := os.Stat(fresh); err != nil {
+		t.Errorf("the new account's own upload was removed: %v", err)
+	}
+}
+
+// Trees a deletion moved aside and never removed — the server stopped between
+// the move and the commit — are removed by the next maintenance pass.
+func TestMaintenanceRemovesTreesADeletionLeftAside(t *testing.T) {
+	t.Parallel()
+	s := memberFixture(t, "u@x.com")
+	att := t.TempDir()
+	s.cfg.EmailAttachmentDir = att
+	digest := accountdelete.Digest("u@x.com")
+	trees := []string{
+		filepath.Join(accountdelete.UploadsDir(att, "u@x.com"), "tok"),
+		filepath.Join(accountdelete.PrivateWorkspaceRoot(att), "conv-1", "participants", digest, "f"),
+	}
+	aside := make([]string, 0, len(trees))
+	for _, d := range trees {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		tr, moved, err := accountdelete.SetAside(filepath.Dir(d), digest)
+		if err != nil || !moved {
+			t.Fatalf("SetAside(%s) = %v, %v", filepath.Dir(d), moved, err)
+		}
+		aside = append(aside, tr.To)
+	}
+	s.sweepDeletedAccounts(context.Background())
+	for _, a := range aside {
+		if _, err := os.Stat(a); !os.IsNotExist(err) {
+			t.Errorf("%s survived the maintenance pass (err %v)", a, err)
+		}
 	}
 }
 

@@ -264,16 +264,23 @@ func (s *Server) purgeParticipantPrivateStashes(userEmail string, live func(dige
 	if userEmail == "" {
 		return nil
 	}
-	s.inflightMu.Lock()
-	for convID, activeUser := range s.activeParticipantWorkspaces {
-		if strings.EqualFold(activeUser, userEmail) {
-			if s.purgedParticipantWorkspaces == nil {
-				s.purgedParticipantWorkspaces = make(map[string]bool)
+	digest := participantDigest(userEmail)
+	// A participant turn running under the address is the deleted account's
+	// unless a new account holds the address by now.
+	again, lerr := live(digest)
+	theirs := lerr != nil || !again
+	if theirs {
+		s.inflightMu.Lock()
+		for convID, activeUser := range s.activeParticipantWorkspaces {
+			if strings.EqualFold(activeUser, userEmail) {
+				if s.purgedParticipantWorkspaces == nil {
+					s.purgedParticipantWorkspaces = make(map[string]bool)
+				}
+				s.purgedParticipantWorkspaces[convID+"\x00"+userEmail] = true
 			}
-			s.purgedParticipantWorkspaces[convID+"\x00"+userEmail] = true
 		}
+		s.inflightMu.Unlock()
 	}
-	s.inflightMu.Unlock()
 	root, err := s.privateWorkspaceStashRoot()
 	if err != nil {
 		return err
@@ -288,7 +295,6 @@ func (s *Server) purgeParticipantPrivateStashes(userEmail string, live func(dige
 	if err != nil {
 		return err
 	}
-	digest := participantDigest(userEmail)
 	var firstErr error
 	for _, d := range entries {
 		if !d.IsDir() {
@@ -300,12 +306,8 @@ func (s *Server) purgeParticipantPrivateStashes(userEmail string, live func(dige
 		}
 		path := filepath.Join(root, convID, "participants", digest)
 		unlock := s.workspaceSwapLocks.lock(convID)
-		// A participant turn running under the address is the deleted
-		// account's unless a new account holds the address by now.
-		if s.isActiveParticipantUser(convID, userEmail) {
-			if again, err := live(digest); err != nil || !again {
-				s.markParticipantWorkspacePurged(convID, userEmail)
-			}
+		if theirs && s.isActiveParticipantUser(convID, userEmail) {
+			s.markParticipantWorkspacePurged(convID, userEmail)
 		}
 		// RemoveOrphanTree asks live again right before the removal: a tree
 		// whose address holds a new account by then is that account's (not a
@@ -320,6 +322,63 @@ func (s *Server) purgeParticipantPrivateStashes(userEmail string, live func(dige
 		unlock()
 	}
 	return firstErr
+}
+
+// setAsideParticipantStashes moves userEmail's participant trees aside in
+// every conversation's private workspace stash (accountdelete.SetAside), each
+// under the conversation's swap lock, for an account deletion that has not
+// committed yet: the account still holds the address. A participant turn of
+// the account still running is marked so it does not move its tree back as
+// it ends; moving a tree back (a deletion that did not commit) clears that
+// mark. It returns what it moved and the first failure.
+func (s *Server) setAsideParticipantStashes(userEmail string) ([]accountdelete.AsideTree, error) {
+	userEmail = strings.ToLower(strings.TrimSpace(userEmail))
+	if userEmail == "" {
+		return nil, nil
+	}
+	root, err := s.privateWorkspaceStashRoot()
+	if err != nil || root == "" {
+		return nil, err
+	}
+	entries, err := os.ReadDir(root)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	digest := participantDigest(userEmail)
+	var aside []accountdelete.AsideTree
+	var firstErr error
+	for _, d := range entries {
+		convID := d.Name()
+		if !d.IsDir() || !filepath.IsLocal(convID) || strings.ContainsAny(convID, `/\`) {
+			continue
+		}
+		unlock := s.workspaceSwapLocks.lock(convID)
+		if s.isActiveParticipantUser(convID, userEmail) {
+			s.markParticipantWorkspacePurged(convID, userEmail)
+		}
+		t, moved, err := accountdelete.SetAside(filepath.Join(root, convID, "participants", digest), digest)
+		unlock()
+		if err != nil {
+			firstErr = firstErrOf(firstErr, err)
+			continue
+		}
+		if moved {
+			t.OnRestore = func() { s.takeParticipantWorkspacePurged(convID, userEmail) }
+			aside = append(aside, t)
+		}
+	}
+	return aside, firstErr
+}
+
+// firstErrOf is a when it is set, else b.
+func firstErrOf(a, b error) error {
+	if a != nil {
+		return a
+	}
+	return b
 }
 
 func (s *Server) markParticipantWorkspacePurged(convID, userEmail string) {

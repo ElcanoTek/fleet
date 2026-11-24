@@ -82,6 +82,11 @@ type Options struct {
 	// AttachmentDir is the server's EMAIL_ATTACHMENT_DIR
 	// (config.Config.EmailAttachmentDir), absolute. "" skips the file step.
 	AttachmentDir string
+	// ServerSetAside is the running server's own step before the database
+	// deletion: it moves the account's private workspace trees aside
+	// (SetAside) under the locks a turn takes, and returns them. nil (a CLI)
+	// moves them aside under AttachmentDir.
+	ServerSetAside func(email string) ([]AsideTree, error)
 	// ServerCleanup is the running server's own step, run after the database
 	// deletion: it forgets the account's in-memory state and removes its
 	// private workspace trees under the locks a turn in flight takes, each
@@ -171,15 +176,14 @@ var afterDatabaseDeletion func()
 // keys stay bound to the account, which still exists: they would have bound
 // to it anyway.
 //
-// The steps after the commit are limited to the account the database step
-// deleted, because the address may hold a new account by then (created the
-// moment the old one was gone, before these steps ran): only the keys bound
-// to the deleted account's id go (Keys.DeleteUserKeys); and each file tree is checked
-// right before it is removed (RemoveOrphanTree) — one whose address has an
-// account again belongs to that account now and stays. The deleted account's
-// files left in it are referenced by no chat of the new account, and the
-// hourly attachment cleanup removes them by age once no kept chat refers to
-// them.
+// The address may hold a new account the moment the deletion commits, before
+// the steps after it run, so nothing of the deleted account is left under the
+// address for those steps to tell apart: its keys are bound to its id first
+// and only those go (Keys.DeleteUserKeys), and its upload and private
+// workspace trees are moved aside (SetAside) while it still exists — then
+// removed after the commit, or moved back if the deletion does not commit.
+// A tree that could not be moved is removed after the commit only while no
+// account has its digest (RemoveOrphanTree), and reported otherwise.
 func Delete(ctx context.Context, st Store, email string, opt Options) (Result, error) {
 	// Each step normalizes the address the way its own store keys it.
 	email = strings.TrimSpace(email)
@@ -193,8 +197,15 @@ func Delete(ctx context.Context, st Store, email string, opt Options) (Result, e
 			return res, &KeysNotBoundError{Err: err}
 		}
 	}
+	// The files are moved aside while the account still exists — nobody can
+	// create an account under the address until the commit — so a later
+	// account under it never finds them under its digest.
+	aside, failed := setAsideAccountFiles(email, opt)
 	accountID, err := st.DeleteAccount(ctx, email, id)
 	if err != nil {
+		if rerr := restoreAside(aside); rerr != nil {
+			return res, fmt.Errorf("%w; moving the account's files back failed: %w", err, rerr)
+		}
 		return res, err
 	}
 	if afterDatabaseDeletion != nil {
@@ -208,28 +219,181 @@ func Delete(ctx context.Context, st Store, email string, opt Options) (Result, e
 	} else {
 		res.KeysDeleted = n
 	}
-	if opt.AttachmentDir != "" {
-		// Removing a path that does not exist succeeds, so a CLI pointed at
-		// the wrong directory would report nothing: say so instead. The
-		// server's maintenance pass removes the files of deleted accounts
-		// from the directory it really uses.
-		if _, err := os.Stat(opt.AttachmentDir); err != nil {
-			res.Problems = append(res.Problems, Problem{Kind: AttachmentDirUnreadable, Email: email, Path: opt.AttachmentDir, Err: err.Error()})
-		} else if err := removeUploadTree(UploadsDir(opt.AttachmentDir, email), Digest(email), live); err != nil {
-			res.Problems = append(res.Problems, Problem{Kind: UploadsFailed, Email: email, Err: err.Error()})
+	res.Problems = append(res.Problems, failed.dirProblem...)
+	var uploadsErr, stashErr error
+	for _, t := range aside {
+		if err := os.RemoveAll(t.To); err != nil {
+			if t.Uploads {
+				uploadsErr = firstError(uploadsErr, err)
+			} else {
+				stashErr = firstError(stashErr, err)
+			}
 		}
+	}
+	// What could not be moved aside is removed now, each tree only while no
+	// account has its digest (RemoveOrphanTree): the last resort, reported
+	// if it fails, and tried again by the maintenance pass.
+	if failed.uploads != nil {
+		uploadsErr = firstError(uploadsErr, removeUploadTree(UploadsDir(opt.AttachmentDir, email), Digest(email), live))
 	}
 	switch {
 	case opt.ServerCleanup != nil:
-		if err := opt.ServerCleanup(email, live); err != nil {
-			res.Problems = append(res.Problems, Problem{Kind: PrivateWorkspacesFailed, Email: email, Err: err.Error()})
-		}
-	case opt.AttachmentDir != "":
-		if err := removePrivateWorkspaces(PrivateWorkspaceRoot(opt.AttachmentDir), email, live); err != nil {
-			res.Problems = append(res.Problems, Problem{Kind: PrivateWorkspacesFailed, Email: email, Err: err.Error()})
-		}
+		// The server forgets the address's in-memory state and removes any
+		// private workspace tree still there: one it could not move, or one
+		// written after the move.
+		stashErr = firstError(stashErr, opt.ServerCleanup(email, live))
+	case failed.stashes != nil:
+		stashErr = firstError(stashErr, removePrivateWorkspaces(PrivateWorkspaceRoot(opt.AttachmentDir), email, live))
+	}
+	if uploadsErr != nil {
+		res.Problems = append(res.Problems, Problem{Kind: UploadsFailed, Email: email, Err: uploadsErr.Error()})
+	}
+	if stashErr != nil {
+		res.Problems = append(res.Problems, Problem{Kind: PrivateWorkspacesFailed, Email: email, Err: stashErr.Error()})
 	}
 	return res, nil
+}
+
+// firstError is a when it is set, else b.
+func firstError(a, b error) error {
+	if a != nil {
+		return a
+	}
+	return b
+}
+
+// setAsideFailures is what setAsideAccountFiles could not move aside.
+type setAsideFailures struct {
+	uploads, stashes error
+	dirProblem       []Problem // the attachment directory could not be read
+}
+
+// setAsideAccountFiles moves the account's upload tree and its private
+// workspace trees aside (SetAside): the server's own step for the latter
+// when there is one (Options.ServerSetAside, under the locks a turn takes),
+// otherwise under AttachmentDir. It returns what it moved and what it could
+// not.
+func setAsideAccountFiles(email string, opt Options) ([]AsideTree, setAsideFailures) {
+	var aside []AsideTree
+	var failed setAsideFailures
+	digest := Digest(email)
+	dirOK := false
+	if opt.AttachmentDir != "" {
+		// Moving a path that does not exist moves nothing, so a CLI pointed
+		// at the wrong directory would report nothing: say so instead. The
+		// server's maintenance pass removes the files of deleted accounts
+		// from the directory it really uses.
+		if _, err := os.Stat(opt.AttachmentDir); err != nil {
+			failed.dirProblem = append(failed.dirProblem, Problem{Kind: AttachmentDirUnreadable, Email: email, Path: opt.AttachmentDir, Err: err.Error()})
+		} else {
+			dirOK = true
+			if t, moved, err := SetAside(UploadsDir(opt.AttachmentDir, email), digest); err != nil {
+				failed.uploads = err
+			} else if moved {
+				t.Uploads = true
+				aside = append(aside, t)
+			}
+		}
+	}
+	switch {
+	case opt.ServerSetAside != nil:
+		ts, err := opt.ServerSetAside(email)
+		aside = append(aside, ts...)
+		failed.stashes = err
+	case dirOK:
+		ts, err := setAsidePrivateWorkspaces(PrivateWorkspaceRoot(opt.AttachmentDir), email)
+		aside = append(aside, ts...)
+		failed.stashes = err
+	}
+	return aside, failed
+}
+
+// AsideTree is an account tree moved aside before its account's deletion
+// (SetAside): removed once the deletion commits, moved back if it does not.
+type AsideTree struct {
+	// From is where the tree was; To where it is now.
+	From, To string
+	// Uploads says it is the upload tree (else a private workspace tree).
+	Uploads bool
+	// OnRestore, when set, runs after the tree is moved back (the server
+	// undoes what it marked when it moved it).
+	OnRestore func()
+}
+
+// SetAside moves path, a tree of the account whose Digest is digest, to an
+// aside name beside it (asidePrefix, which nothing reads and every sweep
+// removes) and reports whether there was one to move. Account deletion moves
+// the account's trees aside before its database deletion commits, while no
+// other account can hold the address, and removes them after; a crash in
+// between leaves aside trees, which the maintenance pass removes.
+func SetAside(path, digest string) (AsideTree, bool, error) {
+	if _, err := os.Lstat(path); os.IsNotExist(err) {
+		return AsideTree{}, false, nil
+	} else if err != nil {
+		return AsideTree{}, false, err
+	}
+	var suffix [8]byte
+	if _, err := rand.Read(suffix[:]); err != nil {
+		return AsideTree{}, false, err
+	}
+	to := filepath.Join(filepath.Dir(path), asidePrefix+digest+"-"+hex.EncodeToString(suffix[:]))
+	if err := os.Rename(path, to); err != nil {
+		if os.IsNotExist(err) {
+			return AsideTree{}, false, nil
+		}
+		return AsideTree{}, false, err
+	}
+	return AsideTree{From: path, To: to}, true, nil
+}
+
+// restoreAside moves the trees back where they were, after a deletion that
+// did not commit, and returns the first failure.
+func restoreAside(aside []AsideTree) error {
+	var firstErr error
+	for _, t := range aside {
+		if err := os.Rename(t.To, t.From); err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		if t.OnRestore != nil {
+			t.OnRestore()
+		}
+	}
+	return firstErr
+}
+
+// setAsidePrivateWorkspaces moves participants/<Digest(email)> aside in every
+// conversation directory under root (SetAside), and returns what it moved
+// and the first failure. A missing root has nothing to move.
+func setAsidePrivateWorkspaces(root, email string) ([]AsideTree, error) {
+	entries, err := os.ReadDir(root)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	digest := Digest(email)
+	var aside []AsideTree
+	var firstErr error
+	for _, d := range entries {
+		if !d.IsDir() || !filepath.IsLocal(d.Name()) {
+			continue
+		}
+		t, moved, err := SetAside(filepath.Join(root, d.Name(), "participants", digest), digest)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		if moved {
+			aside = append(aside, t)
+		}
+	}
+	return aside, firstErr
 }
 
 // Digest is the directory name an account's files are kept under: the first
