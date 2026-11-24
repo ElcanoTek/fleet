@@ -1530,3 +1530,79 @@ func TestPruneKeepsACheckoutWhoseRecordCannotBeRead(t *testing.T) {
 		t.Errorf("a checkout with no .git survived (lstat err %v)", err)
 	}
 }
+
+// TestDeleteBranchIsNotRepackedMidway: a `git pack-refs --all` started
+// between the packed-refs rewrite and the loose ref's removal cannot copy the
+// loose ref back (packed-refs.lock is still held), and a line that does
+// reappear in packed-refs (simulated) is dropped by the check that follows,
+// so the branch ends up fully deleted. A held ref lock removes nothing.
+func TestDeleteBranchIsNotRepackedMidway(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	gitRepo(t, root)
+	gitIn := func(args ...string) (string, error) {
+		out, err := exec.Command("git", append([]string{"-C", root, "-c", "user.email=t@t.t", "-c", "user.name=t"}, args...)...).CombinedOutput()
+		return strings.TrimSpace(string(out)), err
+	}
+	must := func(args ...string) string {
+		t.Helper()
+		out, err := gitIn(args...)
+		if err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+		return out
+	}
+	must("branch", "fleet/run")
+	older := must("rev-parse", "fleet/run")
+	must("pack-refs", "--all")
+	newer := must("commit-tree", "-p", older, "-m", "newer", older+"^{tree}")
+	must("update-ref", "refs/heads/fleet/run", newer)
+	packed := filepath.Join(root, ".git", "packed-refs")
+
+	var packErr error
+	afterPackedRewrite = func() {
+		_, packErr = gitIn("pack-refs", "--all")
+		f, err := os.OpenFile(packed, os.O_APPEND|os.O_WRONLY, 0)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		_, _ = f.WriteString(newer + " refs/heads/fleet/run\n")
+		_ = f.Close()
+	}
+	t.Cleanup(func() { afterPackedRewrite = nil })
+	if err := DeleteBranch(ctx, root, "fleet/run"); err != nil {
+		t.Fatalf("DeleteBranch: %v", err)
+	}
+	afterPackedRewrite = nil
+	if packErr == nil {
+		t.Error("git pack-refs ran while DeleteBranch held packed-refs.lock")
+	}
+	if b, _ := os.ReadFile(packed); strings.Contains(string(b), "refs/heads/fleet/run") {
+		t.Errorf("packed-refs still names the branch:\n%s", b)
+	}
+	if out, err := gitIn("rev-parse", "--verify", "--quiet", "refs/heads/fleet/run"); err == nil {
+		t.Errorf("the branch still resolves: %s", out)
+	}
+	for _, p := range []string{"packed-refs.lock", filepath.Join("refs", "heads", "fleet", "run.lock")} {
+		if _, err := os.Lstat(filepath.Join(root, ".git", p)); !os.IsNotExist(err) {
+			t.Errorf("%s left behind (lstat err %v)", p, err)
+		}
+	}
+
+	// A held ref lock: nothing is removed.
+	must("branch", "fleet/held")
+	refLock := filepath.Join(root, ".git", "refs", "heads", "fleet", "held.lock")
+	if err := os.WriteFile(refLock, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := DeleteBranch(ctx, root, "fleet/held"); err == nil || !strings.Contains(err.Error(), "nothing was removed") {
+		t.Errorf("with the ref lock held: err = %v, want a refusal that removed nothing", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".git", "refs", "heads", "fleet", "held")); err != nil {
+		t.Errorf("the branch was removed while its lock was held: %v", err)
+	}
+	if _, err := os.Stat(refLock); err != nil {
+		t.Errorf("someone else's ref lock was removed: %v", err)
+	}
+}

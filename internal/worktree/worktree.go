@@ -351,19 +351,25 @@ func PrepareRepoAtStartup(ctx context.Context, root string) error {
 // would make it unlink elsewhere. Here every directory on the way is opened
 // without following a link (tools.OpenWorkspaceDir) and the entry is removed
 // relative to that opened directory, so nothing outside it is touched.
-// packed-refs sits in .git itself, which no sandbox can write, so it is
-// rewritten in place under git's packed-refs.lock. The repository must be
-// the one recorded at startup.
+// packed-refs sits in .git itself, which no sandbox can write. The
+// repository must be the one recorded at startup.
 //
-// The order never shows an older value of the branch. packed-refs.lock is
-// taken first; if it cannot be (another writer holds it past
-// packedRefsLockWait), nothing is removed and the error says so. With the
-// lock held, the packed line goes first (the rewritten file replaces
-// packed-refs, which releases the lock), and only then the loose ref and
-// its reflog: while a loose ref exists it is what git reads, so removing it
-// before the packed line would expose the older packed value. When nothing
-// is packed for the branch, the loose ref and reflog are removed while the
-// lock is still held.
+// It follows git's own delete protocol, so the branch never reads as an
+// older value and is not packed again behind its back:
+//
+//  1. take the loose ref's lock, refs/heads/<branch>.lock (O_EXCL, in its
+//     directory opened without following a link), then packed-refs.lock;
+//     when either is held by someone else, nothing is removed and the error
+//     says so;
+//  2. holding both, rewrite packed-refs without the branch (a new file
+//     renamed over it — packed-refs.lock stays held, as git keeps it), then
+//     unlink the loose ref and its reflog: while a loose ref exists git
+//     reads it, so the packed line goes first, and while packed-refs.lock
+//     is held no `git pack-refs` can copy the loose ref back;
+//  3. release the locks, then check packed-refs once more under its lock and
+//     drop the branch's line if it is there again (with no loose ref left,
+//     nothing can repack it). If that lock cannot be taken, the error says
+//     the branch may still be listed in packed-refs.
 func DeleteBranch(ctx context.Context, root, branch string) error {
 	clean := filepath.Clean(branch)
 	if clean == "." || !filepath.IsLocal(clean) || strings.ContainsAny(branch, "\x00\n") {
@@ -377,51 +383,94 @@ func DeleteBranch(ctx context.Context, root, branch string) error {
 		return err
 	}
 	defer gitDir.Close()
-	lock, err := takePackedRefsLock(ctx, gitDir.Root)
+	ref := "refs/heads/" + filepath.ToSlash(clean)
+	if err := deleteBranchLocked(ctx, root, gitDir.Root, clean, ref); err != nil {
+		return err
+	}
+	var lastErr error
+	for range 2 {
+		again, err := dropPackedRefAgain(ctx, gitDir.Root, ref)
+		if err == nil && !again {
+			return nil
+		}
+		lastErr = err
+	}
+	if lastErr != nil {
+		return fmt.Errorf("delete branch %s: the loose ref is gone, but %s may still be listed in packed-refs: %w", branch, ref, lastErr)
+	}
+	return fmt.Errorf("delete branch %s: %s keeps reappearing in packed-refs", branch, ref)
+}
+
+// afterPackedRewrite, when set (tests only), runs in DeleteBranch between
+// the packed-refs rewrite and the loose ref's removal.
+var afterPackedRewrite func()
+
+// deleteBranchLocked is steps 1 and 2 of DeleteBranch.
+func deleteBranchLocked(ctx context.Context, root string, gitDir *os.Root, branch, ref string) error {
+	refDir, err := tools.OpenWorkspaceDir(ctx, root, filepath.Join(root, ".git", "refs", "heads", filepath.Dir(branch)))
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		refDir = nil // no loose ref can exist; nothing to lock
+	case err != nil:
+		return err
+	}
+	if refDir != nil {
+		defer refDir.Close()
+		refLock, err := refDir.OpenFile(filepath.Base(branch)+".lock", os.O_CREATE|os.O_EXCL|os.O_WRONLY|syscall.O_NOFOLLOW, 0o644)
+		if err != nil {
+			return fmt.Errorf("delete branch %s: lock %s: %w; nothing was removed", branch, ref, err)
+		}
+		_ = refLock.Close()
+		defer func() { _ = refDir.Remove(filepath.Base(branch) + ".lock") }()
+	}
+	lock, err := takePackedRefsLock(ctx, gitDir)
 	if err != nil {
 		return fmt.Errorf("delete branch %s: %w; nothing was removed", branch, err)
 	}
-	held := true
-	release := func() {
-		if held {
-			_ = lock.Close()
-			_ = gitDir.Remove("packed-refs.lock")
-			held = false
-		}
-	}
-	defer release()
-	replaced, err := dropPackedRef(gitDir.Root, lock, "refs/heads/"+filepath.ToSlash(clean))
-	if err != nil {
+	_ = lock.Close()
+	defer func() { _ = gitDir.Remove("packed-refs.lock") }()
+	if _, err := dropPackedRef(gitDir, ref); err != nil {
 		return fmt.Errorf("delete branch %s: packed-refs: %w; nothing was removed", branch, err)
 	}
-	if replaced {
-		held = false // the lock file is packed-refs now
+	if afterPackedRewrite != nil {
+		afterPackedRewrite()
 	}
-	errs := removeLooseRef(ctx, root, clean)
-	release()
-	return errors.Join(errs...)
+	if refDir != nil {
+		if err := refDir.Remove(filepath.Base(branch)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("delete branch %s: %w", branch, err)
+		}
+	}
+	return errors.Join(removeReflog(ctx, root, branch)...)
 }
 
-// removeLooseRef removes refs/heads/<branch> and logs/refs/heads/<branch>,
-// each relative to its directory opened without following a link.
-func removeLooseRef(ctx context.Context, root, branch string) []error {
-	var errs []error
-	for _, base := range []string{filepath.Join(".git", "refs", "heads"), filepath.Join(".git", "logs", "refs", "heads")} {
-		dir := filepath.Join(root, base, filepath.Dir(branch))
-		d, err := tools.OpenWorkspaceDir(ctx, root, dir)
-		if errors.Is(err, fs.ErrNotExist) {
-			continue
-		}
-		if err != nil {
-			errs = append(errs, err)
-			continue
-		}
-		if rmErr := d.Remove(filepath.Base(branch)); rmErr != nil && !errors.Is(rmErr, fs.ErrNotExist) {
-			errs = append(errs, rmErr)
-		}
-		_ = d.Close()
+// dropPackedRefAgain is DeleteBranch's step 3: under packed-refs.lock, drop
+// ref's line if it is listed again. It reports whether it had to.
+func dropPackedRefAgain(ctx context.Context, gitDir *os.Root, ref string) (bool, error) {
+	lock, err := takePackedRefsLock(ctx, gitDir)
+	if err != nil {
+		return false, err
 	}
-	return errs
+	_ = lock.Close()
+	defer func() { _ = gitDir.Remove("packed-refs.lock") }()
+	return dropPackedRef(gitDir, ref)
+}
+
+// removeReflog removes logs/refs/heads/<branch>, relative to its directory
+// opened without following a link.
+func removeReflog(ctx context.Context, root, branch string) []error {
+	dir := filepath.Join(root, ".git", "logs", "refs", "heads", filepath.Dir(branch))
+	d, err := tools.OpenWorkspaceDir(ctx, root, dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return []error{err}
+	}
+	defer d.Close()
+	if err := d.Remove(filepath.Base(branch)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return []error{err}
+	}
+	return nil
 }
 
 // packedRefsLockWait bounds how long DeleteBranch waits for another
@@ -429,12 +478,13 @@ func removeLooseRef(ctx context.Context, root, branch string) []error {
 var packedRefsLockWait = time.Second
 
 // dropPackedRef removes ref (and its peeled line) from .git/packed-refs, if
-// listed, with packed-refs.lock already held through lock (DeleteBranch);
-// it reads the file only now, so an operator's `git pack-refs` or a
-// concurrent cleanup cannot slip a write in between (and have it undone).
-// It reports whether it replaced packed-refs with the rewritten lock file,
-// which releases the lock; when ref is not listed it writes nothing.
-func dropPackedRef(gitDir *os.Root, lock *os.File, ref string) (bool, error) {
+// listed, with packed-refs.lock already held by the caller; it reads the
+// file only now, so an operator's `git pack-refs` or a concurrent cleanup
+// cannot slip a write in between (and have it undone). The new contents go
+// to a file of their own, synced and with the old file's permissions, that
+// is renamed over packed-refs, so the lock stays held, as git keeps it. It
+// reports whether ref was listed.
+func dropPackedRef(gitDir *os.Root, ref string) (bool, error) {
 	data, err := readRegularNoFollow(gitDir, "packed-refs", 256<<20)
 	if errors.Is(err, fs.ErrNotExist) {
 		return false, nil
@@ -464,23 +514,36 @@ func dropPackedRef(gitDir *os.Root, lock *os.File, ref string) (bool, error) {
 	if !dropped {
 		return false, nil
 	}
+	tmpName := fmt.Sprintf("packed-refs.%d.new", time.Now().UnixNano())
+	tmp, err := gitDir.OpenFile(tmpName, os.O_CREATE|os.O_EXCL|os.O_WRONLY|syscall.O_NOFOLLOW, info.Mode().Perm())
+	if err != nil {
+		return false, err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tmp.Close()
+			_ = gitDir.Remove(tmpName)
+		}
+	}()
 	// The new file keeps the old one's permissions and is on disk before it
 	// replaces it, so a crash leaves either the old file or the new one.
-	if err := lock.Chmod(info.Mode().Perm()); err != nil {
+	if err := tmp.Chmod(info.Mode().Perm()); err != nil {
 		return false, err
 	}
-	if _, err := lock.WriteString(strings.Join(kept, "")); err != nil {
+	if _, err := tmp.WriteString(strings.Join(kept, "")); err != nil {
 		return false, err
 	}
-	if err := lock.Sync(); err != nil {
+	if err := tmp.Sync(); err != nil {
 		return false, err
 	}
-	if err := lock.Close(); err != nil {
+	if err := tmp.Close(); err != nil {
 		return false, err
 	}
-	if err := gitDir.Rename("packed-refs.lock", "packed-refs"); err != nil {
+	if err := gitDir.Rename(tmpName, "packed-refs"); err != nil {
 		return false, err
 	}
+	committed = true
 	return true, nil
 }
 
