@@ -193,19 +193,6 @@ func (s *Server) handlePatrols(w http.ResponseWriter, r *http.Request) {
 			break // no more rows
 		}
 	}
-	// Which of the caller's patrols are being skipped behind an approval
-	// card. Display data: a failed read leaves the rows unmarked.
-	ids := make([]string, 0, len(out))
-	for i := range out {
-		if out[i].Status == store.ChatScheduleStatusActive {
-			ids = append(ids, out[i].ID)
-		}
-	}
-	if skips, err := s.store.PatrolSkips(r.Context(), ids); err == nil {
-		for i := range out {
-			out[i].Skipped = skips[out[i].ID]
-		}
-	}
 	// Teammates' patrols, in chats shared with the caller. The store reads
 	// them from the same set of chats the sidebar lists as shared
 	// (ListSharedAndMultiplayerConversations), so nothing is listed here that
@@ -285,11 +272,6 @@ func (s *Server) handlePatrolByID(w http.ResponseWriter, r *http.Request) {
 	if !allowed {
 		http.Error(w, "patrol not found", http.StatusNotFound)
 		return
-	}
-	if p.Mine && p.Status == store.ChatScheduleStatusActive {
-		if skips, err := s.store.PatrolSkips(r.Context(), []string{p.ID}); err == nil {
-			p.Skipped = skips[p.ID]
-		}
 	}
 	runs, err := s.store.ListPatrolRuns(r.Context(), p.ID, store.MaxPatrolRuns)
 	if err != nil {

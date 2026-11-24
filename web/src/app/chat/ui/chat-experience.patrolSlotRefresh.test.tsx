@@ -5,9 +5,10 @@ import { clearChatSession } from "./chatSessionStore";
 import type { ChatSchedule } from "./history";
 import { withoutHistoryWindow } from "./historyWindow.testing";
 
-// A scheduled patrol run skipped for a waiting approval card queues no turn,
-// so nothing streams to the open chat. The page re-reads the schedules once
-// the patrol's slot has passed, and the bar's "Patrol on hold" note appears.
+// A scheduled patrol run that is turned away (the previous run still going,
+// a full queue) queues no turn, so nothing streams to the open chat. The page
+// re-reads the schedules once the patrol's slot has passed, and the bar's
+// countdown moves on to the next slot instead of sticking at "due now".
 
 const CONVS: ConversationSummary[] = [
   { id: "conv-a", title: "Patrol chat", persona: "assistant", model: "vendor/one", pinned: false, updated_at: 1767225600 },
@@ -34,10 +35,7 @@ function mockBackend(nowSec: number) {
   // The slot passed 19s ago, so the re-read is due one second after the page
   // works out the wait (the clock is held still below).
   const before = patrol({ next_run_at: nowSec - 19 });
-  const after = patrol({
-    next_run_at: nowSec + 7200,
-    skipped: { reason: "approval_pending", count: 1, slots: [nowSec - 19] },
-  });
+  const after = patrol({ next_run_at: nowSec + 7200 });
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = withoutHistoryWindow(String(input));
     if (init?.method && init.method !== "GET") return json({}, 500);
@@ -76,8 +74,8 @@ afterEach(() => {
   window.history.replaceState(null, "", "/");
 });
 
-describe("Patrol on hold", () => {
-  it("re-reads the schedules after a slot passes and shows the skipped-run note", async () => {
+describe("Patrol bar after a slot passes", () => {
+  it("re-reads the schedules and counts down to the next slot", async () => {
     // The page waits until 20s after the slot, measured from Date.now() when
     // its effect runs, and falls back to a 60s re-read if that moment has
     // already passed. With a running clock the test had under a second to boot
@@ -90,13 +88,13 @@ describe("Patrol on hold", () => {
     const fetchMock = mockBackend(nowSec);
     render(<ChatExperience initialUserEmail="user@example.com" />);
 
-    await screen.findByTestId("patrol-banner");
-    expect(screen.queryByTestId("patrol-skipped-note")).toBeNull();
+    const bar = await screen.findByTestId("patrol-banner");
+    expect(bar.textContent).toContain("due now");
 
-    await waitFor(
-      () => expect(screen.getByTestId("patrol-skipped-note").textContent).toContain("Patrol on hold"),
-      { timeout: 4000 },
-    );
+    await waitFor(() => expect(screen.getByTestId("patrol-banner").textContent).toContain("in 2h"), {
+      timeout: 4000,
+    });
+    expect(screen.getByTestId("patrol-banner").textContent).not.toContain("due now");
     expect(
       fetchMock.mock.calls.some(([u]) => String(u) === "/api/conversations/conv-a/schedules"),
     ).toBe(true);

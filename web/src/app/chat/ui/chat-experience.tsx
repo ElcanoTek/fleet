@@ -129,7 +129,6 @@ import {
   formatCountdown,
   liveSchedules,
 } from "./PatrolBanner";
-import { countPatrolBlockingApprovals } from "./PatrolSkippedNote";
 import { PatrolsDialog, type CreatePatrolInput } from "./PatrolsDialog";
 import { readPatrolBarHidden, writePatrolBarHidden } from "./patrolBarPrefs";
 import { ProjectsModal, type Project } from "./ProjectsModal";
@@ -6989,12 +6988,11 @@ export function ChatExperience({
     return () => window.clearInterval(id);
   }, [activeConversationId, activePatrolCount, isStreaming, attachedConvIdsRef]);
 
-  // A scheduled run that cannot start — an approval card waiting on the
-  // owner, say — is skipped without a turn, so nothing streams to this tab
-  // and the poll above sees nothing. Re-read the schedules once the next
-  // active slot has passed, so the bar's countdown moves on and its
-  // "Patrol on hold" note (schedule.skipped) appears, and again just after
-  // the last waiting card is answered, so the note goes.
+  // A scheduled run that cannot start (the previous run is still going, or
+  // the chat's queue is full) is skipped without a turn, so nothing streams
+  // to this tab and the poll above sees nothing. Re-read the schedules once
+  // the next active slot has passed, so the bar's countdown moves on to the
+  // slot after it instead of sticking at "due now".
   const queuePatrolCallRef = useRef(queuePatrolCall);
   queuePatrolCallRef.current = queuePatrolCall;
   const applyScheduleResponseRef = useRef(applyScheduleResponse);
@@ -7028,27 +7026,6 @@ export function ChatExperience({
     );
     return () => window.clearTimeout(id);
   }, [activeConversationId, nextPatrolSlotAt, scheduleRefreshTick, refreshSchedules]);
-  // Only the cards that hold a patrol count here: an email preview and a
-  // model suggestion never do (store.patrolNonBlockingApprovalTools), so one
-  // left pending must not keep a settled hold's note on screen.
-  const pendingBlockingApprovalCount = useMemo(
-    () => countPatrolBlockingApprovals(messages),
-    [messages],
-  );
-  const prevBlockingApprovalsRef = useRef(pendingBlockingApprovalCount);
-  const anySkipped = activeSchedules.some((s) => s.skipped);
-  useEffect(() => {
-    const prev = prevBlockingApprovalsRef.current;
-    prevBlockingApprovalsRef.current = pendingBlockingApprovalCount;
-    const convId = activeConversationId;
-    if (!convId || isPendingKey(convId) || !anySkipped) return;
-    // Any blocking card answered: the server decides whether a hold remains.
-    if (!(pendingBlockingApprovalCount < prev)) return;
-    // A short delay lets the server record the decision first. Not cleared
-    // on a re-render: the transition happens once, and a late re-read of a
-    // chat's schedules is harmless.
-    window.setTimeout(() => refreshSchedules(convId), 1500);
-  }, [activeConversationId, pendingBlockingApprovalCount, anySkipped, refreshSchedules]);
 
   // Latest-callback refs for the two mount-once effects below. reattachToConv
   // and loadConversation are mutually recursive, so neither can be expressed

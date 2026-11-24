@@ -57,9 +57,9 @@ const (
 	// does not count and is not recorded; Run now answers it as
 	// ErrChatScheduleFiring.
 	ChatScheduleCoalesced ChatScheduleOutcome = "coalesced"
-	// ChatScheduleBusy: a scheduled fire found a patrol in flight, an approval
-	// waiting on the owner or a full input queue. The slot is skipped;
-	// Delivery.Reason (and the run history's reason) says which.
+	// ChatScheduleBusy: a scheduled fire found a patrol in flight or a full
+	// input queue. The slot is skipped; Delivery.Reason (and the run
+	// history's reason) says which.
 	ChatScheduleBusy ChatScheduleOutcome = "busy"
 	// ChatScheduleGone: the conversation was deleted or the owner can no
 	// longer use it. The schedule is cancelled.
@@ -86,15 +86,16 @@ const (
 )
 
 // Why a scheduled fire was busy (ChatScheduleDelivery.Reason, recorded as
-// sched.chat_schedule_runs.reason). The chat UI tells the owner when a
-// patrol's slots are being skipped for an approval card they have not
-// answered (store.ChatSchedule.Skipped); the other two are recorded for the
-// run history only.
+// sched.chat_schedule_runs.reason and shown in a patrol's Recent runs).
 const (
 	// ChatScheduleBusyPatrolInFlight: an earlier patrol turn of the owner's
 	// is still queued or running in the conversation.
 	ChatScheduleBusyPatrolInFlight = "patrol_in_flight"
-	// ChatScheduleBusyApprovalPending: an approval card waits on the owner.
+	// ChatScheduleBusyApprovalPending: an approval card was waiting on the
+	// owner. No delivery returns it any more (ADR-0120: a waiting card does
+	// not hold a scheduled run); it stays because run-history rows recorded
+	// before that carry it (and 0203's CHECK allows it), and Recent runs
+	// still reads them.
 	ChatScheduleBusyApprovalPending = "approval_pending"
 	// ChatScheduleBusyQueueFull: the conversation's input queue is full. (A
 	// manual fire meeting a full queue is rejected with the same reason.)

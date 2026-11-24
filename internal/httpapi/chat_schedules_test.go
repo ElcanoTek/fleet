@@ -340,69 +340,6 @@ func TestChatScheduleRoutes_AndPatrolDrain(t *testing.T) {
 	}
 }
 
-// GET /conversations/{id}/schedules carries a patrol's skipped-for-approval
-// slots as `skipped` (the web's Patrol bar reads it), and omits the key when
-// nothing was skipped.
-func TestChatScheduleList_CarriesSkippedForApproval(t *testing.T) {
-	t.Parallel()
-
-	st := newScheduleFakeStore()
-	srv := newDefaultChatServer(t, &patrolRecordingEngine{}, st)
-	defer srv.StopBackground()
-	h := srv.Routes()
-	const user = "trader@elcanotek.com"
-	conv, err := st.CreateConversation(context.Background(), user, "Patrol", "victoria", "", false)
-	if err != nil {
-		t.Fatalf("CreateConversation: %v", err)
-	}
-	held, err := st.CreateChatSchedule(context.Background(), store.ChatScheduleInput{
-		ConversationID: conv.ID, UserEmail: user, Title: "Held", Prompt: "Check.", CronExpr: "0 */2 * * *", Timezone: "UTC",
-	})
-	if err != nil {
-		t.Fatalf("CreateChatSchedule: %v", err)
-	}
-	st.mu.Lock()
-	sc := st.schedules[held.ID]
-	sc.Skipped = &store.ChatScheduleSkipped{Reason: models.ChatScheduleBusyApprovalPending, Count: 3, Slots: []int64{1795536000, 1795543200, 1795550400}}
-	st.schedules[held.ID] = sc
-	st.mu.Unlock()
-
-	req := httptest.NewRequest(http.MethodGet, "/conversations/"+conv.ID+"/schedules", nil)
-	req = req.WithContext(asUser(req.Context(), user))
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("GET /schedules status = %d, body = %s", rec.Code, rec.Body.String())
-	}
-	var resp struct {
-		Schedules []map[string]json.RawMessage `json:"schedules"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil || len(resp.Schedules) != 1 {
-		t.Fatalf("GET /schedules body = %s (%v)", rec.Body.String(), err)
-	}
-	var skipped struct {
-		Reason string  `json:"reason"`
-		Count  int     `json:"count"`
-		Slots  []int64 `json:"slots"`
-	}
-	if err := json.Unmarshal(resp.Schedules[0]["skipped"], &skipped); err != nil {
-		t.Fatalf("skipped = %s: %v", resp.Schedules[0]["skipped"], err)
-	}
-	if skipped.Reason != "approval_pending" || skipped.Count != 3 || len(skipped.Slots) != 3 || skipped.Slots[0] != 1795536000 {
-		t.Fatalf("skipped = %+v; want the three slots skipped for approval", skipped)
-	}
-
-	st.mu.Lock()
-	sc.Skipped = nil
-	st.schedules[held.ID] = sc
-	st.mu.Unlock()
-	rec = httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	if strings.Contains(rec.Body.String(), `"skipped"`) {
-		t.Fatalf("GET /schedules body = %s; want no skipped key when nothing was skipped", rec.Body.String())
-	}
-}
-
 func TestChatPatrolTool_InvokedInsideTurn(t *testing.T) {
 	t.Parallel()
 

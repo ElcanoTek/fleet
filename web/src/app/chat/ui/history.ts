@@ -1360,20 +1360,6 @@ export type ChatSchedule = {
   max_runs?: number;
   created_at?: number;
   updated_at?: number;
-  /** Set on an active patrol whose latest scheduled runs were skipped
-   *  because an approval card is still waiting on its owner. */
-  skipped?: ChatScheduleSkipped;
-};
-
-/** A patrol's latest run of skipped slots (the server's `skipped`). */
-export type ChatScheduleSkipped = {
-  /** Why: "approval_pending" (an approval card waits on the owner). */
-  reason: string;
-  /** How many slots in a row were skipped. */
-  count: number;
-  /** The skipped slots (Unix seconds), oldest first; at most the newest
-   *  few when count is larger. */
-  slots: number[];
 };
 
 export function historyToMessages(entries: HistoryEntry[]): Message[] {
