@@ -265,7 +265,7 @@
   "Account groups": "Grupos de contas",
   "{0} (account {1})": "{0} (conta {1})",
   "Not set up here: {0}.": "Não configurado aqui: {0}.",
-  "{0} already runs as {1} accounts, the most one chat can use.": "{0} já usa {1} contas, o máximo que um chat admite.",
+  "This would put {0} past {1} accounts, the most one chat can use.": "Isto faria {0} ultrapassar as {1} contas, o máximo que um chat admite.",
   "(default account)": "(conta predefinida)",
   "Accounts for this chat": "Contas para este chat",
   "Accounts for {0}": "Contas para {0}",

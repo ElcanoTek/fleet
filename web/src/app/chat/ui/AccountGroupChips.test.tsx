@@ -88,6 +88,26 @@ describe("AccountGroupChips", () => {
     expect(onApply).not.toHaveBeenCalled();
   });
 
+  it("says a group would pass the account cap, without claiming the connector is already full", () => {
+    const five = [
+      { name: "ix", display_name: "Index Exchange", enabled: true, accounts: ["a", "b", "c", "d", "e", "f", "g"], account: "a", selected_accounts: ["a", "b", "c", "d", "e"] },
+    ];
+    const capped: AccountGroups = {
+      label: "Clients",
+      groups: [
+        { id: "five", name: "Five", accounts: ["a", "b", "c", "d", "e"].map((account) => ({ server: "ix", account })) },
+        { id: "two", name: "Two more", accounts: [{ server: "ix", account: "f" }, { server: "ix", account: "g" }] },
+      ],
+    };
+    const onApply = vi.fn();
+    render(<AccountGroupChips accountGroups={capped} rows={five} query="" appName="Elcano" onApply={onApply} />);
+    const two = screen.getByRole("button", { name: /Two more/ });
+    expect(two).toHaveAttribute("aria-disabled", "true");
+    expect(two).toHaveAttribute("title", "This would put Index Exchange past 6 accounts, the most one chat can use.");
+    fireEvent.click(two);
+    expect(onApply).not.toHaveBeenCalled();
+  });
+
   it("filters with the picker's search and uses a generic heading when the bundle gives none", () => {
     render(
       <AccountGroupChips

@@ -57,7 +57,7 @@ function chipNote(
   }
   if (block?.reason === "cap") {
     notes.push(
-      tr("{0} already runs as {1} accounts, the most one chat can use.", [
+      tr("This would put {0} past {1} accounts, the most one chat can use.", [
         name(block.server),
         MAX_ACCOUNTS_PER_CONNECTOR,
       ]),
