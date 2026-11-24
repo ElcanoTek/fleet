@@ -222,9 +222,13 @@ func RunInteractiveTurn(ctx context.Context, tc TurnConfig, obs agentcore.Observ
 		PersonaName:         tc.Persona,
 		PersonaPolicy:       tc.PersonaPolicy,
 		HiddenToolSuffixes:  tc.HiddenToolSuffixes,
-		ThinkingConfig:      tc.ThinkingConfig,
-		RuntimeDateInInput:  tc.RuntimeDateInMessages,
-		EnableResendBudget:  tc.EnableResendBudget,
+		// A chat that runs a connector as several accounts is told which
+		// accounts have tools (agentcore/multi_account.go). A selection
+		// with one account per server adds nothing to the prompt.
+		MultiAccountNotice: true,
+		ThinkingConfig:     tc.ThinkingConfig,
+		RuntimeDateInInput: tc.RuntimeDateInMessages,
+		EnableResendBudget: tc.EnableResendBudget,
 	}
 	return agentcore.Run(ctx, agentcore.ModeInteractive, cfg, deps)
 }

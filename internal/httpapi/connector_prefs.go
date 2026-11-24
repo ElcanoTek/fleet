@@ -132,31 +132,37 @@ func bundledPrefFor(prefs map[string]store.ConnectorPref, info agent.OptionalSer
 	return p.Enabled, p.Enabled && p.AutoEnable, seat
 }
 
-// bundledTurnAccounts resolves the accounts a bundled connector runs as in one
-// conversation: the conversation's own choice (#988, a single account or a
-// list, docs/MULTI-ACCOUNT-CHATS.md) checked against the live catalog, with ""
-// in the choice standing for prefSeat, the user's connections-page default
-// ("" again when they have none: the deployment's own account). The result is
-// never empty and never repeats an account; its first entry is the account
-// every single-account path has always used.
+// bundledChosenAccounts reads a bundled connector's stored account choice
+// (#988, a single account or a list, docs/MULTI-ACCOUNT-CHATS.md) against the
+// live catalog and the user's connections-page default, prefSeat. The result
+// is the choice as it stands NOW, with "" still standing for "my default": it
+// is what the picker shows and, with "" filled in, what the turn binds, so the
+// two cannot disagree. Never empty, never a repeat.
 //
-// A named account that is no longer provisioned is left out, the same posture
-// as a stale pref, and a choice with nothing left falls back to the default
-// account, so the turn still runs. The list is also cut to the cap here, in
-// case a row was written by something other than cleanMCPAccounts.
-func bundledTurnAccounts(info agent.OptionalServerInfo, override, prefSeat string) []string {
+//   - A named account that is no longer provisioned is left out, the same
+//     posture as a stale pref.
+//   - "" beside the account that IS the user's default names one account
+//     twice; the name is kept and "" dropped.
+//   - A choice with nothing left is the default account, so the turn still
+//     runs.
+//   - The list is cut to the cap, in case a row was written by something
+//     other than cleanMCPAccounts.
+func bundledChosenAccounts(info agent.OptionalServerInfo, override, prefSeat string) []string {
 	override = strings.TrimSpace(override)
 	// The whole value is one provisioned account: the shape every row had
 	// before lists existed.
 	if override != "" && slices.Contains(info.Accounts, override) {
 		return []string{override}
 	}
+	stored := store.SplitMCPAccounts(override)
+	defaultNamed := prefSeat != "" && slices.Contains(stored, prefSeat) && slices.Contains(info.Accounts, prefSeat)
 	out := make([]string, 0, 1)
 	seen := map[string]bool{}
-	for _, a := range store.SplitMCPAccounts(override) {
-		if a == "" {
-			a = prefSeat
-		} else if !slices.Contains(info.Accounts, a) {
+	for _, a := range stored {
+		switch {
+		case a == "" && defaultNamed:
+			continue
+		case a != "" && !slices.Contains(info.Accounts, a):
 			continue
 		}
 		if seen[a] || len(out) >= store.MaxMCPAccountsPerConnector {
@@ -166,9 +172,23 @@ func bundledTurnAccounts(info agent.OptionalServerInfo, override, prefSeat strin
 		out = append(out, a)
 	}
 	if len(out) == 0 {
-		return []string{prefSeat}
+		return []string{""}
 	}
 	return out
+}
+
+// bundledTurnAccounts resolves the accounts a bundled connector runs as in one
+// conversation: bundledChosenAccounts with "" filled in by prefSeat ("" again
+// when the user has no default: the deployment's own account). Its first entry
+// is the account every single-account path has always used.
+func bundledTurnAccounts(info agent.OptionalServerInfo, override, prefSeat string) []string {
+	chosen := bundledChosenAccounts(info, override, prefSeat)
+	for i, a := range chosen {
+		if a == "" {
+			chosen[i] = prefSeat
+		}
+	}
+	return chosen
 }
 
 // applyConnectorPrefs filters a conversation's opted-in bundled servers by the

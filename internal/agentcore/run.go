@@ -101,6 +101,15 @@ type RunConfig struct {
 	// the policy gate. Like PersonaPolicy it only SUBTRACTS. Driver-supplied
 	// data, not a Mode branch (see TestSeamPurity). nil = no narrowing.
 	HiddenToolSuffixes []string
+	// MultiAccountNotice asks Run to tell the model when Selection names one
+	// server under more than one account (multi_account.go,
+	// docs/MULTI-ACCOUNT-CHATS.md): which accounts have tools and how to
+	// treat them. The interactive driver sets it; its rules ("ask the user
+	// which account") have no one to ask in an unattended run, so the
+	// scheduled driver leaves it false and a task that pins several accounts
+	// reads the prompt it always did. Driver-supplied data, not a Mode
+	// branch (see TestSeamPurity).
+	MultiAccountNotice bool
 	// IncludeConfirmAudit appends the scheduled confirm_audit tool.
 	IncludeConfirmAudit bool
 	// RequireCompactionOptIn gates proactive context compaction (#209) behind the
@@ -619,7 +628,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 	// prefix accounting, the finalize seam, terminal structured output) uses
 	// this augmented form, so what the model was told and what it was offered
 	// never diverge.
-	systemPrompt := withLiveRegistry(basePrompt, roster)
+	systemPrompt := withRosterSections(basePrompt, roster, cfg)
 	eng.setModelContextPrefix(systemPrompt, fantasyTools)
 
 	buildAgent := func(m fantasy.LanguageModel) fantasy.Agent {
@@ -692,7 +701,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 			}
 			// The roster changed, so the section describing it is re-derived
 			// from the base — never appended a second time.
-			systemPrompt = withLiveRegistry(basePrompt, roster)
+			systemPrompt = withRosterSections(basePrompt, roster, cfg)
 			eng.setModelContextPrefix(systemPrompt, fantasyTools)
 			agent = buildAgent(activeModel)
 			if deps.ClearMCPDirty != nil {

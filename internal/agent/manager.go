@@ -2087,9 +2087,6 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 	if enableConnectorsWired {
 		hosted.availableOptional = in.AvailableOptionalMCPServers
 	}
-	// From the scope's own catalog, not the request: an account that failed to
-	// connect while its siblings came up must not be described as callable.
-	hosted.multiAccount = multiAccountConnectors(in.OptionalMCPServersEnabled, in.MCPAccountDefaults, in.MCPExtraAccounts, turnCatalog)
 	systemPrompt, err := m.composeTurnSystemPrompt(ctx, in, persona, hosted, hiddenTools)
 	if err != nil {
 		return nil, err

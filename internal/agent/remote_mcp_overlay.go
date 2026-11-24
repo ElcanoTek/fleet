@@ -827,11 +827,6 @@ type hostedMCPRoster struct {
 	// connected optional MCP connectors (bundled + remote) supplied by httpapi.
 	// When nil, buildSystemPrompt falls back to m.MCPServerCatalog().
 	availableOptional []OptionalServerInfo
-	// multiAccount are the bundled connectors this turn runs as more than one
-	// account (docs/MULTI-ACCOUNT-CHATS.md). Not a hosted-overlay fact, but the
-	// same kind: something the turn knows and the tool roster cannot say. nil
-	// for a turn with one account per connector.
-	multiAccount []connectorAccounts
 }
 
 // skippedConnector is one entry of hostedMCPRoster.skipped.

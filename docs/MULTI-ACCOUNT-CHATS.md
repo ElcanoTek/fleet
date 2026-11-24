@@ -64,14 +64,21 @@ never runs on a different client's account.
   a list for several.
 - `GET /conversations/{id}/mcp-servers`: a row's `account` is the first
   account, as before, and a row on several accounts also carries
-  `selected_accounts`. A row on one account has no such key.
+  `selected_accounts`. A row on one account has no such key. A stored list is
+  read against the live catalog the way the turn reads it
+  (`bundledChosenAccounts`): an account since removed from the box is not
+  listed, so the picker shows what the next turn will run as.
+- `""` beside the account that is the user's own Settings default names one
+  account twice. It is stored, answered and shown as that one account, by
+  name.
 
 ### The turn
 
 `applyConnectorPrefs` resolves each bundled connector's accounts
-(`bundledTurnAccounts`): `""` in the choice is the user's Settings →
-Connections default, a named account that is no longer provisioned is left
-out, and a choice with nothing left falls back to the default. The first
+(`bundledTurnAccounts`, the picker's `bundledChosenAccounts` with `""` filled
+in): `""` in the choice is the user's Settings → Connections default, a named
+account that is no longer provisioned is left out, and a choice with nothing
+left falls back to the default. The first
 account goes where a single account always went (`TurnInput.MCPAccountDefaults`)
 and the rest in `TurnInput.MCPExtraAccounts`. The scope selection and the run
 selection add one `{server, account}` entry per extra account. Everything after
@@ -80,21 +87,32 @@ the approval seat) is the existing per-entry path.
 
 ### What the assistant is told
 
-When a turn has a connector on more than one account, the system prompt gains a
-section, `## Connectors on for several accounts in this chat`
-(`internal/agent/multi_account_prompt.go`), listing each such connector, its
-accounts and their tool-name prefixes, with four rules: a call acts on the one
-account in its tool name and ids do not cross accounts; name the account in
-every answer and before every action; ask when a request does not say which
-account; a change for several accounts is one call and one approval per
-account. It is built from the turn scope's own tool catalog, not from the
-request: an account is a best-effort server and can fail to connect while the
-connector's other accounts come up. Such an account is listed as "NOT
-available this turn" with no tool prefix, and a fifth rule tells the assistant
-to say so and never do its work on another account. The section is sorted and
-has no counters, so it is byte-stable for the same choice and the same
-connections ([PROMPT-CACHE-CONTRACT.md](PROMPT-CACHE-CONTRACT.md)). A turn
-with one account per connector gets no section and an unchanged prompt.
+When a chat turn's selection names a connector under more than one account,
+the system prompt gains a section, `## Connectors on for several accounts in
+this chat`, listing each such connector, its accounts and their tool-name
+prefixes, with four rules: a call acts on the one account in its tool name and
+ids do not cross accounts; name the account in every answer and before every
+action; ask when a request does not say which account; a change for several
+accounts is one call and one approval per account.
+
+`agentcore.Run` writes it, from the roster it actually registered
+(`internal/agentcore/multi_account.go`), just before the live registry and for
+the same reason: only the roster knows what survived. An account is a
+best-effort server and can fail to connect while the connector's other
+accounts come up, and a connected one can lose every tool to the allowlist,
+the persona policy, the schema check or `interactive_hidden_tools`. An account
+with no tool in the roster is listed as "NOT available this turn" with no tool
+prefix, and a fifth rule tells the assistant to say so and never do its work on
+another account. The section is rebuilt with the registry when the roster
+changes mid-run.
+
+It is a pure function of the selection and the roster (connectors sorted, no
+counters), so it is byte-stable for the same choice and the same tools
+([PROMPT-CACHE-CONTRACT.md](PROMPT-CACHE-CONTRACT.md)). The interactive driver
+asks for it (`RunConfig.MultiAccountNotice`); a scheduled run does not, because
+"ask the user which account" has no one to ask, so a task that pins several
+accounts reads the prompt it always did. A turn with one account per connector
+gets no section and an unchanged prompt.
 
 ### The picker
 
@@ -148,5 +166,5 @@ them and its card lists each.
 - The rules for the assistant are instructions, not enforcement. What is
   enforced is that a call can only reach the account whose process exports the
   tool, and that an approval runs on the account it was staged under.
-- When the user's Settings default is a named account, `""` in a list resolves
-  to it; a list that also names that account binds it once.
+- A scheduled task that pins several accounts of one server gets no
+  multi-account section; its prompt is unchanged by this work.

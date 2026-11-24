@@ -74,6 +74,33 @@ func TestBundledTurnAccounts(t *testing.T) {
 	}
 }
 
+// What the picker shows is the stored choice read against the live catalog,
+// with "" still meaning "my default": the same reading the turn makes.
+func TestBundledChosenAccounts(t *testing.T) {
+	t.Parallel()
+	info := agent.OptionalServerInfo{Name: "ix", Accounts: []string{"arena", "twc", "raptive"}}
+	cases := []struct {
+		name, override, pref string
+		want                 []string
+	}{
+		{"no override", "", "twc", []string{""}},
+		{"one account", "arena", "", []string{"arena"}},
+		{"a list keeps the default as the default", ",twc,arena", "", []string{"", "twc", "arena"}},
+		{"a removed account is not shown", "twc,gone,arena", "", []string{"twc", "arena"}},
+		{"a list down to one account is one account", "gone,arena", "", []string{"arena"}},
+		{"nothing left is the default", "gone,older", "raptive", []string{""}},
+		{"the default beside its own name is one account, by name", ",twc,arena", "twc", []string{"twc", "arena"}},
+		{"a default that is no longer provisioned does not hide the default", ",arena", "gone", []string{"", "arena"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := bundledChosenAccounts(info, tc.override, tc.pref); !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("bundledChosenAccounts(%q, pref %q) = %q, want %q", tc.override, tc.pref, got, tc.want)
+			}
+		})
+	}
+}
+
 func multiAccountServer(t *testing.T) (*Server, *fakeChatStore) {
 	t.Helper()
 	fs := newFakeChatStore()
@@ -273,5 +300,49 @@ func TestConversationMCPServersSeveralAccounts(t *testing.T) {
 	// A hosted connection mounts one seat per conversation.
 	if code, body := post(`{"enabled_optional":["github"],"accounts":{"github":["","work"]}}`); code != 400 {
 		t.Fatalf("hosted list: %d %s, want 400", code, body)
+	}
+
+	// An account removed from the box after it was chosen: the picker shows
+	// what the next turn will run as, not the stored list.
+	if err := st.SetConversationMCPAccounts(ctx, user, conv.ID, map[string]string{"gamma": "twc,gone,arena"}); err != nil {
+		t.Fatal(err)
+	}
+	row = gamma()
+	if want := []any{"twc", "arena"}; row["account"] != "twc" || !reflect.DeepEqual(row["selected_accounts"], want) {
+		t.Fatalf("stale member: account = %v, selected_accounts = %#v, want twc and %#v", row["account"], row["selected_accounts"], want)
+	}
+	// Down to one account, the row is a one-account row.
+	if err := st.SetConversationMCPAccounts(ctx, user, conv.ID, map[string]string{"gamma": "gone,arena"}); err != nil {
+		t.Fatal(err)
+	}
+	row = gamma()
+	if _, present := row["selected_accounts"]; row["account"] != "arena" || present {
+		t.Fatalf("one account left: %v", row)
+	}
+
+	// "" beside the account that is the user's own default is one account,
+	// on the way in and on the way out.
+	if err := st.SetConnectorPref(ctx, user, store.ConnectorPref{
+		Kind: store.ConnectorKindBundled, ConnectorID: "gamma", Enabled: true, DefaultAccount: "twc",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	code, body = post(`{"enabled_optional":["gamma"],"accounts":{"gamma":["","twc","arena"]}}`)
+	if code != 200 {
+		t.Fatalf("POST default twice: %d %s", code, body)
+	}
+	if err := json.Unmarshal([]byte(body), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if want := []any{"arena", "twc"}; !reflect.DeepEqual(resp.Accounts["gamma"], want) {
+		t.Fatalf("POST response accounts.gamma = %#v, want %#v", resp.Accounts["gamma"], want)
+	}
+	row = gamma()
+	if want := []any{"arena", "twc"}; !reflect.DeepEqual(row["selected_accounts"], want) {
+		t.Fatalf("selected_accounts = %#v, want %#v", row["selected_accounts"], want)
+	}
+	code, body = post(`{"enabled_optional":["gamma"],"accounts":{"gamma":["","twc"]}}`)
+	if code != 200 || !strings.Contains(body, `"gamma":"twc"`) {
+		t.Fatalf("POST default beside its own name: %d %s, want the one account", code, body)
 	}
 }

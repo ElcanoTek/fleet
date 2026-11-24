@@ -376,7 +376,13 @@ export function seatOptions(c: PickerConnector, appName: string): SeatOption[] {
 export function seatLabel(c: PickerConnector, appName: string): string {
   const opts = seatOptions(c, appName);
   const chosen = selectedAccounts(c);
-  const first = (opts.find((o) => o.value === chosen[0]) ?? opts[0]).label;
+  // The first option that is chosen, in the menu's order. The default
+  // account's own name counts as the default option, which is where the menu
+  // lists it.
+  const def = c.default_account ?? "";
+  const first = (
+    opts.find((o) => chosen.includes(o.value) || (o.value === "" && !!def && chosen.includes(def))) ?? opts[0]
+  ).label;
   return chosen.length > 1 ? tr("{0} +{1}", [first, chosen.length - 1]) : first;
 }
 

@@ -278,6 +278,30 @@ describe("Composer — tools popover seat menu", () => {
     expect(setMcpServerAccount).toHaveBeenCalledWith(null, "ix", ["OMG_USD", "OMG_GBP"]);
   });
 
+  // The server stores the user's default by name when a list holds it. The
+  // menu lists that account once, as its default row, which must read as
+  // ticked and untick the name.
+  it("a default account chosen by name is the default row", async () => {
+    const setMcpServerAccount = vi.fn();
+    const rows = SEATED.map((row) =>
+      row.name === "ix"
+        ? { ...row, default_account: "OMG_USD", account: "OMG_USD", selected_accounts: ["OMG_USD", "OMG_GBP"] }
+        : row,
+    );
+    render(<Host overrides={{ mcpServers: rows, setMcpServerAccount }} />);
+    fireEvent.click(screen.getByRole("button", { name: "Tools" }));
+    const trigger = await screen.findByTestId("mcp-seat-ix");
+    expect(trigger).toHaveTextContent("OMG_USD +1");
+    fireEvent.click(trigger);
+    const options = screen.getAllByRole("option");
+    expect(options.map((o) => [o.textContent, o.getAttribute("aria-selected")])).toEqual([
+      ["OMG_USDDefault", "true"],
+      ["OMG_GBP", "true"],
+    ]);
+    fireEvent.click(options[0]);
+    expect(setMcpServerAccount).toHaveBeenCalledWith(null, "ix", ["OMG_GBP"]);
+  });
+
   it("stops offering accounts at the cap", async () => {
     const setMcpServerAccount = vi.fn();
     const accounts = ["a", "b", "c", "d", "e", "f", "g"];

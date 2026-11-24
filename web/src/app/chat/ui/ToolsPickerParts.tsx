@@ -162,8 +162,15 @@ export function SeatMenu({
   const options = seatOptions(connector, appName);
   const several = allowsSeveralAccounts(connector);
   const chosen = selectedAccounts(connector);
-  const isChosen = (value: string) => chosen.includes(value);
-  const selected = options.find((o) => o.value === chosen[0]) ?? options[0];
+  // The menu lists the user's default account once, as the "" option. A
+  // choice that names that account outright (the server stores the name when
+  // a list holds both) is the same row, so it reads as ticked and a click on
+  // it acts on the name.
+  const namedDefault = connector.default_account ?? "";
+  const stored = (value: string) =>
+    value === "" && namedDefault && !chosen.includes("") && chosen.includes(namedDefault) ? namedDefault : value;
+  const isChosen = (value: string) => chosen.includes(stored(value));
+  const selected = options.find((o) => isChosen(o.value)) ?? options[0];
   const triggerLabel = seatLabel(connector, appName);
   const atCap = chosen.length >= MAX_ACCOUNTS_PER_CONNECTOR;
   const [open, setOpen] = useState(false);
@@ -225,7 +232,8 @@ export function SeatMenu({
   // unticked one once the cap is reached.
   const locked = (value: string) =>
     several && (isChosen(value) ? chosen.length === 1 : atCap);
-  const choose = (value: string) => {
+  const choose = (option: string) => {
+    const value = stored(option);
     if (several) {
       // The checklist stays open: ticking a second account is the point.
       const next = toggleAccount(chosen, value);
@@ -277,7 +285,7 @@ export function SeatMenu({
           chosen.length > 1
             ? tr("Accounts for {0}: {1}", [
                 name,
-                chosen.map((v) => options.find((o) => o.value === v)?.label ?? v).join(", "),
+                options.filter((o) => isChosen(o.value)).map((o) => o.label).join(", "),
               ])
             : tr("Account for {0}: {1}", [name, selected.label])
         }

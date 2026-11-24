@@ -312,6 +312,11 @@ type toolRoster struct {
 	// deferredByServer counts the deferred tools per registration (server)
 	// name, so the section can name the connectors the bridges reach.
 	deferredByServer map[string]int
+	// toolsByServer counts the MCP tools this build registered per
+	// registration (server) name, direct or deferred: what survived every
+	// gate. The multi-account section reads it to tell an account that has
+	// tools from one that does not (multi_account.go).
+	toolsByServer map[string]int
 
 	// mcp is every `mcp_<server>_<tool>` name this build registered, direct or
 	// deferred — what the model can reach at all. A narrowed run's audit gate
@@ -574,6 +579,7 @@ func buildFantasyTools(
 		}
 		roster.deferredMCP = len(mcpTools)
 		roster.deferredByServer = mcpByServer
+		roster.toolsByServer = mcpByServer
 		roster.mcp = mcpNames
 		// The model-output boundary sits inside the universal panic boundary: a
 		// panic in a tool, policy hook, output screen, artifact stager, or bridge
@@ -593,6 +599,7 @@ func buildFantasyTools(
 	sort.Strings(mcpNames)
 	roster.directMCP = mcpNames
 	roster.mcp = mcpNames
+	roster.toolsByServer = mcpByServer
 	return containToolRoster(BoundModelOutputTools(allTools), cfg.panicAttribution, policy), roster, nil
 }
 

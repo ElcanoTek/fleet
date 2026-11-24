@@ -539,6 +539,7 @@ func (s *Server) cleanMCPAccounts(ctx context.Context, user string, accounts map
 		}
 	}
 	var remote map[string]map[string]bool
+	var prefs map[string]store.ConnectorPref
 	for rawName, choice := range accounts {
 		name := strings.ToLower(strings.TrimSpace(rawName))
 		if name == "" {
@@ -570,7 +571,19 @@ func (s *Server) cleanMCPAccounts(ctx context.Context, user string, accounts map
 			for a := range wanted {
 				return nil, fmt.Errorf("unknown account %q for connector %q", a, rawName)
 			}
-			clean[info.Name] = store.JoinMCPAccounts(ordered)
+			// Stored as the turn will read it: "" beside the account that is
+			// the user's own default names one account twice, and the answer
+			// the picker reconciles against must not count it as two.
+			if len(ordered) > 1 {
+				if prefs == nil {
+					prefs = s.connectorPrefsOrNone(ctx, user)
+				}
+				_, _, prefSeat := bundledPrefFor(prefs, info)
+				ordered = bundledChosenAccounts(info, store.JoinMCPAccounts(ordered), prefSeat)
+			}
+			if joined := store.JoinMCPAccounts(ordered); joined != "" {
+				clean[info.Name] = joined
+			}
 			continue
 		}
 		if remote == nil {
@@ -597,6 +610,18 @@ func (s *Server) cleanMCPAccounts(ctx context.Context, user string, accounts map
 		clean[name] = label
 	}
 	return clean, nil
+}
+
+// connectorPrefsOrNone reads the user's connections-page prefs, or an empty,
+// non-nil map when they cannot be read (operator defaults, as every other
+// reader of them falls back to).
+func (s *Server) connectorPrefsOrNone(ctx context.Context, user string) map[string]store.ConnectorPref {
+	if s.store != nil {
+		if prefs, err := s.store.ListConnectorPrefs(ctx, user); err == nil && prefs != nil {
+			return prefs
+		}
+	}
+	return map[string]store.ConnectorPref{}
 }
 
 // primaryMCPAccount is the first account of a stored choice, the one a row's
@@ -740,11 +765,18 @@ func (s *Server) handleConversationMCPServersGet(w http.ResponseWriter, r *http.
 			"category":        categoryFor(cats, info.Name),
 			"status":          optionalConnectorStatus(info),
 		}
-		// Several accounts in this conversation (docs/MULTI-ACCOUNT-CHATS.md):
-		// the whole choice, "" for the default account. Absent on one account,
-		// so that row is the payload it always was.
-		if selected := store.SplitMCPAccounts(conv.MCPAccounts[info.Name]); len(selected) > 1 {
-			row["selected_accounts"] = selected
+		// Several accounts in this conversation (docs/MULTI-ACCOUNT-CHATS.md).
+		// A stored list is read against the live catalog exactly as the turn
+		// reads it (bundledChosenAccounts), so the picker never shows an
+		// account that was since removed from the box, or counts the user's
+		// default twice, while the turn runs without it. A row on one account
+		// has no selected_accounts and is the payload it always was.
+		if stored := conv.MCPAccounts[info.Name]; store.IsMCPAccountList(stored) {
+			chosen := bundledChosenAccounts(info, stored, seat)
+			row["account"] = chosen[0]
+			if len(chosen) > 1 {
+				row["selected_accounts"] = chosen
+			}
 		}
 		servers = append(servers, row)
 	}
