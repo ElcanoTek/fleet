@@ -1768,6 +1768,12 @@
       ]
     },
     {
+      "message": "the account's files could not be moved aside before the deletion ({0}), so nothing was deleted; fix that and try again",
+      "fields": [
+        "%s"
+      ]
+    },
+    {
       "message": "the account's user API keys could not be updated before the deletion ({0}); nothing was deleted",
       "fields": [
         "%s"

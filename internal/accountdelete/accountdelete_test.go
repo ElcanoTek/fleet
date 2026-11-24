@@ -163,25 +163,46 @@ func TestDelete(t *testing.T) {
 	})
 }
 
+// skipAsRoot skips a test that relies on directory permissions, which root
+// ignores.
+func skipAsRoot(t *testing.T) {
+	t.Helper()
+	if os.Geteuid() == 0 {
+		t.Skip("directory permissions do not stop root")
+	}
+}
+
+// readOnlyDir makes dir unwritable (nothing in it can be renamed or removed)
+// for the rest of the test.
+func readOnlyDir(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+}
+
 // A file removal after the commit that fails is reported (with what the
-// maintenance pass does about it), and its trees stay for that pass: the
-// lookup each removal asks first failing, or the server's own cleanup failing.
+// maintenance pass does about it): a tree written under the address after
+// the move that cannot be removed, or the server's own cleanup failing. Not
+// parallel: it uses afterDatabaseDeletion.
 func TestDeleteReportsFailedRemovals(t *testing.T) {
-	t.Parallel()
+	skipAsRoot(t)
 	ctx := context.Background()
 	att := t.TempDir()
-	// Paths no tree can be moved from or removed at: "uploads" and a
-	// conversation's "participants" are files.
-	if err := os.WriteFile(filepath.Join(att, "uploads"), []byte("x"), 0o600); err != nil {
-		t.Fatal(err)
+	seedFiles(t, att, "gone@x.com")
+	uploads := filepath.Join(att, "uploads")
+	participants := filepath.Join(PrivateWorkspaceRoot(att), "conv-1", "participants")
+	afterDatabaseDeletion = func() {
+		for _, d := range []string{filepath.Join(UploadsDir(att, "gone@x.com"), "late"), filepath.Join(participants, Digest("gone@x.com"), "late")} {
+			if err := os.MkdirAll(d, 0o700); err != nil {
+				t.Error(err)
+			}
+		}
+		readOnlyDir(t, uploads)
+		readOnlyDir(t, participants)
 	}
-	conv := filepath.Join(PrivateWorkspaceRoot(att), "conv-1")
-	if err := os.MkdirAll(conv, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(conv, "participants"), []byte("x"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	defer func() { afterDatabaseDeletion = nil }()
 	res, err := Delete(ctx, &fakeStore{}, "gone@x.com", Options{Keys: &fakeKeys{}, AttachmentDir: att})
 	if err != nil {
 		t.Fatal(err)
@@ -196,12 +217,73 @@ func TestDeleteReportsFailedRemovals(t *testing.T) {
 	if len(res.Problems) != 2 || !kinds[UploadsFailed] || !kinds[PrivateWorkspacesFailed] {
 		t.Fatalf("problems = %+v, want an upload and a private workspace failure", res.Problems)
 	}
-	// The server's own steps failing are reported the same way.
+	afterDatabaseDeletion = nil
+	// The server's own cleanup failing is reported the same way.
 	res, err = Delete(ctx, &fakeStore{}, "gone@x.com", Options{Keys: &fakeKeys{},
-		ServerSetAside: func(string) ([]AsideTree, func(), error) { return nil, nil, errors.New("read-only file system") },
-		ServerCleanup:  func(string, func(string) (bool, error)) error { return errors.New("read-only file system") }})
+		ServerCleanup: func(string, func(string) (bool, error)) error { return errors.New("read-only file system") }})
 	if err != nil || len(res.Problems) != 1 || res.Problems[0].Kind != PrivateWorkspacesFailed {
 		t.Fatalf("server step failure: %+v, %v", res, err)
+	}
+}
+
+// A tree that cannot be moved aside before the commit stops the deletion:
+// nothing is deleted, the trees already moved go back, the server's marks
+// are taken back, and nothing is left aside. A tree that is not there is no
+// failure.
+func TestDeleteRefusedWhenATreeCannotBeMovedAside(t *testing.T) {
+	skipAsRoot(t)
+	t.Parallel()
+	ctx := context.Background()
+
+	att := t.TempDir()
+	files := seedFiles(t, att, "gone@x.com")
+	readOnlyDir(t, filepath.Join(PrivateWorkspaceRoot(att), "conv-2", "participants"))
+	st, keys := &fakeStore{}, &fakeKeys{}
+	_, err := Delete(ctx, st, "gone@x.com", Options{Keys: keys, AttachmentDir: att})
+	var notMoved *FilesNotSetAsideError
+	if !errors.As(err, &notMoved) || !strings.Contains(err.Error(), "nothing was deleted") {
+		t.Fatalf("err = %v, want a FilesNotSetAsideError saying nothing was deleted", err)
+	}
+	if len(st.deleted) != 0 || len(keys.calls) != 0 {
+		t.Fatalf("store deletions %v, key deletions %v; want none", st.deleted, keys.calls)
+	}
+	for _, f := range files {
+		if _, err := os.Stat(f); err != nil {
+			t.Errorf("%s is not where it was: %v", f, err)
+		}
+	}
+	for _, dir := range []string{filepath.Join(att, "uploads"), filepath.Join(PrivateWorkspaceRoot(att), "conv-1", "participants"), filepath.Join(PrivateWorkspaceRoot(att), "conv-2", "participants")} {
+		entries, _ := os.ReadDir(dir)
+		for _, e := range entries {
+			if IsAside(e.Name()) {
+				t.Errorf("%s was left aside in %s", e.Name(), dir)
+			}
+		}
+	}
+
+	// The server's step failing after it moved a tree and marked a turn: the
+	// tree goes back and the mark is taken back.
+	att2 := t.TempDir()
+	files2 := seedFiles(t, att2, "gone@x.com")
+	undone := false
+	_, err = Delete(ctx, &fakeStore{}, "gone@x.com", Options{Keys: &fakeKeys{}, AttachmentDir: att2,
+		ServerSetAside: func(email string) ([]AsideTree, func(), error) {
+			tr, _, err := SetAside(filepath.Join(PrivateWorkspaceRoot(att2), "conv-1", "participants", Digest(email)), Digest(email))
+			if err != nil {
+				t.Error(err)
+			}
+			return []AsideTree{tr}, func() { undone = true }, errors.New("permission denied")
+		}})
+	if !errors.As(err, &notMoved) {
+		t.Fatalf("server step failure: err %v, want a FilesNotSetAsideError", err)
+	}
+	if !undone {
+		t.Error("the server's marks were not taken back")
+	}
+	for _, f := range files2 {
+		if _, err := os.Stat(f); err != nil {
+			t.Errorf("%s is not where it was: %v", f, err)
+		}
 	}
 }
 

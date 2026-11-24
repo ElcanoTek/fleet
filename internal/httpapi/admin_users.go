@@ -295,6 +295,13 @@ func writeAccountDeleteRefusal(w http.ResponseWriter, r *http.Request, err error
 		http.Error(w, fmt.Sprintf("the account's user API keys could not be updated before the deletion (%s); nothing was deleted", notBound.Err), http.StatusInternalServerError)
 		return
 	}
+	// One of the account's trees could not be moved aside, so nothing was
+	// deleted (accountdelete.FilesNotSetAsideError).
+	var notMoved *accountdelete.FilesNotSetAsideError
+	if errors.As(err, &notMoved) {
+		http.Error(w, fmt.Sprintf("the account's files could not be moved aside before the deletion (%s), so nothing was deleted; fix that and try again", notMoved.Err), http.StatusInternalServerError)
+		return
+	}
 	// Another account took the address between the read and the deletion.
 	if errors.Is(err, store.ErrAccountChanged) {
 		http.Error(w, "the account changed while it was being deleted; nothing was deleted", http.StatusConflict)

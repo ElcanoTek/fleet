@@ -203,8 +203,12 @@ advises on each demoted split admin, unknown role and duplicate username in it.
   - its upload tree and its private workspace trees are moved aside (a
     `.removing-<digest>-…` name beside them) while the account still exists
     and its work is stopped, then removed after the commit — or moved back
-    if the deletion does not commit. A new account's trees start empty.
-    After the commit the address's paths are checked once more (below); if
+    if the deletion does not commit. A new account's trees start empty. A
+    tree that cannot be moved aside (its directory not writable, say) stops
+    the deletion before anything is deleted: the trees already moved go
+    back, and the web route answers 500 (the CLI exits non-zero) with the
+    reason and that nothing was deleted. After the commit the address's
+    paths are checked once more (below); if
     the server stops between the move and the commit, the maintenance pass
     removes the trees left aside (the account was being deleted);
   - its in-memory approve/deny-all decisions, which are kept by address,

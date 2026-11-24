@@ -5142,6 +5142,7 @@
   "the account's user API keys could not be updated before the deletion ({0}); nothing was deleted": "no se pudieron actualizar las claves de API de usuario de la cuenta antes de eliminarla ({0}); no se eliminó nada",
   "the account changed while it was being deleted; nothing was deleted": "la cuenta cambió mientras se eliminaba; no se eliminó nada",
   "files under {0} were left in place after the deletion: an account created under the address since holds them": "los archivos de {0} se dejaron donde estaban tras la eliminación: una cuenta creada desde entonces con esa dirección los tiene",
+  "the account's files could not be moved aside before the deletion ({0}), so nothing was deleted; fix that and try again": "no se pudieron apartar los archivos de la cuenta antes de eliminarla ({0}), así que no se eliminó nada; corrígelo e inténtalo de nuevo",
   "this account no longer exists": "esta cuenta ya no existe",
   "this action cannot be narrowed: approve or decline it whole": "Esta acción no puede limitarse: apruébala o recházala completa",
   "this action cannot be stopped once it runs": "Esta acción no puede detenerse una vez iniciada",

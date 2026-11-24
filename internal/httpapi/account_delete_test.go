@@ -830,6 +830,52 @@ func TestFailedDeletionLeavesARunningParticipantTurnUnmarked(t *testing.T) {
 	}
 }
 
+// A private workspace tree the server cannot move aside before the commit
+// (its directory is not writable) stops the deletion: the route answers with
+// the reason and that nothing was deleted, the account and its trees stay
+// where they were, and no mark is left on the account's running turn.
+func TestAdminDeleteRefusedWhenAStashCannotBeMovedAside(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("directory permissions do not stop root")
+	}
+	t.Parallel()
+	s := memberFixture(t, "boss@x.com", "u@x.com")
+	setRole(t, s, "boss@x.com", "admin", "")
+	att := t.TempDir()
+	s.cfg.EmailAttachmentDir = att
+	upload := filepath.Join(accountdelete.UploadsDir(att, "u@x.com"), "tok", "f.txt")
+	participants := filepath.Join(accountdelete.PrivateWorkspaceRoot(att), "conv-1", "participants")
+	stash := filepath.Join(participants, accountdelete.Digest("u@x.com"), "f.txt")
+	for _, f := range []string{upload, stash} {
+		if err := os.MkdirAll(filepath.Dir(f), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(f, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Chmod(participants, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(participants, 0o700) })
+	s.setParticipantWorkspaceActive("conv-2", "u@x.com", nil)
+	w := do(t, s.Routes(), http.MethodDelete, "/admin/users/u@x.com", nil, "boss@x.com")
+	if w.Code != http.StatusInternalServerError || !strings.Contains(w.Body.String(), "nothing was deleted") {
+		t.Fatalf("status %d body %q, want 500 saying nothing was deleted", w.Code, w.Body.String())
+	}
+	if _, err := s.concreteStore(t).GetUser(context.Background(), "u@x.com"); err != nil {
+		t.Fatalf("the account was deleted: %v", err)
+	}
+	for _, f := range []string{upload, stash} {
+		if _, err := os.Stat(f); err != nil {
+			t.Errorf("%s is not where it was: %v", f, err)
+		}
+	}
+	if s.takeParticipantWorkspacePurged("conv-2", "u@x.com") {
+		t.Error("the account's running turn was left marked")
+	}
+}
+
 // Deleting an account stops the turns it has running — here one in its own
 // chat — and waits for them; another person's turn keeps running.
 func TestStopAccountWorkCancelsItsTurns(t *testing.T) {
