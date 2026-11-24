@@ -183,8 +183,8 @@ var afterDatabaseDeletion func()
 // Delete deletes the account email: the database rows, then its user API
 // keys, then its files. An error means nothing was deleted: the database's
 // (store.ErrUserNotFound, *store.OwnsSharedProjectsError,
-// store.ErrAccountChanged, …), a *KeysNotBoundError or a
-// *FilesNotSetAsideError.
+// store.ErrAccountChanged, …), a *KeysNotBoundError, a
+// *FilesNotSetAsideError or an *OutcomeUnconfirmedError.
 //
 // Before the rows go, the address's user API keys that name no account yet
 // (minted before keys named their account) are bound to this account, read
@@ -201,7 +201,7 @@ var afterDatabaseDeletion func()
 // and only those go (Keys.DeleteUserKeys), and its upload and private
 // workspace trees are moved aside (SetAside) while it still exists — then
 // removed after the commit, or moved back if the deletion does not commit
-// and the address still holds the account (settleUncommitted).
+// unless the account is confirmed gone by then (settleUncommitted).
 // A tree that cannot be moved aside stops the deletion before anything is
 // deleted (*FilesNotSetAsideError); one written under the address after the
 // move is removed after the commit while no account has its digest
@@ -311,20 +311,28 @@ func (e *FilesNotSetAsideError) Error() string {
 func (e *FilesNotSetAsideError) Unwrap() error { return e.Err }
 
 // settleUncommitted handles a database deletion that did not commit (err).
-// The trees moved aside go back only while the address still holds the same
-// account (id). When it does not — another deletion of the account committed
-// meanwhile (DeleteAccount then reports store.ErrUserNotFound, or
-// store.ErrAccountChanged once a new account holds the address) — or when
-// that cannot be read, they are removed, as that deletion's own cleanup would
-// have done: put back, they would be the deleted account's files under the
-// address, for an account created under it later to find. The server's marks
+// The trees moved aside go back while the address still holds the same
+// account (id). When it confirmably does not — another deletion of the
+// account committed meanwhile (DeleteAccount then reports
+// store.ErrUserNotFound, or store.ErrAccountChanged once a new account holds
+// the address) — they are removed, as that deletion's own cleanup would have
+// done: put back, they would be the deleted account's files under the
+// address, for an account created under it later to find; the server's marks
 // stay then too, so a turn of the account still swapping does not stash its
-// files back. err is returned, with what could not be put back or removed.
+// files back. When the account cannot be read back (the database being
+// unreachable, most likely, and the account then still there), they go back
+// too, and the error says the outcome could not be confirmed
+// (*OutcomeUnconfirmedError). err is returned, with what could not be put
+// back or removed.
 func settleUncommitted(ctx context.Context, st Store, email, id string, err error, aside []AsideTree, undo func()) error {
 	// Its own deadline: err may be ctx's.
 	checkCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancel()
-	if cur, cerr := st.AccountForDeletion(checkCtx, email); cerr == nil && cur == id {
+	gone, readErr := accountGone(checkCtx, st, email, id)
+	if readErr != nil {
+		return rollBackSetAside(&OutcomeUnconfirmedError{Err: err, ReadErr: readErr}, aside, undo)
+	}
+	if !gone {
 		return rollBackSetAside(err, aside, undo)
 	}
 	var rmErr error
@@ -336,6 +344,39 @@ func settleUncommitted(ctx context.Context, st Store, email, id string, err erro
 	}
 	return err
 }
+
+// accountGone reports whether the account id is confirmed gone from the
+// address: another account holds it, or no account does. readErr is set when
+// neither the account nor the address could be read.
+func accountGone(ctx context.Context, st Store, email, id string) (gone bool, readErr error) {
+	cur, err := st.AccountForDeletion(ctx, email)
+	if err == nil {
+		return cur != id, nil
+	}
+	// No account under the address (store.ErrUserNotFound), or a failed
+	// read: the address's digest tells them apart.
+	live, lerr := st.AccountDigestLive(ctx, Digest(email))
+	if lerr != nil {
+		return false, err
+	}
+	if live {
+		return false, err // an account holds the address, yet it could not be read
+	}
+	return true, nil
+}
+
+// OutcomeUnconfirmedError is a deletion that did not commit (Err) after
+// which the account could not be read back (ReadErr): its files were put
+// back, since it most likely still exists, and whoever deletes it checks
+// that and tries again.
+type OutcomeUnconfirmedError struct{ Err, ReadErr error }
+
+func (e *OutcomeUnconfirmedError) Error() string {
+	return "the deletion did not complete (" + e.Err.Error() + "), and whether the account still exists could not be read afterwards (" +
+		e.ReadErr.Error() + "), so its files were put back; check that the account is still there and delete it again"
+}
+
+func (e *OutcomeUnconfirmedError) Unwrap() error { return e.Err }
 
 // rollBackSetAside puts the trees moved aside back, takes back the marks the
 // server set (undo), and returns err — with what could not be put back, if

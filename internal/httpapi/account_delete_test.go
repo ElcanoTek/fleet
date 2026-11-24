@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1367,6 +1368,59 @@ func TestDeletionThatLosesARaceLeavesNoTreeUnderTheAddress(t *testing.T) {
 		t.Fatalf("this deletion: status %d body %s, want 404 (the other one deleted the account)", w.Code, w.Body.String())
 	}
 	assertNoTreeUnder(t, "u@x.com", uploadsParent, participants)
+}
+
+// unreadableAfterFailureStore is the real store whose database deletion
+// fails and which cannot be read once it has: the database became
+// unreachable mid-deletion.
+type unreadableAfterFailureStore struct {
+	*store.Store
+	failed *atomic.Bool
+}
+
+var errDatabaseDown = errors.New("connection refused")
+
+func (u unreadableAfterFailureStore) AccountForDeletion(ctx context.Context, email string) (string, error) {
+	if u.failed.Load() {
+		return "", errDatabaseDown
+	}
+	return u.Store.AccountForDeletion(ctx, email)
+}
+
+func (u unreadableAfterFailureStore) DeleteAccount(context.Context, string, string) (string, error) {
+	u.failed.Store(true)
+	return "", errors.New("statement timeout")
+}
+
+func (u unreadableAfterFailureStore) AccountDigestLive(context.Context, string) (bool, error) {
+	return false, errDatabaseDown
+}
+
+// A deletion that did not complete, after which the account cannot be read
+// back, puts the account's trees back and tells the administrator the
+// outcome could not be confirmed.
+func TestAdminDeleteWithAnUnconfirmedOutcomePutsTheFilesBack(t *testing.T) {
+	t.Parallel()
+	s := memberFixture(t, "boss@x.com", "u@x.com")
+	setRole(t, s, "boss@x.com", "admin", "")
+	att := t.TempDir()
+	s.cfg.EmailAttachmentDir = att
+	_, participants := seedAccountTrees(t, att, "u@x.com")
+	st := s.concreteStore(t)
+	s.store = unreadableAfterFailureStore{Store: st, failed: new(atomic.Bool)}
+	w := do(t, s.Routes(), http.MethodDelete, "/admin/users/u@x.com", nil, "boss@x.com")
+	if w.Code != http.StatusInternalServerError || strings.TrimSpace(w.Body.String()) != errAccountDeleteUnconfirmed {
+		t.Fatalf("status %d body %q, want 500 %q", w.Code, w.Body.String(), errAccountDeleteUnconfirmed)
+	}
+	if _, err := st.GetUser(context.Background(), "u@x.com"); err != nil {
+		t.Fatalf("the account is gone: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(participants, accountdelete.Digest("u@x.com"), "f.txt")); err != nil {
+		t.Errorf("the private workspace tree is not back: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(accountdelete.UploadsDir(att, "u@x.com"), "tok", "f.txt")); err != nil {
+		t.Errorf("the upload tree is not back: %v", err)
+	}
 }
 
 // blockingDeleteStore is the real store with a DeleteUser that never finishes

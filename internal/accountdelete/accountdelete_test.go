@@ -380,8 +380,8 @@ func (s *racedStore) AccountForDeletion(context.Context, string) (string, error)
 // A deletion whose database step fails because another deletion of the
 // account committed meanwhile removes the trees it moved aside instead of
 // putting them back: the address no longer holds the account they belong
-// to. The same when a new account holds the address by then, or when whether
-// the account is still there cannot be read. The server's marks stay.
+// to. The same when a new account holds the address by then. The server's
+// marks stay.
 func TestDeleteAfterAnotherDeletionRemovesTheTreesItMovedAside(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -392,7 +392,6 @@ func TestDeleteAfterAnotherDeletionRemovesTheTreesItMovedAside(t *testing.T) {
 	}{
 		{"the account is gone", "", errors.New("user not found"), errors.New("user not found")},
 		{"a new account holds the address", "new-account-id", nil, errors.New("the account changed while it was being deleted")},
-		{"the account cannot be read", "", errors.New("connection refused"), errors.New("statement timeout")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -408,23 +407,64 @@ func TestDeleteAfterAnotherDeletionRemovesTheTreesItMovedAside(t *testing.T) {
 			if !errors.Is(err, tc.err) {
 				t.Fatalf("err = %v, want the database's %v", err, tc.err)
 			}
+			var unconfirmed *OutcomeUnconfirmedError
+			if errors.As(err, &unconfirmed) {
+				t.Fatalf("err = %v, want a confirmed outcome", err)
+			}
 			for _, f := range files {
 				if _, err := os.Stat(f); !os.IsNotExist(err) {
 					t.Errorf("%s is under the address again (stat err %v)", f, err)
 				}
 			}
-			for _, dir := range []string{filepath.Join(att, "uploads"), filepath.Join(PrivateWorkspaceRoot(att), "conv-1", "participants"), filepath.Join(PrivateWorkspaceRoot(att), "conv-2", "participants")} {
-				entries, _ := os.ReadDir(dir)
-				for _, e := range entries {
-					if IsAside(e.Name()) {
-						t.Errorf("%s was left aside in %s", e.Name(), dir)
-					}
-				}
-			}
+			assertNothingAside(t, att)
 			if undone {
 				t.Error("the server's marks were taken back")
 			}
 		})
+	}
+}
+
+// A deletion whose database step fails and after which the account cannot
+// be read back (the database unreachable) puts the trees back, since the
+// account most likely still exists, and says the outcome is unconfirmed.
+func TestDeleteWithAnUnconfirmedOutcomePutsTheTreesBack(t *testing.T) {
+	t.Parallel()
+	att := t.TempDir()
+	files := seedFiles(t, att, "gone@x.com")
+	down := errors.New("connection refused")
+	st := &racedStore{fakeStore: fakeStore{err: errors.New("statement timeout"), liveErr: down}, afterErr: down}
+	undone := false
+	_, err := Delete(context.Background(), st, "gone@x.com", Options{Keys: &fakeKeys{}, AttachmentDir: att,
+		ServerSetAside: func(email string) ([]AsideTree, func(), error) {
+			aside, err := setAsidePrivateWorkspaces(PrivateWorkspaceRoot(att), email)
+			return aside, func() { undone = true }, err
+		}})
+	var unconfirmed *OutcomeUnconfirmedError
+	if !errors.As(err, &unconfirmed) || !errors.Is(unconfirmed.ReadErr, down) ||
+		!strings.Contains(err.Error(), "statement timeout") || !strings.Contains(err.Error(), "files were put back") {
+		t.Fatalf("err = %v, want an OutcomeUnconfirmedError naming both causes", err)
+	}
+	for _, f := range files {
+		if _, err := os.Stat(f); err != nil {
+			t.Errorf("%s is not back where it was: %v", f, err)
+		}
+	}
+	assertNothingAside(t, att)
+	if !undone {
+		t.Error("the server's marks were not taken back")
+	}
+}
+
+// assertNothingAside fails when a tree is left set aside under att.
+func assertNothingAside(t *testing.T, att string) {
+	t.Helper()
+	for _, dir := range []string{filepath.Join(att, "uploads"), filepath.Join(PrivateWorkspaceRoot(att), "conv-1", "participants"), filepath.Join(PrivateWorkspaceRoot(att), "conv-2", "participants")} {
+		entries, _ := os.ReadDir(dir)
+		for _, e := range entries {
+			if IsAside(e.Name()) {
+				t.Errorf("%s was left aside in %s", e.Name(), dir)
+			}
+		}
 	}
 }
 

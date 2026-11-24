@@ -203,10 +203,16 @@ advises on each demoted split admin, unknown role and duplicate username in it.
   - its upload tree and its private workspace trees are moved aside (a
     `.removing-<digest>-…` name beside them) while the account still exists
     and its work is stopped, then removed after the commit. If the deletion
-    does not commit they are moved back while the address still holds the
-    same account; when it does not (another deletion of the account
-    committed meanwhile, from another server on the same database, say) or
-    that cannot be read, they are removed instead. A new account's trees start empty. A
+    does not commit they are moved back, unless the account is confirmed
+    gone by then (another deletion of it committed meanwhile, from another
+    server on the same database, say: no account holds the address, or
+    another one does), in which case they are removed. When the account
+    cannot be read back (the database unreachable, most likely, and the
+    account then still there) they are moved back too, and the web route
+    answers 500 `the deletion did not complete and the account could not be
+    read back, so its files were put back; check that it still exists and
+    delete it again` (the server logs both causes; the CLI prints them). A
+    new account's trees start empty. A
     tree that cannot be moved aside (its directory not writable, say), or a
     directory the move must look into that cannot be read (the attachment
     directory included; only one that is not there means nothing to move),
