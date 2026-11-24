@@ -295,6 +295,62 @@ describe("Composer — tools popover seat menu", () => {
     expect(screen.getByRole("listbox", { name: "Account for Index Exchange" })).toBeInTheDocument();
   });
 
+  // The mode belongs to one opening of the menu, however that opening ends,
+  // and the list does not change kind while it is open.
+  it("the several-accounts mode lasts for one opening of the menu", async () => {
+    const Stateful = () => {
+      const [rows, setRows] = useState(SEATED);
+      return (
+        <Host
+          overrides={{
+            mcpServers: rows,
+            setMcpServerAccount: (_conv: string | null, name: string, accounts: string[]) =>
+              setRows((prev) =>
+                prev.map((row) =>
+                  row.name === name
+                    ? {
+                        ...row,
+                        account: accounts[0] ?? "",
+                        selected_accounts: accounts.length > 1 ? accounts : undefined,
+                      }
+                    : row,
+                ),
+              ),
+          }}
+        />
+      );
+    };
+    render(<Stateful />);
+    fireEvent.click(screen.getByRole("button", { name: "Tools" }));
+    const several = () => screen.getByRole("switch", { name: "Use several accounts" });
+
+    // Dismissed by a click outside: the next opening is the plain list.
+    fireEvent.click(await screen.findByTestId("mcp-seat-ix"));
+    fireEvent.click(several());
+    expect(several()).toBeChecked();
+    fireEvent.mouseDown(screen.getByRole("textbox", { name: "Search tools" }));
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("mcp-seat-ix"));
+    expect(several()).not.toBeChecked();
+
+    // Two accounts, then back to one: still the checklist while the menu is
+    // open (and the switch can be turned off again)…
+    fireEvent.click(several());
+    fireEvent.click(screen.getByRole("option", { name: /OMG_GBP/ }));
+    expect(screen.getByTestId("mcp-seat-ix")).toHaveTextContent("Elcano +1");
+    expect(several()).toHaveAttribute("aria-disabled", "true");
+    fireEvent.click(screen.getByRole("option", { name: /Elcano/ }));
+    expect(screen.getByTestId("mcp-seat-ix")).toHaveTextContent("OMG_GBP");
+    expect(screen.getByRole("listbox", { name: "Accounts for Index Exchange" })).toBeInTheDocument();
+    expect(several()).toBeChecked();
+    expect(several()).not.toHaveAttribute("aria-disabled");
+    // …and the plain list on the next opening.
+    fireEvent.keyDown(screen.getByRole("listbox"), { key: "Escape" });
+    fireEvent.click(screen.getByTestId("mcp-seat-ix"));
+    expect(several()).not.toBeChecked();
+    expect(screen.getByRole("listbox", { name: "Account for Index Exchange" })).toBeInTheDocument();
+  });
+
   it("the keyboard reaches the several-accounts switch from the list and back", async () => {
     render(<Host overrides={{ mcpServers: SEATED }} />);
     fireEvent.click(screen.getByRole("button", { name: "Tools" }));

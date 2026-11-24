@@ -145,9 +145,9 @@ export function StatusIcon({ status }: { status: ConnectorStatus }) {
  *    each row ticks or unticks one account and the menu stays open. The last
  *    ticked account cannot be unticked (the connector's switch turns it off),
  *    and no more than MAX_ACCOUNTS_PER_CONNECTOR can be ticked. It is on, and
- *    cannot be turned off, while the chat already runs the connector as more
- *    than one account: turning it off would have to drop accounts nobody
- *    asked to drop.
+ *    cannot be turned off, while more than one account is ticked: turning it
+ *    off would have to drop accounts nobody asked to drop. The mode lasts for
+ *    one opening of the menu; the next one starts from the chat's own state.
  *
  * The trigger reads the account, or the first one and how many more
  * ("Raptive +3"). A hosted connection mounts one account per chat and has no
@@ -182,8 +182,11 @@ export function SeatMenu({
   const selected = options.find((o) => isChosen(o.value)) ?? options[0];
   const triggerLabel = seatLabel(connector, appName);
   const atCap = chosen.length >= MAX_ACCOUNTS_PER_CONNECTOR;
-  // "Use several accounts", as the person set it for this menu. A chat that
-  // already runs several accounts is in that mode whatever this says.
+  // "Use several accounts" for this opening of the menu: set when it opens on
+  // a chat that already runs several accounts, or by the switch. It holds
+  // until the menu closes, however it closes, so the list never changes kind
+  // under the pointer (unticking down to one account keeps the checklist
+  // until then); the next opening starts from the chat's own state again.
   const [severalAsked, setSeveralAsked] = useState(false);
   const severalLocked = chosen.length > 1;
   const several = canUseSeveral && (severalAsked || severalLocked);
@@ -242,13 +245,13 @@ export function SeatMenu({
 
   const openMenu = () => {
     setActive(Math.max(0, options.indexOf(selected)));
+    // Every opening starts from the chat's own state, whichever way the last
+    // one ended (a choice, Escape, Tab, a click or scroll outside, a resize).
+    setSeveralAsked(chosen.length > 1);
     setOpen(true);
   };
   const closeMenu = () => {
     setOpen(false);
-    // Each opening starts as a switch list again, unless the chat itself
-    // holds several accounts.
-    setSeveralAsked(false);
     triggerRef.current?.focus();
   };
   // An option that a click would not change: the last ticked account, or an
@@ -282,7 +285,6 @@ export function SeatMenu({
       closeMenu();
     } else if (event.key === "Tab") {
       setOpen(false);
-      setSeveralAsked(false);
     }
   };
   const onListKey = (event: KeyboardEvent<HTMLDivElement>) => {
