@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 	"github.com/ElcanoTek/fleet/internal/principal"
 	"github.com/ElcanoTek/fleet/internal/sched/apikeys"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
@@ -86,7 +87,7 @@ func (s *Server) edgePrincipal(w http.ResponseWriter, r *http.Request) (principa
 		return principal.Principal{}, false
 	}
 	return principal.Principal{
-		Email:        strings.ToLower(strings.TrimSpace(key.UserEmail)),
+		Email:        pgtext.EmailKey(key.UserEmail),
 		KeyID:        key.KeyID,
 		KeyAccountID: key.AccountID,
 		AuthMethod:   method,

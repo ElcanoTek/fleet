@@ -66,7 +66,7 @@ When an allowed participant submits `POST /chat` on a multiplayer conversation:
     scoped to the sender.
 - **Steer isolation:** Mid-turn `mode: "steer"` submissions are injected into a
   running turn's `steerMailbox` only when the submitting user matches the active
-  turn's sender (`strings.EqualFold(entry.steer.user, user)`). Steers submitted
+  turn's sender (`pgtext.SameEmail(entry.steer.user, user)`). Steers submitted
   by another participant remain queued and drain as their own turn under that
   participant's identity.
 - **Transcript & SSE attribution:** Both initial and steered user entries carry

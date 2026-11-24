@@ -12,6 +12,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/metrics"
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/tools"
@@ -625,7 +626,7 @@ func (s *Server) autoApproveEnableMCPConnectors(
 	}
 	callerMerged := s.effectiveOptionalMCPServersForCaller(ctx, user, synthConv)
 	ownerMerged := callerMerged
-	if conv.UserEmail != "" && !strings.EqualFold(conv.UserEmail, user) {
+	if conv.UserEmail != "" && !pgtext.SameEmail(conv.UserEmail, user) {
 		ownerMerged = s.effectiveOptionalMCPServersForCaller(ctx, conv.UserEmail, synthConv)
 	}
 	participantMerged := s.effectiveOptionalMCPServersForCaller(ctx, "", &store.Conversation{
@@ -634,7 +635,7 @@ func (s *Server) autoApproveEnableMCPConnectors(
 	})
 	viewerEnabled := map[string][]string{}
 	addViewer := func(email string) {
-		key := strings.ToLower(strings.TrimSpace(email))
+		key := pgtext.EmailKey(email)
 		if key == "" {
 			return
 		}

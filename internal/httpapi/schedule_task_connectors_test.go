@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/tools"
 )
@@ -200,7 +201,7 @@ func (s *redactedMultiplayerStore) GetMultiplayerConversation(ctx context.Contex
 	if err != nil || conv == nil {
 		return conv, err
 	}
-	if !strings.EqualFold(conv.UserEmail, callerEmail) {
+	if !pgtext.SameEmail(conv.UserEmail, callerEmail) {
 		conv.ParticipantOptionalMCPServers = append([]string(nil), conv.OptionalMCPServersEnabled...)
 		conv.OptionalMCPServersEnabled = nil
 		conv.MCPAccounts = s.participantAccounts[strings.ToLower(callerEmail)]

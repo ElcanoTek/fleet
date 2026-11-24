@@ -93,7 +93,7 @@ func (s *Server) isAdmin(email string) bool {
 	if s.cfg == nil || s.accountsManagedByAuth() || len(s.cfg.AdminEmails) == 0 {
 		return false
 	}
-	needle := strings.ToLower(strings.TrimSpace(email))
+	needle := pgtext.EmailKey(email)
 	for _, a := range s.cfg.AdminEmails {
 		if a == needle {
 			return true
@@ -381,7 +381,7 @@ func (s *Server) handleAdminUserPatch(w http.ResponseWriter, r *http.Request, em
 	// The write only costs you access when it clears a users.role = 'admin' that
 	// is your sole grant; the env allowlist survives any column write.
 	if body.Role != nil && *body.Role != store.RoleAdmin &&
-		sameAccount(email, userFromCtx(r.Context())) {
+		pgtext.SameEmail(email, userFromCtx(r.Context())) {
 		cur, err := s.store.GetUser(r.Context(), email)
 		if err != nil {
 			if errors.Is(err, store.ErrUserNotFound) {

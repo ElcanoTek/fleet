@@ -129,7 +129,7 @@ func recordAdminAction(ctx context.Context, db execer, a AdminActor, action, con
 	_, err := db.ExecContext(ctx,
 		`INSERT INTO chat.admin_actions (created_at, actor, via, action, conversation_id, schedule_id, reason, detail)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-		time.Now().Unix(), strings.ToLower(strings.TrimSpace(a.Email)), a.Via, action, convID, schedID,
+		time.Now().Unix(), normalizeEmail(a.Email), a.Via, action, convID, schedID,
 		pgtext.Content(reason), pgtext.Content(detail))
 	return err
 }

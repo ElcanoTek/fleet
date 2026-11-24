@@ -15,6 +15,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/mcpoauth"
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
@@ -89,7 +90,7 @@ func (f *fakeStore) CreateRemoteMCPServer(_ context.Context, in store.RemoteMCPS
 
 func (f *fakeStore) GetRemoteMCPServer(_ context.Context, email, id string) (*store.RemoteMCPServer, error) {
 	s, ok := f.servers[id]
-	if !ok || !strings.EqualFold(s.UserEmail, email) {
+	if !ok || !pgtext.SameEmail(s.UserEmail, email) {
 		return nil, store.ErrRemoteMCPNotFound
 	}
 	cp := *s
@@ -99,7 +100,7 @@ func (f *fakeStore) GetRemoteMCPServer(_ context.Context, email, id string) (*st
 func (f *fakeStore) ListRemoteMCPServers(_ context.Context, email string) ([]store.RemoteMCPServer, error) {
 	var out []store.RemoteMCPServer
 	for _, s := range f.servers {
-		if strings.EqualFold(s.UserEmail, email) {
+		if pgtext.SameEmail(s.UserEmail, email) {
 			out = append(out, *s)
 		}
 	}
@@ -108,7 +109,7 @@ func (f *fakeStore) ListRemoteMCPServers(_ context.Context, email string) ([]sto
 
 func (f *fakeStore) DeleteRemoteMCPServer(_ context.Context, email, id string) error {
 	s, ok := f.servers[id]
-	if !ok || !strings.EqualFold(s.UserEmail, email) {
+	if !ok || !pgtext.SameEmail(s.UserEmail, email) {
 		return store.ErrRemoteMCPNotFound
 	}
 	delete(f.servers, id)
@@ -164,7 +165,7 @@ func (f *fakeStore) SetRemoteMCPStatus(_ context.Context, email, id, status, det
 
 func (f *fakeStore) SetRemoteMCPAPIKey(_ context.Context, email, id, apiKey string) error {
 	s, ok := f.servers[id]
-	if !ok || !strings.EqualFold(s.UserEmail, email) {
+	if !ok || !pgtext.SameEmail(s.UserEmail, email) {
 		return store.ErrRemoteMCPNotFound
 	}
 	if s.AuthKind != store.RemoteMCPAuthAPIKey {
@@ -471,6 +472,57 @@ func TestServiceAddAuthorizeComplete(t *testing.T) {
 	}
 	if fs.tokens[server.ID].AccessToken != "at-init" {
 		t.Errorf("stored access token = %q", fs.tokens[server.ID].AccessToken)
+	}
+}
+
+// The OAuth flow completes only for the account that began it. Two
+// addresses strings.EqualFold calls the same (σ and ς; a KELVIN SIGN and k)
+// are two accounts; the initiator in other capitals is still the initiator.
+func TestCompleteMatchesOnlyTheInitiatingAccount(t *testing.T) {
+	fs := newFakeStore()
+	srv := oauthTestServer(t, "rotate")
+	svc := newTestService(t, fs, srv)
+	ctx := context.Background()
+
+	begin := func(email string) (serverID, state string) {
+		t.Helper()
+		server, _, err := svc.AddServer(ctx, AddServerInput{Email: email, Name: "acme", URL: srv.URL + "/mcp"})
+		if err != nil {
+			t.Fatalf("AddServer %s: %v", email, err)
+		}
+		before := map[string]bool{}
+		for k := range fs.flows {
+			before[k] = true
+		}
+		if _, err := svc.Authorize(ctx, email, server.ID); err != nil {
+			t.Fatalf("Authorize %s: %v", email, err)
+		}
+		for k := range fs.flows {
+			if !before[k] {
+				return server.ID, k
+			}
+		}
+		t.Fatalf("Authorize %s stored no flow", email)
+		return "", ""
+	}
+
+	for _, c := range []struct{ initiator, completer string }{
+		{"σ@x.com", "ς@x.com"},
+		{"kate@x.com", "Kate@x.com"},
+	} {
+		_, state := begin(c.initiator)
+		if _, err := svc.Complete(ctx, c.completer, state, "code"); err == nil {
+			t.Errorf("%q completed the flow %q began", c.completer, c.initiator)
+		}
+	}
+
+	serverID, state := begin("mate@x.com")
+	done, err := svc.Complete(ctx, "Mate@X.com", state, "code-123")
+	if err != nil {
+		t.Fatalf("the initiator in capitals could not complete: %v", err)
+	}
+	if done.ID != serverID || done.Status != store.RemoteMCPStatusConnected {
+		t.Errorf("completed server = %s %q, want %s connected", done.ID, done.Status, serverID)
 	}
 }
 

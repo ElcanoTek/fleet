@@ -130,6 +130,19 @@ func EmailKey(e string) string {
 	return strings.ToLower(t)
 }
 
+// SameEmail reports whether a and b name the same account: whether their
+// EmailKeys are equal. It is the one comparison for identity emails (an
+// owner, a sender, a viewer, a participant, an OAuth flow's user), so a check
+// accepts exactly the addresses the store keys to the same account. An
+// address written with other capitals (Alice@x.com and alice@x.com, ÉMILE@x.com
+// and émile@x.com) or with surrounding spaces still matches. Two different
+// lowercase addresses never match, even where Unicode case folding calls
+// their letters the same (strings.EqualFold equates ς and σ, µ and μ, ϑ and
+// θ, ſ and s): each of them can be an account of its own.
+func SameEmail(a, b string) bool {
+	return EmailKey(a) == EmailKey(b)
+}
+
 // HasASCIILookalike reports whether s holds a non-ASCII character that
 // lowercases or case-folds onto an ASCII letter (U+212A, U+017F, U+0130).
 // U+017F is already lowercase, so an email stored before these checks may

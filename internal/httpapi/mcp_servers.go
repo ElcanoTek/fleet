@@ -21,6 +21,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/mcpoauth"
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
@@ -693,7 +694,7 @@ func (s *Server) effectiveOptionalMCPServersForCaller(ctx context.Context, user 
 		return nil
 	}
 	isOwner := (conv.UserEmail == "" && len(conv.OptionalMCPServersEnabled) > 0) ||
-		(conv.UserEmail != "" && strings.EqualFold(conv.UserEmail, user))
+		(conv.UserEmail != "" && pgtext.SameEmail(conv.UserEmail, user))
 	if isOwner && (s.remoteMCP == nil || !s.remoteMCP.Enabled()) {
 		return raw
 	}
@@ -858,7 +859,7 @@ func (s *Server) handleConversationMCPServersSet(w http.ResponseWriter, r *http.
 	}
 	sort.Strings(clean)
 	ownerEmail := convOwnerEmail(conv, user)
-	isOwner := conv == nil || conv.UserEmail == "" || strings.EqualFold(conv.UserEmail, user)
+	isOwner := conv == nil || conv.UserEmail == "" || pgtext.SameEmail(conv.UserEmail, user)
 	callerEmail := strings.TrimSpace(user)
 	if callerEmail == "" {
 		callerEmail = ownerEmail

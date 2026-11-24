@@ -9,6 +9,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/approvalglob"
 	"github.com/ElcanoTek/fleet/internal/identity"
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 	"github.com/ElcanoTek/fleet/internal/tools"
 )
 
@@ -36,7 +37,7 @@ func NewSessionApprovalRegistry() *SessionApprovalRegistry {
 }
 
 func sessionKey(convID, userEmail, toolName string) string {
-	return convID + "\x00" + strings.ToLower(strings.TrimSpace(userEmail)) + "\x00" + toolName
+	return convID + "\x00" + pgtext.EmailKey(userEmail) + "\x00" + toolName
 }
 
 // Register records a pre-decision for (convID, toolName). Nil-safe.
@@ -82,7 +83,7 @@ func (r *SessionApprovalRegistry) ForgetUnauthorizedUsers(convID, ownerEmail str
 		return
 	}
 	prefix := convID + "\x00"
-	ownerKey := strings.ToLower(strings.TrimSpace(ownerEmail))
+	ownerKey := pgtext.EmailKey(ownerEmail)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for k := range r.entries {
@@ -126,7 +127,7 @@ func (r *SessionApprovalRegistry) ForgetUser(userEmail string) {
 	if r == nil {
 		return
 	}
-	userKey := strings.ToLower(strings.TrimSpace(userEmail))
+	userKey := pgtext.EmailKey(userEmail)
 	if userKey == "" {
 		return
 	}

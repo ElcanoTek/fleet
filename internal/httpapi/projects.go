@@ -19,6 +19,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/logging"
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/tools"
@@ -398,7 +399,7 @@ func (s *Server) projectTransfer(w http.ResponseWriter, r *http.Request, user, p
 		return
 	}
 	admin := s.callerIsAdmin(r.Context())
-	if p == nil || (!strings.EqualFold(p.OwnerEmail, user) && !admin) {
+	if p == nil || (!pgtext.SameEmail(p.OwnerEmail, user) && !admin) {
 		http.Error(w, "project not found", http.StatusNotFound)
 		return
 	}
@@ -466,7 +467,7 @@ func (s *Server) projectMembersByID(w http.ResponseWriter, r *http.Request, user
 	// else: this list enumerates every account in a team, which is more than a
 	// plain member can learn from the project's own surfaces.
 	admin := s.callerIsAdmin(r.Context())
-	if p == nil || (!strings.EqualFold(p.OwnerEmail, user) && !admin) {
+	if p == nil || (!pgtext.SameEmail(p.OwnerEmail, user) && !admin) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
@@ -1123,7 +1124,7 @@ func (s *Server) projectMyState(w http.ResponseWriter, r *http.Request, p *store
 // worse than one anybody can, but "anybody edits anybody" is not a model a
 // team can reason about, so the rule is one line: yours, or yours to own.
 func mayManageProjectMemory(p *store.Project, m *store.Memory, user string) bool {
-	return strings.EqualFold(m.UserEmail, user) || strings.EqualFold(p.OwnerEmail, user)
+	return pgtext.SameEmail(m.UserEmail, user) || pgtext.SameEmail(p.OwnerEmail, user)
 }
 
 // projectMemoryPermitted resolves memID within the project and enforces
@@ -1250,7 +1251,7 @@ func (s *Server) projectExport(w http.ResponseWriter, r *http.Request, p *store.
 	// workspace routes are owner-scoped), but the export exists for the one
 	// person who can destroy the project, and that is who should have it.
 	user := userFromCtx(r.Context())
-	if !strings.EqualFold(p.OwnerEmail, user) && !s.callerIsAdmin(r.Context()) {
+	if !pgtext.SameEmail(p.OwnerEmail, user) && !s.callerIsAdmin(r.Context()) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
@@ -1326,7 +1327,7 @@ func (s *Server) projectTurnContext(ctx context.Context, user string, conv *stor
 	if err != nil || proj == nil {
 		return "", nil
 	}
-	if conv.UserEmail != "" && !strings.EqualFold(conv.UserEmail, user) {
+	if conv.UserEmail != "" && !pgtext.SameEmail(conv.UserEmail, user) {
 		callerTeam := ""
 		if u, uerr := s.store.GetUser(ctx, user); uerr == nil && u != nil {
 			callerTeam = u.TeamID

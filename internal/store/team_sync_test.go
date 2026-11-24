@@ -108,6 +108,35 @@ func TestApplyExternalAccessKeepsTeamThatDiffersOnlyInCase(t *testing.T) {
 	}
 }
 
+// A team label restated in another case form moves and unshares no one,
+// including where lowercasing alone would not map the two forms together:
+// GREEK CAPITAL SIGMA lowercases to σ, never to the final ς.
+func TestApplyExternalAccessKeepsTeamRestatedInGreekCapitals(t *testing.T) {
+	t.Parallel()
+
+	f := newTeamFixture(t)
+	for _, u := range []struct{ email, subject string }{{"bob@x.com", "bob"}, {"dana@x.com", "dana"}} {
+		if _, _, err := f.s.ApplyExternalAccess(f.ctx, teamGrant(u.email, u.subject, 1, strPtr("Πωλησεις"))); err != nil {
+			t.Fatalf("grant %s into Πωλησεις: %v", u.email, err)
+		}
+	}
+	p, err := f.s.CreateProject(f.ctx, &Project{OwnerEmail: "dana@x.com", Name: "Sales", TeamID: "Πωλησεις"})
+	if err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	c := f.sharedChat(t, "bob@x.com", p.ID, "Bob's shared chat")
+
+	if _, _, err := f.s.ApplyExternalAccess(f.ctx, teamGrant("bob@x.com", "bob", 2, strPtr("ΠΩΛΗΣΕΙΣ"))); err != nil {
+		t.Fatalf("grant bob into ΠΩΛΗΣΕΙΣ: %v", err)
+	}
+	if got := teamOf(t, f, "bob@x.com"); got != "Πωλησεις" {
+		t.Fatalf("bob's team = %q after his team was restated in capitals, want Πωλησεις unchanged", got)
+	}
+	if got, err := f.s.GetTeamVisibleConversation(f.ctx, "dana@x.com", c.ID); err != nil || got == nil {
+		t.Fatalf("dana lost bob's shared chat after his team was restated in capitals: (%v, %v)", got, err)
+	}
+}
+
 // A newly provisioned account is created in the provider's team.
 func TestApplyExternalAccessCreatesAccountInTeam(t *testing.T) {
 	t.Parallel()

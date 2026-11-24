@@ -32,6 +32,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/metrics"
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/store"
@@ -625,7 +626,7 @@ func matchesExclusiveOwnerRecipient(raw any, ownerEmail string) bool {
 		if s == "" || strings.ContainsAny(s, ",;<> \t\r\n") {
 			return false
 		}
-		return strings.EqualFold(s, owner)
+		return pgtext.SameEmail(s, owner)
 	case []any:
 		if len(v) != 1 {
 			return false
@@ -638,7 +639,7 @@ func matchesExclusiveOwnerRecipient(raw any, ownerEmail string) bool {
 		if s == "" || strings.ContainsAny(s, ",;<> \t\r\n") {
 			return false
 		}
-		return strings.EqualFold(s, owner)
+		return pgtext.SameEmail(s, owner)
 	default:
 		return false
 	}

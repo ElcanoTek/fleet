@@ -13,10 +13,10 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
-	"strings"
 
 	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/metrics"
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
@@ -39,7 +39,7 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request, convID str
 		return
 	}
 	var allowCheck func() bool
-	if conv.UserEmail != "" && !strings.EqualFold(user, conv.UserEmail) {
+	if conv.UserEmail != "" && !pgtext.SameEmail(user, conv.UserEmail) {
 		allowCheck = func() bool {
 			if s.currentMultiplayerEpoch(convID) == epoch {
 				return true

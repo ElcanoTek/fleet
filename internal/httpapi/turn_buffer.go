@@ -13,6 +13,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/logging"
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/tools"
@@ -604,7 +605,7 @@ func sanitizeTurnEventForViewerWithCards(name string, data []byte, viewerEmail, 
 		if sender == "" {
 			sender = strings.TrimSpace(convOwnerEmail)
 		}
-		if sender != "" && !strings.EqualFold(viewerEmail, sender) {
+		if sender != "" && !pgtext.SameEmail(viewerEmail, sender) {
 			delete(m, "injected_context")
 			if b, err := json.Marshal(m); err == nil {
 				return b, true
@@ -630,7 +631,7 @@ func sanitizeTurnEventForViewerWithCards(name string, data []byte, viewerEmail, 
 		if uEmail == "" {
 			return data, true
 		}
-		if viewerEmail != "" && !strings.EqualFold(viewerEmail, uEmail) {
+		if viewerEmail != "" && !pgtext.SameEmail(viewerEmail, uEmail) {
 			if name != "tool.result" || cardInput == nil {
 				return nil, false
 			}
@@ -658,7 +659,7 @@ func sanitizeTurnEventForViewerWithCards(name string, data []byte, viewerEmail, 
 }
 
 func sanitizeConversationEvent(data []byte, viewerEmail, convOwnerEmail string) ([]byte, bool) {
-	if len(data) == 0 || viewerEmail == "" || convOwnerEmail == "" || strings.EqualFold(viewerEmail, convOwnerEmail) {
+	if len(data) == 0 || viewerEmail == "" || convOwnerEmail == "" || pgtext.SameEmail(viewerEmail, convOwnerEmail) {
 		return data, true
 	}
 	var m map[string]any
@@ -693,7 +694,7 @@ func sanitizeTerminalTurnEvent(name string, data []byte, viewerEmail, convOwnerE
 	if sender == "" {
 		sender = strings.TrimSpace(convOwnerEmail)
 	}
-	if viewerEmail != "" && sender != "" && !strings.EqualFold(viewerEmail, sender) {
+	if viewerEmail != "" && sender != "" && !pgtext.SameEmail(viewerEmail, sender) {
 		switch name {
 		case "turn.completed":
 			return []byte("{}"), true
@@ -738,13 +739,13 @@ func sanitizeMCPServersUpdatedEvent(data []byte, viewerEmail, convOwnerEmail str
 	if !hasPart {
 		return data, true
 	}
-	isSender := viewerEmail != "" && uEmail != "" && strings.EqualFold(viewerEmail, uEmail)
+	isSender := viewerEmail != "" && uEmail != "" && pgtext.SameEmail(viewerEmail, uEmail)
 	if viewerEmail != "" && !isSender {
 		targetRaw := partRaw
-		viewerKey := strings.ToLower(strings.TrimSpace(viewerEmail))
+		viewerKey := pgtext.EmailKey(viewerEmail)
 		if vSpecific, ok := viewerMap[viewerKey]; ok {
 			targetRaw = vSpecific
-		} else if convOwnerEmail != "" && strings.EqualFold(viewerEmail, convOwnerEmail) {
+		} else if convOwnerEmail != "" && pgtext.SameEmail(viewerEmail, convOwnerEmail) {
 			if hasOwner {
 				targetRaw = ownerRaw
 			} else if uEmail == "" {
@@ -792,7 +793,7 @@ func sanitizeQueueUpdatedEvent(data []byte, viewerEmail string) ([]byte, bool) {
 	}
 	uEmail, _ := m["user_email"].(string)
 	uEmail = strings.TrimSpace(uEmail)
-	if uEmail != "" && viewerEmail != "" && !strings.EqualFold(viewerEmail, uEmail) {
+	if uEmail != "" && viewerEmail != "" && !pgtext.SameEmail(viewerEmail, uEmail) {
 		return nil, false
 	}
 	delete(m, "user_email")
@@ -807,7 +808,7 @@ func sanitizeQueueUpdatedEvent(data []byte, viewerEmail string) ([]byte, bool) {
 			itemUser, _ := itemMap["user_email"].(string)
 			itemUser = strings.TrimSpace(itemUser)
 			delete(itemMap, "user_email")
-			if uEmail == "" && viewerEmail != "" && itemUser != "" && !strings.EqualFold(viewerEmail, itemUser) {
+			if uEmail == "" && viewerEmail != "" && itemUser != "" && !pgtext.SameEmail(viewerEmail, itemUser) {
 				continue
 			}
 			filtered = append(filtered, itemMap)
@@ -869,7 +870,7 @@ func (b *turnBuffer) AttachForViewerChecked(ctx context.Context, lastEventID uin
 		subID = b.nextSubID
 		ch = make(chan bufferedEvent, 256)
 		b.subscribers[subID] = ch
-		b.subViewers[subID] = strings.ToLower(strings.TrimSpace(viewerEmail))
+		b.subViewers[subID] = pgtext.EmailKey(viewerEmail)
 	}
 	b.mu.Unlock()
 
@@ -1055,7 +1056,7 @@ func (b *turnBuffer) subscriberEmails() []string {
 	seen := make(map[string]bool, len(b.subViewers))
 	var out []string
 	for subID := range b.subscribers {
-		v := strings.ToLower(strings.TrimSpace(b.subViewers[subID]))
+		v := pgtext.EmailKey(b.subViewers[subID])
 		if v != "" && !seen[v] {
 			seen[v] = true
 			out = append(out, v)
@@ -1071,7 +1072,7 @@ func (b *turnBuffer) detachUnauthorizedViewers(ownerEmail string, allowedViewers
 	defer b.mu.Unlock()
 	for subID, ch := range b.subscribers {
 		v := b.subViewers[subID]
-		if v == "" || strings.EqualFold(v, ownerEmail) || allowedViewers[v] {
+		if v == "" || pgtext.SameEmail(v, ownerEmail) || allowedViewers[v] {
 			continue
 		}
 		if b.revokedSubs == nil {

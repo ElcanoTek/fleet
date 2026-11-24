@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 )
 
 const (
@@ -164,7 +166,7 @@ func (m *SessionManager) StartSession(ctx context.Context, req SessionStartReque
 
 	m.reapExpired()
 
-	owner := strings.ToLower(strings.TrimSpace(req.OwnerEmail))
+	owner := pgtext.EmailKey(req.OwnerEmail)
 	m.mu.Lock()
 	if len(m.sessions)+m.starting >= maxActiveSessions {
 		// Evict only the caller's own oldest session so one user cannot terminate
@@ -230,7 +232,7 @@ func (m *SessionManager) StartSession(ctx context.Context, req SessionStartReque
 	sess := &LiveSession{
 		id:          sessionID,
 		viewToken:   viewToken,
-		ownerEmail:  strings.ToLower(strings.TrimSpace(req.OwnerEmail)),
+		ownerEmail:  pgtext.EmailKey(req.OwnerEmail),
 		baseURL:     targetURL,
 		credentials: req.Credentials,
 		createdAt:   now,
@@ -352,7 +354,7 @@ func (m *SessionManager) reapExpired() {
 // multiplayer conversation never grants another user access to the owner's
 // live browser session.
 func (s *LiveSession) Authorize(ownerEmail string, viewToken string) bool {
-	caller := strings.ToLower(strings.TrimSpace(ownerEmail))
+	caller := pgtext.EmailKey(ownerEmail)
 	if s.ownerEmail != "" {
 		return caller != "" && caller == s.ownerEmail
 	}

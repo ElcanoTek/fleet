@@ -16,11 +16,11 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/logging"
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
@@ -118,7 +118,7 @@ func (s *Server) handleAuthVerify(w http.ResponseWriter, r *http.Request) {
 	// Rate-limit BEFORE any store work so a limited attempt costs neither a
 	// bcrypt nor a query. 429 (not the generic invalid-credentials body) so
 	// the login UI can say "try again shortly" honestly.
-	if !s.verifyLimit.allow(strings.ToLower(strings.TrimSpace(req.Email)), time.Now()) {
+	if !s.verifyLimit.allow(pgtext.EmailKey(req.Email), time.Now()) {
 		w.Header().Set("Retry-After", "60")
 		writeJSONStatus(w, r, http.StatusTooManyRequests, verifyResponse{
 			OK:    false,

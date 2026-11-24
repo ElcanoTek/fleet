@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/logging"
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
@@ -343,7 +344,7 @@ func (s *Server) handleConversationMultiplayerGet(w http.ResponseWriter, r *http
 		"multiplayer":  conv.Multiplayer,
 		"team_visible": conv.TeamVisible,
 		"owner_email":  conv.UserEmail,
-		"is_owner":     strings.EqualFold(conv.UserEmail, user),
+		"is_owner":     pgtext.SameEmail(conv.UserEmail, user),
 		"participants": nonNilStrings(conv.MultiplayerParticipants),
 		"excluded":     nonNilStrings(conv.MultiplayerExcluded),
 		"roster":       nonNilStrings(roster),
@@ -368,7 +369,7 @@ func (s *Server) handleConversationMultiplayerSet(w http.ResponseWriter, r *http
 	if !ok {
 		return
 	}
-	isOwner := strings.EqualFold(conv.UserEmail, user)
+	isOwner := pgtext.SameEmail(conv.UserEmail, user)
 	if !isOwner {
 		http.Error(w, "only the conversation owner can change multiplayer settings", http.StatusForbidden)
 		return
@@ -492,7 +493,7 @@ func (s *Server) enforceMultiplayerRevocation(ctx context.Context, convID string
 			entry.buf.detachUnauthorizedViewers(ownerEmail, allowed)
 		}
 		if entry.IsRunning() && entry.steer != nil {
-			sender := strings.ToLower(strings.TrimSpace(entry.steer.user))
+			sender := pgtext.EmailKey(entry.steer.user)
 			if sender != "" && !allowed[sender] {
 				revokedCandidates[sender] = true
 				_ = s.cancelInflightTurn(convID, entry.turnID)
@@ -511,7 +512,7 @@ func (s *Server) buildMultiplayerAllowedSet(qctx context.Context, convID string,
 		ownerEmail = conv.UserEmail
 		multiplayer = conv.Multiplayer
 	}
-	ownerKey = strings.ToLower(strings.TrimSpace(ownerEmail))
+	ownerKey = pgtext.EmailKey(ownerEmail)
 	allowed = map[string]bool{}
 	revokedCandidates = map[string]bool{}
 	if ownerKey != "" {
@@ -519,18 +520,18 @@ func (s *Server) buildMultiplayerAllowedSet(qctx context.Context, convID string,
 	}
 	if !multiplayer {
 		for _, r := range roster {
-			if e := strings.ToLower(strings.TrimSpace(r)); e != "" && e != ownerKey {
+			if e := pgtext.EmailKey(r); e != "" && e != ownerKey {
 				revokedCandidates[e] = true
 			}
 		}
 		if conv != nil {
 			for _, p := range conv.MultiplayerParticipants {
-				if e := strings.ToLower(strings.TrimSpace(p)); e != "" && e != ownerKey {
+				if e := pgtext.EmailKey(p); e != "" && e != ownerKey {
 					revokedCandidates[e] = true
 				}
 			}
 			for _, ex := range conv.MultiplayerExcluded {
-				if e := strings.ToLower(strings.TrimSpace(ex)); e != "" && e != ownerKey {
+				if e := pgtext.EmailKey(ex); e != "" && e != ownerKey {
 					revokedCandidates[e] = true
 				}
 			}
@@ -538,7 +539,7 @@ func (s *Server) buildMultiplayerAllowedSet(qctx context.Context, convID string,
 		return ownerEmail, ownerKey, allowed, revokedCandidates
 	}
 	for _, r := range roster {
-		e := strings.ToLower(strings.TrimSpace(r))
+		e := pgtext.EmailKey(r)
 		if e == "" {
 			continue
 		}
@@ -558,7 +559,7 @@ func (s *Server) buildMultiplayerAllowedSet(qctx context.Context, convID string,
 	}
 	if conv != nil {
 		for _, ex := range conv.MultiplayerExcluded {
-			if e := strings.ToLower(strings.TrimSpace(ex)); e != "" && e != ownerKey {
+			if e := pgtext.EmailKey(ex); e != "" && e != ownerKey {
 				delete(allowed, e)
 				revokedCandidates[e] = true
 			}
@@ -573,7 +574,7 @@ func (s *Server) revokeMultiplayerStoreItems(qctx context.Context, convID, owner
 			if item.State != store.InputStateQueued {
 				continue
 			}
-			sender := strings.ToLower(strings.TrimSpace(item.UserEmail))
+			sender := pgtext.EmailKey(item.UserEmail)
 			if sender != "" && !allowed[sender] {
 				revokedCandidates[sender] = true
 				_, _ = s.store.RemoveQueuedInput(qctx, item.UserEmail, convID, item.ID)
@@ -582,7 +583,7 @@ func (s *Server) revokeMultiplayerStoreItems(qctx context.Context, convID, owner
 	}
 	if approvals, err := s.store.ListPendingApprovals(qctx, "", convID); err == nil {
 		for _, a := range approvals {
-			sender := strings.ToLower(strings.TrimSpace(a.UserEmail))
+			sender := pgtext.EmailKey(a.UserEmail)
 			if sender != "" && !allowed[sender] {
 				revokedCandidates[sender] = true
 				_, _ = s.store.ClaimApproval(qctx, a.UserEmail, a.ID, "rejected", "Multiplayer access to this conversation was revoked.")
@@ -591,7 +592,7 @@ func (s *Server) revokeMultiplayerStoreItems(qctx context.Context, convID, owner
 	}
 	if scheds, serr := s.store.ListChatSchedules(qctx, "", convID, false); serr == nil {
 		for _, sc := range scheds {
-			sender := strings.ToLower(strings.TrimSpace(sc.UserEmail))
+			sender := pgtext.EmailKey(sc.UserEmail)
 			if sender != "" && sender != ownerKey && !allowed[sender] {
 				revokedCandidates[sender] = true
 				_, _ = s.store.CancelChatSchedule(qctx, sc.UserEmail, convID, sc.ID)
@@ -769,7 +770,7 @@ func (s *Server) handleConversationTeamView(w http.ResponseWriter, r *http.Reque
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	isOwner := strings.EqualFold(snap.OwnerEmail, user)
+	isOwner := pgtext.SameEmail(snap.OwnerEmail, user)
 	if !isOwner {
 		for i := range files {
 			if !files[i].Shared {

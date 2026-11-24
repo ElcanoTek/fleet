@@ -21,6 +21,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/mcp"
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 	"github.com/ElcanoTek/fleet/internal/sandbox"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
@@ -323,7 +324,7 @@ func (s *fakeChatStore) Get(_ context.Context, userEmail, convID string) (*store
 	if c == nil {
 		return nil, nil
 	}
-	if c.UserEmail != "" && userEmail != "" && !strings.EqualFold(c.UserEmail, userEmail) {
+	if c.UserEmail != "" && userEmail != "" && !pgtext.SameEmail(c.UserEmail, userEmail) {
 		return nil, nil
 	}
 	cp := *c
@@ -677,7 +678,7 @@ func (s *fakeChatStore) SetConversationMultiplayer(_ context.Context, ownerEmail
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	c := s.convs[convID]
-	if c == nil || (c.UserEmail != "" && ownerEmail != "" && !strings.EqualFold(c.UserEmail, ownerEmail)) {
+	if c == nil || (c.UserEmail != "" && ownerEmail != "" && !pgtext.SameEmail(c.UserEmail, ownerEmail)) {
 		return nil, store.ErrConversationNotFound
 	}
 	c.Multiplayer = multiplayer
@@ -712,10 +713,10 @@ func (s *fakeChatStore) TransferConversation(_ context.Context, ownerEmail, conv
 	defer s.mu.Unlock()
 	to := strings.ToLower(strings.TrimSpace(toEmail))
 	c := s.convs[convID]
-	if c == nil || !strings.EqualFold(c.UserEmail, ownerEmail) {
+	if c == nil || !pgtext.SameEmail(c.UserEmail, ownerEmail) {
 		return nil, store.ErrConversationNotFound
 	}
-	if to == "" || strings.EqualFold(to, ownerEmail) {
+	if to == "" || pgtext.SameEmail(to, ownerEmail) {
 		return nil, store.ErrTransferTarget
 	}
 	if u, ok := s.users[to]; ok && !u.Enabled {
@@ -739,7 +740,7 @@ func (s *fakeChatStore) UpdateConversationMultiplayerAccess(_ context.Context, o
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	c := s.convs[convID]
-	if c == nil || (c.UserEmail != "" && ownerEmail != "" && !strings.EqualFold(c.UserEmail, ownerEmail)) {
+	if c == nil || (c.UserEmail != "" && ownerEmail != "" && !pgtext.SameEmail(c.UserEmail, ownerEmail)) {
 		return nil, store.ErrConversationNotFound
 	}
 	for _, a := range addEmails {
@@ -747,7 +748,7 @@ func (s *fakeChatStore) UpdateConversationMultiplayerAccess(_ context.Context, o
 		if a == "" {
 			continue
 		}
-		c.MultiplayerExcluded = slices.DeleteFunc(c.MultiplayerExcluded, func(x string) bool { return strings.EqualFold(x, a) })
+		c.MultiplayerExcluded = slices.DeleteFunc(c.MultiplayerExcluded, func(x string) bool { return pgtext.SameEmail(x, a) })
 		if !slices.Contains(c.MultiplayerParticipants, a) {
 			c.MultiplayerParticipants = append(c.MultiplayerParticipants, a)
 		}
@@ -757,7 +758,7 @@ func (s *fakeChatStore) UpdateConversationMultiplayerAccess(_ context.Context, o
 		if r == "" {
 			continue
 		}
-		c.MultiplayerParticipants = slices.DeleteFunc(c.MultiplayerParticipants, func(x string) bool { return strings.EqualFold(x, r) })
+		c.MultiplayerParticipants = slices.DeleteFunc(c.MultiplayerParticipants, func(x string) bool { return pgtext.SameEmail(x, r) })
 		if !slices.Contains(c.MultiplayerExcluded, r) {
 			c.MultiplayerExcluded = append(c.MultiplayerExcluded, r)
 		}
@@ -773,7 +774,7 @@ func (s *fakeChatStore) GetMultiplayerConversation(_ context.Context, callerEmai
 		return nil, nil
 	}
 	for _, ex := range c.MultiplayerExcluded {
-		if strings.EqualFold(ex, callerEmail) {
+		if pgtext.SameEmail(ex, callerEmail) {
 			return nil, nil
 		}
 	}
@@ -803,12 +804,12 @@ func (s *fakeChatStore) ListSharedAndMultiplayerConversations(_ context.Context,
 	defer s.mu.Unlock()
 	var out []store.Conversation
 	for _, c := range s.convs {
-		if strings.EqualFold(c.UserEmail, callerEmail) || (!c.Multiplayer && !c.TeamVisible) {
+		if pgtext.SameEmail(c.UserEmail, callerEmail) || (!c.Multiplayer && !c.TeamVisible) {
 			continue
 		}
 		excluded := false
 		for _, ex := range c.MultiplayerExcluded {
-			if strings.EqualFold(ex, callerEmail) {
+			if pgtext.SameEmail(ex, callerEmail) {
 				excluded = true
 				break
 			}
@@ -825,7 +826,7 @@ func (s *fakeChatStore) ListFiltered(_ context.Context, userEmail string, _ stor
 	defer s.mu.Unlock()
 	var out []store.Conversation
 	for _, c := range s.convs {
-		if strings.EqualFold(c.UserEmail, userEmail) {
+		if pgtext.SameEmail(c.UserEmail, userEmail) {
 			out = append(out, *c)
 		}
 	}
@@ -839,7 +840,7 @@ func (s *fakeChatStore) Delete(_ context.Context, user, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	c := s.convs[id]
-	if c == nil || (c.UserEmail != "" && !strings.EqualFold(c.UserEmail, user)) {
+	if c == nil || (c.UserEmail != "" && !pgtext.SameEmail(c.UserEmail, user)) {
 		return store.ErrConversationNotFound
 	}
 	delete(s.convs, id)
@@ -1073,7 +1074,7 @@ func (s *fakeChatStore) SweepAndEnqueueDueUIAutoSubmits(_ context.Context, nowMs
 		if owner == "" {
 			owner = r.UserEmail
 		}
-		if !strings.EqualFold(owner, r.UserEmail) || c.EffectiveApprovalMode() != store.ConversationApprovalAutonomous {
+		if !pgtext.SameEmail(owner, r.UserEmail) || c.EffectiveApprovalMode() != store.ConversationApprovalAutonomous {
 			cancelRow()
 			continue
 		}
@@ -1672,7 +1673,7 @@ func (s *fakeChatStore) ListQueuedInputs(_ context.Context, userEmail, convID st
 	defer s.mu.Unlock()
 	var out []store.InputQueueRow
 	for _, it := range s.queue {
-		if it.ConversationID == convID && (userEmail == "" || strings.EqualFold(it.UserEmail, userEmail)) && it.Mode != store.InputModeDirect && it.State != store.InputStateCompleted && it.State != store.InputStateCancelled {
+		if it.ConversationID == convID && (userEmail == "" || pgtext.SameEmail(it.UserEmail, userEmail)) && it.Mode != store.InputModeDirect && it.State != store.InputStateCompleted && it.State != store.InputStateCancelled {
 			out = append(out, it)
 		}
 	}
@@ -1744,7 +1745,7 @@ func (s *fakeChatStore) CancelQueuedInputs(_ context.Context, userEmail, convID 
 	defer s.mu.Unlock()
 	n := 0
 	for i := range s.queue {
-		if s.queue[i].ConversationID == convID && (userEmail == "" || strings.EqualFold(s.queue[i].UserEmail, userEmail)) && s.queue[i].State == store.InputStateQueued && s.queue[i].AcceptedSeq <= upTo {
+		if s.queue[i].ConversationID == convID && (userEmail == "" || pgtext.SameEmail(s.queue[i].UserEmail, userEmail)) && s.queue[i].State == store.InputStateQueued && s.queue[i].AcceptedSeq <= upTo {
 			s.queue[i].State = store.InputStateCancelled
 			n++
 		}

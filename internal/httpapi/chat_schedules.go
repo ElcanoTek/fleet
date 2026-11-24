@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/tools"
@@ -475,7 +476,7 @@ func (s *Server) applyScheduleApprovalMutation(
 	autoApprove *bool,
 	defaultAutoWhenUnset bool,
 ) error {
-	if conv.UserEmail != "" && !strings.EqualFold(conv.UserEmail, user) {
+	if conv.UserEmail != "" && !pgtext.SameEmail(conv.UserEmail, user) {
 		return nil
 	}
 	switch {

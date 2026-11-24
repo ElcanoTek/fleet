@@ -23,6 +23,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/logging"
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/truncate"
@@ -113,7 +114,7 @@ const multiplayerInputKeyPrefix = "mp-user:"
 
 func effectiveMultiplayerInputID(user, rawID string) string {
 	rawID = strings.TrimSpace(rawID)
-	user = strings.ToLower(strings.TrimSpace(user))
+	user = pgtext.EmailKey(user)
 	if rawID == "" || user == "" {
 		return rawID
 	}
@@ -340,7 +341,7 @@ func (s *Server) handleBusySubmit(w http.ResponseWriter, r *http.Request, user s
 	}
 
 	if created && row.Mode == store.InputModeSteer && row.State != store.InputStateCancelled {
-		if entry, ok := s.getInflight(conv.ID); ok && entry.IsRunning() && entry.steer != nil && strings.EqualFold(entry.steer.user, user) {
+		if entry, ok := s.getInflight(conv.ID); ok && entry.IsRunning() && entry.steer != nil && pgtext.SameEmail(entry.steer.user, user) {
 			entry.steer.offer(row.ID, req.Message)
 		}
 	}
@@ -731,7 +732,7 @@ func (s *Server) handleQueueRoutes(w http.ResponseWriter, r *http.Request, user,
 		// Running turn: offer the promoted row to the steer boundary too (the
 		// queued->injected flip still gates on the boundary's Acknowledge),
 		// only when the active turn belongs to the same sender.
-		if entry, running := s.getInflight(convID); running && entry.IsRunning() && entry.steer != nil && strings.EqualFold(entry.steer.user, user) {
+		if entry, running := s.getInflight(convID); running && entry.IsRunning() && entry.steer != nil && pgtext.SameEmail(entry.steer.user, user) {
 			items, lerr := s.store.ListQueuedInputs(r.Context(), user, convID)
 			if lerr == nil {
 				for _, it := range items {
