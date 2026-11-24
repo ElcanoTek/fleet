@@ -117,12 +117,30 @@ gets no section and an unchanged prompt.
 ### The picker
 
 The account pill on a popover row and the account field in the library are the
-same `SeatMenu`. For a bundled connector with named accounts it is now a
-checklist (`aria-multiselectable`): each row ticks or unticks one account and
-the menu stays open. The last ticked account cannot be unticked (the
-connector's switch turns it off), and at the cap the unticked rows are
-disabled with "Up to 6 accounts at once." The pill reads the first account and
-how many more: `Elcano +2`.
+same `SeatMenu`. It has one behaviour at a time:
+
+- **Switch** (how it opens): a plain list with a check on the current
+  account. Clicking an account switches to it and closes the menu, as it did
+  before a chat could hold several. Switching accounts is by far the common
+  case, so it stays one click.
+- **Several**: a bundled connector with named accounts has a **Use several
+  accounts** switch at the menu's foot. On, the list is a checklist
+  (`aria-multiselectable`): each row ticks or unticks one account and the menu
+  stays open. The last ticked account cannot be unticked (the connector's
+  switch turns it off), and at the cap the unticked rows are disabled with
+  "Up to 6 accounts at once."
+
+The switch is on and locked while the chat already runs the connector as more
+than one account (turning it off would have to drop accounts nobody asked to
+drop); unticking down to one account unlocks it. Otherwise each opening starts
+as the switch list. The pill reads the account, or the first one and how many
+more: `Elcano +2`. From the keyboard, the arrow keys move through the accounts
+and past the last one onto the switch; Enter or Space acts on the focused
+row; Escape closes the menu.
+
+The first version was a checklist only. That made switching from one account
+to another two clicks (tick the new one, untick the old) and made it easy to
+end up on two accounts by accident.
 
 ### Approval cards
 

@@ -1045,11 +1045,15 @@ assistant cannot call a reserved tool in a conversation, whatever you turn on; a
 tools and connectors that Chat does not. When a connector has more than one
 account, an account menu on its row and in the library picks the one this
 conversation uses; the default reads as your deployment's name, or as the
-account you chose in **Settings → Connections**. For a **Bundled** connector
-the menu is a checklist, **Accounts**: tick two or more and this conversation
-uses the connector as each of them at once, up to six. The menu's button then
-reads the first account and how many more, as in `Elcano +2`. At least one
-account stays ticked; the connector's switch is what turns it off. With more
+account you chose in **Settings → Connections**. Click an account to
+switch to it; the menu closes. A **Bundled** connector's menu also has a **Use
+several accounts** switch at its foot. Turn it on and the list becomes a
+checklist: tick two or more and this conversation uses the connector as each
+of them at once, up to six. The menu's button then reads the first account and
+how many more, as in `Elcano +2`. At least one account stays ticked; the
+connector's switch is what turns it off. While more than one account is
+ticked the menu stays a checklist; untick down to one to get the plain list
+back. With more
 than one account on, the assistant names the account in its answers and
 before each action, asks which one you mean when a request does not say, and
 every action that needs approval gets its own card showing the one account it
