@@ -846,18 +846,120 @@ func firstLine(s string) string {
 	return ""
 }
 
-// openRepoRoots opens .git/worktrees (only when root's .git is the
-// repository recorded at startup) and .fleet-worktrees, each without
-// following a link; either is nil when unavailable. subErr reports why
-// .fleet-worktrees could not be opened (fs.ErrNotExist when it is absent).
-func openRepoRoots(ctx context.Context, root string) (admin, sub *os.Root, checkErr, subErr error) {
-	if checkErr = Pin(root).Check(ctx, root); checkErr == nil {
-		if r, err := openUnder(ctx, root, filepath.Join(".git", "worktrees")); err == nil {
-			admin = r
+// repoRoots is what openRepoRoots opened, and why something was not.
+type repoRoots struct {
+	// admin is .git/worktrees, nil unless the repository passed its check
+	// and the directory could be opened (adminErr says why not;
+	// fs.ErrNotExist when it is absent).
+	admin    *os.Root
+	adminErr error
+	// sub is .fleet-worktrees (subErr says why not; fs.ErrNotExist when it
+	// is absent).
+	sub    *os.Root
+	subErr error
+	// noRepo: root has no .git at all, so no record can exist.
+	noRepo bool
+	// checkErr: root has a .git, but it is not the repository recorded at
+	// startup or is laid out in a way fleet does not act on.
+	checkErr error
+}
+
+func (r repoRoots) close() { closeRoots(r.admin, r.sub) }
+
+// openRepoRoots opens .git/worktrees and .fleet-worktrees, each without
+// following a link. The repository is checked with RepoPin.CheckBeforeStart:
+// a one-off `fleet worktree prune|list` may run before an upgraded server
+// has created the directories it requires at start (logs/, lfs/, …), and
+// none of them matters here, where only .git/worktrees and .fleet-worktrees
+// are read or touched; a directory that is present must still be a real
+// one.
+func openRepoRoots(ctx context.Context, root string) repoRoots {
+	var r repoRoots
+	if _, err := os.Lstat(filepath.Join(root, ".git")); errors.Is(err, fs.ErrNotExist) {
+		r.noRepo = true
+	}
+	r.checkErr = Pin(root).CheckBeforeStart(ctx, root)
+	if r.noRepo {
+		r.checkErr = nil
+	}
+	if r.checkErr == nil && !r.noRepo {
+		r.admin, r.adminErr = openUnder(ctx, root, filepath.Join(".git", "worktrees"))
+	}
+	r.sub, r.subErr = openUnder(ctx, root, Subdir)
+	return r
+}
+
+// checkoutLock reads the checkout .fleet-worktrees/<name>'s .git file and
+// the record it names, so a checkout is removed only once its record has
+// been read and its lock honoured. It returns the record's lock reason (""
+// when unlocked, and for an orphan: a checkout with no .git file, or whose
+// record provably does not exist — no repository, no .git/worktrees, no
+// such entry), or an error when the .git file or the record cannot be read
+// or parsed, or the .git file names something other than a record under
+// this repository's .git/worktrees; the checkout is then kept.
+//
+// The lock is read from the record the checkout names whether or not the
+// pair is proven (fleetRecords): honouring it can only keep a checkout.
+func checkoutLock(r repoRoots, root, name string) (string, error) {
+	gitfile, err := readRegularNoFollow(r.sub, filepath.Join(name, ".git"), 64<<10)
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("its .git cannot be read: %w", err)
+	}
+	target, found := strings.CutPrefix(strings.TrimSpace(firstLine(string(gitfile))), "gitdir: ")
+	if !found {
+		return "", errors.New("its .git is not a `gitdir:` file")
+	}
+	id, ok := recordID(root, target)
+	if !ok {
+		return "", fmt.Errorf("its .git names %s, not a record under %s", SanitizeForTerminal(target), filepath.Join(root, ".git", "worktrees"))
+	}
+	switch {
+	case r.noRepo, errors.Is(r.adminErr, fs.ErrNotExist):
+		return "", nil
+	case r.admin == nil:
+		return "", fmt.Errorf("its record %s cannot be read: %w", id, errors.Join(r.adminErr, r.checkErr))
+	}
+	info, err := r.admin.Lstat(id)
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("its record %s cannot be read: %w", id, err)
+	}
+	if !info.IsDir() || info.Mode()&fs.ModeSymlink != 0 {
+		return "", fmt.Errorf("its record %s is not a directory (%s)", id, info.Mode().Type())
+	}
+	lockPath := filepath.Join(id, "locked")
+	if _, err := r.admin.Lstat(lockPath); errors.Is(err, fs.ErrNotExist) {
+		return "", nil
+	} else if err != nil {
+		return "", fmt.Errorf("its record %s's lock cannot be read: %w", id, err)
+	}
+	locked := "no reason given"
+	if b, ok := smallRegularFile(r.admin, lockPath, 4<<10); ok && strings.TrimSpace(b) != "" {
+		locked = strings.TrimSpace(firstLine(b))
+	}
+	return locked, nil
+}
+
+// recordID returns the record id a checkout's `gitdir:` target names when
+// it is an entry directly under root's .git/worktrees (by the root as
+// configured or resolved).
+func recordID(root, target string) (string, bool) {
+	target = filepath.Clean(target)
+	roots := []string{pinKey(root)}
+	if resolved, err := filepath.EvalSymlinks(root); err == nil && resolved != roots[0] {
+		roots = append(roots, resolved)
+	}
+	for _, r := range roots {
+		if filepath.Dir(target) == filepath.Join(r, ".git", "worktrees") {
+			return filepath.Base(target), true
 		}
 	}
-	sub, subErr = openUnder(ctx, root, Subdir)
-	return admin, sub, checkErr, subErr
+	return "", false
 }
 
 func closeRoots(roots ...*os.Root) {
@@ -887,32 +989,43 @@ var ErrRecordNotRemoved = errors.New("worktree record not removed")
 // directory inside it this process cannot search) keeps its record, and the
 // error says so; only a failure to remove the record after the checkout is
 // gone is ErrRecordNotRemoved.
-// The record is touched only when root's .git is the repository recorded at
-// startup and the record is proven to be this worktree's (fleetRecords).
+// The checkout is removed only once its record has been read
+// (checkoutLock): a repository that is present but fails its check, or a
+// record that cannot be read, keeps the checkout. The record is removed only
+// when the pair is proven to be this worktree's (fleetRecords).
 func RemoveWorktree(ctx context.Context, root, name string) error {
 	if name == "" || name != filepath.Base(name) || name == "." || name == ".." {
 		return fmt.Errorf("worktree remove: %q is not a worktree directory name", name)
 	}
-	admin, sub, _, subErr := openRepoRoots(ctx, root)
-	defer closeRoots(admin, sub)
-	if subErr != nil && !errors.Is(subErr, fs.ErrNotExist) {
-		return fmt.Errorf("worktree remove: %w", subErr)
+	r := openRepoRoots(ctx, root)
+	defer r.close()
+	if r.subErr != nil {
+		if errors.Is(r.subErr, fs.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("worktree remove: %w", r.subErr)
+	}
+	path := filepath.Join(root, Subdir, name)
+	if r.checkErr != nil {
+		return fmt.Errorf("worktree remove: %s kept: %w", path, r.checkErr)
+	}
+	locked, err := checkoutLock(r, root, name)
+	if err != nil {
+		return fmt.Errorf("worktree remove: %s kept: %w", path, err)
+	}
+	if locked != "" {
+		return fmt.Errorf("worktree remove: %s: %w (%s)", path, ErrLocked, SanitizeForTerminal(locked))
 	}
 	var rec adminRecord
 	var known bool
-	if admin != nil {
-		rec, known = fleetRecords(admin, sub, root).live[name]
-		if known && rec.isLock {
-			return fmt.Errorf("worktree remove: %s: %w (%s)", filepath.Join(root, Subdir, name), ErrLocked, SanitizeForTerminal(rec.locked))
-		}
+	if r.admin != nil {
+		rec, known = fleetRecords(r.admin, r.sub, root).live[name]
 	}
-	if sub != nil {
-		if err := sub.RemoveAll(name); err != nil {
-			return fmt.Errorf("worktree remove: %s was not fully removed, its record is kept: %w", filepath.Join(root, Subdir, name), err)
-		}
+	if err := r.sub.RemoveAll(name); err != nil {
+		return fmt.Errorf("worktree remove: %s was not fully removed, its record is kept: %w", path, err)
 	}
 	if known {
-		if err := admin.RemoveAll(rec.id); err != nil {
+		if err := r.admin.RemoveAll(rec.id); err != nil {
 			return fmt.Errorf("worktree remove: record %s: %w: %w", rec.id, ErrRecordNotRemoved, err)
 		}
 	}
@@ -1102,8 +1215,9 @@ type Entry struct {
 // come from records a run can write; callers display them with
 // SanitizeForTerminal.
 func List(ctx context.Context, root string) ([]Entry, error) {
-	admin, sub, _, subErr := openRepoRoots(ctx, root)
-	defer closeRoots(admin, sub)
+	r := openRepoRoots(ctx, root)
+	defer r.close()
+	admin, sub, subErr := r.admin, r.sub, r.subErr
 	if errors.Is(subErr, fs.ErrNotExist) {
 		return nil, nil
 	}
@@ -1162,22 +1276,30 @@ var reportedRoots sync.Map
 //     already gone are removed. This frees no disk; it stops the metadata
 //     from accumulating. Only records whose gitdir names a directory under
 //     .fleet-worktrees are considered — anything else in .git/worktrees is
-//     not fleet's. It runs only when root's .git is the repository pinned at
-//     startup (RepoPin.Check); a .git that appeared or changed since is
-//     reported once (a Warning on the first pass) and left alone until a
-//     restart.
+//     not fleet's.
 //  2. <root>/.fleet-worktrees/* directories older than olderThan are removed
-//     — the part that actually frees disk. One whose record is proven to be
-//     its own (the checkout's .git and the record's gitdir name each other)
-//     and marks it as locked is kept, whatever its age (a lock is the one
-//     explicit "in use" signal git offers); a proven record is removed
-//     together with its directory. A lock in a record not proven that way
-//     counts for nothing, and so does the "initializing" lock CreateWorktree
-//     removes once the record is complete: on a checkout this old it was left
-//     by a server stopped part-way.
+//     — the part that actually frees disk — but only once the record each
+//     checkout's .git file names has been read (checkoutLock). A lock in
+//     that record keeps the checkout, whatever its age (a lock is the one
+//     explicit "in use" signal git offers), except the "initializing" lock
+//     CreateWorktree removes once the record is complete: on a checkout this
+//     old it was left by a server stopped part-way. A .git file or record
+//     that cannot be read keeps the checkout too. A checkout with no .git
+//     file, or whose record provably does not exist, is an orphan and goes.
+//     A record proven to be the checkout's own (the checkout's .git and the
+//     record's gitdir name each other) is removed together with it.
 //  3. A record that holds nothing but an "initializing" lock older than
 //     olderThan — a CreateWorktree stopped before it wrote gitdir — is
 //     removed.
+//
+// Nothing at all is removed while root has a .git that is not the
+// repository pinned at startup, or is laid out in a way fleet does not act
+// on (RepoPin.CheckBeforeStart, which lets the directories the server
+// creates at start still be missing, so a one-off `fleet worktree prune`
+// before an upgraded server's first start still reads records and locks); a
+// .git that appeared or changed since is reported once (a Warning on the
+// first pass) and left alone until a restart. When root has no .git at
+// all, no record can exist and aged checkouts are orphans.
 //
 // Every deletion goes through an os.Root on .fleet-worktrees or on
 // .git/worktrees, each opened without following a symlink at any level
@@ -1207,16 +1329,17 @@ func PruneStale(ctx context.Context, root string, olderThan time.Duration, dryRu
 		olderThan = MinPruneAge
 	}
 
-	admin, sub, checkErr, subErr := openRepoRoots(ctx, root)
-	defer closeRoots(admin, sub)
-	if checkErr != nil {
-		if _, statErr := os.Lstat(filepath.Join(root, ".git")); statErr == nil {
-			// A .git is there but it is not the recorded repository: say so
-			// once per process.
-			if _, seen := reportedRoots.LoadOrStore(pinKey(root), true); !seen {
-				res.Warnings = append(res.Warnings, fmt.Sprintf("worktree records under %s left alone: %v", filepath.Join(root, ".git"), checkErr))
-			}
+	r := openRepoRoots(ctx, root)
+	defer r.close()
+	admin, sub, subErr := r.admin, r.sub, r.subErr
+	if r.checkErr != nil {
+		// A .git is there but it is not the recorded repository, or not one
+		// fleet acts on: no checkout is removed without its record read, so
+		// nothing is removed. Say so once per process.
+		if _, seen := reportedRoots.LoadOrStore(pinKey(root), true); !seen {
+			res.Warnings = append(res.Warnings, fmt.Sprintf("worktree checkouts under %s and records under %s left alone: %v", filepath.Join(root, Subdir), filepath.Join(root, ".git"), r.checkErr))
 		}
+		return res, nil
 	}
 	if subErr != nil && !errors.Is(subErr, fs.ErrNotExist) {
 		return res, fmt.Errorf("worktree prune: %w", subErr)
@@ -1260,12 +1383,22 @@ func PruneStale(ctx context.Context, root string, olderThan time.Duration, dryRu
 			res.Kept++
 			continue
 		}
-		rec, known := records.live[e.Name()]
-		if known && rec.isLock && rec.locked != initializingLock {
+		// The checkout goes only once its record has been read: a lock
+		// (other than the initializing one, which counts for nothing on a
+		// checkout this old) keeps it, and so does a .git file or record
+		// that cannot be read.
+		locked, recErr := checkoutLock(r, root, e.Name())
+		if recErr != nil {
 			res.Kept++
-			res.Warnings = append(res.Warnings, fmt.Sprintf("kept %s: locked (%s)", path, SanitizeForTerminal(rec.locked)))
+			res.Warnings = append(res.Warnings, fmt.Sprintf("kept %s: %v", path, recErr))
 			continue
 		}
+		if locked != "" && locked != initializingLock {
+			res.Kept++
+			res.Warnings = append(res.Warnings, fmt.Sprintf("kept %s: locked (%s)", path, SanitizeForTerminal(locked)))
+			continue
+		}
+		rec, known := records.live[e.Name()]
 		if dryRun {
 			res.Removed = append(res.Removed, path)
 			continue

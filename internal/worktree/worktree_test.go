@@ -109,10 +109,10 @@ func TestPruneStaleNonGitRootIsQuiet(t *testing.T) {
 }
 
 // A root whose .git is a gitfile (a linked worktree, here one pointing
-// nowhere) is not a repository fleet records at startup: its worktree records
-// are left alone, and the sweep says so once, while the directory sweep still
-// does its work.
-func TestPruneStaleGitfileRootLeavesRecordsAlone(t *testing.T) {
+// nowhere) is not a repository fleet records at startup: no checkout is
+// removed without its record read, so the sweep removes nothing — not even
+// an aged checkout — and says so once.
+func TestPruneStaleGitfileRootLeavesEverythingAlone(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, ".git"), []byte("gitdir: /nonexistent/gitdir\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -130,10 +130,10 @@ func TestPruneStaleGitfileRootLeavesRecordsAlone(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Errorf("want one warning that the records are left alone, got: %v", res.Warnings)
+		t.Errorf("want one warning that the checkouts and records are left alone, got: %v", res.Warnings)
 	}
-	if _, err := os.Stat(old); !os.IsNotExist(err) {
-		t.Errorf("aged worktree %s survived the sweep (stat err %v)", old, err)
+	if _, err := os.Stat(old); err != nil {
+		t.Errorf("aged worktree %s was removed while the repository failed its check: %v", old, err)
 	}
 	// Said once per process, not every pass.
 	res, _ = PruneStale(context.Background(), root, 24*time.Hour, false)
@@ -1390,5 +1390,143 @@ func TestLFSStorage(t *testing.T) {
 		if set != wantSet || (set && got != value) {
 			t.Errorf("lfs.storage %q: LFSStorage = %q, %v; want set=%v", value, got, set, wantSet)
 		}
+	}
+}
+
+// TestPruneHonoursLocksBeforeTheServerPreparesTheRepository: a one-off
+// `fleet worktree prune` run before an upgraded server has created the
+// directories it now requires (.git/lfs, .git/logs) still reads records and
+// honours a lock: the locked worktree and its record survive, and an
+// unlocked aged one is reclaimed with its record.
+func TestPruneHonoursLocksBeforeTheServerPreparesTheRepository(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	gitRepo(t, root)
+	if err := os.Mkdir(filepath.Join(root, Subdir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	lockedRecord, err := CreateWorktree(ctx, root, "task-locked", "fleet/task-locked")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(lockedRecord, "locked"), []byte("keep\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	freeRecord, err := CreateWorktree(ctx, root, "task-free", "fleet/task-free")
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-2 * DefaultPruneAge)
+	for _, name := range []string{"task-locked", "task-free"} {
+		if err := os.Chtimes(filepath.Join(root, Subdir, name), old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, dir := range []string{"lfs", "logs"} {
+		if err := os.RemoveAll(filepath.Join(root, ".git", dir)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	PinAtStartup(root) // what the one-off command does at its start
+	res, err := PruneStale(ctx, root, DefaultPruneAge, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{filepath.Join(root, Subdir, "task-locked"), lockedRecord} {
+		if _, err := os.Lstat(p); err != nil {
+			t.Errorf("the locked worktree lost %s: %v (warnings %v)", p, err, res.Warnings)
+		}
+	}
+	for _, p := range []string{filepath.Join(root, Subdir, "task-free"), freeRecord} {
+		if _, err := os.Lstat(p); !os.IsNotExist(err) {
+			t.Errorf("the unlocked aged worktree kept %s (lstat err %v)", p, err)
+		}
+	}
+}
+
+// TestPruneRemovesNothingWhenTheRepositoryFailsItsCheck: with a .git that
+// fleet does not act on (a symlinked .git/worktrees, an alternates file), no
+// checkout is removed, aged or not, and the sweep says why.
+func TestPruneRemovesNothingWhenTheRepositoryFailsItsCheck(t *testing.T) {
+	for name, spoil := range map[string]func(t *testing.T, gitDir string){
+		"symlinked worktrees": func(t *testing.T, gitDir string) {
+			target := t.TempDir()
+			if err := os.Rename(filepath.Join(gitDir, "worktrees"), filepath.Join(target, "worktrees")); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(filepath.Join(target, "worktrees"), filepath.Join(gitDir, "worktrees")); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"alternates": func(t *testing.T, gitDir string) {
+			if err := os.WriteFile(filepath.Join(gitDir, "objects", "info", "alternates"), []byte("/elsewhere\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			root := t.TempDir()
+			gitRepo(t, root)
+			if err := os.Mkdir(filepath.Join(root, Subdir), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := CreateWorktree(ctx, root, "task-run", "fleet/task-run"); err != nil {
+				t.Fatal(err)
+			}
+			orphan := mkWorktreeDir(t, root, "task-orphan", 2*DefaultPruneAge)
+			checkout := filepath.Join(root, Subdir, "task-run")
+			old := time.Now().Add(-2 * DefaultPruneAge)
+			if err := os.Chtimes(checkout, old, old); err != nil {
+				t.Fatal(err)
+			}
+			spoil(t, filepath.Join(root, ".git"))
+			res, err := PruneStale(ctx, root, DefaultPruneAge, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, p := range []string{checkout, orphan} {
+				if _, err := os.Lstat(p); err != nil {
+					t.Errorf("%s was removed while the repository failed its check: %v", p, err)
+				}
+			}
+			if len(res.Removed) != 0 || !strings.Contains(strings.Join(res.Warnings, "\n"), "left alone") {
+				t.Errorf("removed %v, warnings %v; want nothing removed and a warning", res.Removed, res.Warnings)
+			}
+			if err := RemoveWorktree(ctx, root, "task-run"); err == nil {
+				t.Error("RemoveWorktree removed a checkout while the repository failed its check")
+			}
+			if _, err := os.Lstat(checkout); err != nil {
+				t.Errorf("RemoveWorktree removed %s: %v", checkout, err)
+			}
+		})
+	}
+}
+
+// TestPruneKeepsACheckoutWhoseRecordCannotBeRead: a checkout whose .git
+// names something other than a record under this repository's
+// .git/worktrees is kept; one with no .git file at all is an orphan and
+// goes.
+func TestPruneKeepsACheckoutWhoseRecordCannotBeRead(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	gitRepo(t, root)
+	elsewhere := mkWorktreeDir(t, root, "task-elsewhere", 2*DefaultPruneAge)
+	if err := os.WriteFile(filepath.Join(elsewhere, ".git"), []byte("gitdir: /some/other/repo/.git/worktrees/x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-2 * DefaultPruneAge)
+	if err := os.Chtimes(elsewhere, old, old); err != nil {
+		t.Fatal(err)
+	}
+	orphan := mkWorktreeDir(t, root, "task-orphan", 2*DefaultPruneAge)
+	if _, err := PruneStale(ctx, root, DefaultPruneAge, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(elsewhere); err != nil {
+		t.Errorf("a checkout naming a record elsewhere was removed: %v", err)
+	}
+	if _, err := os.Lstat(orphan); !os.IsNotExist(err) {
+		t.Errorf("a checkout with no .git survived (lstat err %v)", err)
 	}
 }

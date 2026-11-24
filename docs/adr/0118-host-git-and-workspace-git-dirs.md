@@ -126,10 +126,15 @@ branch, run no git.** `internal/worktree` works through `os.Root` handles
 opened with the workspace tree's no-follow opener (`tools.OpenWorkspaceDir`,
 ADR-0036). Entries that are links are skipped. A record counts as a live
 worktree's only when the checkout's own `.git` file and the record's
-`gitdir` name each other (a run can rewrite only its own pair), and a lock is
-honoured only in such a record — except the `initializing` lock
-`CreateWorktree` removes when it finishes, which counts for nothing on a
-checkout past the prune age. A record whose `gitdir` names a
+`gitdir` name each other (a run can rewrite only its own pair); only such a
+record is removed with its checkout. No checkout is removed before the
+record its `.git` file names has been read: a lock there keeps it (except
+the `initializing` lock `CreateWorktree` removes when it finishes, which
+counts for nothing on a checkout past the prune age), and a `.git` file or
+record that cannot be read, or that names anything but an entry of this
+repository's `.git/worktrees`, keeps it too. A checkout with no `.git` file,
+or whose record provably does not exist (no `.git` at all, or no such
+entry), is an orphan. A record whose `gitdir` names a
 `.fleet-worktrees` directory that is gone is stale, and so is one holding
 nothing but an `initializing` lock older than the prune age (a server
 stopped before it wrote `gitdir`); reading such a record lists at most two
@@ -174,8 +179,14 @@ directories reached without following a link; no `objects/info/alternates`; regu
 `HEAD`, `config` and `packed-refs` files; no reftable ref storage. Anything
 it cannot establish is a refusal. A root not recorded, one that had no `.git`
 at startup, whose `.git` was replaced since, whose `.git` is a gitfile or a
-symlink, or that uses reftable, gets no worktree tasks (a clear error) and no
-record pruning (reported once per process). The directories `Check` requires
+symlink, or that uses reftable, gets no worktree tasks (a clear error), and
+the sweep and `fleet worktree prune` remove nothing there — no record and
+no checkout — reporting why once per process. The sweep, `fleet worktree
+prune|list` and a run's cleanup use the start-time form of the check
+(`RepoPin.CheckBeforeStart`), which lets the directories the server creates
+at start (below) still be missing, so a one-off `fleet worktree prune` run
+before an upgraded server's first start still reads records and honours
+locks. The directories `Check` requires
 that git does not always create (`worktrees/`, `logs/refs/heads/`,
 `objects/info/`, `info/`, `lfs/`) are created at boot, in mock mode too, so
 the mounts in decision 5 exist; `TakeWorktree` refuses a run without

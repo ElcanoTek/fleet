@@ -296,14 +296,19 @@ What this does **not** do:
   (ADR-0118): it reads and deletes through no-follow `os.Root` handles on
   `.fleet-worktrees` and `.git/worktrees` (`tools.OpenWorkspaceDir`), skips
   entries that are symlinks, and considers only records whose `gitdir` names
-  a directory under `.fleet-worktrees`; a lock counts only in a record that
-  its checkout's own `.git` file names back, and the `initializing` lock
-  fleet holds only while it writes a record counts for nothing on a
-  worktree this old. A record holding nothing but an `initializing` lock
-  older than the prune age (a server stopped while writing it) is removed. Records are pruned only when the
-  root's `.git` is the real directory recorded when fleet started; a `.git`
+  a directory under `.fleet-worktrees`. No checkout is removed before the
+  record its `.git` file names has been read: a lock there keeps it (the
+  `initializing` lock fleet holds only while it writes a record counts for
+  nothing on a worktree this old), and a `.git` file or record that cannot
+  be read keeps it too; a checkout with no `.git` file, or whose record
+  provably does not exist, is an orphan. A record holding nothing but an
+  `initializing` lock older than the prune age (a server stopped while
+  writing it) is removed. Nothing is removed unless the root's `.git` is the
+  real directory recorded when fleet started and passes its check; a `.git`
   that appeared or changed since is reported once per process and left alone
-  until a restart. `fleet worktree prune` and `fleet worktree list`, separate
+  until a restart. The directories the server creates at start may still be
+  missing, so `fleet worktree prune` before an upgraded server's first start
+  still honours locks. `fleet worktree prune` and `fleet worktree list`, separate
   processes, record the root as they find it when the command starts; `list`
   runs no git either and prints what a run could write (a lock reason) with
   control characters replaced. Every read of a record file Lstats it, opens it
