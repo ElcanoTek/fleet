@@ -1319,6 +1319,14 @@ type Task struct {
 	Tags           []string   `json:"tags,omitempty"`
 	LeaseOwner     *string    `json:"lease_owner,omitempty"`
 	LeaseExpiresAt *time.Time `json:"lease_expires_at,omitempty"`
+	// FinishedRunID is the claim token (the run_id) of the run whose outcome
+	// this row holds (migration 0213): stamped under the lease as a run ends,
+	// before its outcome is written, and again by the outcome write itself.
+	// The runner reads it back after a write whose result it could not see,
+	// and lease recovery dead-letters a leased/running row whose FinishedRunID
+	// equals its LeaseOwner instead of running it again. Internal bookkeeping:
+	// not in the API, never exported.
+	FinishedRunID *string `json:"-"`
 	// AttemptCount is how many times this task has been re-queued after a clean,
 	// transient failure (0 on the first run). MaxRetries caps it: the task may run
 	// up to MaxRetries+1 times before a failure is terminal.

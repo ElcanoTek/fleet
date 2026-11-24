@@ -193,6 +193,7 @@ A task can stop making progress in several ways. Each has a bound:
 | State | Backstop | Bound |
 | --- | --- | --- |
 | `running`, process crashed | `RecoverExpiredLeases` re-queues; past the retry budget it dead-letters | 5m lease |
+| `running`, run ended but its outcome write fails | The runner retries the write while it keeps the lease; a run that ended without its outcome landing is dead-lettered by `RecoverExpiredLeases` rather than run again, unless the outcome was itself a request to run again ([below](#when-a-runs-outcome-cannot-be-written)) | the outage; 10s past a force-cancel |
 | `running`, agent hung | Per-run wall-clock deadline | `FLEET_TASK_WALL_TIMEOUT` (4h) |
 | `running`, lease stolen | `errTaskLeaseLost` cancels the stale run | immediate |
 | `paused_awaiting_input` | `ExpirePausedTasks` fails it terminally | `FLEET_PAUSED_TASK_EXPIRY_MINUTES` (off by default) |
@@ -222,6 +223,110 @@ chain. See [`DEAD-LETTER-RECURRENCE.md`](DEAD-LETTER-RECURRENCE.md).
 
 There is no disable knob. An unreachable parked row is a broken row, not an
 operator policy choice.
+
+### When a run's outcome cannot be written
+
+A scheduled run ends in one lease-fenced write: its success or error, its
+retry requeue, its dead-letter, or its ask/wake park. That write used to be a
+single attempt. A Postgres restart, failover or connection reset at that
+moment left the row `running`; the worker returned, its lease renewals
+stopped, and five minutes later `RecoverExpiredLeases` re-queued the task, so
+the whole run happened again, emails and MCP writes included, as
+`[retry] attempt 2`. With `max_retries=0` it was dead-lettered as a crash loop
+instead, with no notification. A wall-clock timeout or a self-audit abort,
+which are never retried, re-ran the same way.
+
+Now every outcome write goes through one helper in the runner
+(`recordOutcome`, `internal/runner/outcome.go`):
+
+- **It retries while the run keeps its lease.** A failure the database
+  reports as transient (a restart or shutdown, a dropped or refused
+  connection, a timeout, too many connections, a serialization failure or
+  deadlock) is retried with backoff: 250 ms, doubling to 15 s between
+  attempts, each attempt bounded at 15 s. The run stays in the pool while it
+  retries, so its lease renewal keeps going. The pool slot stays taken
+  meanwhile, which is also what keeps `fleet update` waiting.
+- **Its own server's lease recovery leaves it alone.** An outage can outlast
+  the lease, because the renewals fail with it. The scheduler's lease
+  recovery skips every row leased by a run this server still holds, from just
+  before the claim commits until the run's outcome has landed or been given
+  up (`Pool.HeldLeaseTokens`, registered with `Storage.SetLeaseHolder`). When
+  the database answers again, the sweep may run first; it leaves the row, and
+  the run's next attempt lands. Renewals and outcome writes are fenced on the
+  lease owner, not on the expiry time, so an expired lease that nobody
+  recovered still accepts them. Rows leased by other servers are recovered as
+  before.
+- **It is idempotent.** Each outcome write records the run's claim token
+  (`sched.tasks.finished_run_id`, migration 0213) in the same statement that
+  releases the lease. When a write is refused by the lease fence, or its
+  COMMIT never answers (every transactional outcome write reports that case
+  as `ErrTaskCommitOutcomeUnknown`), the runner reads the row back. Its own token, a
+  released lease and the status it was writing mean the write had already
+  landed, so the run's notification and email reply fire once.
+- **A refusal no retry can fix is not retried.** For example, a constraint
+  violation or a structured-output contract error. The run records a fallback
+  instead: a dead-letter or a retry requeue falls back to a terminal error, as
+  before, and a structured task's success takes the structured-output
+  persistence class. A free-form success becomes a terminal `error` whose
+  message says the success could not be recorded and the run was not run
+  again. Before, it stayed `running` until lease recovery ran it again.
+- **Shutdown bounds it.** Retries continue through the drain grace
+  (`FLEET_SHUTDOWN_GRACE_SECONDS`). When the pool force-cancels its runs, every
+  write still pending, including the interrupted runs' own outcomes, gets one
+  shared 10 s window, then the runner gives up. That fits inside the 30 s the
+  deploy unit allows past the grace.
+- **A run that ended is not run again by recovery.** As a run ends, before
+  its outcome is written, the runner stamps `finished_run_id` under its
+  lease. If the outcome never lands, the row stays `running` with that
+  stamp: the database stayed unreachable until the server stopped, the
+  server was killed between the stamp and the write, or the outcome and its
+  fallback were both refused. A refusal does not wait for a stop: the worker
+  returns, and the lease runs out about five minutes later with the server
+  still running. Once the lease has expired, `RecoverExpiredLeases`
+  dead-letters the row, whatever its retry budget, with the reason "outcome
+  not recorded: the run finished, but its result could not be saved before
+  its lease expired…". It counts as
+  `fleet_dead_letter_queued_total{reason="outcome_unrecorded"}`. Read the run
+  log, then replay it (`fleet sched dlq replay`) if it should run again. A
+  recurring task's next occurrence is spawned by the recurrence sweep, as for
+  every recovery dead-letter.
+- **A run that asked to run again is not stamped.** The retry requeue and the
+  connector-outage re-run send the task back to run again, so the runner
+  does not stamp the run finished before writing them, and first clears a
+  stamp an earlier write of the same run left (a structured success that was
+  refused and is retried through `retry_on`). If such a write never lands,
+  recovery re-queues the task like a crash (attempt + 1), which is what the
+  run asked for. If clearing that earlier stamp fails too, the stamp stays
+  and recovery dead-letters the run instead.
+
+A run the process died in the middle of never stamped anything, so it is
+recovered as before: re-queued while its retry budget lasts (and run again as
+attempt N), dead-lettered by the crash-loop guard past it.
+
+What this does **not** cover:
+
+- **The stamp is a write too.** If the database was already unreachable when
+  the run ended and stays so until the server stops, nothing records that the
+  run ended, and recovery re-queues it like a crash.
+- **Another server's lease recovery.** It does not know which runs this
+  server holds. If an outage outlasts the lease and another fleet server on
+  the same database recovers the row first, the stamp makes it a dead-letter
+  rather than a second run, but the outcome the runner held is not the one
+  recorded.
+- **A run that hangs while its renewals keep failing** stays `running` until
+  it ends or its server restarts, since its own server no longer recovers it.
+  By default the wall-clock timeout (`FLEET_TASK_WALL_TIMEOUT`, 4h) bounds the
+  run; `FLEET_TASK_WALL_TIMEOUT=0` removes that bound.
+- **No notification for a recovery dead-letter**, the same gap as the expiry
+  sweeps above: the notifier lives in the runner.
+- **Transcripts and metadata are still single attempts.** The run log
+  (`AddLog`), the published-artifact manifest, the workspace path and clearing
+  answered questions or wake state are best effort. A failure there loses that
+  record, but it never runs the task again.
+- **Chat turns and patrols were never affected.** A chat turn stranded by a
+  crash is recovered as an interrupted turn, never re-run. A patrol fire whose
+  settle fails is delivered again under the same fire id, which does not
+  queue a second turn.
 
 ## Sandbox container bounds
 

@@ -58,7 +58,9 @@ package models
 //     quarantines to `dead_lettered` (storage.DeadLetterTaskWithContext).
 //     Crash recovery (db.RecoverExpiredLeases, #1116) requeues expired-lease
 //     rows to `pending` while the attempt budget lasts and dead-letters
-//     crash-loopers past it.
+//     crash-loopers past it. A row whose run ENDED before its lease expired
+//     (finished_run_id = lease_owner: the outcome write never landed) is
+//     dead-lettered whatever its budget, never re-queued.
 //   - Pauses (#510 / docs/SELF-WAKE.md): a RUNNING task may park lease-free in
 //     paused_awaiting_input (ask) or paused_awaiting_wake (sleep/event);
 //     resume/wake re-queue it as `pending` and the expiry sweeps fail an
@@ -140,7 +142,8 @@ const (
 	TaskWriterRunnerDeadLetter = "storage.DeadLetterTaskWithContext"
 	// TaskWriterLeaseRecovery — db.RecoverExpiredLeases
 	// (internal/sched/db/claim.go): crash-safe requeue of expired-lease rows,
-	// attempt-bounded into the DLQ (#1116).
+	// attempt-bounded into the DLQ (#1116); a run that ended without its
+	// outcome landing is dead-lettered, never re-queued.
 	TaskWriterLeaseRecovery = "db.RecoverExpiredLeases"
 	// TaskWriterPauseForQuestion — db.PauseTaskForQuestion
 	// (internal/sched/db/pause.go, #510): ask-pause, running only, lease
@@ -273,8 +276,8 @@ var TaskLifecycle = []TaskTransition{
 	// ── Crash recovery (#1116) ──────────────────────────────────────────
 	{TaskStatusLeased, TaskStatusPending, TaskWriterLeaseRecovery, "expired lease, attempt budget remains: requeue (attempt++)"},
 	{TaskStatusRunning, TaskStatusPending, TaskWriterLeaseRecovery, "expired lease, attempt budget remains: requeue (attempt++)"},
-	{TaskStatusLeased, TaskStatusDeadLettered, TaskWriterLeaseRecovery, "crash-loop guard: attempt budget spent"},
-	{TaskStatusRunning, TaskStatusDeadLettered, TaskWriterLeaseRecovery, "crash-loop guard: attempt budget spent"},
+	{TaskStatusLeased, TaskStatusDeadLettered, TaskWriterLeaseRecovery, "crash-loop guard: attempt budget spent; or the run ended and its outcome never landed (finished_run_id = lease_owner)"},
+	{TaskStatusRunning, TaskStatusDeadLettered, TaskWriterLeaseRecovery, "crash-loop guard: attempt budget spent; or the run ended and its outcome never landed (finished_run_id = lease_owner)"},
 
 	// ── Ask pause (#510) ────────────────────────────────────────────────
 	{TaskStatusRunning, TaskStatusPausedAwaitingInput, TaskWriterPauseForQuestion, "agent asked a human; lease released, paused_at stamped"},

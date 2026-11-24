@@ -319,6 +319,7 @@ type lifecycleSeedOpts struct {
 	attemptSpent bool          // attempt_count = max_retries (else 0 of 2)
 	pausedAgo    time.Duration // paused_at = now-… (0 = unset)
 	wakeAgo      time.Duration // wake_at = now-…, wake_event_key set (0 = unset)
+	runFinished  bool          // finished_run_id = the row's lease owner
 	scheduledFor *time.Time
 }
 
@@ -369,6 +370,14 @@ func seedLifecycleTask(t *testing.T, d *Database, status models.TaskStatus, opts
 			`UPDATE tasks SET wake_at = $2, wake_event_key = 'lifecycle-evt' WHERE id = $1`,
 			task.ID, now.Add(-opts.wakeAgo)); err != nil {
 			t.Fatalf("seed wake state: %v", err)
+		}
+	}
+	if opts.runFinished {
+		// Stamped on every row, standing in for db.MarkRunFinished, so the
+		// recovery branch's status clause is the deciding predicate.
+		if _, err := d.conn.ExecContext(ctx,
+			`UPDATE tasks SET finished_run_id = $2 WHERE id = $1`, task.ID, owner.String()); err != nil {
+			t.Fatalf("seed finished_run_id: %v", err)
 		}
 	}
 	return lifecycleSeed{id: task.ID, owner: owner}
@@ -567,32 +576,31 @@ func TestLifecycleDBWriterMatrix(t *testing.T) {
 		assertAll(models.TaskWriterStrandedWakeExpiry, models.TaskStatusError, rows)
 	})
 
-	t.Run("db.RecoverExpiredLeases requeue", func(t *testing.T) {
-		reset()
-		// Expired lease on EVERY row (status decides); attempt budget intact
-		// → the requeue branch's edges.
-		rows := seedAll(lifecycleSeedOpts{leaseExpired: true})
-		requeued, deadLettered, err := d.RecoverExpiredLeases(ctx, time.Now().UTC())
-		if err != nil {
-			t.Fatalf("recover: %v", err)
-		}
-		if requeued != 2 || deadLettered != 0 {
-			t.Errorf("recover = (%d requeued, %d dead-lettered), want (2, 0)", requeued, deadLettered)
-		}
-		assertAll(models.TaskWriterLeaseRecovery, models.TaskStatusPending, rows)
-	})
-
-	t.Run("db.RecoverExpiredLeases crash-loop dead-letter", func(t *testing.T) {
-		reset()
-		// Attempt budget spent → the quarantine branch's edges.
-		rows := seedAll(lifecycleSeedOpts{leaseExpired: true, attemptSpent: true})
-		requeued, deadLettered, err := d.RecoverExpiredLeases(ctx, time.Now().UTC())
-		if err != nil {
-			t.Fatalf("recover: %v", err)
-		}
-		if requeued != 0 || deadLettered != 2 {
-			t.Errorf("recover = (%d requeued, %d dead-lettered), want (0, 2)", requeued, deadLettered)
-		}
-		assertAll(models.TaskWriterLeaseRecovery, models.TaskStatusDeadLettered, rows)
-	})
+	// Lease recovery: an expired lease on EVERY row (status decides). The
+	// seeding picks the branch — attempt budget intact (requeue), spent
+	// (crash-loop dead-letter), or the run ended (finished_run_id =
+	// lease_owner: dead-letter whatever the budget, never the requeue).
+	// want is (requeued, crash-loop dead-lettered, unrecorded dead-lettered).
+	recoverCase := func(name string, opts lifecycleSeedOpts, target models.TaskStatus, want [3]int) {
+		t.Run("db.RecoverExpiredLeases "+name, func(t *testing.T) {
+			reset()
+			rows := seedAll(opts)
+			requeued, deadLettered, unrecorded, err := d.RecoverExpiredLeases(ctx, time.Now().UTC(), nil)
+			if err != nil {
+				t.Fatalf("recover: %v", err)
+			}
+			if got := [3]int{requeued, deadLettered, unrecorded}; got != want {
+				t.Errorf("recover = %v (requeued, dead-lettered, unrecorded), want %v", got, want)
+			}
+			assertAll(models.TaskWriterLeaseRecovery, target, rows)
+		})
+	}
+	recoverCase("requeue", lifecycleSeedOpts{leaseExpired: true}, models.TaskStatusPending, [3]int{2, 0, 0})
+	recoverCase("crash-loop dead-letter", lifecycleSeedOpts{leaseExpired: true, attemptSpent: true}, models.TaskStatusDeadLettered, [3]int{0, 2, 0})
+	recoverCase("finished-run dead-letter", lifecycleSeedOpts{leaseExpired: true, runFinished: true}, models.TaskStatusDeadLettered, [3]int{0, 0, 2})
+	// No lease_owner and no lease_expires_at at all: still a crash (the
+	// `lease_expires_at IS NULL` arm), in both crash branches — a NULL
+	// lease_owner must not read as "finished by its owner".
+	recoverCase("ownerless requeue", lifecycleSeedOpts{}, models.TaskStatusPending, [3]int{2, 0, 0})
+	recoverCase("ownerless crash-loop dead-letter", lifecycleSeedOpts{attemptSpent: true}, models.TaskStatusDeadLettered, [3]int{0, 2, 0})
 }

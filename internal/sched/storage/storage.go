@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -78,10 +79,12 @@ var ErrTaskLeaseNotHeld = errors.New("worker does not hold the lease on this tas
 // production caller; it is now enforced here.
 var ErrTaskNotReportableStatus = errors.New("status is not worker-reportable")
 
-// ErrTaskCommitOutcomeUnknown is returned only when the terminal transaction
-// reached Commit and Commit returned an error. The caller may re-read to learn
-// whether the transaction landed; earlier lease/validation/write errors are
-// definite failures and must never borrow another worker's terminal result.
+// ErrTaskCommitOutcomeUnknown is returned only when one of the runner's
+// lease-fenced transition transactions (UpdateTaskStatusAtomicWithContext,
+// the retry requeues, the dead-letter) reached Commit and Commit returned an
+// error. The caller may re-read to learn whether the transaction landed;
+// earlier lease/validation/write errors are definite failures and must never
+// borrow another worker's terminal result.
 var ErrTaskCommitOutcomeUnknown = errors.New("task transaction commit outcome unknown")
 
 // Storage provides persistent storage for scheduled tasks.
@@ -94,6 +97,10 @@ type Storage struct {
 	// per-task zone from this default, and EnqueueTask must do the same so
 	// agent/chat-created recurring tasks don't drift to UTC after occurrence #1.
 	defaultTaskTZ string
+	// leaseHolder reports the lease tokens runs in this process still hold
+	// (SetLeaseHolder); lease recovery through this Storage never touches a
+	// row leased by one of them. nil = none known.
+	leaseHolder atomic.Pointer[func() []string]
 }
 
 // New creates a new Storage instance.
@@ -534,6 +541,19 @@ func (s *Storage) ReleaseClaimedTask(ctx context.Context, taskID uuid.UUID, leas
 	return s.db.ReleaseClaimedTask(ctx, taskID, leaseOwner)
 }
 
+// MarkRunFinished stamps the run's claim token on its task as the run ends,
+// before the runner writes the outcome, so lease recovery never runs a
+// finished run again (see db.MarkRunFinished). Reports whether it landed.
+func (s *Storage) MarkRunFinished(ctx context.Context, taskID, leaseOwner uuid.UUID) (bool, error) {
+	return s.db.MarkRunFinished(ctx, taskID, leaseOwner.String())
+}
+
+// ClearRunFinished removes this claim's own finished stamp before a write
+// that asks for the task to run again (see db.ClearRunFinished).
+func (s *Storage) ClearRunFinished(ctx context.Context, taskID, leaseOwner uuid.UUID) (bool, error) {
+	return s.db.ClearRunFinished(ctx, taskID, leaseOwner.String())
+}
+
 // PromoteStarvedTasks raises the effective priority of pending tasks that have
 // waited past the starvation window (#230). Returns the count promoted.
 func (s *Storage) PromoteStarvedTasks(ctx context.Context, windowMinutes int) (int64, error) {
@@ -601,17 +621,48 @@ func (s *Storage) RecoverExpiredLeases() (int, error) {
 	return s.RecoverExpiredLeasesWithContext(context.Background())
 }
 
+// SetLeaseHolder registers the source of the lease tokens runs in this process
+// still hold — the runner pool's HeldLeaseTokens, wired by cmd/fleet. Lease
+// recovery through this Storage (the scheduler tick, startup) then leaves
+// those rows alone however expired their leases: such a run is alive, and its
+// renewal or outcome write lands once the database answers again (see
+// db.RecoverExpiredLeases). Safe to call at any time; nil unregisters.
+func (s *Storage) SetLeaseHolder(held func() []string) {
+	if held == nil {
+		s.leaseHolder.Store(nil)
+		return
+	}
+	s.leaseHolder.Store(&held)
+}
+
 // RecoverExpiredLeasesWithContext resets tasks with expired leases with context.
 // Returns the count re-queued to pending. Rows already past their retry budget
 // are dead-lettered instead (#1116, the crash-loop bound — see
-// db.RecoverExpiredLeases); those are logged and counted into the DLQ metric
-// here rather than returned, so the "recovered N tasks" logs the callers emit
-// stay honest about what was actually re-queued.
+// db.RecoverExpiredLeases), and so are runs that ended without their outcome
+// reaching the row (finished_run_id = lease_owner), which are never run
+// again; both are logged and counted into the DLQ metric here rather than
+// returned, so the "recovered N tasks" logs the callers emit stay honest about
+// what was actually re-queued.
 func (s *Storage) RecoverExpiredLeasesWithContext(ctx context.Context) (int, error) {
+	// Read before the sweep's statements: a token is held from before its
+	// claim commits until its run's outcome has landed or been abandoned, so
+	// one added after this read has a fresh lease, and one released after it
+	// no longer leases its row (or was given up at shutdown, when recovery is
+	// exactly what should happen to it).
+	var held []string
+	if h := s.leaseHolder.Load(); h != nil {
+		held = (*h)()
+	}
 	now := time.Now().UTC()
-	requeued, deadLettered, err := s.db.RecoverExpiredLeases(ctx, now)
-	if err != nil {
-		return requeued, err
+	// The three statements commit separately, so a later one failing leaves
+	// the earlier ones' rows quarantined: log and count those before
+	// returning the error.
+	requeued, deadLettered, unrecorded, err := s.db.RecoverExpiredLeases(ctx, now, held)
+	if unrecorded > 0 {
+		logging.From(ctx).Warn("Lease recovery dead-lettered runs that finished without recording their outcome; they are not run again", "dead_lettered", unrecorded)
+		for i := 0; i < unrecorded; i++ {
+			metrics.RecordDeadLetterQueued("outcome_unrecorded")
+		}
 	}
 	if deadLettered > 0 {
 		logging.From(ctx).Warn("Lease recovery dead-lettered crash-looping tasks past their retry budget", "dead_lettered", deadLettered)
@@ -619,7 +670,7 @@ func (s *Storage) RecoverExpiredLeasesWithContext(ctx context.Context) (int, err
 			metrics.RecordDeadLetterQueued("lease_recovery")
 		}
 	}
-	return requeued, nil
+	return requeued, err
 }
 
 // GetTasksByStatus gets all tasks with a specific status.
@@ -1684,6 +1735,13 @@ func (s *Storage) UpdateTaskStatusAtomicWithContext(ctx context.Context, taskID 
 		task.Artifacts = update.Artifacts
 	}
 
+	// A terminal transition records which run reached it (migration 0213), in
+	// the same transaction: a runner whose COMMIT result was lost reads the
+	// row back and recognises its own outcome by this token.
+	if update.Status == models.TaskStatusSuccess || update.Status == models.TaskStatusError {
+		finishedBy := nodeID.String()
+		task.FinishedRunID = &finishedBy
+	}
 	applySuccessOrErrorTransition(task, update)
 
 	if err := s.db.UpdateTaskTx(ctx, tx, task); err != nil {
@@ -1808,6 +1866,10 @@ func (s *Storage) requeueTaskForRetry(ctx context.Context, taskID, nodeID uuid.U
 	// A retry is a fresh attempt. Never let a legacy/pre-contract candidate from
 	// an earlier attempt become the next attempt's effective success output.
 	task.OutputJSON = nil
+	// The run that asked for the retry (migration 0213): the runner's
+	// read-back after a lost result recognises its requeue by it.
+	finishedBy := nodeID.String()
+	task.FinishedRunID = &finishedBy
 	task.LeaseOwner = nil
 	task.LeaseExpiresAt = nil
 	if msg != "" {
@@ -1818,7 +1880,7 @@ func (s *Storage) requeueTaskForRetry(ctx context.Context, taskID, nodeID uuid.U
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", ErrTaskCommitOutcomeUnknown, err)
 	}
 	return task, nil
 }
@@ -1886,6 +1948,9 @@ func (s *Storage) DeadLetterTaskWithOutcomeWithContext(ctx context.Context, task
 		}
 	}
 	task.OutputJSON = nil
+	// The run that quarantined the row (migration 0213), as in the requeue.
+	finishedBy := nodeID.String()
+	task.FinishedRunID = &finishedBy
 	task.LeaseOwner = nil
 	task.LeaseExpiresAt = nil
 	if reason != "" {
@@ -1897,7 +1962,7 @@ func (s *Storage) DeadLetterTaskWithOutcomeWithContext(ctx context.Context, task
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", ErrTaskCommitOutcomeUnknown, err)
 	}
 	// Post-commit on purpose, matching UpdateTaskStatusAtomicWithContext: folding
 	// the spawn into the quarantine tx would make a transient successor-insert

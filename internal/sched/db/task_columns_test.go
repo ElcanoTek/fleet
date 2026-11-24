@@ -299,6 +299,7 @@ func TestTaskRegistryRoundTrip(t *testing.T) {
 	task.WakeReason = "seeded reason"
 	task.WakeCycles = 5
 	task.PausedAt = &now
+	task.FinishedRunID = strPtr("seeded-run")
 
 	if err := d.AddTask(ctx, task); err != nil {
 		t.Fatalf("AddTask: %v", err)
@@ -313,6 +314,7 @@ func TestTaskRegistryRoundTrip(t *testing.T) {
 	insertExcluded := []string{
 		"ErrorAnalysis", "Artifacts", "PendingQuestion", "PendingAnswer",
 		"WakeAt", "WakeEventKey", "WakeNote", "WakeReason", "WakeCycles", "PausedAt",
+		"FinishedRunID",
 	}
 	assertTaskFieldsEqual(t, "insert round trip", task, got, insertExcluded)
 
@@ -334,7 +336,8 @@ func TestTaskRegistryRoundTrip(t *testing.T) {
 			pending_question = 'seeded question', pending_answer = 'seeded answer',
 			wake_at = $4, wake_event_key = 'seeded-event', wake_note = 'seeded note',
 			wake_reason = 'seeded reason', wake_cycles = 7,
-			paused_at = $4, effective_priority = 7, recurrence_spawned = TRUE
+			paused_at = $4, effective_priority = 7, recurrence_spawned = TRUE,
+			finished_run_id = 'seeded-run'
 		WHERE id = $1`,
 		task.ID, []byte(seededAnalysis), []byte(seededArtifacts), seedTime); err != nil {
 		t.Fatalf("seed excluded columns: %v", err)
@@ -370,6 +373,7 @@ func TestTaskRegistryRoundTrip(t *testing.T) {
 	expUpsert.WakeReason = "seeded reason"
 	expUpsert.WakeCycles = 7
 	expUpsert.PausedAt = &seedTime
+	expUpsert.FinishedRunID = strPtr("seeded-run")
 	expUpsert.EffectivePriority = 7 // the in-memory task carried 25; the upsert must not write it back
 	// Provenance is stamped by the creating insert and by nothing after it
 	// (#1270): the upsert carried "key-2-attempted-rewrite" and must be ignored.
@@ -377,15 +381,16 @@ func TestTaskRegistryRoundTrip(t *testing.T) {
 	assertTaskFieldsEqual(t, "upsert exclusion", &expUpsert, afterUpsert, nil)
 	assertRecurrenceSpawned(t, d, task.ID, true, "upsert exclusion")
 
-	// UpdateTaskTx: the txUpdate-writable trio (artifacts, pending_question,
-	// pending_answer) must go through, while the txUpdate-excluded columns —
-	// wake state, paused_at, error_analysis, effective_priority,
-	// created_by_key_id, recurrence_spawned — keep their stored values even
-	// though the in-memory copy zeroes every one of them.
+	// UpdateTaskTx: the txUpdate-writable columns (artifacts, pending_question,
+	// pending_answer, finished_run_id) must go through, while the
+	// txUpdate-excluded columns — wake state, paused_at, error_analysis,
+	// effective_priority, created_by_key_id, recurrence_spawned — keep their
+	// stored values even though the in-memory copy zeroes every one of them.
 	upd := *afterUpsert
 	upd.Artifacts = json.RawMessage(`[{"name":"b.txt","path":"out/b.txt","size":42}]`)
 	upd.PendingQuestion = "which env?"
 	upd.PendingAnswer = "prod"
+	upd.FinishedRunID = strPtr("tx-run")
 	upd.ErrorAnalysis = nil
 	upd.WakeAt = nil
 	upd.WakeEventKey = ""
