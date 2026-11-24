@@ -211,7 +211,12 @@ advises on each demoted split admin, unknown role and duplicate username in it.
   - its in-memory approve/deny-all decisions, which are kept by address,
     are forgotten while its work is stopped and again after the commit,
     whatever holds the address by then (forgetting one only means approving
-    again).
+    again). A deletion run with the CLI cannot reach a running server's
+    memory: the server drops that address's decisions at its next hourly
+    maintenance pass, so an account re-created under the address before that
+    pass can still be offered them in a conversation it is allowed into.
+    Delete accounts from Settings → Admin → Users while the server runs, or
+    restart the server after a CLI deletion.
 
   **Work in flight.** The web route first refuses what the deletion would
   refuse (no such account: 404; a team-shared project still owned: 409),
