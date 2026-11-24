@@ -77,7 +77,7 @@ Each member is checked against the rows the same response lists
 | --- | --- |
 | `ok` | the connector is in this user's picker with a switch and has the account |
 | `account_missing` | the connector is there, but this account is not provisioned on the box |
-| `connector_missing` | the connector is not in this user's picker: not set up on the box, unavailable, or turned off under Settings → Connections |
+| `connector_missing` | the connector is not usable by this user: not set up on the box, unavailable, or turned off under Settings → Connections (including one a conversation still lists only so it can be switched off) |
 
 ## What a click does
 

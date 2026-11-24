@@ -99,7 +99,7 @@ func (s *Server) listMCPServerCatalog(w http.ResponseWriter, r *http.Request) {
 	// What a chat turn can call: interactive_hidden_tools are not offered
 	// (mcp_servers_hidden.go).
 	servers = hideInteractiveHiddenTools(servers)
-	writeJSON(w, r, s.withAccountGroups(map[string]any{"servers": servers, "categories": s.clientConfig.ConnectorCategories()}, servers))
+	writeJSON(w, r, s.withAccountGroups(map[string]any{"servers": servers, "categories": s.clientConfig.ConnectorCategories()}, servers, nil))
 }
 
 // defaultEnabledOptionalMCPServers returns the canonical (lowercased, sorted,
@@ -739,12 +739,21 @@ func (s *Server) handleConversationMCPServersGet(w http.ResponseWriter, r *http.
 	}
 	cats := s.connectorCategories()
 	servers := s.alwaysOnMCPServerCatalogEntries()
+	// Connectors listed only so they can be switched off: the user turned
+	// them off under Settings → Connections, and no turn runs them.
+	var turnedOff map[string]bool
 	for _, info := range s.agent.MCPServerCatalog() {
 		avail, _, seat := bundledPrefFor(prefs, info)
 		if !avail && !enabled[info.Name] {
 			// Hidden unless the conversation already opted it in before the
 			// user disabled it (then it stays visible so it can be turned off).
 			continue
+		}
+		if !avail {
+			if turnedOff == nil {
+				turnedOff = map[string]bool{}
+			}
+			turnedOff[info.Name] = true
 		}
 		row := map[string]any{
 			"name":         info.Name,
@@ -803,7 +812,7 @@ func (s *Server) handleConversationMCPServersGet(w http.ResponseWriter, r *http.
 	// What a chat turn can call: interactive_hidden_tools are not offered
 	// (mcp_servers_hidden.go).
 	servers = hideInteractiveHiddenTools(servers)
-	writeJSON(w, r, s.withAccountGroups(map[string]any{"servers": servers, "categories": s.clientConfig.ConnectorCategories()}, servers))
+	writeJSON(w, r, s.withAccountGroups(map[string]any{"servers": servers, "categories": s.clientConfig.ConnectorCategories()}, servers, turnedOff))
 }
 
 // handleConversationMCPServersSet serves POST /conversations/{id}/mcp-servers.

@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"net/http/httptest"
 	"os"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
+	"github.com/ElcanoTek/fleet/internal/store"
 )
 
 func TestResolveAccountGroups(t *testing.T) {
@@ -58,10 +60,16 @@ func TestPickableBundledAccounts(t *testing.T) {
 		{"name": "hidden", "remote": true},
 		{"name": "not-in-catalog"},
 	}
-	got := pickableBundledAccounts(rows, catalog)
+	got := pickableBundledAccounts(rows, catalog, nil)
 	want := map[string][]string{"ix": {"twc"}, "ox": nil}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("pickable = %#v, want %#v", got, want)
+	}
+	// A connector the user turned off under Settings → Connections is still
+	// listed in a conversation that had it on, but no turn runs it.
+	got = pickableBundledAccounts(rows, catalog, map[string]bool{"ix": true})
+	if want := (map[string][]string{"ox": nil}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("pickable with ix turned off = %#v, want %#v", got, want)
 	}
 }
 
@@ -153,4 +161,80 @@ func writeBareBundle(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return dir
+}
+
+// A connector the user turned off under Settings → Connections stays listed in
+// a conversation that already had it on, so it can be switched off there, but
+// no turn runs it. A group member on it is reported missing, not usable.
+func TestConversationCatalogAccountGroupsSkipConnectorsTurnedOffInSettings(t *testing.T) {
+	t.Parallel()
+	srv, st, _, user := remoteMCPFixture(t)
+	srv.agent = &catalogEngine{catalog: []agent.OptionalServerInfo{
+		{Name: "gamma", Accounts: []string{"twc"}, Tools: []string{"get"}, ToolCount: 1},
+	}}
+	dir := t.TempDir()
+	manifest := `
+mcp_servers:
+  - name: gamma
+    display_name: Gamma
+    description: Decks.
+    command: /bin/true
+    optional: true
+    always: true
+account_groups:
+  groups:
+    - name: The Weather Company
+      accounts: [{server: gamma, account: twc}]
+`
+	if err := os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bundle, err := clientconfig.Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.clientConfig = bundle
+
+	ctx := context.Background()
+	conv, err := st.CreateConversation(ctx, user, "t", "victoria", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetOptionalMCPServers(ctx, user, conv.ID, []string{"gamma"}); err != nil {
+		t.Fatal(err)
+	}
+	status := func() string {
+		t.Helper()
+		req := httptest.NewRequest("GET", "/conversations/"+conv.ID+"/mcp-servers", nil)
+		req = req.WithContext(asUser(req.Context(), user))
+		w := httptest.NewRecorder()
+		srv.conversationByID(w, req)
+		var body struct {
+			Servers       []map[string]any  `json:"servers"`
+			AccountGroups accountGroupsView `json:"account_groups"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+			t.Fatalf("GET: %d %s", w.Code, w.Body.String())
+		}
+		listed := false
+		for _, row := range body.Servers {
+			if row["name"] == "gamma" {
+				listed = true
+			}
+		}
+		if !listed {
+			t.Fatalf("gamma is not listed: %s", w.Body.String())
+		}
+		return body.AccountGroups.Groups[0].Accounts[0].Status
+	}
+	if got := status(); got != accountGroupMemberOK {
+		t.Fatalf("status = %q, want ok", got)
+	}
+	if err := st.SetConnectorPref(ctx, user, store.ConnectorPref{Kind: store.ConnectorKindBundled, ConnectorID: "gamma", Enabled: false}); err != nil {
+		t.Fatal(err)
+	}
+	// Still listed (the conversation has it on), but not a usable member.
+	if got := status(); got != accountGroupMemberConnectorMissing {
+		t.Fatalf("status with gamma turned off in Settings = %q, want %q", got, accountGroupMemberConnectorMissing)
+	}
 }

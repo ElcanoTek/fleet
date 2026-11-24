@@ -83,7 +83,12 @@ func resolveAccountGroups(cfg clientconfig.AccountGroupsConfig, pickable map[str
 // rows are the response's own server rows, so a connector the response hides
 // (the user turned it off, the persona cannot use it in chat) is not pickable
 // here either.
-func pickableBundledAccounts(rows []map[string]any, catalog []agent.OptionalServerInfo) map[string][]string {
+//
+// turnedOff names connectors the user turned off under Settings → Connections.
+// A conversation that had one on still lists its row, so it can be switched
+// off there, but no turn will run it (applyConnectorPrefs drops it): it is not
+// pickable, and a group member on it is reported missing.
+func pickableBundledAccounts(rows []map[string]any, catalog []agent.OptionalServerInfo, turnedOff map[string]bool) map[string][]string {
 	accounts := make(map[string][]string, len(catalog))
 	for _, info := range catalog {
 		accounts[info.Name] = info.Accounts
@@ -91,7 +96,7 @@ func pickableBundledAccounts(rows []map[string]any, catalog []agent.OptionalServ
 	out := make(map[string][]string, len(rows))
 	for _, row := range rows {
 		name, _ := row["name"].(string)
-		if name == "" {
+		if name == "" || turnedOff[name] {
 			continue
 		}
 		if remote, _ := row["remote"].(bool); remote {
@@ -113,12 +118,13 @@ func pickableBundledAccounts(rows []map[string]any, catalog []agent.OptionalServ
 }
 
 // withAccountGroups adds the bundle's account groups to a catalog response
-// body. A bundle with none leaves the body as it was, key and all.
-func (s *Server) withAccountGroups(body map[string]any, rows []map[string]any) map[string]any {
+// body. A bundle with none leaves the body as it was, key and all. turnedOff
+// is pickableBundledAccounts'; nil when the response lists no such row.
+func (s *Server) withAccountGroups(body map[string]any, rows []map[string]any, turnedOff map[string]bool) map[string]any {
 	if s.clientConfig == nil || s.agent == nil {
 		return body
 	}
-	if view := resolveAccountGroups(s.clientConfig.AccountGroups(), pickableBundledAccounts(rows, s.agent.MCPServerCatalog())); view != nil {
+	if view := resolveAccountGroups(s.clientConfig.AccountGroups(), pickableBundledAccounts(rows, s.agent.MCPServerCatalog(), turnedOff)); view != nil {
 		body["account_groups"] = view
 	}
 	return body
