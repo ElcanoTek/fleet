@@ -43,10 +43,13 @@ const (
 // what it must not do to a card a person asked for and has not answered:
 // nobody is there to see it go. Fleet does not record which kind of turn
 // staged a card, so the note states the rule and the run applies it from
-// the conversation. %s is when the list was read.
+// the conversation. A tool whose cards are never superseded (schedule_task:
+// supersedesEarlierCards) says so on its line, because there the "bring it up
+// to date" call would add a second card for the same task instead.
+// %s is when the list was read.
 const waitingApprovalsNote = "[Approval cards waiting in this chat: the actions below were staged on earlier turns and are still waiting for a person to approve or decline them. None of them has run. " +
 	"Do not stage or run the same action again in this run, and where you report status say they are waiting for approval, not done. " +
-	"A new card for one of these tools replaces the card waiting for that tool: the earlier card is rejected and never runs. " +
+	"Unless its line says otherwise, a new card for one of these tools replaces the card waiting for that tool: the earlier card is rejected and never runs. " +
 	"So use such a tool in this run only to bring an earlier scheduled run's own card up to date (today's report in place of yesterday's). " +
 	"Never replace a card a person asked for, or one you cannot tell apart from that: leave the tool for a later run and say what is waiting behind the card. " +
 	"If you do replace a card, say which one in your summary. " +
@@ -131,6 +134,24 @@ func waitingApprovalSummary(a store.Approval) string {
 	return dashboardText(strings.Join(parts, "; "), maxWaitingApprovalSummaryRunes)
 }
 
+// What a waiting card's line (and the count of the cards not listed) adds
+// when a new call to its tool would NOT replace it (supersedesEarlierCards):
+// the run must not make the call to bring the card up to date, or the chat
+// ends up with two cards for one thing.
+const (
+	waitingApprovalStacksLine  = "; a new call to this tool does NOT replace this card, it adds another beside it: do not call it again for the same thing"
+	waitingApprovalStacksCount = " (a new call does NOT replace these, it adds another: do not call it again for the same thing)"
+)
+
+// waitingApprovalStacks is note when a new card for toolName is added beside
+// the waiting ones, "" when it replaces them.
+func waitingApprovalStacks(toolName, note string) string {
+	if supersedesEarlierCards(toolName) {
+		return ""
+	}
+	return note
+}
+
 // waitingApprovalLines renders the list: the oldest maxWaitingApprovalsListed
 // cards one per line, then the rest counted by tool.
 func waitingApprovalLines(cards []store.Approval) []string {
@@ -155,8 +176,8 @@ func waitingApprovalLines(cards []store.Approval) []string {
 		if a.ExpiresAt > 0 {
 			expires = "expires " + waitingApprovalTime(a.ExpiresAt)
 		}
-		line += fmt.Sprintf(" (approval_id %s; staged %s; %s)",
-			dashboardText(a.ID, maxDashboardCardIDLen), waitingApprovalTime(a.CreatedAt), expires)
+		line += fmt.Sprintf(" (approval_id %s; staged %s; %s%s)",
+			dashboardText(a.ID, maxDashboardCardIDLen), waitingApprovalTime(a.CreatedAt), expires, waitingApprovalStacks(a.ToolName, waitingApprovalStacksLine))
 		lines = append(lines, line)
 	}
 	if restTotal > 0 {
@@ -177,7 +198,7 @@ func waitingApprovalLines(cards []store.Approval) []string {
 		}
 		counts := make([]string, 0, len(shown)+1)
 		for _, name := range shown {
-			counts = append(counts, fmt.Sprintf("%s ×%d", name, rest[name]))
+			counts = append(counts, fmt.Sprintf("%s ×%d%s", name, rest[name], waitingApprovalStacks(name, waitingApprovalStacksCount)))
 		}
 		if len(names) > len(shown) {
 			counts = append(counts, "other tools")

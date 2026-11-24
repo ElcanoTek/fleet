@@ -939,6 +939,16 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 	return a.stage(toolName, toolCallID, rawInput, false)
 }
 
+// supersedesEarlierCards reports whether staging a card for toolName replaces
+// the pending cards the same person already has for it from earlier turns
+// (stage, below). Every tool's does except schedule_task's: each of its calls
+// proposes a task of its own, so a new card is added beside the waiting ones.
+// The list a patrol turn is given of its owner's waiting cards says which
+// applies (waitingApprovalLines).
+func supersedesEarlierCards(toolName string) bool {
+	return toolName != tools.ScheduleTaskToolName
+}
+
 // StageCritical implements agentcore.CriticalStager: the critical-tool gate
 // stages through it, so a card it stages joins this turn's batch for the tool
 // (kept pending when the same tool is staged again this turn). The gate owns
@@ -1044,7 +1054,7 @@ func (a *approvalStager) stage(toolName, toolCallID, rawInput string, critical b
 	// superseding them rejected every card but the last while the agent told
 	// the user all were waiting (live 2026-11-23). A card from an earlier turn
 	// is still superseded.
-	if toolName != tools.ScheduleTaskToolName {
+	if supersedesEarlierCards(toolName) {
 		var keep []string
 		if critical {
 			keep = a.turnStagedFor(toolName)

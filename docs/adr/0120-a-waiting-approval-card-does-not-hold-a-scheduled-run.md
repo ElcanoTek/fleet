@@ -70,7 +70,10 @@ Three facts made the hold unnecessary as well as costly:
    waiting rather than done, and that a new card for the same tool replaces
    the waiting one: the run is to do that only to bring an earlier scheduled
    run's own card up to date, never to a card a person asked for, and to say
-   which card it replaced. The list is bounded (12 cards, the rest counted by tool)
+   which card it replaced. A card whose tool is never superseded
+   (`schedule_task`: each call proposes a task of its own) says on its line
+   that a new call would add a second card, not replace it. The list is
+   bounded (12 cards, the rest counted by tool)
    and its text is bounded and made safe to quote. A run is not started
    without it: if the cards cannot be read, the queued turn goes back to the
    queue.
@@ -109,8 +112,11 @@ Three facts made the hold unnecessary as well as costly:
   is not started without them (`TestPatrolTurnIsToldTheCardsWaitingOnItsOwner`),
   the live case end to end through the real agent loop
   (`TestPatrolRunsWhileACardWaits_ThenTheResumeFollowsIt`), and what a patrol
-  turn's own calls do to waiting cards in Manual, Auto-approve and Autonomous
-  (`TestPatrolTurnStagingBesideWaitingCards`).
+  turn's own calls do to waiting cards: in Manual
+  (`TestPatrolTurnStagingReplacesOnlyItsOwnersCardForTheSameTool`), for
+  `schedule_task` (`TestPatrolTurnStagingAddsAScheduleTaskCardBesideTheWaitingOne`)
+  and in Auto-approve and Autonomous
+  (`TestPatrolTurnCallThatNeedsNoCardLeavesWaitingCardsAlone`).
 - `TestGetUserPatrolAndRuns` (store) and the mocked Playwright sidebar spec
   keep an old `approval_pending` history row readable.
 

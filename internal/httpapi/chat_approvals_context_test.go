@@ -59,7 +59,7 @@ func TestWaitingApprovalsBlockListsTheDecisionsStillOpen(t *testing.T) {
 		"None of them has run.",
 		"Do not stage or run the same action again in this run",
 		"say they are waiting for approval, not done",
-		"A new card for one of these tools replaces the card waiting for that tool: the earlier card is rejected and never runs.",
+		"Unless its line says otherwise, a new card for one of these tools replaces the card waiting for that tool: the earlier card is rejected and never runs.",
 		"only to bring an earlier scheduled run's own card up to date",
 		"Never replace a card a person asked for",
 		"If you do replace a card, say which one in your summary.",
@@ -163,11 +163,11 @@ func TestWaitingApprovalSummaryFallsBackToTheToolName(t *testing.T) {
 
 	got := appendWaitingApprovalsBlock("", agent.InputKindChatPatrol, []store.Approval{
 		waitingCardRow("ap-1", "mcp_deals_update_deal", `{"token":"sk-secret-123","deal_id":"D9"}`, time.Hour, 0),
-		waitingCardRow("ap-2", "schedule_task", `not json`, time.Minute, time.Hour),
+		waitingCardRow("ap-2", "manage_tasks", `not json`, time.Minute, time.Hour),
 	}, waitingNow)
 	for _, want := range []string{
 		"1. mcp_deals_update_deal (approval_id ap-1; staged 2026-11-25 10:30 UTC; does not expire)",
-		"2. schedule_task (approval_id ap-2; staged 2026-11-25 11:29 UTC; expires 2026-11-25 12:30 UTC)",
+		"2. manage_tasks (approval_id ap-2; staged 2026-11-25 11:29 UTC; expires 2026-11-25 12:30 UTC)",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("note lacks %q:\n%s", want, got)
@@ -175,6 +175,44 @@ func TestWaitingApprovalSummaryFallsBackToTheToolName(t *testing.T) {
 	}
 	if strings.Contains(got, "sk-secret") || strings.Contains(got, "D9") {
 		t.Errorf("arguments the redaction would alter reached the note:\n%s", got)
+	}
+}
+
+// A new schedule_task call does not replace a waiting schedule_task card (each
+// call proposes a task of its own), so "bring the earlier card up to date"
+// would leave two cards for one task. Its line, and the count of the cards
+// not listed, say so; a tool whose cards are replaced says nothing more.
+func TestWaitingApprovalsBlockSaysWhenANewCallWouldNotReplaceTheCard(t *testing.T) {
+	t.Parallel()
+
+	if supersedesEarlierCards(tools.ScheduleTaskToolName) || !supersedesEarlierCards("mcp_deals_update_deal") || !supersedesEarlierCards(tools.ManageTasksToolName) {
+		t.Fatal("supersedesEarlierCards: only schedule_task cards are added beside the waiting ones")
+	}
+	got := appendWaitingApprovalsBlock("", agent.InputKindChatPatrol, []store.Approval{
+		waitingCardRow("ap-task", tools.ScheduleTaskToolName, `{"name":"Daily refresh","cron":"0 18 * * *"}`, 2*time.Hour, 22*time.Hour),
+		waitingCardRow("ap-deal", "mcp_deals_update_deal", `{"deal_id":"D1"}`, time.Hour, 23*time.Hour),
+	}, waitingNow)
+	lines := strings.Split(strings.SplitN(got, "oldest first:\n", 2)[1], "\n")
+	if len(lines) != 2 {
+		t.Fatalf("lines = %q, want two", lines)
+	}
+	if want := "expires 2026-11-26 09:30 UTC; a new call to this tool does NOT replace this card, it adds another beside it: do not call it again for the same thing)"; !strings.HasPrefix(lines[0], "1. schedule_task: ") || !strings.HasSuffix(lines[0], want) {
+		t.Errorf("the schedule_task line = %q, want it to end %q", lines[0], want)
+	}
+	if strings.Contains(lines[1], "does NOT replace") || !strings.HasSuffix(lines[1], "expires 2026-11-26 10:30 UTC)]") {
+		t.Errorf("the update_deal line = %q, want no exception on it", lines[1])
+	}
+
+	many := make([]store.Approval, 0, maxWaitingApprovalsListed+2)
+	for i := range maxWaitingApprovalsListed {
+		many = append(many, waitingCardRow(fmt.Sprintf("ap-%02d", i), "mcp_deals_update_deal", `{}`, time.Duration(100-i)*time.Minute, time.Hour))
+	}
+	many = append(many,
+		waitingCardRow("ap-t1", tools.ScheduleTaskToolName, `{}`, 2*time.Minute, time.Hour),
+		waitingCardRow("ap-t2", tools.ScheduleTaskToolName, `{}`, time.Minute, time.Hour))
+	got = appendWaitingApprovalsBlock("", agent.InputKindChatPatrol, many, waitingNow)
+	if want := "…and 2 more waiting: schedule_task ×2 (a new call does NOT replace these, it adds another: do not call it again for the same thing).]"; !strings.HasSuffix(got, want) {
+		t.Errorf("the count does not say schedule_task cards are not replaced:\n%s", got)
 	}
 }
 
@@ -409,134 +447,175 @@ func assertPatrolRunThenOneResume(t *testing.T, h *resumeHarness, card *store.Ap
 
 // What a patrol turn's own critical calls do to the cards it found waiting,
 // in each approval mode.
-func TestPatrolTurnStagingBesideWaitingCards(t *testing.T) {
-	const owner, mate = "alice@x.com", "bob@x.com"
-	const toolA, toolB = "mcp_deals_update_deal", "mcp_deals_create_deal"
+
+const (
+	stagingOwner, stagingMate  = "alice@x.com", "bob@x.com"
+	stagingToolA, stagingToolB = "mcp_deals_update_deal", "mcp_deals_create_deal"
+)
+
+// stagingFixture is a multiplayer chat with a patrol, and three cards staged
+// by people's own turns under a one-hour chat timeout: the owner's for
+// stagingToolA (sameTool) and stagingToolB (other), and a participant's for
+// stagingToolA (their).
+type stagingFixture struct {
+	s                      *Server
+	conv                   *store.Conversation
+	sameTool, other, their *store.Approval
+}
+
+func newStagingFixture(t *testing.T) stagingFixture {
+	t.Helper()
 	ctx := context.Background()
-
-	type fixture struct {
-		s                      *Server
-		conv                   *store.Conversation
-		sameTool, other, their *store.Approval
+	s := serverFixture(t)
+	seedUsers(t, s, stagingOwner, stagingMate)
+	conv, err := s.store.CreateConversation(ctx, stagingOwner, "deals", "victoria", "", false)
+	if err != nil {
+		t.Fatal(err)
 	}
-	// A multiplayer chat with a patrol, and three cards staged by people's
-	// own turns under a one-hour chat timeout: the owner's for toolA and
-	// toolB, and a participant's for toolA.
-	setup := func(t *testing.T) fixture {
+	if _, err := s.store.SetConversationMultiplayer(ctx, stagingOwner, conv.ID, true, []string{stagingMate}, nil); err != nil {
+		t.Fatalf("SetConversationMultiplayer: %v", err)
+	}
+	if _, err := s.store.CreateChatSchedule(ctx, store.ChatScheduleInput{
+		ConversationID: conv.ID, UserEmail: stagingOwner, Prompt: "Check the deals.", CronExpr: "30 6 * * *", Timezone: "UTC",
+	}); err != nil {
+		t.Fatalf("CreateChatSchedule: %v", err)
+	}
+	f := stagingFixture{s: s, conv: conv}
+	typed := func(user, tool, call string) *store.Approval {
 		t.Helper()
-		s := serverFixture(t)
-		seedUsers(t, s, owner, mate)
-		conv, err := s.store.CreateConversation(ctx, owner, "deals", "victoria", "", false)
+		id, err := f.stager(user, "", "").StageCritical(tool, call, `{"deal_id":"D1"}`)
 		if err != nil {
-			t.Fatal(err)
+			t.Fatalf("stage %s for %s: %v", tool, user, err)
 		}
-		if _, err := s.store.SetConversationMultiplayer(ctx, owner, conv.ID, true, []string{mate}, nil); err != nil {
-			t.Fatalf("SetConversationMultiplayer: %v", err)
-		}
-		if _, err := s.store.CreateChatSchedule(ctx, store.ChatScheduleInput{
-			ConversationID: conv.ID, UserEmail: owner, Prompt: "Check the deals.", CronExpr: "30 6 * * *", Timezone: "UTC",
-		}); err != nil {
-			t.Fatalf("CreateChatSchedule: %v", err)
-		}
-		hour := 3600
-		typed := func(user, tool, call string) *store.Approval {
-			t.Helper()
-			st := &approvalStager{ctx: ctx, store: s.store, conversationID: conv.ID, userEmail: user, sink: discardSink{}, convTimeoutSeconds: &hour}
-			id, err := st.StageCritical(tool, call, `{"deal_id":"D1"}`)
-			if err != nil {
-				t.Fatalf("stage %s for %s: %v", tool, user, err)
-			}
-			a, err := s.store.GetApproval(ctx, user, id)
-			if err != nil || a == nil {
-				t.Fatalf("GetApproval: %v %v", a, err)
-			}
-			return a
-		}
-		return fixture{s: s, conv: conv, sameTool: typed(owner, toolA, "call_a"), other: typed(owner, toolB, "call_b"), their: typed(mate, toolA, "call_m")}
+		return f.card(t, user, id)
 	}
-	card := func(t *testing.T, f fixture, user, id string) *store.Approval {
-		t.Helper()
-		a, err := f.s.store.GetApproval(ctx, user, id)
-		if err != nil || a == nil {
-			t.Fatalf("GetApproval: %v %v", a, err)
-		}
-		return a
-	}
-	unchanged := func(t *testing.T, f fixture, was *store.Approval) {
-		t.Helper()
-		now := card(t, f, was.UserEmail, was.ID)
-		if now.Status != "pending" || now.ExpiresAt != was.ExpiresAt || now.ResumeState != was.ResumeState || now.CreatedAt != was.CreatedAt {
-			t.Errorf("a waiting card changed:\n was %+v\n now %+v", was, now)
-		}
-	}
-	patrolStager := func(f fixture, mode string) *approvalStager {
-		hour := 3600
-		return &approvalStager{
-			ctx: ctx, store: f.s.store, conversationID: f.conv.ID, userEmail: owner, sink: discardSink{},
-			inputKind: agent.InputKindChatPatrol, convTimeoutSeconds: &hour,
-			convApprovalMode: mode, convAutoApprove: mode != store.ConversationApprovalManual,
-		}
-	}
+	f.sameTool = typed(stagingOwner, stagingToolA, "call_a")
+	f.other = typed(stagingOwner, stagingToolB, "call_b")
+	f.their = typed(stagingMate, stagingToolA, "call_m")
+	return f
+}
 
-	// Manual: the run's card for the same tool replaces the owner's waiting
-	// card for it, as any later turn's would (the stager's same-tool
-	// supersede), and nothing else. The new card gets a patrol card's day
-	// to be answered and resumes the chat when it is.
-	t.Run("manual", func(t *testing.T) {
-		f := setup(t)
-		a := patrolStager(f, store.ConversationApprovalManual)
-		before := time.Now().Unix()
-		id, err := a.StageCritical(toolA, "call_patrol", `{"deal_id":"D2"}`)
-		if err != nil || id == agentcore.PreApprovedSentinel || id == agentcore.RecordedSentinel {
-			t.Fatalf("StageCritical = %q, %v; want a staged card", id, err)
-		}
-		replaced := card(t, f, owner, f.sameTool.ID)
-		if replaced.Status != "rejected" || replaced.ResultText != "Superseded by a newer call to this tool." {
-			t.Errorf("the owner's waiting card for the same tool = %+v; want it superseded", replaced)
-		}
-		if n := a.SupersededCount("call_patrol"); n != 1 {
-			t.Errorf("SupersededCount = %d, want 1 (the gate tells the model which card will not run)", n)
-		}
-		unchanged(t, f, f.other)
-		unchanged(t, f, f.their)
-		staged := card(t, f, owner, id)
-		if staged.Status != "pending" || staged.ResumeState != store.ApprovalResumeArmed {
-			t.Errorf("the run's card = %+v; want it pending and armed to resume", staged)
-		}
-		if floor := before + defaultApprovalTimeoutSeconds; staged.ExpiresAt < floor {
-			t.Errorf("the run's card expires at %d, want at least a day out (%d) whatever the chat's timeout", staged.ExpiresAt, floor)
-		}
-		if f.other.ExpiresAt >= before+defaultApprovalTimeoutSeconds {
-			t.Fatalf("fixture: a person's card expires at %d; it should keep the chat's one-hour timeout", f.other.ExpiresAt)
-		}
-		// Approving the run's card while another card still waits defers the
-		// resume until that one is settled too (store.ClaimApprovalResume).
-		if ok, err := f.s.store.ClaimApproval(ctx, owner, id, "approved", store.ApprovalExecutingSentinel); err != nil || !ok {
-			t.Fatalf("ClaimApproval = %v, %v", ok, err)
-		}
-		if err := f.s.store.SetApprovalResult(ctx, owner, id, "done", false); err != nil {
-			t.Fatal(err)
-		}
-		res, err := f.s.store.ClaimApprovalResume(ctx, store.ApprovalResumeRequest{ConversationID: f.conv.ID, MaxPerHour: 10, MaxPending: 20})
-		if err != nil || res.Input != nil || len(res.Outstanding) != 1 || res.Outstanding[0] != f.other.ID {
-			t.Fatalf("ClaimApprovalResume = %+v, %v; want it to wait for the owner's other card", res, err)
-		}
-	})
+// stager is the stager of a turn of user's in the chat, whose own approval
+// timeout is one hour: a person's turn (inputKind "") or a patrol turn, in
+// the given approval mode ("" is Manual).
+func (f stagingFixture) stager(user, inputKind, mode string) *approvalStager {
+	hour := 3600
+	return &approvalStager{
+		ctx: context.Background(), store: f.s.store, conversationID: f.conv.ID, userEmail: user, sink: discardSink{},
+		inputKind: inputKind, convTimeoutSeconds: &hour,
+		convApprovalMode: mode, convAutoApprove: mode != "" && mode != store.ConversationApprovalManual,
+	}
+}
 
-	// Auto-approve and Autonomous: the call runs without a card, so nothing
-	// is staged and nothing is superseded. The waiting card for the same
-	// tool stays, which is why the run is told not to repeat it.
+func (f stagingFixture) patrolStager(mode string) *approvalStager {
+	return f.stager(stagingOwner, agent.InputKindChatPatrol, mode)
+}
+
+func (f stagingFixture) card(t *testing.T, user, id string) *store.Approval {
+	t.Helper()
+	a, err := f.s.store.GetApproval(context.Background(), user, id)
+	if err != nil || a == nil {
+		t.Fatalf("GetApproval: %v %v", a, err)
+	}
+	return a
+}
+
+// unchanged fails unless the card is as it was staged.
+func (f stagingFixture) unchanged(t *testing.T, was *store.Approval) {
+	t.Helper()
+	now := f.card(t, was.UserEmail, was.ID)
+	if now.Status != "pending" || now.ExpiresAt != was.ExpiresAt || now.ResumeState != was.ResumeState || now.CreatedAt != was.CreatedAt {
+		t.Errorf("a waiting card changed:\n was %+v\n now %+v", was, now)
+	}
+}
+
+// Manual: the run's card for the same tool replaces the owner's waiting card
+// for it, as any later turn's would (the stager's same-tool supersede), and
+// nothing else. The new card gets a patrol card's day to be answered and
+// resumes the chat when it is.
+func TestPatrolTurnStagingReplacesOnlyItsOwnersCardForTheSameTool(t *testing.T) {
+	ctx := context.Background()
+	f := newStagingFixture(t)
+	a := f.patrolStager(store.ConversationApprovalManual)
+	before := time.Now().Unix()
+	id, err := a.StageCritical(stagingToolA, "call_patrol", `{"deal_id":"D2"}`)
+	if err != nil || id == agentcore.PreApprovedSentinel || id == agentcore.RecordedSentinel {
+		t.Fatalf("StageCritical = %q, %v; want a staged card", id, err)
+	}
+	replaced := f.card(t, stagingOwner, f.sameTool.ID)
+	if replaced.Status != "rejected" || replaced.ResultText != "Superseded by a newer call to this tool." {
+		t.Errorf("the owner's waiting card for the same tool = %+v; want it superseded", replaced)
+	}
+	if n := a.SupersededCount("call_patrol"); n != 1 {
+		t.Errorf("SupersededCount = %d, want 1 (the gate tells the model which card will not run)", n)
+	}
+	f.unchanged(t, f.other)
+	f.unchanged(t, f.their)
+	staged := f.card(t, stagingOwner, id)
+	if staged.Status != "pending" || staged.ResumeState != store.ApprovalResumeArmed {
+		t.Errorf("the run's card = %+v; want it pending and armed to resume", staged)
+	}
+	if floor := before + defaultApprovalTimeoutSeconds; staged.ExpiresAt < floor {
+		t.Errorf("the run's card expires at %d, want at least a day out (%d) whatever the chat's timeout", staged.ExpiresAt, floor)
+	}
+	if f.other.ExpiresAt >= before+defaultApprovalTimeoutSeconds {
+		t.Fatalf("fixture: a person's card expires at %d; it should keep the chat's one-hour timeout", f.other.ExpiresAt)
+	}
+	// Approving the run's card while another card still waits defers the
+	// resume until that one is settled too (store.ClaimApprovalResume).
+	if ok, err := f.s.store.ClaimApproval(ctx, stagingOwner, id, "approved", store.ApprovalExecutingSentinel); err != nil || !ok {
+		t.Fatalf("ClaimApproval = %v, %v", ok, err)
+	}
+	if err := f.s.store.SetApprovalResult(ctx, stagingOwner, id, "done", false); err != nil {
+		t.Fatal(err)
+	}
+	res, err := f.s.store.ClaimApprovalResume(ctx, store.ApprovalResumeRequest{ConversationID: f.conv.ID, MaxPerHour: 10, MaxPending: 20})
+	if err != nil || res.Input != nil || len(res.Outstanding) != 1 || res.Outstanding[0] != f.other.ID {
+		t.Fatalf("ClaimApprovalResume = %+v, %v; want it to wait for the owner's other card", res, err)
+	}
+}
+
+// schedule_task is the one tool whose cards are never superseded: each call
+// proposes a task of its own. A run's call is added beside the waiting card,
+// which is why its line in the list tells the run not to make the call again
+// for the same task.
+func TestPatrolTurnStagingAddsAScheduleTaskCardBesideTheWaitingOne(t *testing.T) {
+	f := newStagingFixture(t)
+	const task = `{"name":"Daily refresh","prompt":"Refresh the board.","cron":"0 18 * * *"}`
+	firstID, err := f.stager(stagingOwner, "", "").Stage(tools.ScheduleTaskToolName, "call_task", task)
+	if err != nil {
+		t.Fatalf("Stage: %v", err)
+	}
+	first := f.card(t, stagingOwner, firstID)
+	a := f.patrolStager(store.ConversationApprovalManual)
+	secondID, err := a.Stage(tools.ScheduleTaskToolName, "call_task_patrol", task)
+	if err != nil || secondID == firstID {
+		t.Fatalf("Stage in the patrol turn = %q, %v; want a second card", secondID, err)
+	}
+	f.unchanged(t, first)
+	if second := f.card(t, stagingOwner, secondID); second.Status != "pending" {
+		t.Errorf("the run's schedule_task card = %+v; want it pending beside the first", second)
+	}
+	if n := a.SupersededCount("call_task_patrol"); n != 0 {
+		t.Errorf("SupersededCount = %d, want 0: schedule_task cards are not replaced", n)
+	}
+}
+
+// Auto-approve and Autonomous: the call runs without a card, so nothing is
+// staged and nothing is superseded. The waiting card for the same tool
+// stays, which is why the run is told not to repeat it.
+func TestPatrolTurnCallThatNeedsNoCardLeavesWaitingCardsAlone(t *testing.T) {
 	for _, mode := range []string{store.ConversationApprovalAuto, store.ConversationApprovalAutonomous} {
 		t.Run(mode, func(t *testing.T) {
-			f := setup(t)
-			a := patrolStager(f, mode)
-			id, err := a.StageCritical(toolA, "call_patrol", `{"deal_id":"D2"}`)
+			f := newStagingFixture(t)
+			a := f.patrolStager(mode)
+			id, err := a.StageCritical(stagingToolA, "call_patrol", `{"deal_id":"D2"}`)
 			if err != nil || (id != agentcore.PreApprovedSentinel && id != agentcore.RecordedSentinel) {
 				t.Fatalf("StageCritical in %s = %q, %v; want the call to run without a card", mode, id, err)
 			}
-			unchanged(t, f, f.sameTool)
-			unchanged(t, f, f.other)
-			unchanged(t, f, f.their)
+			f.unchanged(t, f.sameTool)
+			f.unchanged(t, f.other)
+			f.unchanged(t, f.their)
 			if n := a.SupersededCount("call_patrol"); n != 0 {
 				t.Errorf("SupersededCount = %d, want 0", n)
 			}
