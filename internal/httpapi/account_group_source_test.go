@@ -86,13 +86,20 @@ type sourceBroker struct {
 	answer string
 	err    error
 	gate   chan struct{}
+	// panicOnce makes the next call panic, as a faulty dependency would.
+	panicOnce bool
 }
 
 func (b *sourceBroker) CallMCP(ctx context.Context, server, tool string, _ map[string]any) (string, bool, error) {
 	b.mu.Lock()
 	b.calls = append(b.calls, server+"/"+tool)
 	answer, err, gate := b.answer, b.err, b.gate
+	boom := b.panicOnce
+	b.panicOnce = false
 	b.mu.Unlock()
+	if boom {
+		panic("source broker fault")
+	}
 	if gate != nil {
 		select {
 		case <-gate:
@@ -278,6 +285,37 @@ func TestSourcedAccountGroupsDoesNotBlockOnASlowSource(t *testing.T) {
 	}
 	if broker.callCount() != 1 {
 		t.Fatalf("calls = %d, want the one refresh", broker.callCount())
+	}
+}
+
+// A dependency that panics during a refresh (the tracker recovers it) must not
+// leave the refresh marked as running: that would stop every later refresh.
+func TestSourcedAccountGroupsRecoversFromAPanickingRefresh(t *testing.T) {
+	sourcePolicy(t, "mcp_deals_list_account_groups")
+	src := &clientconfig.AccountGroupsSource{Server: "deals", Tool: "list_account_groups", RefreshSeconds: 300}
+	broker := &sourceBroker{answer: twoGroups, panicOnce: true}
+	s := &Server{store: newFakeChatStore(), agent: &sourceEngine{fakeTurnEngine: &fakeTurnEngine{}, broker: broker}}
+	ctx := context.Background()
+
+	if got := s.sourcedAccountGroups(ctx, src); len(got) != 0 {
+		t.Fatalf("groups from a refresh that panicked: %v", got)
+	}
+	waitForRefresh(t, s)
+	s.accountGroupSource.mu.Lock()
+	running, retryIn := s.accountGroupSource.refreshing, time.Until(s.accountGroupSource.nextRefresh)
+	s.accountGroupSource.nextRefresh = time.Now().Add(-time.Second)
+	s.accountGroupSource.mu.Unlock()
+	if running != nil {
+		t.Fatal("the refresh is still marked as running after it panicked")
+	}
+	if retryIn <= 0 || retryIn > accountGroupSourceRetry {
+		t.Fatalf("retry in %v, want within %v", retryIn, accountGroupSourceRetry)
+	}
+	// The next refresh runs and its answer is served.
+	s.sourcedAccountGroups(ctx, src)
+	waitForRefresh(t, s)
+	if got := s.sourcedAccountGroups(ctx, src); len(got) != 2 {
+		t.Fatalf("after the retry: %v", got)
 	}
 }
 

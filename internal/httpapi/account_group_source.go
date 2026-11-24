@@ -77,7 +77,18 @@ func (s *Server) sourcedAccountGroups(ctx context.Context, src *clientconfig.Acc
 		// after shutdown began is not started at all.
 		refreshCtx := context.WithoutCancel(ctx)
 		started := s.background.Go("httpapi.account-groups.refresh", func() {
-			defer close(done)
+			// Runs on every way out, a panic in the scope opener or the
+			// broker included (the tracker recovers it): a marker left set
+			// would stop every later refresh until the process restarts.
+			defer func() {
+				c.mu.Lock()
+				if c.refreshing == done {
+					c.refreshing = nil
+					c.nextRefresh = time.Now().Add(accountGroupSourceRetry)
+				}
+				c.mu.Unlock()
+				close(done)
+			}()
 			s.refreshAccountGroups(refreshCtx, source)
 		})
 		if !started {
