@@ -73,6 +73,10 @@ type CreateTaskConfig struct {
 	// budget is capped at ParentBudgetUSD * childBudgetFraction. <= 0 means the
 	// parent is unbounded, so the per-child cap is not applied.
 	ParentBudgetUSD float64
+	// ParentPrivateEmails is the creating task's private_emails: a follow-up
+	// task a private task spawns keeps its email out of the team Outbox too,
+	// so delegating the send cannot undo the person's choice.
+	ParentPrivateEmails bool
 	// RecurringAllowed mirrors the creating task's allow_recurring_task_creation
 	// bit. When false, create_task refuses any non-empty recurrence — a single
 	// opt-in cannot mint a self-perpetuating recurring task.
@@ -163,6 +167,7 @@ func NewCreateTaskTool(cfg CreateTaskConfig) fantasy.AgentTool {
 				Tags:               in.Tags,
 				CreatedByTaskID:    &cfg.CreatingTaskID,
 				A2ADelegationDepth: cfg.ParentA2ADepth,
+				PrivateEmails:      cfg.ParentPrivateEmails,
 			}
 
 			// Model: explicit override, else inherit the parent's.

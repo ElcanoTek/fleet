@@ -247,3 +247,26 @@ func TestCreateTask_RunAtParsing(t *testing.T) {
 		t.Fatalf("expected ScheduledFor 2099-01-02T03:04:05Z, got %v", enq.last.ScheduledFor)
 	}
 }
+
+// A follow-up task a private task spawns is private too: delegating the send
+// cannot put the email back in the team Outbox. A parent that is not private
+// spawns ordinary children.
+func TestCreateTask_InheritsPrivateEmails(t *testing.T) {
+	for _, private := range []bool{true, false} {
+		enq := &fakeEnqueuer{}
+		var counter atomic.Int32
+		tool := NewCreateTaskTool(CreateTaskConfig{
+			Enqueuer:            enq,
+			CreatingTaskID:      uuid.New(),
+			ParentPrivateEmails: private,
+			MaxCreations:        DefaultMaxTaskCreations,
+			Counter:             &counter,
+		})
+		if resp := runCreateTask(t, tool, `{"prompt":"send the digest"}`); resp.IsError {
+			t.Fatalf("private=%v: %q", private, resp.Content)
+		}
+		if enq.last.PrivateEmails != private {
+			t.Fatalf("parent private=%v: child private_emails=%v", private, enq.last.PrivateEmails)
+		}
+	}
+}

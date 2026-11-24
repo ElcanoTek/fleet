@@ -367,6 +367,9 @@ type TaskScheduleRequest struct {
 	RunAt         *time.Time
 	MaxIterations int
 	AllowNetwork  bool
+	// PrivateEmails keeps the task's sent email out of the team Outbox
+	// (TaskCreate.PrivateEmails).
+	PrivateEmails bool
 	// ThinkingBudgetTokens is the per-task extended-thinking override (#220):
 	// nil = inherit the deployment default, 0 = off, >0 = this task's budget.
 	ThinkingBudgetTokens *int

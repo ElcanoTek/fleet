@@ -49,6 +49,7 @@ func TestRecurringTaskCarriesFullConfigForward(t *testing.T) {
 		// The capability / posture bits the old literal dropped:
 		AllowNetwork:               true,
 		CarryContext:               true,
+		PrivateEmails:              true,
 		AllowEventTriggers:         true,
 		AllowTaskCreation:          true,
 		AllowRecurringTaskCreation: true,
@@ -114,6 +115,9 @@ func TestRecurringTaskCarriesFullConfigForward(t *testing.T) {
 	}
 	if !next.CarryContext {
 		t.Error("carry_context was lost on the recurrence")
+	}
+	if !next.PrivateEmails {
+		t.Error("private_emails was lost on the recurrence: its email would reach the Outbox")
 	}
 	if !next.AllowEventTriggers {
 		t.Error("allow_event_triggers was lost on the recurrence")

@@ -124,6 +124,8 @@ type Agent struct {
 
 	// prepareEmailAttachments is Options.PrepareEmailAttachments.
 	prepareEmailAttachments func(args map[string]any) (cleanup func(), err error)
+	// mcpRequestMeta is Options.MCPRequestMeta.
+	mcpRequestMeta map[string]any
 
 	// auditProtocolRef names the bundle's self-audit protocol in the audit
 	// guidance ("protocols/self-audit.md"), or "" when the bundle ships none.
@@ -208,6 +210,9 @@ type Options struct {
 	// scheduled driver binds it to the run's working directory. nil = no
 	// rewrite.
 	PrepareEmailAttachments func(args map[string]any) (cleanup func(), err error)
+	// MCPRequestMeta is agentcore.Deps.MCPRequestMeta: `_meta` entries every
+	// MCP call of the run carries. nil = none.
+	MCPRequestMeta map[string]any
 	// AuditProtocolRef is the workspace-relative self-audit protocol path the
 	// audit guidance names, from AuditProtocolRef(protocolsDir); "" when the
 	// bundle ships none, so the model is never sent after a missing file.
@@ -279,6 +284,7 @@ func NewAgent(opts Options) *Agent {
 		thinkingBudget:          opts.ThinkingBudget,
 		personaPolicy:           opts.PersonaPolicy,
 		prepareEmailAttachments: opts.PrepareEmailAttachments,
+		mcpRequestMeta:          opts.MCPRequestMeta,
 		auditProtocolRef:        opts.AuditProtocolRef,
 		outputSchema:            append(json.RawMessage(nil), opts.OutputSchema...),
 		verifierModel:           opts.VerifierModel,
@@ -1353,6 +1359,7 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 		ReadWorkspaceFile: tools.WorkspaceFileReader(a.sb),
 		// The run's own (scheduledrun binds it to the job's working directory).
 		PrepareEmailAttachments: a.prepareEmailAttachments,
+		MCPRequestMeta:          a.mcpRequestMeta,
 		Model:                   a.model,
 		FallbackModel:           a.fallbackModel,
 		FallbackModels:          a.fallbackModels,

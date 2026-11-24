@@ -61,6 +61,7 @@ export type Task = {
   mcp_selection?: MCPChoice[];
   allow_network?: boolean;
   carry_context?: boolean;
+  private_emails?: boolean;
   persona?: string;
   tags?: string[];
   retry_policy?: RetryPolicy;
@@ -129,6 +130,7 @@ export type TaskCreate = {
   mcp_selection?: MCPChoice[];
   allow_network?: boolean;
   carry_context?: boolean;
+  private_emails?: boolean;
   // Per-task extended-thinking override (#220): omit to inherit the deployment
   // default, 0 = off, >0 = this task's budget in tokens.
   thinking_budget_tokens?: number | null;
@@ -224,6 +226,7 @@ export type TaskTemplateTask = {
   priority?: number;
   allow_network?: boolean;
   carry_context?: boolean;
+  private_emails?: boolean;
   persona?: string;
   description?: string;
   tags?: string[];

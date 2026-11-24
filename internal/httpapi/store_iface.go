@@ -250,6 +250,9 @@ type chatStore interface {
 	// writing what they approved in the same claim
 	// (docs/APPROVAL-NARROWING.md).
 	ClaimApprovalNarrowed(ctx context.Context, userEmail, approvalID, resultText, narrowedJSON string) (bool, error)
+	// ClaimApprovalPrivate approves a pending outbound email card, writing
+	// the person's Private choice in the same claim.
+	ClaimApprovalPrivate(ctx context.Context, userEmail, approvalID, resultText string, private bool) (bool, error)
 	// MarkApprovalStopRequested records, once, that the person pressed Stop
 	// on a still-executing call (docs/APPROVAL-STOP.md).
 	MarkApprovalStopRequested(ctx context.Context, userEmail, approvalID string) (bool, error)

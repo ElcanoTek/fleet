@@ -40,6 +40,12 @@ func approvalClientFields(toolName, rawInput, convID string) map[string]any {
 		// that scope.
 		"no_session_approval": !agentcore.SessionApprovalAllowed(toolName) || isArgumentSensitiveFloorCall(toolName, rawInput),
 	}
+	if privateOptionTool(toolName) {
+		// An outbound email card offers the Private box (approval_private.go):
+		// the person may keep the email out of the team Outbox. Only present
+		// when true, so every other card's payload is unchanged.
+		out["private_option"] = true
+	}
 	if approvalReportsProgress(toolName) {
 		// critical_tool_progress: once approved and running, the card polls
 		// for the call's progress and outcome (docs/APPROVAL-PROGRESS.md).
@@ -268,6 +274,12 @@ func summarizeScheduleTaskInput(toolName, rawInput string) map[string]any {
 		"always_on_connectors": append([]string{}, p.AlwaysOnConnectors...),
 		"no_connectors":        len(connectorLabels(p.Connectors)) == 0 && len(p.AlwaysOnConnectors) == 0,
 	}
+	if p.PrivateEmails {
+		// The task keeps its sent email out of the team Outbox. Only present
+		// when true, so every other card's payload is unchanged.
+		out["private_emails"] = true
+	}
+
 	cron := strings.TrimSpace(p.Cron)
 	switch {
 	case cron != "":
@@ -492,6 +504,11 @@ func summarizeSendEmailInput(toolName, rawInput, convID string) map[string]any {
 	}
 	if v, ok := args["inline_attachments"]; ok {
 		out["inline_attachments"] = v
+	}
+	if args["private"] == true {
+		// The model asked to keep it out of the team Outbox: the card's
+		// Private box starts ticked (approval_private.go).
+		out["private"] = true
 	}
 	return out
 }

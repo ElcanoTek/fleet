@@ -35,7 +35,7 @@ func TestRunStagedScheduleTask(t *testing.T) {
 
 	approval := &store.Approval{
 		ToolName: "schedule_task",
-		ArgsJSON: `{"name":"Weekly report","prompt":"Summarize the week's PRs","cron":"0 9 * * MON","model":"x","allow_network":true,"tags":["reports"],` +
+		ArgsJSON: `{"name":"Weekly report","prompt":"Summarize the week's PRs","cron":"0 9 * * MON","model":"x","allow_network":true,"private_emails":true,"tags":["reports"],` +
 			`"connectors":[{"server":"email"},{"server":"magnite_mcp","account":"reklaim"}],"connectors_resolved":true}`,
 	}
 	text, err := s.runStagedScheduleTask(context.Background(), approval, nil)
@@ -62,6 +62,10 @@ func TestRunStagedScheduleTask(t *testing.T) {
 	}
 	if got.Model != "x" || !got.AllowNetwork {
 		t.Fatalf("model/network not mapped: %+v", got)
+	}
+	// The person asked in chat to keep the task's email private.
+	if !got.PrivateEmails {
+		t.Fatalf("private_emails not mapped: %+v", got)
 	}
 
 	// The confirmation names the task, the schedule, the id, and links the Ops Center.

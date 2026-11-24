@@ -29,6 +29,7 @@ import {
   type ApprovalOutcomePayload,
   approvalStatusFromOutcome,
   parseApprovalNarrowed,
+  parsePrivateChoice,
   resultCardFromOutcome,
 } from "./history";
 import {
@@ -545,6 +546,10 @@ export function ApprovalCard({
   // subsequent call to this tool in the conversation (approve-all / deny-all)
   // so the agent isn't gated per call.
   const [applyAll, setApplyAll] = useState(false);
+  // An outbound email card's Private box: keep this email out of the team
+  // Outbox. Starts ticked when the model passed `private` (the person asked
+  // in chat); the person's choice is sent with Send and wins either way.
+  const [privateSend, setPrivateSend] = useState(approval.summary?.private === true);
 
   // Approval timeout countdown (#225). Called unconditionally before the
   // bash/suggest early-returns to satisfy the rules of hooks; the bash card
@@ -602,6 +607,7 @@ export function ApprovalCard({
           ...(!executing && edits && Object.keys(edits).length > 0 ? { edits } : {}),
           ...(narrowing ? { approved_values: approvedValues, narrowed_arg: narrowedArg } : {}),
           ...(approved && !executing && renderedCardSha256 ? { card_sha256: renderedCardSha256 } : {}),
+          ...(approved && !executing && approval.privateOption ? { private: privateSend } : {}),
         }),
       });
       if (!response.ok) {
@@ -621,12 +627,14 @@ export function ApprovalCard({
         resume?: boolean;
         result_card?: unknown;
         narrowed?: unknown;
+        private_choice?: unknown;
         stoppable?: boolean;
         stopped?: boolean;
         enabled_optional?: string[];
       };
       const nextStatus = approvalStatusFromOutcome(data);
       const narrowed = parseApprovalNarrowed(data.narrowed) ?? approval.narrowed;
+      const privateChoice = parsePrivateChoice(data.private_choice) ?? approval.privateChoice;
       if (Array.isArray(data.enabled_optional)) {
         onMcpServersUpdated?.(data.enabled_optional);
       }
@@ -640,6 +648,7 @@ export function ApprovalCard({
           resultText: data.result_text,
           decisionError: undefined,
           narrowed,
+          privateChoice,
           stoppable: data.stoppable === true || approval.stoppable,
         });
         return;
@@ -653,6 +662,7 @@ export function ApprovalCard({
         executing: false,
         decisionError: undefined,
         narrowed,
+        privateChoice,
         stopped: data.stopped === true || undefined,
       });
     } catch (err) {
@@ -999,6 +1009,22 @@ export function ApprovalCard({
           </div>
         ) : (
           <div className="mt-3 flex flex-col gap-2">
+            {/* The Private box: every email sent is copied to the team
+                Outbox, which the whole organization can read; ticking it
+                keeps this one out. Only outbound email cards offer it. */}
+            {approval.privateOption ? (
+              <label className="flex items-center gap-1.5 text-[0.72rem] text-[var(--color-text-secondary)]">
+                <input
+                  type="checkbox"
+                  data-testid="approval-private"
+                  checked={privateSend}
+                  disabled={submitting !== null}
+                  onChange={(e) => setPrivateSend(e.target.checked)}
+                  className="size-3.5 accent-[var(--color-primary)]"
+                />
+                {tr("Private: don't save to the Outbox")}
+              </label>
+            ) : null}
             <div className="flex items-center gap-2">
               <button
                 type="button"
@@ -1041,6 +1067,11 @@ export function ApprovalCard({
         )
       ) : (
         <>
+          {approval.privateChoice === true ? (
+            <div data-testid="email-private-settled" className="mt-2 text-[0.72rem] text-[var(--color-card-text-muted)]">
+              {tr("Private: not saved to the Outbox")}
+            </div>
+          ) : null}
           {approval.resultText ? (
             isPreviewOnly || approval.status === "execution_unknown" ? (
               <ApprovalResult text={approval.resultText} />
@@ -1716,6 +1747,12 @@ function ScheduleTaskCard({
           <div>
             <span className="text-[var(--color-card-text-muted)]">{tr("Network:")}{" "}</span>
             {tr("egress allowed")}
+          </div>
+        ) : null}
+        {s.private_emails ? (
+          <div data-testid="schedule-private-emails">
+            <span className="text-[var(--color-card-text-muted)]">{tr("Emails:")}{" "}</span>
+            {tr("private, not saved to the Outbox")}
           </div>
         ) : null}
         {connectorsLine ? (

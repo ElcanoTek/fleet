@@ -53,3 +53,48 @@ func TestUpdateTaskTxPersistsCarryContext(t *testing.T) {
 		t.Error("CarryContext = false after UpdateTaskTx, want true — the edit path dropped the toggle")
 	}
 }
+
+// A private_emails edit must survive the UpdateTaskTx path — the one the
+// PUT /tasks/{id} edit flow persists through (storage.UpdateEditableTask),
+// like carry_context above.
+func TestUpdateTaskTxPersistsPrivateEmails(t *testing.T) {
+	t.Parallel()
+
+	db := setupTestDB(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	tk := models.NewTask(models.TaskCreate{Prompt: "weekly digest", Recurrence: "0 9 * * *"})
+	if err := db.AddTask(ctx, tk); err != nil {
+		t.Fatalf("AddTask: %v", err)
+	}
+
+	got, err := db.GetTask(ctx, tk.ID)
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if got.PrivateEmails {
+		t.Fatal("PrivateEmails should default to false")
+	}
+
+	tx, err := db.BeginTx(ctx)
+	if err != nil {
+		t.Fatalf("BeginTx: %v", err)
+	}
+	got.PrivateEmails = true
+	if err := db.UpdateTaskTx(ctx, tx, got); err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("UpdateTaskTx: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+
+	reread, err := db.GetTask(ctx, tk.ID)
+	if err != nil {
+		t.Fatalf("GetTask after UpdateTaskTx: %v", err)
+	}
+	if !reread.PrivateEmails {
+		t.Error("PrivateEmails = false after UpdateTaskTx, want true — the edit path dropped the toggle")
+	}
+}

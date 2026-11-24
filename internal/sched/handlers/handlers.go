@@ -1926,6 +1926,7 @@ func (h *Handlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 		InstructionSelfImprove: tc.InstructionSelfImprove,
 		AllowNetwork:           tc.AllowNetwork,
 		CarryContext:           tc.CarryContext,
+		PrivateEmails:          tc.PrivateEmails,
 		ThinkingBudgetTokens:   tc.ThinkingBudgetTokens,
 		Persona:                tc.Persona,
 		ScheduledFor:           tc.ScheduledFor,
@@ -2192,13 +2193,14 @@ type taskRerunOverrides struct {
 	//   - SLAWarnMultiplier / SLAFailMultiplier: present sets it; 0 = default.
 	//   - SandboxLimits / RunIf: json.RawMessage so an explicit `null` (clear)
 	//     is distinguishable from an omitted key (inherit).
-	//   - CarryContext / InstructionSelfImprove: present sets the flag.
+	//   - CarryContext / InstructionSelfImprove / PrivateEmails: present sets the flag.
 	ExpectedDurationMinutes *int            `json:"expected_duration_minutes,omitempty"`
 	SLAWarnMultiplier       *float64        `json:"sla_warn_multiplier,omitempty"`
 	SLAFailMultiplier       *float64        `json:"sla_fail_multiplier,omitempty"`
 	SandboxLimits           json.RawMessage `json:"sandbox_limits,omitempty"`
 	RunIf                   json.RawMessage `json:"run_if,omitempty"`
 	CarryContext            *bool           `json:"carry_context,omitempty"`
+	PrivateEmails           *bool           `json:"private_emails,omitempty"`
 	InstructionSelfImprove  *bool           `json:"instruction_self_improve,omitempty"`
 	// NewLineage starts the copy as a job of its own: a fresh lineage_id, and
 	// with it its own per-job workspace directory (ADR-0069) and its own owner

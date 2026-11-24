@@ -80,6 +80,9 @@ type taskYAML struct {
 	// sandbox is sealed and web_fetch is not registered (ADR-0094), exactly
 	// as for a task created through the API.
 	AllowNetwork bool `yaml:"allow_network"`
+	// PrivateEmails mirrors the task column: every email the run sends stays
+	// out of the team Outbox.
+	PrivateEmails bool `yaml:"private_emails"`
 }
 
 type mcpChoiceYAML struct {
@@ -249,7 +252,8 @@ func loadTaskYAML(path string) (*models.Task, error) {
 		CreatedAt: time.Now().UTC(),
 		// Same default a task created through the API gets (#1043): delegation
 		// is opt-out, so an omitted key means true.
-		AllowNetwork: y.AllowNetwork,
+		AllowNetwork:  y.AllowNetwork,
+		PrivateEmails: y.PrivateEmails,
 	}
 	if s := strings.TrimSpace(y.Model); s != "" {
 		task.Model = &s

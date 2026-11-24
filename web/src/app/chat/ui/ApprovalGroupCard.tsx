@@ -31,6 +31,7 @@ import {
   type ApprovalOutcomePayload,
   approvalStatusFromOutcome,
   parseApprovalNarrowed,
+  parsePrivateChoice,
   resultCardFromOutcome,
 } from "./history";
 import { approvedValuesFor, selectableKeys, selectedCountText, type RowSelection } from "./approvalNarrowing";
@@ -121,6 +122,11 @@ export function ApprovalGroupCard({
   const [unchecked, setUnchecked] = useState<ReadonlySet<string>>(() => new Set());
   // Per call, the rows of a narrowable card the person unticked.
   const [leftOut, setLeftOut] = useState<ReadonlyMap<string, ReadonlySet<string>>>(() => new Map());
+  // Per outbound email call, the Private box the person changed (keeps the
+  // email out of the team Outbox). A call absent here shows the model's own
+  // choice (summary.private).
+  const [privateSet, setPrivateSet] = useState<ReadonlyMap<string, boolean>>(() => new Map());
+  const privateOf = (a: Approval) => privateSet.get(a.id) ?? a.summary?.private === true;
   const [submitting, setSubmitting] = useState<"approve" | "cancel" | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const expiresAt = earliestExpiry(approvals);
@@ -191,6 +197,11 @@ export function ApprovalGroupCard({
       for (const a of approvals) {
         if (approving.has(a.id) && a.card && a.cardSha256) cardDigests[a.id] = a.cardSha256;
       }
+      // Each approved email call's Private box (approval_private.go).
+      const privateChoices: Record<string, boolean> = {};
+      for (const a of approvals) {
+        if (approving.has(a.id) && a.privateOption) privateChoices[a.id] = privateOf(a);
+      }
       const response = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -199,6 +210,7 @@ export function ApprovalGroupCard({
           decline,
           ...(Object.keys(narrowed).length > 0 ? { narrow: narrowed, narrow_args: narrowedArgs } : {}),
           ...(Object.keys(cardDigests).length > 0 ? { card_sha256: cardDigests } : {}),
+          ...(Object.keys(privateChoices).length > 0 ? { private: privateChoices } : {}),
         }),
       });
       if (!response.ok) {
@@ -234,6 +246,7 @@ export function ApprovalGroupCard({
             executing: true,
             resultText: r.result.result_text,
             narrowed: parseApprovalNarrowed(r.result.narrowed),
+            privateChoice: parsePrivateChoice(r.result.private_choice),
             stoppable: r.result.stoppable === true || approval.stoppable,
             stopping: r.result.stopping === true || undefined,
           });
@@ -245,6 +258,7 @@ export function ApprovalGroupCard({
             resultCard: resultCardFromOutcome(r.result),
             executing: false,
             narrowed: parseApprovalNarrowed(r.result.narrowed),
+            privateChoice: parsePrivateChoice(r.result.private_choice),
             // A stop recorded while the group request waited (docs/APPROVAL-STOP.md).
             stopped: r.result.stopped === true || undefined,
           });
@@ -351,6 +365,22 @@ export function ApprovalGroupCard({
                     </>
                   );
                 })()}
+                {a.privateOption ? (
+                  <label className="mt-1 flex items-center gap-1.5 text-[0.72rem] text-[var(--color-text-secondary)]">
+                    <input
+                      type="checkbox"
+                      data-testid={`approval-group-private-${a.id}`}
+                      checked={privateOf(a)}
+                      disabled={submitting !== null || unchecked.has(a.id)}
+                      onChange={(e) => {
+                        const value = e.target.checked;
+                        setPrivateSet((prev) => new Map(prev).set(a.id, value));
+                      }}
+                      className="size-3.5 accent-[var(--color-primary)]"
+                    />
+                    {tr("Private: don't save to the Outbox")}
+                  </label>
+                ) : null}
                 <div className="mt-1">
                   <ApprovalSeatBadge server={a.mcpServer} account={a.mcpAccount} verb="Runs as" />
                 </div>

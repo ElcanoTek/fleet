@@ -251,3 +251,48 @@ describe("a card a grouped decision could not decide", () => {
     expect(screen.getByRole("button", { name: "Approve & run" })).toBeEnabled();
   });
 });
+
+// An outbound email call in a group gets the email card's Private box: its
+// value (the model's own to start, then the person's) goes in `private` for
+// each approved email call, and no other call gets one.
+describe("ApprovalGroupCard Private box", () => {
+  function emailMembers(): Approval[] {
+    const groupId = "11111111-2222-3333-4444-555555555555";
+    return [
+      {
+        id: "ap-mail-a",
+        tool: "mcp_ses_outbound_send_email",
+        summary: { to: "a@client.example", subject: "A", private: true },
+        status: "pending",
+        groupId,
+        privateOption: true,
+      },
+      {
+        id: "ap-mail-b",
+        tool: "mcp_ses_outbound_send_email",
+        summary: { to: "b@client.example", subject: "B" },
+        status: "pending",
+        groupId,
+        privateOption: true,
+      },
+      members()[1],
+    ];
+  }
+
+  it("sends each approved email call's box, starting from the model's choice", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ group_id: "g", results: [] }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    renderGroup({ approvals: emailMembers() });
+    const a = screen.getByTestId("approval-group-private-ap-mail-a") as HTMLInputElement;
+    const b = screen.getByTestId("approval-group-private-ap-mail-b") as HTMLInputElement;
+    expect(a.checked).toBe(true);
+    expect(b.checked).toBe(false);
+    expect(screen.queryByTestId("approval-group-private-ap-mg")).toBeNull();
+    fireEvent.click(a);
+    fireEvent.click(b);
+    fireEvent.click(screen.getByTestId("approval-group-approve"));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
+    expect(body.private).toEqual({ "ap-mail-a": false, "ap-mail-b": true });
+  });
+});

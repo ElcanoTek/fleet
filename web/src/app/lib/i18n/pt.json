@@ -6467,5 +6467,16 @@
   "expect_version must be a number": "expect_version deve ser um número",
   "Only the first {0} people are listed; the counts above cover everyone. Search or shorten the period to find the rest.": "Somente as primeiras {0} pessoas são listadas; as contagens acima incluem todas. Pesquise ou reduza o período para encontrar o restante.",
   "These are the {0} that have waited longest; {1} more are waiting.": "Estas são as {0} que aguardam há mais tempo; há mais {1} aguardando.",
-  "Done, but the list could not be refreshed, so it may be out of date. Try again in a moment.": "Feito, mas não foi possível atualizar a lista, por isso pode estar desatualizada. Tente novamente daqui a pouco."
+  "Done, but the list could not be refreshed, so it may be out of date. Try again in a moment.": "Feito, mas não foi possível atualizar a lista, por isso pode estar desatualizada. Tente novamente daqui a pouco.",
+  "Private: don't save to the Outbox": "Privado: não salvar na Caixa de saída",
+  "Private: not saved to the Outbox": "Privado: não foi salvo na Caixa de saída",
+  "Private emails": "E-mails privados",
+  "Emails this task sends are not saved to the team Outbox.": "Os e-mails que esta tarefa envia não são salvos na Caixa de saída da equipe.",
+  "Emails:": "E-mails:",
+  "private, not saved to the Outbox": "privados, não são salvos na Caixa de saída",
+  "private applies only to an outbound email card that offers the Private box": "private só se aplica a um cartão de e-mail de saída que oferece a caixa Privado",
+  "private cannot be combined with a narrowed approval": "private não pode ser combinado com uma aprovação restrita",
+  "private goes with an approval; to decline, send approved false without it": "private acompanha uma aprovação; para recusar, envie approved false sem ele",
+  "private values must be true or false": "os valores de private devem ser true ou false",
+  "private names approval {0}, which is not approved": "private nomeia a aprovação {0}, que não está aprovada"
 }

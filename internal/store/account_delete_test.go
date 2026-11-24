@@ -260,6 +260,7 @@ var accountColumns = map[string]accountColumnRule{
 	"sched.tasks.created_by_key_id":                       {kind: "kept", why: "not an account: an API key id"},
 	"sched.tasks.created_by_task_id":                      {kind: "kept", why: "not an account: a task id"},
 	"sched.tasks.lease_owner":                             {kind: "kept", why: "not an account: the worker holding the lease"},
+	"sched.tasks.private_emails":                          {kind: "kept", why: "not an account: whether the task keeps its sent email out of the team Outbox"},
 	"sched.trigger_events.sender":                         {kind: "kept", why: "the sender of an inbound trigger email: an address, not an account"},
 	"sched.trigger_events.subject":                        {kind: "kept", why: "not an account: an inbound email's subject line"},
 	"sched.users_premerge_m4.username":                    {kind: "kept", why: "the frozen pre-merge copy of the legacy scheduler users, read only by the one-time identity merge (docs/IDENTITY.md); nothing signs in from it"},

@@ -249,6 +249,24 @@ told the staged list in `_meta["fleet/narrowed"]`, and the settled card says
 **Approved 2 of 3 · 1 left out**. See
 [APPROVAL-NARROWING.md](APPROVAL-NARROWING.md) and ADR-0089.
 
+## Keep an email out of the team Outbox
+
+The bundle's email sender copies every email it sends to the team Outbox,
+which the whole organization can read. A `send_email` card (payload
+`private_option: true`; a `send_template_email` card renders without it) has a
+**Private: don't save to the Outbox** box, ticked to start when the model
+passed `private` (the person asked for it in chat). The person's choice goes
+with Send (`private` on the approve POST, a `private` map on the group
+decision), is written in the claim itself (`chat.approvals.private_choice`,
+migration 0214), and reaches the sender as `_meta["fleet/private_emails"]`,
+which wins over the model's argument either way. The settled card says
+**Private: not saved to the Outbox**. A request with no choice (the CLI, an
+older client) runs with the model's own argument. A call that runs without a
+card (allow all for this session) also keeps the model's argument. A
+scheduled task's `private_emails` option sends `fleet/private_emails: true`
+with every MCP call of its runs, so email a server sends from inside another
+tool stays out too.
+
 ## A running call shows its progress
 
 For tools a bundle lists in `agent_policy.critical_tool_progress`, an approved

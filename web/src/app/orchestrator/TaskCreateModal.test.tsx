@@ -1055,6 +1055,38 @@ describe("TaskCreateModal — task templates", () => {
   });
 });
 
+// ── private emails ────────────────────────────────────────────────────────────
+
+// A task set to send privately: every email its runs send stays out of the
+// team Outbox. Off by default; the switch reaches the create payload.
+describe("TaskCreateModal — private emails", () => {
+  it("sends private_emails only when the switch is on", async () => {
+    createTask.mockReset();
+    createTask.mockResolvedValue({ id: "t-1" });
+    renderModal();
+    fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Send the weekly digest" } });
+    fireEvent.click(screen.getByRole("button", { name: /Advanced/ }));
+    const toggle = screen.getByLabelText("Private emails");
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    fireEvent.click(toggle);
+    fireEvent.click(screen.getByRole("button", { name: "Run task now" }));
+
+    await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
+    expect((createTask.mock.calls[0][0] as Record<string, unknown>).private_emails).toBe(true);
+  });
+
+  it("leaves private_emails out of a task created with the switch off", async () => {
+    createTask.mockReset();
+    createTask.mockResolvedValue({ id: "t-1" });
+    renderModal();
+    fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Send the weekly digest" } });
+    fireEvent.click(screen.getByRole("button", { name: "Run task now" }));
+
+    await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
+    expect((createTask.mock.calls[0][0] as Record<string, unknown>).private_emails).toBeUndefined();
+  });
+});
+
 // ── title ─────────────────────────────────────────────────────────────────────
 
 describe("TaskCreateModal — title", () => {
@@ -1328,6 +1360,7 @@ describe("TaskCreateModal — resubmit override payload", () => {
       sandbox_limits: { memory_mb: 512 },
       run_if: { command: "test -f /workspace/ready", on_error: "run", timeout_seconds: 30 },
       carry_context: true,
+      private_emails: false,
     });
   });
 

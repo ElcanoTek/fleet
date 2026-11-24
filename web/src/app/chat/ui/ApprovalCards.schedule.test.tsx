@@ -46,3 +46,17 @@ describe("the schedule card's connectors", () => {
     expect(screen.getByTestId("schedule-no-connectors")).toBeTruthy();
   });
 });
+
+// A task the person asked to keep private says so before Approve: its runs'
+// email stays out of the team Outbox.
+describe("the schedule card's private emails", () => {
+  it("says the task's emails are private only when they are", () => {
+    renderSchedule({ connectors: ["email"], always_on_connectors: [], no_connectors: false, private_emails: true });
+    expect(screen.getByTestId("schedule-private-emails").textContent).toBe("Emails: private, not saved to the Outbox");
+  });
+
+  it("shows nothing for an ordinary task", () => {
+    renderSchedule({ connectors: ["email"], always_on_connectors: [], no_connectors: false });
+    expect(screen.queryByTestId("schedule-private-emails")).toBeNull();
+  });
+});

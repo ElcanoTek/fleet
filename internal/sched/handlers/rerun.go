@@ -247,6 +247,9 @@ func applyRerunOverrides(tc *models.TaskCreate, o taskRerunOverrides) error {
 	if o.CarryContext != nil {
 		tc.CarryContext = *o.CarryContext
 	}
+	if o.PrivateEmails != nil {
+		tc.PrivateEmails = *o.PrivateEmails
+	}
 	if o.InstructionSelfImprove != nil {
 		tc.InstructionSelfImprove = *o.InstructionSelfImprove
 	}

@@ -1616,6 +1616,12 @@ type approvalRequest struct {
 	// (`narrowable.arg`), required with ApprovedValues: the narrowing is
 	// refused unless it is still the argument the tool narrows.
 	NarrowedArg string `json:"narrowed_arg,omitempty"`
+	// Private is the Private box of an outbound email card (approval_private.go):
+	// true keeps the email out of the team Outbox, false saves it even when the
+	// model passed private. Absent (nil) runs the call with its own argument.
+	// Only with approved=true on an outbound email card; anything else is
+	// refused before a claim.
+	Private *bool `json:"private,omitempty"`
 	// CardSHA256 is the `card_sha256` fleet sent with the row's describer
 	// card, echoed by a client that rendered that card (the web's generic
 	// action card). It attests which card the person approved; the call then
@@ -1889,6 +1895,11 @@ func (s *Server) decideAdmittedApproval(ctx context.Context, done <-chan struct{
 	if err != nil {
 		return approvalError(http.StatusBadRequest, err.Error())
 	}
+	// An outbound email card's Private box (approval_private.go), checked the
+	// same way and written with the claim.
+	if err := checkRequestedPrivate(approval, req, narrowing); err != nil {
+		return approvalError(http.StatusBadRequest, err.Error())
+	}
 
 	// A click that lands after the default-deny deadline but before the sweep's
 	// next tick resolves the row as timed out RIGHT NOW instead of losing the
@@ -1976,7 +1987,7 @@ func (s *Server) decideAdmittedApproval(ctx context.Context, done <-chan struct{
 		s.armApprovalStop(approvalID)
 	}
 	s.executingApprovals.register(execCtx, convID, user, approvalID)
-	claimed, err := s.claimApproved(ctx, user, convID, approval, narrowing)
+	claimed, err := s.claimApproved(ctx, user, convID, approval, narrowing, req.Private)
 	if err != nil || !claimed {
 		s.executingApprovals.unregister(approvalID)
 		if stoppable {
@@ -2016,10 +2027,10 @@ func (s *Server) decideAdmittedApproval(ctx context.Context, done <-chan struct{
 			// never success or failure, and never a re-run.
 			s.approvalPersistenceFailures.Store(approvalID, true)
 			// The narrowing was recorded with the claim, so the card keeps it.
-			reply <- withApprovalNarrowed(map[string]any{
+			reply <- withApprovalPrivateChoice(withApprovalNarrowed(map[string]any{
 				"status": "approved", "execution_unknown": true,
 				"result_text": approvalOutcomeUnrecordedText,
-			}, approval)
+			}, approval), approval)
 		})
 		reply <- s.executeClaimedApproval(execCtx, user, convID, approvalID, approval, req)
 	}()
@@ -2041,7 +2052,7 @@ func (s *Server) decideAdmittedApproval(ctx context.Context, done <-chan struct{
 		// A narrowed approval says what was approved while it still runs, so
 		// the running card keeps its "Approved k of n" and left-out rows;
 		// critical_tool_stop: the running card offers Stop.
-		return approvalBody(s.resumeReplyFlag(execCtx, withApprovalStop(withApprovalNarrowed(running, approval), approval), approval))
+		return approvalBody(s.resumeReplyFlag(execCtx, withApprovalStop(withApprovalPrivateChoice(withApprovalNarrowed(running, approval), approval), approval), approval))
 	case <-done:
 		// The client is gone; nobody reads a reply. The execution carries on
 		// detached and records its outcome for the next "Check result".
@@ -2206,10 +2217,10 @@ func (s *Server) executeClaimedApproval(execCtx context.Context, user, convID, a
 	if err := s.store.SetApprovalResult(execCtx, user, approvalID, resultText, isErr); err != nil {
 		logging.From(actionCtx).Error("SetApprovalResult failed", "err", err)
 		s.approvalPersistenceFailures.Store(approvalID, true)
-		return withApprovalNarrowed(map[string]any{
+		return withApprovalPrivateChoice(withApprovalNarrowed(map[string]any{
 			"status": "approved", "execution_unknown": true,
 			"result_text": approvalOutcomeUnrecordedText,
-		}, approval)
+		}, approval), approval)
 	}
 	// SetApprovalResult commits the history breadcrumb in the same transaction.
 	// When the underlying execution itself failed (toolErr != nil && !stopped,
@@ -2243,7 +2254,7 @@ func (s *Server) executeClaimedApproval(execCtx context.Context, user, convID, a
 		reply["result_card"] = resultCard
 	}
 	s.attachApprovedOptionalMCPServers(execCtx, reply, user, convID, approval, toolErr, isErr)
-	withApprovalNarrowed(reply, approval)
+	withApprovalPrivateChoice(withApprovalNarrowed(reply, approval), approval)
 	if stopped {
 		reply["stoppable"], reply["stopped"] = true, true
 	}
@@ -2335,8 +2346,9 @@ func (s *Server) approvalClientState(a *store.Approval) map[string]any {
 	// The outcome card the call's own result carried, for a tool in
 	// critical_tool_result_cards whose success fleet recorded. Absent for
 	// every other row, so its payload is unchanged. So is what a narrowed
-	// approval approved (approval_narrowing.go).
-	return withApprovalStop(withApprovalNarrowed(s.withApprovalResultCard(out, a), a), a)
+	// approval approved (approval_narrowing.go), and an email card's Private
+	// choice (approval_private.go).
+	return withApprovalStop(withApprovalPrivateChoice(withApprovalNarrowed(s.withApprovalResultCard(out, a), a), a), a)
 }
 
 // writeResolvedApprovalState answers a request that lost the claim race

@@ -1011,6 +1011,11 @@ type TaskCreate struct {
 	// CarryContext (#504): recurring runs carry a bounded handoff from the prior
 	// run. Default false = fresh each run.
 	CarryContext bool `json:"carry_context,omitempty"`
+	// PrivateEmails keeps every email this task's runs send out of the team
+	// Outbox: each MCP call of a run carries fleet/private_emails=true
+	// (scheduledrun), which the bundle's email sender honors. Default false =
+	// sent email is copied to the Outbox as usual.
+	PrivateEmails bool `json:"private_emails,omitempty"`
 	// AllowEventTriggers (#511) is the security opt-in for event ingress: a run
 	// spawned by an EMAIL (or other event) trigger inherits this template task's
 	// write-capable MCP connectors ONLY when this is true. Default false ⇒ an
@@ -1200,6 +1205,9 @@ type Task struct {
 	// from the prior run (its final answer) into each run (#504). Default false
 	// = start fresh each run.
 	CarryContext bool `json:"carry_context,omitempty"`
+	// PrivateEmails keeps the email this task's runs send out of the team
+	// Outbox; see TaskCreate.PrivateEmails.
+	PrivateEmails bool `json:"private_emails,omitempty"`
 	// AllowEventTriggers (#511) opts an event-triggered run into inheriting this
 	// task's write-capable connectors. Default false ⇒ native tools only; see
 	// TaskCreate.AllowEventTriggers.
@@ -1580,6 +1588,7 @@ func NewTask(tc TaskCreate) *Task {
 		InstructionSelfImprove:     tc.InstructionSelfImprove,
 		AllowNetwork:               tc.AllowNetwork,
 		CarryContext:               tc.CarryContext,
+		PrivateEmails:              tc.PrivateEmails,
 		AllowEventTriggers:         tc.AllowEventTriggers,
 		Persona:                    tc.Persona,
 		Description:                tc.Description,
@@ -1725,7 +1734,10 @@ func TaskToCreate(t *Task) TaskCreate {
 		// CarryContext (#504) is part of the recipe so a recurrence/clone keeps the
 		// prior-run handoff opt-in — without it a recurring carry_context task lost
 		// the very feature after occurrence #1 (issue #565).
-		CarryContext:       t.CarryContext,
+		CarryContext: t.CarryContext,
+		// PrivateEmails is part of the recipe so every occurrence of a
+		// recurring private task keeps its email out of the Outbox.
+		PrivateEmails:      t.PrivateEmails,
 		AllowEventTriggers: t.AllowEventTriggers,
 		// Persona (#221) is part of the recipe so a recurrence/clone runs under the
 		// same per-task persona override rather than falling back to the global

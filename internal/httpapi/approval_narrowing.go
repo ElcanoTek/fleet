@@ -283,8 +283,13 @@ func requestedNarrowing(a *store.Approval, req approvalRequest) (*approvalNarrow
 // claim, or, for a narrowed approval, the claim that writes the narrowing in
 // the same UPDATE, so the row can never be approved without what the person
 // approved. On a won narrowed claim it sets a.NarrowedJSON (execution reads
-// it) and logs the audit line.
-func (s *Server) claimApproved(ctx context.Context, user, convID string, a *store.Approval, n *approvalNarrowing) (bool, error) {
+// it) and logs the audit line. An outbound email card's Private choice
+// (private, checked by checkRequestedPrivate) is written by its own claim the
+// same way and set on a.PrivateChoice; an email card is never narrowable.
+func (s *Server) claimApproved(ctx context.Context, user, convID string, a *store.Approval, n *approvalNarrowing, private *bool) (bool, error) {
+	if private != nil {
+		return s.claimApprovedPrivate(ctx, user, convID, a, *private)
+	}
 	if n == nil {
 		return s.store.ClaimApproval(ctx, user, a.ID, "approved", approvalExecutingSentinel)
 	}

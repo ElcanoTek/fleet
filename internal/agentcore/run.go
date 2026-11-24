@@ -181,6 +181,12 @@ type Deps struct {
 	// the scheduled driver binds it to the run's working directory
 	// (tools.SnapshotEmailAttachmentsInDir). nil = no rewrite.
 	PrepareEmailAttachments func(args map[string]any) (cleanup func(), err error)
+	// MCPRequestMeta, when set, is added to the `_meta` of every MCP tools/call
+	// of the run (mcp.WithRequestMeta keeps only fleet/ keys). The scheduled
+	// driver sets fleet/private_emails=true for a task set to send privately,
+	// so its email never reaches the team Outbox, including email a server
+	// sends from inside another tool. nil = nothing added.
+	MCPRequestMeta map[string]any
 
 	// Model + FallbackModel are the resolved fantasy language models.
 	Model         fantasy.LanguageModel
@@ -560,6 +566,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 		journal:           deps.TurnJournal,
 		readWorkspaceFile: deps.ReadWorkspaceFile,
 		prepareEmail:      deps.PrepareEmailAttachments,
+		requestMeta:       deps.MCPRequestMeta,
 	}
 	// A narrowed roster (#1603) makes Gate-2 exhaustive for this run.
 	toolCfg.exclusiveAllowlist = cfg.MCPRosterNarrowing != ""

@@ -477,6 +477,12 @@ type Approval struct {
 	// at staging by SetApprovalNarrowableArg (migration 079,
 	// docs/APPROVAL-NARROWING.md). Empty = the card approves its call whole.
 	NarrowableArg string
+	// PrivateChoice is the Private box of an outbound email card as the
+	// person approved it (migration 0214), written by ClaimApprovalPrivate in
+	// the claim itself: true keeps the email out of the team Outbox, false
+	// saves it even when the model passed private. nil = no choice was sent
+	// (the CLI, an older client): the call runs with its own argument.
+	PrivateChoice *bool
 }
 
 // approvalCols is the one column list the full approval readers select
@@ -490,15 +496,20 @@ const approvalCols = `id, conversation_id, user_email, tool_name, args_json, sta
 	COALESCE(tool_call_id, ''), COALESCE(expires_at, 0),
 	COALESCE(mcp_server, ''), COALESCE(mcp_account, ''),
 	is_err, COALESCE(card_json, ''), resume_state, COALESCE(group_id, ''), COALESCE(progress_json, ''),
-	COALESCE(result_card_json, ''), COALESCE(narrowed_json, ''), COALESCE(stop_requested_at, 0), COALESCE(narrowable_arg, '')`
+	COALESCE(result_card_json, ''), COALESCE(narrowed_json, ''), COALESCE(stop_requested_at, 0), COALESCE(narrowable_arg, ''),
+	private_choice`
 
 // scanApproval scans one row selected with approvalCols.
 func scanApproval(row rowScanner) (Approval, error) {
 	var a Approval
+	var private sql.NullBool
 	err := row.Scan(&a.ID, &a.ConversationID, &a.UserEmail, &a.ToolName,
 		&a.ArgsJSON, &a.Status, &a.ResultText, &a.CreatedAt, &a.ResolvedAt, &a.ToolCallID, &a.ExpiresAt,
 		&a.MCPServer, &a.MCPAccount, &a.IsErr, &a.CardJSON, &a.ResumeState, &a.GroupID, &a.ProgressJSON, &a.ResultCardJSON,
-		&a.NarrowedJSON, &a.StopRequestedAt, &a.NarrowableArg)
+		&a.NarrowedJSON, &a.StopRequestedAt, &a.NarrowableArg, &private)
+	if private.Valid {
+		a.PrivateChoice = &private.Bool
+	}
 	return a, err
 }
 
@@ -579,7 +590,7 @@ func (s *Store) ListResolvedApprovals(ctx context.Context, userEmail, convID str
 // completed cards or their argument bodies. Filter before any display limit so
 // an older in-flight execution cannot be hidden by newer completed approvals.
 func (s *Store) ListExecutingApprovals(ctx context.Context, userEmail, convID, sentinel string) ([]Approval, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, tool_name, COALESCE(tool_call_id, ''), COALESCE(mcp_server, ''), COALESCE(mcp_account, ''), COALESCE(progress_json, ''), COALESCE(narrowed_json, ''), COALESCE(stop_requested_at, 0) FROM approvals
+	rows, err := s.db.QueryContext(ctx, `SELECT id, tool_name, COALESCE(tool_call_id, ''), COALESCE(mcp_server, ''), COALESCE(mcp_account, ''), COALESCE(progress_json, ''), COALESCE(narrowed_json, ''), COALESCE(stop_requested_at, 0), private_choice FROM approvals
 		WHERE conversation_id = $1 AND user_email = $2 AND status = 'approved'
 		AND is_err IS NULL AND result_text = $3 ORDER BY created_at`, convID, userEmail, sentinel)
 	if err != nil {
@@ -589,8 +600,12 @@ func (s *Store) ListExecutingApprovals(ctx context.Context, userEmail, convID, s
 	var out []Approval
 	for rows.Next() {
 		a := Approval{Status: "approved", ResultText: sentinel}
-		if err := rows.Scan(&a.ID, &a.ToolName, &a.ToolCallID, &a.MCPServer, &a.MCPAccount, &a.ProgressJSON, &a.NarrowedJSON, &a.StopRequestedAt); err != nil {
+		var private sql.NullBool
+		if err := rows.Scan(&a.ID, &a.ToolName, &a.ToolCallID, &a.MCPServer, &a.MCPAccount, &a.ProgressJSON, &a.NarrowedJSON, &a.StopRequestedAt, &private); err != nil {
 			return nil, err
+		}
+		if private.Valid {
+			a.PrivateChoice = &private.Bool
 		}
 		out = append(out, a)
 	}
@@ -885,7 +900,7 @@ func (s *Store) ResolveApproval(ctx context.Context, userEmail, approvalID, newS
 // whether SweepExpiredApprovals has run yet. Rows with NULL/0
 // expires_at never expire. The expiry sweep uses ClaimExpiredApproval
 // so it can still flip those rows for notification/audit.
-func (s *Store) claimApprovalForAuthorizedUser(ctx context.Context, userEmail, approvalID, resultText, narrowedJSON string) (bool, error) {
+func (s *Store) claimApprovalForAuthorizedUser(ctx context.Context, userEmail, approvalID, resultText, narrowedJSON string, privateChoice sql.NullBool) (bool, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return false, err
@@ -910,12 +925,14 @@ func (s *Store) claimApprovalForAuthorizedUser(ctx context.Context, userEmail, a
 		return false, err
 	}
 	// An empty narrowedJSON (a card approved whole) leaves narrowed_json as
-	// it was — NULL on a pending row.
+	// it was — NULL on a pending row; so does a NULL privateChoice for
+	// private_choice.
 	res, err := tx.ExecContext(ctx,
 		`UPDATE approvals SET status = 'approved', result_text = $2, resolved_at = $1,
-		        narrowed_json = COALESCE(NULLIF($3, ''), narrowed_json)
+		        narrowed_json = COALESCE(NULLIF($3, ''), narrowed_json),
+		        private_choice = COALESCE($6::boolean, private_choice)
 		 WHERE id = $4 AND user_email = $5 AND `+approvalClaimable,
-		now, resultText, narrowedJSON, approvalID, userEmail,
+		now, resultText, narrowedJSON, approvalID, userEmail, privateChoice,
 	)
 	if err != nil {
 		return false, err
@@ -934,7 +951,7 @@ func (s *Store) ClaimApproval(ctx context.Context, userEmail, approvalID, newSta
 		return false, fmt.Errorf("invalid approval status %q", newStatus)
 	}
 	if newStatus == approvalStatusApproved {
-		return s.claimApprovalForAuthorizedUser(ctx, userEmail, approvalID, resultText, "")
+		return s.claimApprovalForAuthorizedUser(ctx, userEmail, approvalID, resultText, "", sql.NullBool{})
 	}
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE approvals SET status = $2, result_text = $3, resolved_at = $1
@@ -977,7 +994,17 @@ func (s *Store) ClaimApprovalNarrowed(ctx context.Context, userEmail, approvalID
 	if narrowedJSON == "" {
 		return false, errors.New("ClaimApprovalNarrowed: empty narrowing record")
 	}
-	return s.claimApprovalForAuthorizedUser(ctx, userEmail, approvalID, resultText, narrowedJSON)
+	return s.claimApprovalForAuthorizedUser(ctx, userEmail, approvalID, resultText, narrowedJSON, sql.NullBool{})
+}
+
+// ClaimApprovalPrivate is ClaimApproval for an outbound email card approved
+// with the person's Private choice (migration 0214): the same claim
+// predicate, resolving the row as approved with resultText (the executing
+// sentinel) AND writing private_choice in the same UPDATE. So the email can
+// never run without the choice the person made: either both land or the
+// card stays pending.
+func (s *Store) ClaimApprovalPrivate(ctx context.Context, userEmail, approvalID, resultText string, private bool) (bool, error) {
+	return s.claimApprovalForAuthorizedUser(ctx, userEmail, approvalID, resultText, "", sql.NullBool{Bool: private, Valid: true})
 }
 
 // ClaimApprovalAndSetModel resolves a pending approval as "approved" AND pins

@@ -328,6 +328,10 @@
     "persona id required",
     "persona not found",
     "pick at least one thing for the patrol to watch",
+    "private applies only to an outbound email card that offers the Private box",
+    "private cannot be combined with a narrowed approval",
+    "private goes with an approval; to decline, send approved false without it",
+    "private values must be true or false",
     "project default model not allowed in lockdown mode",
     "project id required",
     "project not found",
@@ -1546,6 +1550,12 @@
       "fields": [
         "%d",
         "%d"
+      ]
+    },
+    {
+      "message": "private names approval {0}, which is not approved",
+      "fields": [
+        "%s"
       ]
     },
     {
