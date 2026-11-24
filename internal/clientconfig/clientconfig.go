@@ -252,6 +252,7 @@ func Load(dir string) (*Bundle, error) {
 		Models:                         m.Models,
 		EmptyState:                     m.EmptyState,
 		TaskTemplates:                  m.TaskTemplates,
+		accountGroups:                  m.AccountGroups,
 		MCPCatalog:                     m.MCPServers,
 		HTTPTools:                      m.HTTPTools,
 		A2APeers:                       m.A2APeers,

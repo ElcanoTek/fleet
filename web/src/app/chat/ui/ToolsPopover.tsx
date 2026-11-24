@@ -15,6 +15,8 @@ import {
   type PickerCategory,
   type PickerConnector,
 } from "./toolsPicker";
+import { AccountGroupChips } from "./AccountGroupChips";
+import type { AccountGroups } from "./accountGroups";
 import { Highlight, SeatMenu, StatusKicker, ToolSwitch } from "./ToolsPickerParts";
 
 // The composer's Tools popover (the wrench). Search pinned at the top and
@@ -27,6 +29,10 @@ import { Highlight, SeatMenu, StatusKicker, ToolSwitch } from "./ToolsPickerPart
 export type ToolsPopoverProps = {
   servers: PickerConnector[];
   categories: PickerCategory[];
+  /** The bundle's account groups, shown as chips over the list; null = none. */
+  accountGroups?: AccountGroups | null;
+  /** A chip was pressed: the rows it changed, to save at once. */
+  onApplyRows?: (rows: PickerConnector[]) => void;
   appName: string;
   isAdmin: boolean;
   loading: boolean;
@@ -53,6 +59,8 @@ const GROUP_LABEL =
 export function ToolsPopover({
   servers,
   categories,
+  accountGroups,
+  onApplyRows,
   appName,
   isAdmin,
   loading,
@@ -276,6 +284,15 @@ export function ToolsPopover({
           </>
         ) : null}
       </div>
+
+      <AccountGroupChips
+        accountGroups={accountGroups}
+        rows={servers}
+        query={q}
+        appName={appName}
+        onApply={(rows) => onApplyRows?.(rows as PickerConnector[])}
+        className="border-b border-[var(--color-divider)] px-3 pb-2 pt-1.5"
+      />
 
       <div
         ref={listRef}

@@ -110,6 +110,9 @@ func (b *Bundle) validate() error {
 			}
 		}
 	}
+	if err := b.validateAccountGroups(); err != nil {
+		return err
+	}
 	if err := b.validateHTTPTools(seen); err != nil {
 		return err
 	}
