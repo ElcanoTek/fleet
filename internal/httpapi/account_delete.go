@@ -5,6 +5,8 @@ package httpapi
 
 import (
 	"context"
+	"errors"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,13 +16,13 @@ import (
 	"github.com/ElcanoTek/fleet/internal/identity"
 	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/safe"
+	"github.com/ElcanoTek/fleet/internal/store"
 )
 
 // defaultAccountDrainTimeout bounds how long deleting an account waits for
 // the account's requests and turns to stop once cancelled. Past it the deletion
-// goes ahead: a write that still lands afterwards is refused for want of an
-// account (store.withAccountRow) or removed by the maintenance pass
-// (sweepDeletedAccounts).
+// is refused and nothing is deleted (handleAdminUserDelete): the trees it
+// would move aside could still be written to.
 const defaultAccountDrainTimeout = 15 * time.Second
 
 // defaultAccountDeleteTimeout bounds an account deletion once the account's
@@ -232,6 +234,76 @@ func (s *Server) sweepDeletedAccounts(ctx context.Context) {
 		liveEmails[e] = true
 	}
 	s.sessionApprovals.ForgetUsersExcept(liveEmails)
+}
+
+// accountFilesWritable reports whether files may be written into email's
+// upload tree now: no deletion holds the account's gate, and an account still
+// holds the address. A writer asks right before it writes, so a request
+// admitted before a deletion began stops instead of writing into a tree the
+// deletion is about to move aside. The deletion also waits for that request
+// (stopAccountWork), and is refused when it does not end in time.
+func (s *Server) accountFilesWritable(ctx context.Context, email string) (bool, error) {
+	if s.accounts.isClosed(email) {
+		return false, nil
+	}
+	return s.accountHoldsAddress(ctx, email)
+}
+
+// accountHoldsAddress reports whether an account holds email's address now.
+// A server with no account store, a unit-test shape, reports true.
+func (s *Server) accountHoldsAddress(ctx context.Context, email string) (bool, error) {
+	if s.store == nil {
+		return true, nil
+	}
+	switch _, err := s.store.GetUser(ctx, email); {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, store.ErrUserNotFound):
+		return false, nil
+	default:
+		return false, err
+	}
+}
+
+// refuseUnlessAccountFilesWritable answers the request and returns false
+// when files may not be written for user now (accountFilesWritable): 403
+// not_a_member, as membershipMiddleware answers the account's requests once
+// its deletion has begun, or 500 when the account could not be looked up.
+// The lookup does not end with the request: a deletion cancels the request
+// when it begins, and one that is then refused leaves the account there, its
+// upload to finish.
+func (s *Server) refuseUnlessAccountFilesWritable(w http.ResponseWriter, r *http.Request, user string) bool {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
+	defer cancel()
+	ok, err := s.accountFilesWritable(ctx, user)
+	switch {
+	case ok:
+		return true
+	case err != nil:
+		logging.From(ctx).Error("uploads: the account lookup failed", "err", safe.LogSafe(err.Error()))
+		http.Error(w, "membership check failed", http.StatusInternalServerError)
+	default:
+		writeNotAMember(w)
+	}
+	return false
+}
+
+// stashOwner is the participant a private workspace swap moves staged files
+// back to (restoreParticipantWorkspaceToOwner): email while an account holds
+// its address, "" once none does, so the files are removed from the shared
+// workspace instead of written into a stash no account has. A lookup that
+// fails keeps them for email; the maintenance pass removes a stash whose
+// address has no account.
+func (s *Server) stashOwner(email string) string {
+	if email == "" {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if live, err := s.accountHoldsAddress(ctx, email); err == nil && !live {
+		return ""
+	}
+	return email
 }
 
 // digestLive is the sweep's last look before it removes a tree: whether an

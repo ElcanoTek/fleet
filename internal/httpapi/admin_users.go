@@ -13,10 +13,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/ElcanoTek/fleet/internal/accountdelete"
 	"github.com/ElcanoTek/fleet/internal/identity"
@@ -162,6 +160,17 @@ func (s *Server) handleAdminUserDelete(w http.ResponseWriter, r *http.Request, e
 		http.Error(w, "the deletion was interrupted before it started; nothing was deleted", http.StatusServiceUnavailable)
 		return
 	}
+	if !stopped {
+		// Some of the account's requests or turns had not ended within
+		// accountDrainTimeout. The deletion waits for all of them, so nothing
+		// is deleted: the gate reopens when this returns, and nothing was set
+		// aside yet. What was cancelled stays cancelled, so a retry usually
+		// finds it ended.
+		logging.From(r.Context()).Warn("admin users: the account's requests or turns did not stop in time; nothing was deleted", "email", safe.LogSafe(email))
+		w.Header().Set("Retry-After", "5")
+		http.Error(w, errAccountWorkStillRunning, http.StatusServiceUnavailable)
+		return
+	}
 	if s.afterAccountWorkStopped != nil {
 		s.afterAccountWorkStopped()
 	}
@@ -204,11 +213,7 @@ func (s *Server) handleAdminUserDelete(w http.ResponseWriter, r *http.Request, e
 		return
 	}
 	logAccountDeleteProblems(ctx, email, deleted.Problems)
-	warnings := make([]string, 0, len(deleted.Problems)+1)
-	if !stopped {
-		logging.From(ctx).Warn("admin users: the account's requests or turns did not stop in time; deleted it anyway", "email", safe.LogSafe(email))
-		warnings = append(warnings, errAccountWorkStillRunning(s.accountDrainTimeout()).Error())
-	}
+	warnings := make([]string, 0, len(deleted.Problems))
 	for _, p := range deleted.Problems {
 		warnings = append(warnings, accountDeleteWarning(p).Error())
 	}
@@ -223,11 +228,9 @@ func (s *Server) handleAdminUserDelete(w http.ResponseWriter, r *http.Request, e
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// errAccountWorkStillRunning is the warning of a deletion that went ahead
-// with some of the account's requests or turns still running.
-func errAccountWorkStillRunning(waited time.Duration) error {
-	return fmt.Errorf("some of the account's requests or turns were still running after %d seconds; what they write for the account afterwards is refused, or removed by the maintenance pass", int(math.Ceil(waited.Seconds())))
-}
+// errAccountWorkStillRunning answers a deletion refused because some of the
+// account's requests or turns had not ended within accountDrainTimeout.
+const errAccountWorkStillRunning = "some of the account's requests or turns are still running; nothing was deleted; try again"
 
 // accountDeleteWarning words a step the deletion left for the admin users
 // page. Each wording is a fixed message the browser translates

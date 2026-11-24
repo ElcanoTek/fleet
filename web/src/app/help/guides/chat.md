@@ -548,7 +548,9 @@ the renamed team; a new team that later takes the old name starts with
 nothing shared.
 **Delete user** in a person's row removes their account with their chats,
 memories, connected MCP servers, connector settings, skills, personal
-projects, API keys and uploaded files. When the account is deleted but a step
+projects, API keys and uploaded files. Their requests and replies in progress
+are stopped first; if any is still running after about 15 seconds, nothing is
+deleted and the page says to try again. When the account is deleted but a step
 does not finish (their API keys could not be removed, say), the page says so
 in a notice above the table, with what is left and how to remove it.
 

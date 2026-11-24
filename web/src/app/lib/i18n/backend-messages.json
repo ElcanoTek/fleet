@@ -361,6 +361,7 @@
     "skill id required",
     "skill not found",
     "skill unreadable",
+    "some of the account's requests or turns are still running; nothing was deleted; try again",
     "source changed during copy",
     "source task has an invalid recurrence",
     "specify model, chat_model, task_model, fallback_model, or sync_current=true",
@@ -1686,12 +1687,6 @@
       "message": "shared_file_write: the writer {0} is not a user of this server",
       "fields": [
         "%s"
-      ]
-    },
-    {
-      "message": "some of the account's requests or turns were still running after {0} seconds; what they write for the account afterwards is refused, or removed by the maintenance pass",
-      "fields": [
-        "%d"
       ]
     },
     {

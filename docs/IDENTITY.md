@@ -204,9 +204,11 @@ advises on each demoted split admin, unknown role and duplicate username in it.
     `.removing-<digest>-…` name beside them) while the account still exists
     and its work is stopped, then removed after the commit — or moved back
     if the deletion does not commit. A new account's trees start empty. A
-    tree that cannot be moved aside (its directory not writable, say) stops
-    the deletion before anything is deleted: the trees already moved go
-    back, and the web route answers 500 (the CLI exits non-zero) with the
+    tree that cannot be moved aside (its directory not writable, say), or a
+    directory the move must look into that cannot be read (the attachment
+    directory included; only one that is not there means nothing to move),
+    stops the deletion before anything is deleted: the trees already moved
+    go back, and the web route answers 500 (the CLI exits non-zero) with the
     reason and that nothing was deleted. After the commit the address's
     paths are checked once more (below); if
     the server stops between the move and the commit, the maintenance pass
@@ -244,11 +246,22 @@ advises on each demoted split admin, unknown role and duplicate username in it.
   process before the rows go: its requests are cancelled and new ones
   refused (`not_a_member`) until the deletion is over, and the turns it runs
   — in its own chats and as a multiplayer participant — are cancelled; it
-  waits up to 15 seconds for both. No turn starts for the account once this
-  begins: a request about to start one is refused (`not_a_member`), and the
-  running turns are cancelled after the account's requests have ended, then
-  looked for once more. It answers 503 and deletes nothing if its
-  own request ends first (the client left, or the administrator deleting is
+  waits up to 15 seconds for both. If any of them is still running after
+  that, the deletion is refused with nothing deleted: 503 with Retry-After,
+  `some of the account's requests or turns are still running; nothing was
+  deleted; try again`; the account's requests are served again, and what was
+  cancelled stays cancelled, so a retry usually goes through. No turn starts
+  for the account once this begins: a request about to start one is refused
+  (`not_a_member`), and the running turns are cancelled after the account's
+  requests have ended, then looked for once more. The upload route looks
+  again right before it writes each file: once the account's deletion has
+  begun, or when no account holds the address, it writes nothing (not even
+  the account's upload directory) and answers 403 `not_a_member`. A
+  multiplayer participant's files staged in a shared chat go back to the
+  participant's private stash when the turn ends (or when an interrupted
+  swap is recovered) only while an account holds the address; otherwise
+  they are removed from the chat's workspace. The deletion also answers 503
+  and deletes nothing if its own request ends first (the client left, or the administrator deleting is
   being deleted) — though by then the account's requests in flight and its
   turns have already been cancelled. Once the work is stopped the deletion
   runs to its end even if the client leaves, within two minutes. If the
@@ -299,8 +312,8 @@ advises on each demoted split admin, unknown role and duplicate username in it.
 
   **Steps left.** The database deletion alone decides whether the account is
   deleted. A later step that does not complete (the key store, an upload or
-  private workspace tree — in the server's own cleanup too) is reported —
-  and so is work still running after the 15 seconds; a tree left behind is
+  private workspace tree — in the server's own cleanup too) is reported;
+  a tree left behind is
   removed by the hourly maintenance pass while its digest is no account's
   (a tree the address's new account holds is not a failure): the web
   route answers 200 `{"warnings": [...]}` instead of 204

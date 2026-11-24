@@ -33,15 +33,10 @@ it("localizes owned diagnostics separately from arbitrary error or user content"
   expect(localizeError("my task is active", "es")).toBe("my task is active");
 });
 
-it("translates the warnings of an account deletion with steps left", () => {
+it("translates an account deletion's refusals and its warnings of steps left", () => {
   expect(
-    localizeError(
-      "some of the account's requests or turns were still running after 15 seconds; what they write for the account afterwards is refused, or removed by the maintenance pass",
-      "es",
-    ),
-  ).toBe(
-    "algunas solicitudes o turnos de la cuenta seguían en curso después de 15 segundos; lo que escriban para la cuenta después se rechaza o lo elimina la pasada de mantenimiento",
-  );
+    localizeError("some of the account's requests or turns are still running; nothing was deleted; try again", "es"),
+  ).toBe("algunas solicitudes o turnos de la cuenta siguen en curso; no se eliminó nada; inténtalo de nuevo");
   expect(
     localizeError("removing the account's uploads failed: disk full; the server's hourly maintenance pass tries again", "pt"),
   ).toBe("não foi possível eliminar os ficheiros carregados da conta: disk full; a manutenção horária do servidor volta a tentar");

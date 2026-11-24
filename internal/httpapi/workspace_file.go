@@ -497,7 +497,7 @@ func (s *Server) sweepOrphanPrivateWorkspaceStashes(ctx context.Context) {
 		if s.isParticipantWorkspaceActiveInMemory(convID, "") {
 			continue
 		}
-		_ = recoverInterruptedParticipantWorkspace(convID, filepath.Join(root, convID))
+		_ = recoverInterruptedParticipantWorkspace(convID, filepath.Join(root, convID), s.stashOwner)
 	}
 }
 
@@ -521,7 +521,7 @@ func (s *Server) isParticipantWorkspaceActive(convID, ownerEmail string) bool {
 	// swap-phase marker left on disk came from an interrupted earlier process.
 	// Recover the owner's private workspace directories immediately before
 	// serving the request; fail closed if recovery cannot complete.
-	if err := recoverInterruptedParticipantWorkspace(convID, stashRoot); err != nil {
+	if err := recoverInterruptedParticipantWorkspace(convID, stashRoot, s.stashOwner); err != nil {
 		return true
 	}
 	return false
@@ -547,7 +547,7 @@ func (s *Server) activateTurnPrivateWorkspace(conv *store.Conversation, user str
 		unlock()
 		return err
 	}
-	if err := recoverInterruptedParticipantWorkspace(conv.ID, stashRoot); err != nil {
+	if err := recoverInterruptedParticipantWorkspace(conv.ID, stashRoot, s.stashOwner); err != nil {
 		unlock()
 		return err
 	}
@@ -615,7 +615,7 @@ func (s *Server) restoreTurnPrivateWorkspace(conv *store.Conversation, user stri
 	if conv.UserEmail != "" && !strings.EqualFold(conv.UserEmail, user) {
 		if stashRoot, err := s.privateWorkspaceStashDir(conv.ID); err == nil {
 			if ws, werr := tools.EnsureConversationDir(context.Background(), conv.ID); werr == nil {
-				_ = restoreParticipantWorkspaceToOwner(ws.Root, stashRoot, user)
+				_ = restoreParticipantWorkspaceToOwner(ws.Root, stashRoot, s.stashOwner(user))
 				_ = ws.Close()
 			}
 			if s.takeParticipantWorkspacePurged(conv.ID, user) {
@@ -638,8 +638,9 @@ func writeStashMarker(stashRoot, name, val string) error {
 // recoverInterruptedParticipantWorkspace finishes a swap an earlier process
 // left half done. The conversation directory is opened (created if missing,
 // never followed if it is a symbolic link) only when there is something to
-// move back into it.
-func recoverInterruptedParticipantWorkspace(convID, stashRoot string) error {
+// move back into it. stashFor, when set, names who the participant's staged
+// files go back to (Server.stashOwner: "" removes them instead).
+func recoverInterruptedParticipantWorkspace(convID, stashRoot string, stashFor func(email string) string) error {
 	marker := filepath.Join(stashRoot, "active-participant")
 	raw, err := os.ReadFile(marker) //nolint:gosec // server-derived stashRoot
 	if err == nil {
@@ -648,7 +649,11 @@ func recoverInterruptedParticipantWorkspace(convID, stashRoot string) error {
 			return werr
 		}
 		defer ws.Close()
-		return restoreParticipantWorkspaceToOwner(ws.Root, stashRoot, strings.TrimSpace(string(raw)))
+		participant := strings.TrimSpace(string(raw))
+		if stashFor != nil {
+			participant = stashFor(participant)
+		}
+		return restoreParticipantWorkspaceToOwner(ws.Root, stashRoot, participant)
 	}
 	if !os.IsNotExist(err) {
 		return err

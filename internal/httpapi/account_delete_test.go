@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -791,10 +792,10 @@ func (refusingDeleteStore) DeleteAccount(context.Context, string, string) (strin
 	return "", errors.New("statement timeout")
 }
 
-// A deletion that goes ahead with a participant turn of the account still
-// running (it did not stop in time), and then fails at the database, leaves
-// no mark on that turn: the account is still there, and when the turn ends
-// its files are stashed as usual — not discarded as a deleted account's.
+// A deletion that marks a participant turn of the account (its files still
+// in the shared workspace) and then fails at the database takes the mark
+// back: the account is still there, and when the turn ends its files are
+// stashed as usual, not discarded as a deleted account's.
 // Not parallel: it sets the workspace root.
 func TestFailedDeletionLeavesARunningParticipantTurnUnmarked(t *testing.T) {
 	t.Setenv("FLEET_WORKSPACE_ROOT", t.TempDir())
@@ -828,6 +829,71 @@ func TestFailedDeletionLeavesARunningParticipantTurnUnmarked(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(stash, "participants", participantDigest("u@x.com"), uploadsDir, "notes.txt")); err != nil {
 		t.Fatalf("the participant's files were not stashed when its turn ended: %v", err)
 	}
+}
+
+// A participant swap that ends once no account holds the participant's
+// address writes no stash for it: the staged files leave the shared workspace
+// and are removed, so a later account under the address does not find them.
+// Both writers: a turn ending, and the recovery of a swap an earlier process
+// left half done. Not parallel: it sets the workspace root.
+func TestParticipantSwapOfAGoneAccountWritesNoStash(t *testing.T) {
+	t.Setenv("FLEET_WORKSPACE_ROOT", t.TempDir())
+	s := memberFixture(t) // no account holds gone@x.com
+	s.cfg.EmailAttachmentDir = t.TempDir()
+	stage := func(convID string) {
+		t.Helper()
+		ws, err := tools.EnsureConversationDir(context.Background(), convID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer ws.Close()
+		if err := ws.MkdirAll(uploadsDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := ws.WriteFile(filepath.Join(uploadsDir, "notes.txt"), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	check := func(convID string) {
+		t.Helper()
+		stash, err := s.privateWorkspaceStashDir(convID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Stat(filepath.Join(stash, "participants", participantDigest("gone@x.com"))); !os.IsNotExist(err) {
+			t.Errorf("%s: a stash was written for the address (stat err %v)", convID, err)
+		}
+		ws, err := tools.EnsureConversationDir(context.Background(), convID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer ws.Close()
+		if _, err := ws.Stat(filepath.Join(uploadsDir, "notes.txt")); !os.IsNotExist(err) {
+			t.Errorf("%s: the staged file stayed in the shared workspace (stat err %v)", convID, err)
+		}
+	}
+
+	ended := &store.Conversation{ID: "conv-ended", UserEmail: "owner@x.com"}
+	s.setParticipantWorkspaceActive(ended.ID, "gone@x.com", nil)
+	stage(ended.ID)
+	s.restoreTurnPrivateWorkspace(ended, "gone@x.com")
+	check(ended.ID)
+
+	stage("conv-interrupted")
+	stash, err := s.privateWorkspaceStashDir("conv-interrupted")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(stash, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeStashMarker(stash, "active-participant", "gone@x.com"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.recoverWorkspaceForTransfer("conv-interrupted"); err != nil {
+		t.Fatal(err)
+	}
+	check("conv-interrupted")
 }
 
 // A private workspace tree the server cannot move aside before the commit
@@ -1046,30 +1112,156 @@ func TestAdminDeleteInterruptedBeforeTheStopDeletesNothing(t *testing.T) {
 	}
 }
 
-// A deletion that goes ahead with some of the account's work still running
-// after the wait says so in its warnings.
-func TestAdminDeleteWarnsOfWorkStillRunning(t *testing.T) {
+// hasActive reports whether email has a request in flight.
+func (g *accountGate) hasActive(email string) bool {
+	key := gateKey(email)
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return len(g.active[key]) > 0
+}
+
+// startUpload sends an upload of one file as user through the routes, with a
+// body that arrives in two parts. It returns once the upload handler is
+// reading the first part inside the account's gate; finish sends the rest
+// and returns the response.
+func startUpload(t *testing.T, s *Server, user string) (finish func() *httptest.ResponseRecorder) {
+	t.Helper()
+	body, ct := multipartBody(t, map[string][]byte{"report.csv": []byte("a,b\n1,2\n")})
+	raw := body.Bytes()
+	pr, pw := io.Pipe()
+	req := httptest.NewRequestWithContext(gatewayContext("/attachments", user), http.MethodPost, "/attachments", pr)
+	req.Header.Set("Content-Type", ct)
+	w := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		s.Routes().ServeHTTP(w, req)
+		_ = pr.Close() // a handler that answered without reading unblocks the writes below
+	}()
+	// The pipe hands the first part over only once the handler reads it.
+	if _, err := pw.Write(raw[:16]); err != nil {
+		<-done
+		t.Fatalf("the upload was answered before its body was read: %d %s", w.Code, w.Body.String())
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for !s.accounts.hasActive(user) {
+		if time.Now().After(deadline) {
+			t.Fatal("the upload never entered the account's gate")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	return func() *httptest.ResponseRecorder {
+		_, _ = pw.Write(raw[16:])
+		_ = pw.Close()
+		<-done
+		return w
+	}
+}
+
+// A request of the account that has not ended when the wait for the
+// account's work is over (here an upload whose body is still arriving)
+// refuses the deletion: 503 with Retry-After, the account and its files
+// stay where they were, its requests are served again, and the upload then
+// finishes.
+func TestAdminDeleteRefusedWhileAnUploadIsStillRunning(t *testing.T) {
 	t.Parallel()
 	s := memberFixture(t, "boss@x.com", "u@x.com")
 	setRole(t, s, "boss@x.com", "admin", "")
-	s.accountDrain = time.Second
-	// A request of the account that does not end when cancelled.
-	_, leave, _ := s.accounts.enter(context.Background(), "u@x.com")
-	defer leave()
+	att := t.TempDir()
+	s.cfg.EmailAttachmentDir = att
+	s.accountDrain = 300 * time.Millisecond
+	uploads := accountdelete.UploadsDir(att, "u@x.com")
+	participants := filepath.Join(accountdelete.PrivateWorkspaceRoot(att), "conv-1", "participants")
+	seeded := []string{filepath.Join(uploads, "tok", "f.txt"), filepath.Join(participants, accountdelete.Digest("u@x.com"), "f.txt")}
+	for _, f := range seeded {
+		if err := os.MkdirAll(filepath.Dir(f), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(f, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	finish := startUpload(t, s, "u@x.com")
 	w := do(t, s.Routes(), http.MethodDelete, "/admin/users/u@x.com", nil, "boss@x.com")
-	if w.Code != http.StatusOK {
-		t.Fatalf("status %d body %s, want 200 with warnings", w.Code, w.Body.String())
+	if w.Code != http.StatusServiceUnavailable || w.Header().Get("Retry-After") == "" ||
+		strings.TrimSpace(w.Body.String()) != errAccountWorkStillRunning {
+		t.Fatalf("status %d (Retry-After %q) body %q, want 503 with Retry-After saying nothing was deleted",
+			w.Code, w.Header().Get("Retry-After"), w.Body.String())
 	}
-	var body struct {
-		Warnings []string `json:"warnings"`
+	if _, err := s.concreteStore(t).GetUser(context.Background(), "u@x.com"); err != nil {
+		t.Fatalf("the account was deleted: %v", err)
 	}
-	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || len(body.Warnings) != 1 ||
-		body.Warnings[0] != errAccountWorkStillRunning(time.Second).Error() {
-		t.Fatalf("warnings = %q (err %v)", body.Warnings, err)
+	for _, f := range seeded {
+		if _, err := os.Stat(f); err != nil {
+			t.Errorf("%s is not where it was: %v", f, err)
+		}
 	}
-	if _, err := s.concreteStore(t).GetUser(context.Background(), "u@x.com"); err == nil {
-		t.Fatal("the account survived")
+	for _, dir := range []string{filepath.Dir(uploads), participants} {
+		entries, _ := os.ReadDir(dir)
+		for _, e := range entries {
+			if accountdelete.IsAside(e.Name()) {
+				t.Errorf("%s was moved aside in %s", e.Name(), dir)
+			}
+		}
 	}
+	if s.accounts.isClosed("u@x.com") {
+		t.Fatal("the account's requests stay refused after the refused deletion")
+	}
+
+	up := finish()
+	if up.Code != http.StatusOK {
+		t.Fatalf("the upload: status %d body %s, want 200", up.Code, up.Body.String())
+	}
+	var resp struct {
+		Attachments []uploadedAttachment `json:"attachments"`
+	}
+	if err := json.Unmarshal(up.Body.Bytes(), &resp); err != nil || len(resp.Attachments) != 1 {
+		t.Fatalf("the upload's answer %s (err %v), want one attachment", up.Body.String(), err)
+	}
+	if _, err := os.Stat(filepath.FromSlash(resp.Attachments[0].Path)); err != nil {
+		t.Errorf("the uploaded file is missing: %v", err)
+	}
+}
+
+// The upload writer looks right before it writes: an upload whose body
+// arrives once the account's deletion has begun, or for an address no account
+// holds, writes nothing, not even the account's upload directory.
+func TestUploadRefusedForAnAccountBeingDeletedOrGone(t *testing.T) {
+	t.Parallel()
+	t.Run("being deleted", func(t *testing.T) {
+		t.Parallel()
+		s := memberFixture(t, "u@x.com")
+		att := t.TempDir()
+		s.cfg.EmailAttachmentDir = att
+		finish := startUpload(t, s, "u@x.com")
+		reopen := s.accounts.close("u@x.com")
+		defer reopen()
+		w := finish()
+		if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "not_a_member") {
+			t.Fatalf("status %d body %s, want 403 not_a_member", w.Code, w.Body.String())
+		}
+		if _, err := os.Stat(accountdelete.UploadsDir(att, "u@x.com")); !os.IsNotExist(err) {
+			t.Fatalf("the account's upload directory was written (stat err %v)", err)
+		}
+	})
+	t.Run("gone", func(t *testing.T) {
+		t.Parallel()
+		s := memberFixture(t) // no account holds gone@x.com
+		att := t.TempDir()
+		s.cfg.EmailAttachmentDir = att
+		body, ct := multipartBody(t, map[string][]byte{"report.csv": []byte("a,b\n")})
+		req := httptest.NewRequestWithContext(asUser(context.Background(), "gone@x.com"), http.MethodPost, "/attachments", body)
+		req.Header.Set("Content-Type", ct)
+		w := httptest.NewRecorder()
+		s.postAttachments(w, req)
+		if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "not_a_member") {
+			t.Fatalf("status %d body %s, want 403 not_a_member", w.Code, w.Body.String())
+		}
+		if _, err := os.Stat(accountdelete.UploadsDir(att, "gone@x.com")); !os.IsNotExist(err) {
+			t.Fatalf("an upload directory was written for the address (stat err %v)", err)
+		}
+	})
 }
 
 // blockingDeleteStore is the real store with a DeleteUser that never finishes

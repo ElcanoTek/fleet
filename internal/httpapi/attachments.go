@@ -120,7 +120,14 @@ func (s *Server) postAttachments(w http.ResponseWriter, r *http.Request) {
 
 	// Per-caller subtree, derived from the authenticated identity (never from
 	// anything in the request body) — see userUploadsRoot.
-	baseDir := userUploadsRoot(s.cfg.EmailAttachmentDir, userFromCtx(r.Context()))
+	user := userFromCtx(r.Context())
+	baseDir := userUploadsRoot(s.cfg.EmailAttachmentDir, user)
+	// Reading the body can take long; the account may have begun to be
+	// deleted meanwhile. Nothing is written for it then, not even the
+	// directory (accountFilesWritable), and each file is checked again.
+	if !s.refuseUnlessAccountFilesWritable(w, r, user) {
+		return
+	}
 	if err := os.MkdirAll(baseDir, 0o755); err != nil { //nolint:gosec // host-side upload landing area, readable by the host user only
 		http.Error(w, "mkdir uploads: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -138,6 +145,9 @@ func (s *Server) postAttachments(w http.ResponseWriter, r *http.Request) {
 
 	out := make([]uploadedAttachment, 0, len(files))
 	for _, fh := range files {
+		if !s.refuseUnlessAccountFilesWritable(w, r, user) {
+			return
+		}
 		att, err := saveUpload(baseDir, fh)
 		if err != nil {
 			logging.From(r.Context()).Error("saveUpload failed", "filename", safe.LogSafe(fh.Filename), "err", safe.LogSafe(err.Error()))

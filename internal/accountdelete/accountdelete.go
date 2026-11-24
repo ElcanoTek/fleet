@@ -121,8 +121,9 @@ const (
 	KeysUnavailable ProblemKind = "keys_unavailable"
 	// KeysFailed: deleting the user keys failed (Err).
 	KeysFailed ProblemKind = "keys_failed"
-	// AttachmentDirUnreadable: the attachment directory (Path) could not be
-	// read, so no file was removed there.
+	// AttachmentDirUnreadable: the attachment directory (Path) does not
+	// exist, so no file was removed there. Any other error reading it
+	// refuses the deletion (FilesNotSetAsideError).
 	AttachmentDirUnreadable ProblemKind = "attachment_dir_unreadable"
 	// UploadsFailed: removing the upload tree failed (Err).
 	UploadsFailed ProblemKind = "uploads_failed"
@@ -337,8 +338,13 @@ func setAsideAccountFiles(email string, opt Options) (aside []AsideTree, undo fu
 		// at the wrong directory would report nothing: say so instead. The
 		// server's maintenance pass removes the files of deleted accounts
 		// from the directory it really uses.
-		if _, err := os.Stat(opt.AttachmentDir); err != nil {
+		// Only a confirmed absence means there is nothing to move: any other
+		// error (no permission, an I/O error) refuses the deletion, since a
+		// tree may be there that cannot be moved.
+		if _, err := os.Stat(opt.AttachmentDir); os.IsNotExist(err) {
 			dirProblem = append(dirProblem, Problem{Kind: AttachmentDirUnreadable, Email: email, Path: opt.AttachmentDir, Err: err.Error()})
+		} else if err != nil {
+			return aside, undo, dirProblem, fmt.Errorf("the attachment directory: %w", err)
 		} else {
 			dirOK = true
 			t, moved, serr := SetAside(UploadsDir(opt.AttachmentDir, email), digest)

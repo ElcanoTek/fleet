@@ -287,6 +287,52 @@ func TestDeleteRefusedWhenATreeCannotBeMovedAside(t *testing.T) {
 	}
 }
 
+// An attachment directory that exists but cannot be read refuses the
+// deletion: only a directory that is not there counts as nothing to move.
+// Covers the directory itself unreadable and a parent that cannot be looked
+// into (so even its existence cannot be confirmed).
+func TestDeleteRefusedWhenTheAttachmentDirCannotBeRead(t *testing.T) {
+	skipAsRoot(t)
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		closed func(parent, att string) string
+	}{
+		{"the directory", func(_, att string) string { return att }},
+		{"its parent", func(parent, _ string) string { return parent }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			parent := t.TempDir()
+			att := filepath.Join(parent, "attachments")
+			files := seedFiles(t, att, "gone@x.com")
+			closed := tc.closed(parent, att)
+			if err := os.Chmod(closed, 0); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = os.Chmod(closed, 0o700) })
+
+			st, keys := &fakeStore{}, &fakeKeys{}
+			_, err := Delete(context.Background(), st, "gone@x.com", Options{Keys: keys, AttachmentDir: att})
+			var notMoved *FilesNotSetAsideError
+			if !errors.As(err, &notMoved) || !strings.Contains(err.Error(), "nothing was deleted") {
+				t.Fatalf("err = %v, want a FilesNotSetAsideError saying nothing was deleted", err)
+			}
+			if len(st.deleted) != 0 || len(keys.calls) != 0 {
+				t.Fatalf("store deletions %v, key deletions %v; want none", st.deleted, keys.calls)
+			}
+			if err := os.Chmod(closed, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			for _, f := range files {
+				if _, err := os.Stat(f); err != nil {
+					t.Errorf("%s is not where it was: %v", f, err)
+				}
+			}
+		})
+	}
+}
+
 // The account's trees are moved aside before the database deletion: a
 // deletion that does not commit moves them back, and leaves nothing aside.
 func TestDeleteThatDoesNotCommitPutsTheFilesBack(t *testing.T) {

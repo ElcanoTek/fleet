@@ -300,7 +300,7 @@ func (s *Server) recoverWorkspaceForTransfer(convID string) error {
 	if err != nil {
 		return err
 	}
-	return recoverInterruptedParticipantWorkspace(convID, stash)
+	return recoverInterruptedParticipantWorkspace(convID, stash, s.stashOwner)
 }
 
 // transferConversation moves an idle chat to toEmail and reconciles everyone
