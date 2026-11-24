@@ -57,6 +57,7 @@ import {
 import { PromptLibrary } from "@/app/shared/ui/PromptLibrary";
 import { EmailTemplateLibrary, useHasEmailTemplates } from "@/app/shared/ui/EmailTemplateLibrary";
 import { ToolsLibrary } from "./ToolsLibrary";
+import type { AccountGroups } from "./accountGroups";
 import { ToolsPopover } from "./ToolsPopover";
 import { ApprovalModesInfoModal } from "./ApprovalModesInfoModal";
 import { countOn, orderedCategories, type PickerCategory } from "./toolsPicker";
@@ -266,6 +267,13 @@ export type ComposerProps = {
   ) => void | Promise<void>;
   // The picker's category headings, in order ([] = the built-in fallback).
   mcpCategories: PickerCategory[];
+  /** The bundle's account groups (the picker's chips); null = none. */
+  mcpAccountGroups?: AccountGroups | null;
+  /** A chip was pressed: these rows' switches and accounts, saved at once. */
+  applyMcpServerRows?: (
+    conversationId: string | null,
+    rows: { name: string; enabled: boolean; account?: string; selected_accounts?: string[] }[],
+  ) => void | Promise<void>;
   // The deployment's name ("Elcano"): the default account's label.
   appName: string;
   // Shows the library's admin-only links (visibility only).
@@ -382,6 +390,8 @@ export function Composer({
   toggleMcpServer,
   setMcpServersEnabled,
   mcpCategories,
+  mcpAccountGroups,
+  applyMcpServerRows,
   appName,
   isAdmin,
   setMcpServerAccount,
@@ -1315,6 +1325,8 @@ export function Composer({
                   <ToolsPopover
                     servers={mcpServers}
                     categories={pickerCategories}
+                    accountGroups={mcpAccountGroups}
+                    onApplyRows={(rows) => void applyMcpServerRows?.(activeConversationId, rows)}
                     appName={appName}
                     isAdmin={isAdmin}
                     loading={isLoadingMcpServers}
@@ -1339,6 +1351,8 @@ export function Composer({
                   <ToolsLibrary
                     servers={mcpServers}
                     categories={pickerCategories}
+                    accountGroups={mcpAccountGroups}
+                    onApplyRows={(rows) => void applyMcpServerRows?.(activeConversationId, rows)}
                     appName={appName}
                     isAdmin={isAdmin}
                     initialSelected={toolsLibrary.selected}

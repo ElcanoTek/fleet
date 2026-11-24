@@ -197,6 +197,7 @@ import {
   isTemporaryChat,
 } from "./deleteAllUnpinnedScope";
 import { Composer } from "./Composer";
+import type { AccountGroups } from "./accountGroups";
 import { mergeComposerSkills, type SkillInfo } from "./skillSlash";
 import { ChatTranscript } from "./ChatTranscript";
 import {
@@ -973,6 +974,9 @@ export function ChatExperience({
   // The Tools picker's category headings, in order, from the same catalog
   // responses (empty until the first one answers; the picker falls back).
   const [mcpCategories, setMcpCategories] = useState<PickerCategory[]>([]);
+  // The bundle's account groups (the picker's chips), from the same catalog
+  // responses as the rows they act on; null when the bundle supplies none.
+  const [mcpAccountGroups, setMcpAccountGroups] = useState<AccountGroups | null>(null);
   const [mcpPickerOpen, setMcpPickerOpen] = useState(false);
   // Bundle + user skill roster for the composer "/" autocomplete (#513).
   const [skills, setSkills] = useState<SkillInfo[]>(
@@ -2391,10 +2395,12 @@ export function ChatExperience({
       const data = (await response.json()) as {
         servers?: MCPServerInfo[];
         categories?: PickerCategory[];
+        account_groups?: AccountGroups;
       };
       if (!mcpCatalogIsCurrent(gen, conversationId)) return;
       setMcpServers((data.servers ?? []).map(localizeConnector));
       if (data.categories?.length) setMcpCategories(data.categories);
+      setMcpAccountGroups(data.account_groups ?? null);
     } catch {
       /* non-fatal — picker just stays empty */
     } finally {
@@ -2427,6 +2433,7 @@ export function ChatExperience({
       const data = (await response.json()) as {
         servers?: MCPServerInfo[];
         categories?: PickerCategory[];
+        account_groups?: AccountGroups;
       };
       const servers = data.servers ?? [];
       // The seed is the user's saved prefs, not any chat's state: always
@@ -2437,6 +2444,7 @@ export function ChatExperience({
       if (!mcpCatalogIsCurrent(gen, null)) return;
       setMcpServers(servers.map(localizeConnector));
       if (data.categories?.length) setMcpCategories(data.categories);
+      setMcpAccountGroups(data.account_groups ?? null);
     } catch {
       /* non-fatal */
     } finally {
@@ -2524,6 +2532,28 @@ export function ChatExperience({
     const nextServers = prev.map((s) =>
       s.name === name ? withSelectedAccounts(s, accounts) : s,
     );
+    supersedeMcpCatalogLoads();
+    setMcpServers(nextServers);
+    if (!conversationId) return;
+    await postMcpServerState(conversationId, nextServers, prev);
+  };
+
+  // applyMcpServerRows is a click on an account-group chip: several rows'
+  // switches and accounts changed at once (accountGroups.ts computed them).
+  // One optimistic update and one full-state POST, like "All on"; `rows` are
+  // the picker's rows with those changes applied.
+  const applyMcpServerRows = async (
+    conversationId: string | null,
+    rows: { name: string; enabled: boolean; account?: string; selected_accounts?: string[] }[],
+  ) => {
+    const prev = mcpServers;
+    const changed = new Map(rows.map((row) => [row.name, row]));
+    const nextServers = prev.map((s) => {
+      const row = changed.get(s.name);
+      if (!row || (row.enabled === s.enabled && sameAccounts(row, s))) return s;
+      return withSelectedAccounts({ ...s, enabled: row.enabled }, selectedAccounts(row));
+    });
+    if (nextServers.every((row, i) => row === prev[i])) return;
     supersedeMcpCatalogLoads();
     setMcpServers(nextServers);
     if (!conversationId) return;
@@ -9221,6 +9251,8 @@ export function ChatExperience({
                 toggleMcpServer={toggleMcpServer}
                 setMcpServersEnabled={setMcpServersEnabled}
                 mcpCategories={mcpCategories}
+                mcpAccountGroups={mcpAccountGroups}
+                applyMcpServerRows={applyMcpServerRows}
                 appName={branding.app_name}
                 isAdmin={adminState === "admin"}
                 setMcpServerAccount={setMcpServerAccount}

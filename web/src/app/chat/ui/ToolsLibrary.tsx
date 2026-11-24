@@ -27,6 +27,8 @@ import {
   type PickerCategory,
   type PickerConnector,
 } from "./toolsPicker";
+import { AccountGroupChips } from "./AccountGroupChips";
+import type { AccountGroups } from "./accountGroups";
 import { allowsSeveralAccounts } from "./mcpAccounts";
 import { Highlight, SeatMenu, StatusDot, StatusIcon, StatusKicker, ToolSwitch } from "./ToolsPickerParts";
 
@@ -49,6 +51,10 @@ import { Highlight, SeatMenu, StatusDot, StatusIcon, StatusKicker, ToolSwitch } 
 export type ToolsLibraryProps = {
   servers: PickerConnector[];
   categories: PickerCategory[];
+  /** The bundle's account groups, shown as chips over the list; null = none. */
+  accountGroups?: AccountGroups | null;
+  /** A chip was pressed: the rows it changed, to save at once. */
+  onApplyRows?: (rows: PickerConnector[]) => void;
   appName: string;
   isAdmin: boolean;
   /** Open on this connection (a dimmed popover row, "Set up ›"). */
@@ -83,6 +89,8 @@ const settingsHref = (name?: string) =>
 export function ToolsLibrary({
   servers,
   categories,
+  accountGroups,
+  onApplyRows,
   appName,
   isAdmin,
   initialSelected,
@@ -307,6 +315,14 @@ export function ToolsLibrary({
                   {q ? tr(" · matching ‘{0}’", [q]) : ""}
                 </div>
               </div>
+              <AccountGroupChips
+                accountGroups={accountGroups}
+                rows={servers}
+                query={q}
+                appName={appName}
+                onApply={(rows) => onApplyRows?.(rows as PickerConnector[])}
+                className="mx-4 mb-2.5"
+              />
               {toggleable.length > 0 ? (
                 <div
                   className="mx-4 mb-2.5 flex items-center gap-1.5 rounded-[var(--radius-sm)] border border-[var(--color-divider)] bg-[var(--color-rail-bg)] py-1.5 pl-3 pr-1.5 any-pointer-coarse:min-h-11 any-pointer-coarse:py-0"

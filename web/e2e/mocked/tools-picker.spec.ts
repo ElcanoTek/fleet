@@ -50,11 +50,33 @@ const SERVERS = [
     description: "Turn this on, then ask for an image.", tools: [], tool_count: 0 },
 ];
 
-async function boot(page: Page, { admin }: { admin: boolean }) {
+// Account groups (docs/ACCOUNT-GROUPS.md): the bundle's named sets of
+// connector accounts, with the server's verdict on each member.
+const ACCOUNT_GROUPS = {
+  label: "Clients",
+  groups: [
+    { id: "omg-emea", name: "OMG EMEA", accounts: [
+      { server: "indexexchange", account: "OMG_GBP", status: "ok" },
+      { server: "magnite", account: "OMG_EMEA", status: "ok" },
+    ] },
+    { id: "omg-us", name: "OMG US", accounts: [
+      { server: "indexexchange", account: "OMG_USD", status: "ok" },
+      { server: "pubmatic", account: "omg_us", status: "account_missing" },
+    ] },
+  ],
+};
+
+async function boot(page: Page, { admin, accountGroups = false }: { admin: boolean; accountGroups?: boolean }) {
   await page.route("**/api/**", (route) => route.fulfill({ json: {} }));
   await mockChatBoot(page);
   await page.route("**/api/mcp-servers", (r: Route) =>
-    r.fulfill({ json: { servers: SERVERS, categories: CATEGORIES } }),
+    r.fulfill({
+      json: {
+        servers: SERVERS,
+        categories: CATEGORIES,
+        ...(accountGroups ? { account_groups: ACCOUNT_GROUPS } : {}),
+      },
+    }),
   );
   await page.route("**/api/admin/settings", (r: Route) =>
     admin ? r.fulfill({ json: {} }) : r.fulfill({ status: 403, body: "forbidden" }),
@@ -159,6 +181,55 @@ test("tools library: counts, filters, detail and admin setup link", async ({ pag
 
   await page.keyboard.press("Escape");
   await expect(library).toHaveCount(0);
+});
+
+test("account group chips set every connector in the group to its accounts", async ({ page, context }) => {
+  await page.setViewportSize({ width: 1280, height: 860 });
+  await loginViaCookie(context);
+  await boot(page, { admin: true, accountGroups: true });
+  await page.getByRole("button", { name: "Tools", exact: true }).click();
+  const popover = page.getByTestId("chat-tools-popover");
+  const chips = popover.getByRole("group", { name: "Clients" });
+  await expect(chips).toBeVisible();
+  const emea = chips.getByRole("button", { name: "OMG EMEA" });
+  const us = chips.getByRole("button", { name: /OMG US/ });
+  await expect(emea).toHaveAttribute("aria-pressed", "false");
+  // A member that is not set up on this box is flagged, not hidden.
+  await expect(us).toHaveAttribute("data-flagged", "true");
+  await expect(us).toHaveAttribute("title", /Not set up here: PubMatic \(account omg_us\)/);
+
+  // The first group replaces the default account and turns Magnite on.
+  await emea.click();
+  await expect(emea).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByTestId("mcp-seat-indexexchange")).toHaveText(/^OMG_GBP$/);
+  await expect(page.getByTestId("mcp-seat-magnite")).toHaveText(/^OMG_EMEA$/);
+  await expect(popover.getByRole("switch", { name: "Magnite" })).toBeChecked();
+
+  // A second group adds its account on the connector the first one set.
+  await us.click();
+  await expect(us).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByTestId("mcp-seat-indexexchange")).toHaveText(/OMG_USD \+1/);
+  await page.screenshot({ path: "test-results/tools-account-groups.png" });
+
+  // Turning the first one off removes only its accounts; a connector left
+  // with none is switched off.
+  await emea.click();
+  await expect(emea).toHaveAttribute("aria-pressed", "false");
+  await expect(page.getByTestId("mcp-seat-indexexchange")).toHaveText(/^OMG_USD$/);
+  await expect(popover.getByRole("switch", { name: "Magnite" })).not.toBeChecked();
+
+  // Search filters the chips with the rows.
+  await page.getByRole("textbox", { name: "Search tools" }).fill("emea");
+  await expect(chips.getByRole("button")).toHaveCount(1);
+});
+
+test("a bundle with no account groups shows no chip row", async ({ page, context }) => {
+  await page.setViewportSize({ width: 1280, height: 860 });
+  await loginViaCookie(context);
+  await boot(page, { admin: true });
+  await page.getByRole("button", { name: "Tools", exact: true }).click();
+  await expect(page.getByTestId("chat-tools-popover")).toBeVisible();
+  await expect(page.getByTestId("chat-tools-account-groups")).toHaveCount(0);
 });
 
 test("tools picker renders in the dark theme", async ({ page, context }) => {

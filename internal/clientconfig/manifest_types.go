@@ -43,6 +43,10 @@ type Bundle struct {
 	EmptyState    EmptyState
 	Localizations Localizations
 
+	// accountGroups is the manifest's account_groups block in canonical form
+	// (validateAccountGroups); read through AccountGroups.
+	accountGroups AccountGroupsConfig
+
 	// BrandLogoPath is the absolute, symlink-resolved file backing
 	// Branding.Logo, or "" when the bundle declares none. Set at load by
 	// resolveBrandLogo so the HTTP layer serves a path it never has to
@@ -1345,14 +1349,17 @@ type manifest struct {
 	// PluginRoots lists extra directories (absolute, or relative to the bundle
 	// root) whose immediate children are Agent Plugins, in addition to the
 	// fixed <bundle>/plugins/ dir. See plugins.go / docs/AGENT-PLUGINS.md.
-	PluginRoots       []string         `yaml:"plugin_roots"`
-	Providers         []ProviderDef    `yaml:"providers"`
-	FallbackProviders []string         `yaml:"fallback_providers"`
-	EmptyState        EmptyState       `yaml:"empty_state"`
-	TaskTemplates     []TaskTemplate   `yaml:"task_templates"`
-	AgentPolicy       AgentPolicy      `yaml:"agent_policy"`
-	Personas          []PersonaDef     `yaml:"personas"`
-	Pricing           PricingConfig    `yaml:"pricing"`
-	Sandbox           *sandboxManifest `yaml:"sandbox"`
-	Hooks             *HooksConfig     `yaml:"hooks"`
+	PluginRoots       []string       `yaml:"plugin_roots"`
+	Providers         []ProviderDef  `yaml:"providers"`
+	FallbackProviders []string       `yaml:"fallback_providers"`
+	EmptyState        EmptyState     `yaml:"empty_state"`
+	TaskTemplates     []TaskTemplate `yaml:"task_templates"`
+	// AccountGroups are named sets of connector accounts offered as chips in
+	// the chat Tools picker (account_groups.go, docs/ACCOUNT-GROUPS.md).
+	AccountGroups AccountGroupsConfig `yaml:"account_groups"`
+	AgentPolicy   AgentPolicy         `yaml:"agent_policy"`
+	Personas      []PersonaDef        `yaml:"personas"`
+	Pricing       PricingConfig       `yaml:"pricing"`
+	Sandbox       *sandboxManifest    `yaml:"sandbox"`
+	Hooks         *HooksConfig        `yaml:"hooks"`
 }

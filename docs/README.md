@@ -316,6 +316,7 @@ above fails otherwise.
 - [`CONNECTOR-ONBOARDING.md`](CONNECTOR-ONBOARDING.md) — Connector-directory onboarding — guided setup, API keys, BYO OAuth clients
 - [`CONNECTOR-PREFS.md`](CONNECTOR-PREFS.md) — Unified connector enablement — availability, selection, binding
 - [`MULTI-ACCOUNT-CHATS.md`](MULTI-ACCOUNT-CHATS.md) — Several accounts of one connector in one chat: storage, the picker checklist, what the assistant is told, approval cards
+- [`ACCOUNT-GROUPS.md`](ACCOUNT-GROUPS.md) — Account groups: bundle-supplied sets of connector accounts ("Clients") as chips in the Tools picker; the manifest block, per-box member status, what a click does
 - [`CONTEXT-HANDLES.md`](CONTEXT-HANDLES.md) — Composer context handles (#517)
 - [`CONVERSATION-AUTO-APPROVE.md`](CONVERSATION-AUTO-APPROVE.md) — Per-conversation auto-approve and 24-hour default approval timeout
 - [`CREDITS-EXHAUSTED-NOTICE.md`](CREDITS-EXHAUSTED-NOTICE.md) — Out-of-credits notice (`credits_exhausted`): OpenRouter 402/403 key-limit and upstream quota detection, friendly top-up / licensing card

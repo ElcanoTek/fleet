@@ -1056,7 +1056,17 @@ every action that needs approval gets its own card showing the one account it
 runs as. A task you schedule from that conversation keeps all of its
 accounts. A third-party connection you signed into yourself still uses one
 account per conversation. The default you set in **Settings → Connections**
-is always a single account. A connector that **Needs
+is always a single account. Your deployment may also offer **account
+groups**: a row of chips at the top of the Tools menu and its library, under a
+heading your deployment chooses (for example **Clients**), one chip per named
+set of accounts. Click a chip to switch on every connector in that group with
+the group's accounts; the first one replaces the default account, and a second
+one adds its accounts beside the first. Click it again to remove that group's
+accounts; a connector left with no account is switched off. Connectors the
+group does not include are left alone. A chip with a warning icon includes a
+connector or account that is not set up here (hover it to see which); it still
+applies the rest, and it never falls back to the default account. Searching the
+menu filters the chips too. A connector that **Needs
 setup** has credentials your administrator adds on the server; an
 administrator's **Set up in Settings** link opens its card there. Fleet mounts at most eight third-party connections in one
 turn — the ones you signed into yourself and any shared with you together
