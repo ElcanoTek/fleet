@@ -94,7 +94,10 @@ disk usage was invisible to admins.
   dirs, and sweeps aged upload/temp files with the same keep rules as the
   hourly sweep: an upload a remaining chat refers to stays whatever the
   cutoff, and a task file a kept job names stays (a job that finished within
-  the cutoff is kept). Returns counts + bytes freed.
+  the cutoff is kept). Finished task and mcp-run workspace dirs go by the
+  task-workspace sweep's rules, so a dir changed in the last hour stays even
+  here ([MAINTENANCE.md](MAINTENANCE.md#what-a-sweep-checks-before-it-removes-a-directory)).
+  Returns counts + bytes freed.
   The panel previews how many conversations a given cutoff would remove
   before the operator commits.
 

@@ -16,6 +16,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ElcanoTek/fleet/internal/sched/apikeys"
 )
@@ -902,6 +903,7 @@ func TestSweepOrphanUploads(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(aside, "tok"), 0o700); err != nil {
 		t.Fatal(err)
 	}
+	settledLongAgo(t, aside) // a tree set aside just now may still go back
 	var listedAfterRead bool
 	n, err := SweepOrphanUploads(att, func() ([]string, error) {
 		_, statErr := os.Stat(UploadsDir(att, "gone@x.com"))
@@ -939,6 +941,7 @@ func TestSweepOrphanUploadsRemovesSetAsideTreesOnEveryPass(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(aside, "tok"), 0o700); err != nil {
 		t.Fatal(err)
 	}
+	settledLongAgo(t, aside) // a tree set aside just now may still go back
 	listed := false
 	n, err := SweepOrphanUploads(att, func() ([]string, error) { listed = true; return nil, nil }, func(string) (bool, error) { return false, nil })
 	if err != nil || n != 0 {
@@ -1115,5 +1118,130 @@ func TestDeleteSparesAnAccountCreatedAfterTheCommit(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// settledLongAgo backdates path's modification time well past reclaim.Grace:
+// a tree set aside by a deletion that was interrupted long ago.
+func settledLongAgo(t *testing.T, path string) {
+	t.Helper()
+	old := time.Now().Add(-48 * time.Hour)
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestRemoveAsideLeavesADeletionInFlightAlone: a deletion moves the account's
+// trees aside before its database deletion commits, and moves them back when
+// it does not (a refused deletion, ErrAccountChanged). A maintenance pass
+// running in between leaves them: only a tree set aside longer ago than
+// reclaim.Grace — one an interrupted deletion left — is removed.
+func TestRemoveAsideLeavesADeletionInFlightAlone(t *testing.T) {
+	t.Parallel()
+	att := t.TempDir()
+	const email = "kept@x.com"
+	tree := UploadsDir(att, email)
+	file := filepath.Join(tree, "tok", "a.png")
+	if err := os.MkdirAll(filepath.Dir(file), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file, []byte("png"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	settledLongAgo(t, tree) // uploaded long ago
+
+	aside, moved, err := SetAside(tree, Digest(email))
+	if err != nil || !moved {
+		t.Fatalf("SetAside = %v, %v", moved, err)
+	}
+	if err := RemoveSetAsideUploads(att); err != nil {
+		t.Fatal(err)
+	}
+	if err := restoreAside([]AsideTree{aside}); err != nil {
+		t.Fatalf("the tree a running deletion set aside was removed under it: %v", err)
+	}
+	if _, err := os.Stat(file); err != nil {
+		t.Fatalf("the account's upload is gone after its deletion did not commit: %v", err)
+	}
+
+	left, moved, err := SetAside(tree, Digest(email))
+	if err != nil || !moved {
+		t.Fatalf("SetAside = %v, %v", moved, err)
+	}
+	settledLongAgo(t, left.To)
+	if err := RemoveSetAsideUploads(att); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(left.To); !os.IsNotExist(err) {
+		t.Errorf("a tree an interrupted deletion set aside long ago survived (err %v)", err)
+	}
+}
+
+// A tree whose time this process may not set is still moved aside, not a
+// refused deletion: the sweep then counts its hour from the tree's last
+// change. A symbolic link or a file at the path is moved without being
+// stamped (and a link is not followed to stamp what it names).
+func TestSetAsideStampIsBestEffort(t *testing.T) {
+	// Not parallel: it replaces asideChtimes.
+	att := t.TempDir()
+	old := time.Now().Add(-48 * time.Hour).Truncate(time.Second)
+
+	tree := UploadsDir(att, "noperm@x.com")
+	if err := os.MkdirAll(filepath.Join(tree, "tok"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(tree, old, old); err != nil {
+		t.Fatal(err)
+	}
+	stamp := asideChtimes
+	t.Cleanup(func() { asideChtimes = stamp })
+	asideChtimes = func(*os.Root, string, time.Time) error {
+		return &fs.PathError{Op: "chtimes", Path: "x", Err: fs.ErrPermission}
+	}
+	aside, moved, err := SetAside(tree, Digest("noperm@x.com"))
+	asideChtimes = stamp
+	if err != nil || !moved {
+		t.Fatalf("SetAside with a time it may not set = %v, %v; want moved", moved, err)
+	}
+	if !errors.Is(aside.StampErr, fs.ErrPermission) {
+		t.Errorf("StampErr = %v, want the permission error (Delete logs it)", aside.StampErr)
+	}
+	if info, err := os.Lstat(aside.To); err != nil || !info.ModTime().Equal(old) {
+		t.Fatalf("aside tree mtime = %v, %v; want the old %v", info.ModTime(), err, old)
+	}
+
+	target := filepath.Join(t.TempDir(), "elsewhere")
+	if err := os.Mkdir(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(target, old, old); err != nil {
+		t.Fatal(err)
+	}
+	link := UploadsDir(att, "link@x.com")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	file := UploadsDir(att, "file@x.com")
+	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(file, old, old); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct{ path, email string }{{link, "link@x.com"}, {file, "file@x.com"}} {
+		a, moved, err := SetAside(c.path, Digest(c.email))
+		if err != nil || !moved {
+			t.Fatalf("SetAside(%s) = %v, %v", c.path, moved, err)
+		}
+		info, err := os.Lstat(a.To)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().IsRegular() && !info.ModTime().Equal(old) {
+			t.Errorf("a file at the path was stamped: mtime %v", info.ModTime())
+		}
+	}
+	if info, err := os.Stat(target); err != nil || !info.ModTime().Equal(old) {
+		t.Errorf("the directory a link at the path names was stamped: mtime %v, %v", info.ModTime(), err)
 	}
 }

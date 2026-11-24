@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/reclaim"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/tools"
 )
@@ -48,6 +49,43 @@ func TestTaskWorkspaceDirIsPerJobLineage(t *testing.T) {
 	}
 	if got := r.taskWorkspaceDir(context.Background(), nil); got != root {
 		t.Fatalf("nil task must fall back to the root, got %q", got)
+	}
+}
+
+// A run makes its job directory and its MCP run dir holding their
+// reclaim.TaskDirs lock, the one the workspace sweep holds while it decides a
+// directory is an orphan and removes it (storage.SweepTaskWorkspaces).
+func TestTaskDirsAreMadeUnderTheSweepLock(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("FLEET_WORKSPACE_ROOT", root)
+	held := map[string]bool{}
+	taskDirMade = func(key string) {
+		unlock, ok := reclaim.TaskDirs.TryLock(key)
+		if ok {
+			unlock()
+		}
+		held[key] = !ok
+	}
+	t.Cleanup(func() { taskDirMade = nil })
+
+	r := &Runner{cfg: &config.Config{WorkspaceRoot: root, DataDir: t.TempDir()}}
+	job := models.NewTask(models.TaskCreate{Prompt: "daily scan"})
+	if dir := r.taskWorkspaceDir(context.Background(), job); dir == root {
+		t.Fatalf("job directory fell back to the root")
+	}
+	if _, err := r.stableTaskWorkdir(context.Background(), job); err != nil {
+		t.Fatalf("stableTaskWorkdir: %v", err)
+	}
+	for _, key := range []string{
+		reclaim.TaskWorkspaceKey(job.WorkspaceLineage().String()),
+		reclaim.MCPRunKey("task-" + job.ID.String()),
+	} {
+		got, made := held[key]
+		if !made {
+			t.Errorf("%s: not made", key)
+		} else if !got {
+			t.Errorf("%s: made without its reclaim.TaskDirs lock held", key)
+		}
 	}
 }
 

@@ -44,6 +44,7 @@ iteration.
 | `SweepTurnEvents` | Finished turns' durable SSE ledgers | `FLEET_TURN_EVENT_RETENTION_DAYS` (14) |
 | `SweepAttachments` | Attachment files past the conversation TTL that nothing kept uses: an upload a message of a still-existing conversation names, and the Multiplayer private stash, stay (`store.AttachmentKeeper`, [ATTACHMENT-SCOPING.md](ATTACHMENT-SCOPING.md#how-long-an-upload-lives)) | conversation TTL, then use |
 | `SweepOrphanWorkspaces` | `<workspace>/<convID>/` dirs with no live conversation row; each candidate is looked up again just before removal, so a chat created during the pass keeps its dir | liveness, not age |
+| `SweepTaskWorkspaces` | `<workspace>/mcp-runs/task-<id>/` once its task is no longer live or awaiting replay, and `<workspace>/tasks/<lineage>/` once no task of the job is live and its last one finished more than 7 days ago (the conversation window, if shorter); a dir changed within the last hour is left for a later pass, and each candidate's tasks are looked up again just before removal ([below](#what-a-sweep-checks-before-it-removes-a-directory)) | liveness, then 7 days |
 | `CleanupTempFiles` | Orchestrator `temp_uploads` files no kept job names: a job with a pending, scheduled, running, paused or dead-lettered task, a recurring job whose next occurrence is not spawned yet, or a job that finished within the window (`storage.TempUploadKeeper`) | `FLEET_SCRATCH_RETENTION_DAYS` (14 by default), then use |
 | `SweepExpiredOAuthFlows` | Abandoned per-user remote-MCP OAuth flow rows | flow expiry |
 | `worktree.PruneStale` | Orphaned per-run git worktrees | `FLEET_WORKTREE_PRUNE_AGE` (24h) |
@@ -59,6 +60,56 @@ cosmetic log line into 24 a day, and an operator who learns to ignore this
 pass stops reading it when it has something real to say. A stat failure that
 is **not** absence (a permissions problem, an unreadable `.git`) is still
 reported: that one an operator must see.
+
+### What a sweep checks before it removes a directory
+
+A sweep reads the database once and lists the directories after, and making a
+directory and writing the row that owns it are two steps, so a directory can
+look orphaned when its owner is moments old. The sweeps that remove a
+directory because they find no owner for it therefore check each candidate
+again, just before removing it:
+
+- **The owner is looked up again, for that one directory.**
+  `SweepOrphanWorkspaces` asks whether the conversation exists;
+  `SweepTaskWorkspaces` asks whether the task is still live (an
+  `mcp-runs/task-<id>/` dir) or whether the job still has a live task or one
+  that finished within the window (a `tasks/<lineage>/` dir).
+- **Where later rows reuse a directory, under the lock its creators hold.**
+  Every run of a job works in the same `tasks/<lineage>/`, so a rerun of a job
+  whose directory is a week old reuses a directory the pass may already have
+  chosen. The task-workspace sweep's second look and its removal hold the lock
+  a scheduled run holds while it makes its job directory and its MCP run dir
+  (`reclaim.TaskDirs`), and a run's task row is written before it takes that
+  lock: the pass either sees the new task and keeps the directory, or removes
+  it before the run makes a fresh one, never while the run works in it.
+- **A directory changed within the last hour is left alone**
+  (`reclaim.Grace`), whatever the database says, by the task-workspace sweep:
+  a directory can exist before the row that owns it is visible to the pass,
+  and one another process makes under the same root has only this wait
+  (`fleet task run` started with the server's `FLEET_WORKSPACE_ROOT` makes
+  its runs' connector directories in the server's `mcp-runs/`). An orphan waits for a later pass. A time more
+  than an hour in the future does not count as new: it is a clock far ahead
+  or a time set by hand (a sandbox can set its job directory's), and the
+  second look still keeps a directory a live task owns. Conversation workspaces have no such
+  wait: every path writes the conversation row before it makes the
+  directory, so the second look sees the conversation of any directory the
+  pass listed, and an administrator's permanent delete still reclaims the
+  workspace at once.
+
+Removal goes through a no-follow handle on the parent directory, so a
+candidate replaced by a symbolic link is never followed.
+
+The trees an account deletion moves aside before its database deletion
+commits (`.removing-…`, [IDENTITY.md](IDENTITY.md)) are removed by the pass
+only once they are an hour old, so a deletion that does not commit can still
+move them back.
+
+The Multiplayer private stash's recovery step
+(`sweepOrphanPrivateWorkspaceStashes`) puts back what an interrupted swap of
+the owner's files left behind. It decides under each conversation's swap
+lock, the lock a participant's turn swaps under, and leaves a conversation
+alone while a participant's turn holds its workspace, so it never undoes the
+swap of a turn that started during the pass.
 
 ### The post-turn pass is now an optimization
 

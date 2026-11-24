@@ -192,6 +192,11 @@ type Server struct {
 	// beforeSharedFilesSync is a test seam run in SyncSharedFiles just before
 	// it takes sharedFilesMu; nil in production.
 	beforeSharedFilesSync func()
+	// beforeStashRecovery is a test seam run in
+	// sweepOrphanPrivateWorkspaceStashes for each conversation it found with
+	// no participant turn, before it takes the conversation's swap lock;
+	// nil in production.
+	beforeStashRecovery func(convID string)
 	// stopEpochs records the last Stop scope=all boundary per conversation
 	// (#785): the input-queue acceptance counter's value when the Stop began
 	// (#1477), so it compares exactly with each row's AcceptedSeq and is

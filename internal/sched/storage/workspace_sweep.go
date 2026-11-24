@@ -11,6 +11,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/reclaim"
 )
 
 // liveTaskStatuses are the statuses that keep a task's job live: it may still
@@ -38,6 +40,13 @@ const (
 //     sched.tasks and whose last task completed before the retention cutoff
 //     (or is not in sched.tasks) is removed. Active lineages keep their entire
 //     workspace directory intact (ADR-0069).
+//
+// The tasks are read once, before the directories are listed, so a task
+// created in between — a new job, or a rerun of a job whose directory is
+// days old — is missing from that read while its run is already working in
+// its directory. A directory is therefore removed only once it is settled
+// and its tasks, read again just for it, still do not keep it
+// (reclaimTaskDir).
 func (s *Storage) SweepTaskWorkspaces(ctx context.Context, workspaceRoot string, olderThan time.Duration) (int, error) {
 	if strings.TrimSpace(workspaceRoot) == "" || s == nil || s.db == nil || s.db.Conn() == nil {
 		return 0, nil
@@ -46,6 +55,9 @@ func (s *Storage) SweepTaskWorkspaces(ctx context.Context, workspaceRoot string,
 	activeTasks, activeLineages, lineageLastDone, err := s.loadTaskWorkspaceState(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("query task workspace state: %w", err)
+	}
+	if afterTaskWorkspaceSnapshot != nil {
+		afterTaskWorkspaceSnapshot()
 	}
 
 	retention := olderThan
@@ -76,11 +88,16 @@ func (s *Storage) SweepTaskWorkspaces(ctx context.Context, workspaceRoot string,
 			if activeTasks[taskID] {
 				continue
 			}
-			if err := removeTaskWorkspaceTree(mcpRunsDir, name); err != nil {
-				errs = append(errs, fmt.Errorf("remove mcp-run workspace %s: %w", name, err))
+			gone, err := reclaimTaskDir(mcpRunsDir, name, reclaim.MCPRunKey(name), func() (bool, error) {
+				return s.taskLive(ctx, taskID)
+			})
+			if err != nil {
+				errs = append(errs, fmt.Errorf("mcp-run workspace %s: %w", name, err))
 				continue
 			}
-			removed++
+			if gone {
+				removed++
+			}
 		}
 	} else if !os.IsNotExist(rerr) {
 		errs = append(errs, fmt.Errorf("readdir %s: %w", mcpRunsDir, rerr))
@@ -103,16 +120,19 @@ func (s *Storage) SweepTaskWorkspaces(ctx context.Context, workspaceRoot string,
 			if activeLineages[name] {
 				continue
 			}
-			if olderThan > 0 {
-				if lastDone, ok := lineageLastDone[name]; ok && lastDone.After(cutoff) {
-					continue
-				}
-			}
-			if err := removeTaskWorkspaceTree(tasksDir, name); err != nil {
-				errs = append(errs, fmt.Errorf("remove task workspace %s: %w", name, err))
+			if lastDone, ok := lineageLastDone[name]; keepsFinishedLineage(ok, lastDone, olderThan, cutoff) {
 				continue
 			}
-			removed++
+			gone, err := reclaimTaskDir(tasksDir, name, reclaim.TaskWorkspaceKey(name), func() (bool, error) {
+				return s.lineageKept(ctx, name, olderThan, cutoff)
+			})
+			if err != nil {
+				errs = append(errs, fmt.Errorf("task workspace %s: %w", name, err))
+				continue
+			}
+			if gone {
+				removed++
+			}
 		}
 	} else if !os.IsNotExist(rerr) {
 		errs = append(errs, fmt.Errorf("readdir %s: %w", tasksDir, rerr))
@@ -169,6 +189,100 @@ func (s *Storage) loadTaskWorkspaceState(ctx context.Context) (
 	}
 	return activeTasks, activeLineages, lineageLastDone, rows.Err()
 }
+
+// keepsFinishedLineage reports whether a job directory with no live task is
+// kept for the retention window: its last task (seen) finished after cutoff.
+// A non-positive olderThan keeps none.
+func keepsFinishedLineage(seen bool, lastDone time.Time, olderThan time.Duration, cutoff time.Time) bool {
+	return olderThan > 0 && seen && lastDone.After(cutoff)
+}
+
+// reclaimTaskDir removes parent/name, a directory the snapshot found no task
+// keeping, if it still is an orphan, and reports whether it did. It holds the
+// directory's reclaim.TaskDirs lock, the one a run holds while it makes the
+// directory (scheduledrun), and under it requires a real directory (Lstat
+// through parent, never following a link) that is settled (reclaim.Settled:
+// not modified within reclaim.Grace), then asks kept — the owning tasks, read again — once
+// more. A run's task row is live before the run takes that lock, so the
+// directory is either removed before the run makes it (the run then makes a
+// fresh one) or seen as kept here. A failed lookup keeps the directory and is
+// returned.
+func reclaimTaskDir(parent, name, key string, kept func() (bool, error)) (bool, error) {
+	defer reclaim.TaskDirs.Lock(key)()
+	r, err := os.OpenRoot(parent)
+	if err != nil {
+		return false, err
+	}
+	info, err := r.Lstat(name)
+	_ = r.Close()
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if !info.IsDir() || !reclaim.Settled(info, time.Now()) {
+		return false, nil
+	}
+	if beforeTaskWorkspaceRecheck != nil {
+		beforeTaskWorkspaceRecheck(key)
+	}
+	keep, err := kept()
+	if err != nil {
+		return false, fmt.Errorf("recheck: %w", err)
+	}
+	if keep {
+		return false, nil
+	}
+	if err := removeTaskWorkspaceTree(parent, name); err != nil {
+		return false, fmt.Errorf("remove: %w", err)
+	}
+	return true, nil
+}
+
+// taskLive reports whether task id is live or replayable now
+// (liveTaskStatuses): the snapshot's rule for an mcp-runs directory, asked
+// again for one directory about to be removed.
+func (s *Storage) taskLive(ctx context.Context, id string) (bool, error) {
+	var live bool
+	err := s.db.Conn().QueryRowContext(ctx,
+		`SELECT EXISTS (SELECT 1 FROM tasks WHERE id = $1::uuid AND status = ANY($2))`,
+		id, liveTaskStatuses).Scan(&live)
+	return live, err
+}
+
+// lineageKept reports whether the tasks of one job keep its directory now:
+// the snapshot's rule for a tasks/<lineage> directory (a live task, or a
+// last task that finished within the retention window), asked again for one
+// directory about to be removed. Like the snapshot it counts a task whose
+// lineage, or whose own id, is the directory's name. The rows are folded in
+// the query, so a recurring job's long history is not read back.
+func (s *Storage) lineageKept(ctx context.Context, lineage string, olderThan time.Duration, cutoff time.Time) (bool, error) {
+	var live bool
+	var lastDone sql.NullTime
+	err := s.db.Conn().QueryRowContext(ctx, `
+		SELECT COALESCE(bool_or(status = ANY($3)), false),
+		       max(COALESCE(completed_at, dead_lettered_at, created_at))
+		  FROM tasks
+		 WHERE id = $1::uuid OR lineage_id = $2`,
+		lineage, strings.ToLower(lineage), liveTaskStatuses).Scan(&live, &lastDone)
+	if err != nil {
+		return false, err
+	}
+	// With no live task every row is finished, so the latest time is the
+	// last finish, as the snapshot computes it.
+	return live || keepsFinishedLineage(lastDone.Valid, lastDone.Time, olderThan, cutoff), nil
+}
+
+// afterTaskWorkspaceSnapshot is a test seam run in SweepTaskWorkspaces right
+// after the task snapshot is read, before the directories are listed; nil in
+// production.
+var afterTaskWorkspaceSnapshot func()
+
+// beforeTaskWorkspaceRecheck is a test seam run in reclaimTaskDir with the
+// directory's lock held, just before its tasks are read again; nil in
+// production.
+var beforeTaskWorkspaceRecheck func(key string)
 
 // parseMCPRunTaskID extracts the lowercased 36-char task UUID from an mcp-runs
 // subdirectory name ("task-<uuid>" or "task-<uuid>-<suffix>").

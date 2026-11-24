@@ -105,10 +105,13 @@ failed to stage its inputs. A job that finished longer ago than the window
 keeps nothing: rerunning or cloning it then may find its input gone and need
 the file attached again.
 
-Finished task and mcp-run workspaces are unaffected either way: their sweep is
-handed the conversation window but has a fixed seven-day ceiling of its own
-(`storage.SweepTaskWorkspaces`), so they are removed after seven days as
-before.
+Task and mcp-run workspaces are unaffected either way
+(`storage.SweepTaskWorkspaces`). A job's `tasks/<lineage>/` directory is kept
+while the job has a live task and for seven days after its last task finished
+(the sweep is handed the conversation window but caps it at seven days); a
+run's `mcp-runs/task-<id>/` directory is removed once its task is no longer
+live or awaiting replay. Neither is removed within an hour of its last change
+([MAINTENANCE.md](MAINTENANCE.md#what-a-sweep-checks-before-it-removes-a-directory)).
 
 Chat attachment uploads (`EMAIL_ATTACHMENT_DIR`) follow the chats that refer
 to them, not the age of the file: an image stays while a conversation that
