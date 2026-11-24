@@ -437,6 +437,17 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 	// so the span records the failure instead of a nil-error success.
 	var runSpan trace.Span
 	defer endRunSpan(&runSpan, &err)
+	// Every exit carries the usage the run was billed for — completed,
+	// cancelled, failed, or contained by the panic backstop — and the model
+	// that served it, because the drivers record spend from Result.Usage
+	// whatever the error. Deferred before the backstop so it runs after it:
+	// the backstop clears the result of a panicked run, and this puts the
+	// usage back.
+	var (
+		usageOrch *orchestrationState
+		eng       *engine
+	)
+	defer stampRunUsage(&result, &usageOrch, &eng)
 	defer recoverSynchronousRunPanic(panicAttribution, &result, &err)
 
 	// Correlation (#2052): the run's ids ride the context, so every log line
@@ -469,7 +480,8 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 	// fresh throwaway state per round, so the run proceeded while its usage
 	// accumulated into objects nobody read: Result.Usage reported zero and the
 	// cost/token ceilings never fired (#1125).
-	usageOrch, ok := policyOrchestration(deps.Policy)
+	var ok bool
+	usageOrch, ok = policyOrchestration(deps.Policy)
 	if !ok {
 		return Result{}, fmt.Errorf("policy %T does not expose an orchestration state (embed InteractivePolicy/ScheduledPolicy or expose the inner policy via Unwrap)", deps.Policy)
 	}
@@ -496,7 +508,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 	// from a run in the admin view to its log lines and its trace (#2052).
 	logSession.SetCorrelation(telemetry.TraceID(ctx), logging.Value(ctx, logging.KeyRunID), logging.Value(ctx, logging.KeyTurnID))
 
-	eng := newRunEngine(ctx, cfg, deps, logSession)
+	eng = newRunEngine(ctx, cfg, deps, logSession)
 	eng.logger = logging.From(ctx)
 	defer func() {
 		result.Compactions = eng.compactionsSnapshot()
@@ -1154,6 +1166,24 @@ func cancelledResult(sink *streamSink, orch *orchestrationState, label string, a
 		ModelSlug:         slugOf(activeModel),
 		Cancelled:         true,
 		Usage:             usageSnapshot(orch),
+	}
+}
+
+// stampRunUsage sets result.Usage from the run's orchestration state, if Run
+// got as far as resolving one (an earlier exit made no provider call), and
+// result.ModelSlug from the model the engine was last driving. The engine
+// notes every fallback swap, including one inside a round that then failed,
+// which the loop's own copy of the active model only learns from a round that
+// returns: a run that failed after a swap is attributed to the model that
+// served it, not the configured one. On every other exit the two agree.
+func stampRunUsage(result *Result, orch **orchestrationState, eng **engine) {
+	if *orch != nil {
+		result.Usage = usageSnapshot(*orch)
+	}
+	if *eng != nil {
+		if slug := slugOf((*eng).currentModel()); slug != "" {
+			result.ModelSlug = slug
+		}
 	}
 }
 

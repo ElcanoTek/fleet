@@ -34,7 +34,7 @@ func TestManagerRunTurn_FailedAfterToolsPersistsFailureSummary(t *testing.T) {
 	const model = "anthropic/claude-opus-4.8"
 	var committed []HistoryEntry
 	sink := &recordingSink{}
-	_, err := mgr.RunTurn(ctx, TurnInput{
+	res, err := mgr.RunTurn(ctx, TurnInput{
 		UserMessage: "build the page",
 		Model:       model,
 		CommitTerminal: func(entries []HistoryEntry, _ bool) error {
@@ -77,6 +77,17 @@ func TestManagerRunTurn_FailedAfterToolsPersistsFailureSummary(t *testing.T) {
 	}
 	if summary.Model != model {
 		t.Errorf("summary model = %q, want %q", summary.Model, model)
+	}
+	// The error comes with the turn's billed usage — the same the summary
+	// shows — for the HTTP layer's turn_metrics row, and nothing that reads as
+	// a completed turn.
+	if !res.Billed() || res.PromptTokens != summary.PromptTokens || res.CompletionTokens != summary.CompletionTokens ||
+		res.CostUSD != summary.CostUSD || res.Model != model {
+		t.Errorf("failed turn result = %+v, want the summary's usage (%d/%d, %v) on %q",
+			res, summary.PromptTokens, summary.CompletionTokens, summary.CostUSD, model)
+	}
+	if res != nil && (res.FinalText != "" || res.NewHistory != nil || res.Cancelled) {
+		t.Errorf("failed turn result carries more than its usage: %+v", res)
 	}
 
 	// The persisted failure is the card the live stream carried.

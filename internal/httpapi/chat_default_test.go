@@ -219,6 +219,11 @@ type fakeChatStore struct {
 	memoriesErr           error
 	autonomousAcceptances map[string]int
 	uiAutoSubmits         []store.UIAutoSubmit
+	// turnMetrics keeps every RecordTurn row, in order.
+	turnMetrics []store.TurnMetric
+	// commitTurnErr makes every CommitTurnHistory (a turn's terminal history
+	// commit) fail with it.
+	commitTurnErr error
 }
 
 func newFakeChatStore() *fakeChatStore {
@@ -418,6 +423,12 @@ func (s *fakeChatStore) CommitUserMessage(ctx context.Context, convID, _ string,
 }
 
 func (s *fakeChatStore) CommitTurnHistory(ctx context.Context, convID, _ string, entries []agent.HistoryEntry) ([]int64, error) {
+	s.mu.Lock()
+	commitErr := s.commitTurnErr
+	s.mu.Unlock()
+	if commitErr != nil {
+		return nil, commitErr
+	}
 	return s.AppendHistory(ctx, convID, entries)
 }
 
@@ -433,10 +444,11 @@ func (s *fakeChatStore) ListMemories(context.Context, string) ([]store.Memory, e
 	return nil, nil
 }
 
-func (s *fakeChatStore) RecordTurn(context.Context, store.TurnMetric) error {
+func (s *fakeChatStore) RecordTurn(_ context.Context, m store.TurnMetric) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.recorded++
+	s.turnMetrics = append(s.turnMetrics, m)
 	return nil
 }
 
