@@ -94,7 +94,7 @@ Configured per trigger and enforced after authentication:
 | **DKIM** | `require_dkim` (default true) rejects anything whose provider-reported DKIM ≠ `pass` → **403**. |
 | **SPF** | `require_spf` (default false — SPF breaks on legitimate forwarding) rejects SPF ≠ `pass` → **403**. |
 | **Attachments** | `max_attachments` (default 0 = none) and `max_attachment_bytes` cap the declared attachments → **413**. |
-| **Dedup / idempotency** | The `Message-ID` (or a content hash when absent) is the idempotency key. A duplicate delivery returns **200 `{"status":"duplicate"}`** and spawns no second run. |
+| **Dedup / idempotency** | The `Message-ID` (or a content hash when absent) is the idempotency key. A duplicate delivery returns **200 `{"status":"duplicate"}`** and spawns no second run. A delivery that fails to start a run is not recorded, so the sender's retry runs it (see [Deliveries and retries](#deliveries-and-retries)). |
 | **Rate limit** | The same per-slug limiter as the webhook route (`FLEET_WEBHOOK_RATE_LIMIT_PER_MINUTE`). |
 
 A **nil / unset** policy is treated as the most restrictive posture (no approved
@@ -168,6 +168,41 @@ When SMTP is configured for sending (`FLEET_SMTP_HOST` + `FLEET_SMTP_FROM`) and
 the run **succeeds**, fleet replies to the original sender with the run's final
 answer, threaded to the original message via `In-Reply-To`/`References`. Reply-back
 is a no-op when SMTP isn't configured.
+
+### Deliveries and retries
+
+The `trigger_events` row is also the dedup record, and it is written in the
+same database transaction that creates the run, already linked to it
+(`storage.SpawnEmailRun`). The two commit together or not at all:
+
+| What happens to a delivery | Answer | What the sender's retry of the same `Message-ID` gets |
+| --- | --- | --- |
+| The run is created | **202** `{"run_id": …}` | **200** `{"status":"duplicate"}`, no second run |
+| The run cannot be created (a database error, a dropped connection, fleet stopping mid-request) | **500**, or no answer | Nothing was recorded, so the retry starts the run |
+| The template's `prompt_template` fails to render | **400** | Nothing was recorded, so a retry after the template is fixed starts the run |
+| The `Message-ID` holds U+0000, which the database cannot store, or is longer than an RFC 5322 line allows (998 bytes) | **400** `invalid message_id`, before any lookup | The same **400**; such an email never runs |
+
+A delivery that fails to start a run is not recorded, so the sender's retry
+runs it; the delivery is only "seen" once its run exists. Two deliveries of the
+same `Message-ID` that arrive together start one run: the second waits for the
+first's transaction, and is answered as a duplicate if the first created its
+run, or creates the run itself if the first did not. Whether a failed delivery
+is retried at all is up to the sending provider; fleet records nothing for it.
+If the acknowledgement of the commit is lost (the connection drops as the
+transaction commits), a delivery whose run was created can still be answered
+**500**; the retry is then answered as a duplicate.
+
+A redelivery of an email that already ran is answered as a duplicate before
+the prompt is rendered, so it stays **200** `{"status":"duplicate"}` even if the
+trigger's `prompt_template` was changed since to one that no longer renders (a
+new email then gets the **400**).
+
+`trigger_events` rows are kept: no job prunes them, and deleting a trigger
+deletes its events (`ON DELETE CASCADE`). A redelivery is recognized for as long
+as its row exists. Rows recorded before the event and its run were committed
+together can name no run (`run_id` NULL, from a delivery whose render, spawn or
+run link failed); a redelivery of one is still answered as a duplicate, and no
+migration removes them.
 
 ## Managing email triggers (CLI)
 

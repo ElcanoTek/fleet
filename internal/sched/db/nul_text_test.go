@@ -125,8 +125,16 @@ func TestSchedTextWithNULIsStoredWithoutIt(t *testing.T) {
 			t.Fatalf("CreateTrigger: %v", err)
 		}
 		ev := &models.TriggerEvent{TriggerID: trig.ID, IdempotencyKey: "k1", Sender: "a@example.com", Subject: "Re:\x00 invoice", MessageID: "<m1>"}
-		if inserted, err := db.RecordTriggerEvent(ctx, ev); err != nil || !inserted {
-			t.Fatalf("RecordTriggerEvent = %v, %v", inserted, err)
+		tx, err := db.BeginTx(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if inserted, err := db.RecordTriggerEventTx(ctx, tx, ev); err != nil || !inserted {
+			_ = tx.Rollback()
+			t.Fatalf("RecordTriggerEventTx = %v, %v", inserted, err)
+		}
+		if err := tx.Commit(); err != nil {
+			t.Fatal(err)
 		}
 		got, err := db.GetTrigger(ctx, trig.ID)
 		if err != nil {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/google/uuid"
@@ -101,18 +102,24 @@ func TestSpawnTriggerRun_RefusesATriggerOfAnotherKind(t *testing.T) {
 			return store.SpawnWebhookRun(ctx, tr, "prompt")
 		}},
 		{"SpawnEmailRun (opted out)", models.TriggerKindEmail, func(tr *models.TaskTrigger) (uuid.UUID, error) {
-			return store.SpawnEmailRun(ctx, tr, "prompt", false)
+			id, _, err := store.SpawnEmailRun(ctx, tr, &models.TriggerEvent{IdempotencyKey: tr.Slug}, "prompt", false)
+			return id, err
 		}},
 		{"SpawnEmailRun (opted in)", models.TriggerKindEmail, func(tr *models.TaskTrigger) (uuid.UUID, error) {
-			return store.SpawnEmailRun(ctx, tr, "prompt", true)
+			id, _, err := store.SpawnEmailRun(ctx, tr, &models.TriggerEvent{IdempotencyKey: tr.Slug}, "prompt", true)
+			return id, err
 		}},
 	}
 
 	covered := map[models.TriggerKind]bool{}
-	for _, sp := range spawners {
+	for i, sp := range spawners {
 		covered[sp.kind] = true
 		for _, kind := range models.TriggerKinds {
-			trig := &models.TaskTrigger{ID: uuid.New(), TaskID: template.ID, Slug: "k-" + string(kind), Kind: kind}
+			// Stored, so an email spawn can record its trigger event against it.
+			trig := &models.TaskTrigger{ID: uuid.New(), TaskID: template.ID, Slug: fmt.Sprintf("k-%d-%s", i, kind), Secret: "s", Kind: kind}
+			if err := store.CreateTrigger(ctx, trig); err != nil {
+				t.Fatalf("CreateTrigger: %v", err)
+			}
 			before := countTasks(t, store)
 			runID, err := sp.spawn(trig)
 			after := countTasks(t, store)

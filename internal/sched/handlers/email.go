@@ -125,25 +125,40 @@ func (h *Handlers) HandleEmailTrigger(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusRequestEntityTooLarge, reason)
 		return
 	}
-
-	// Dedup: the provider may deliver the same email more than once. Record the
-	// event keyed by Message-ID (or a content hash when absent); a duplicate is a
-	// success no-op that spawns NO second run.
-	ev := &models.TriggerEvent{
-		TriggerID:      trig.ID,
-		IdempotencyKey: emailIdempotencyKey(email),
-		Sender:         emailAddress(email.From),
-		Subject:        email.Subject,
-		MessageID:      strings.TrimSpace(email.MessageID),
-	}
-	inserted, err := h.storage.RecordTriggerEvent(r.Context(), ev)
-	if err != nil {
-		logging.From(r.Context()).Error("email trigger dedup error", "slug", safe.LogSafe(slug), "err", err)
-		writeError(w, http.StatusInternalServerError, "internal error")
+	// The Message-ID is the dedup key, stored and looked up exactly as sent. One
+	// the database cannot hold as given would fail that lookup on every retry,
+	// so the email could never run or be answered as a duplicate; it is refused
+	// here, after the policy checks above (which read no database) and before
+	// any lookup. (A From the database could not hold never gets this far:
+	// checkEmailPolicy refuses it as an unapproved sender.)
+	if !storableMessageID(email.MessageID) {
+		writeError(w, http.StatusBadRequest, "invalid message_id")
 		return
 	}
-	if !inserted {
+
+	// Dedup: the provider may deliver the same email more than once. The event,
+	// keyed by Message-ID (or a content hash when absent), is recorded in the
+	// same transaction that creates the run, already linked to it, so the run
+	// is traceable to its inbound email and reply-back can recover the sender.
+	// A delivery already recorded is a success no-op that spawns NO second run;
+	// a delivery whose run could not be created is not recorded, so the
+	// provider's retry of it runs.
+	//
+	// An event recorded now is final (it exists only with its run), so a
+	// redelivery of one is answered here, before the prompt is rendered: it
+	// stays a duplicate even if the template was changed since and no longer
+	// renders. The transactional insert in SpawnEmailRun stays the authority
+	// for deliveries that race past this read. Events recorded before the
+	// event and its run were committed together may have no run (run_id NULL,
+	// from a delivery whose render, spawn or run link failed); a redelivery of
+	// one is still answered as a duplicate.
+	idempotencyKey := emailIdempotencyKey(email)
+	if _, err := h.storage.GetTriggerEventByKey(r.Context(), trig.ID, idempotencyKey); err == nil {
 		writeJSON(w, r, http.StatusOK, map[string]string{"status": "duplicate"})
+		return
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		logging.From(r.Context()).Error("email trigger dedup lookup error", "slug", safe.LogSafe(slug), "err", err)
+		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 
@@ -160,18 +175,21 @@ func (h *Handlers) HandleEmailTrigger(w http.ResponseWriter, r *http.Request) {
 		inheritConnectors = task.AllowEventTriggers
 	}
 
-	runID, err := h.storage.SpawnEmailRun(r.Context(), trig, prompt, inheritConnectors)
+	ev := &models.TriggerEvent{
+		IdempotencyKey: idempotencyKey,
+		Sender:         emailAddress(email.From),
+		Subject:        email.Subject,
+		MessageID:      strings.TrimSpace(email.MessageID),
+	}
+	runID, duplicate, err := h.storage.SpawnEmailRun(r.Context(), trig, ev, prompt, inheritConnectors)
 	if err != nil {
 		logging.From(r.Context()).Error("email trigger enqueue error", "slug", safe.LogSafe(slug), "err", err)
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-
-	// Link the event to the run so the run is traceable to its inbound email and
-	// reply-back can recover the sender. Best-effort: a failure here does not
-	// fail the (already-spawned) run.
-	if err := h.storage.SetTriggerEventRunID(r.Context(), ev.ID, runID); err != nil {
-		logging.From(r.Context()).Warn("email trigger event-link warning", "slug", safe.LogSafe(slug), "err", err)
+	if duplicate {
+		writeJSON(w, r, http.StatusOK, map[string]string{"status": "duplicate"})
+		return
 	}
 
 	writeJSON(w, r, http.StatusAccepted, map[string]string{"run_id": runID.String()})
@@ -266,6 +284,21 @@ func emailAddress(from string) string {
 	}
 	email, _ := pgtext.CheckedEmail(addr)
 	return email
+}
+
+// maxMessageIDBytes bounds a Message-ID. No RFC 5322 line, its header name
+// included, is longer than 998 characters, and a much longer key would not fit
+// in the trigger_events unique index.
+const maxMessageIDBytes = 998
+
+// storableMessageID reports whether the Message-ID, trimmed as it is stored,
+// can be stored and looked up as sent: it holds no U+0000, which Postgres
+// refuses in text, and is at most maxMessageIDBytes long. Keys are refused,
+// never cleaned (internal/pgtext). An absent Message-ID is fine: the content
+// hash stands in for it.
+func storableMessageID(id string) bool {
+	t := strings.TrimSpace(id)
+	return strings.IndexByte(t, 0) < 0 && len(t) <= maxMessageIDBytes
 }
 
 // emailIdempotencyKey is the dedup key: the Message-ID when present, else a

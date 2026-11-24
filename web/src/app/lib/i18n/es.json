@@ -4663,6 +4663,7 @@
   "invalid filename: path traversal not allowed": "Nombre de archivo no válido: no se permite recorrer directorios superiores",
   "invalid focus": "Enfoque no válido",
   "invalid logical file name": "Nombre lógico de archivo no válido",
+  "invalid message_id": "message_id no válido",
   "invalid ops_role (want none|readonly|client|admin, or none|view|run)": "ops_role no válido (se espera none|readonly|client|admin, o none|view|run)",
   "invalid ops_scope (want none|view|run)": "ops_scope no válido (se espera none|view|run)",
   "invalid path": "Ruta no válida",

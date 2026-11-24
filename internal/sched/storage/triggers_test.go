@@ -2,7 +2,9 @@ package storage
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/google/uuid"
@@ -175,30 +177,77 @@ func TestCreateTrigger_KindPolicyRoundTrip(t *testing.T) {
 	}
 }
 
-func TestRecordTriggerEvent_Dedup(t *testing.T) {
+// seedEmailTrigger stores an email trigger on template, for the spawns that
+// record their trigger event against it.
+func seedEmailTrigger(t *testing.T, store *Storage, template *models.Task, slug string) *models.TaskTrigger {
+	t.Helper()
+	trig := &models.TaskTrigger{ID: uuid.New(), TaskID: template.ID, Slug: slug, Secret: "s", Kind: models.TriggerKindEmail, EmailPolicy: &models.EmailTriggerPolicy{}}
+	if err := store.CreateTrigger(context.Background(), trig); err != nil {
+		t.Fatalf("CreateTrigger: %v", err)
+	}
+	return trig
+}
+
+func TestSpawnEmailRun_Dedup(t *testing.T) {
 	t.Parallel()
 
 	store, _ := newTestStore(t)
-	task := seedTemplateTask(t, store, nil, nil)
+	trig := seedEmailTrigger(t, store, seedTemplateTask(t, store, nil, nil), "d1")
 	ctx := context.Background()
-	trigID := uuid.New()
-	if err := store.CreateTrigger(ctx, &models.TaskTrigger{ID: trigID, TaskID: task.ID, Slug: "d1", Secret: "s", Kind: models.TriggerKindEmail, EmailPolicy: &models.EmailTriggerPolicy{}}); err != nil {
-		t.Fatalf("CreateTrigger: %v", err)
+
+	firstID, dup, err := store.SpawnEmailRun(ctx, trig, &models.TriggerEvent{IdempotencyKey: "<m1>", Sender: "a@corp.com"}, "prompt", false)
+	if err != nil || dup || firstID == uuid.Nil {
+		t.Fatalf("first delivery: run=%s duplicate=%v err=%v (want a run)", firstID, dup, err)
+	}
+	// Same key again → a duplicate, and no second run.
+	before := countTasks(t, store)
+	againID, dup, err := store.SpawnEmailRun(ctx, trig, &models.TriggerEvent{IdempotencyKey: "<m1>", Sender: "a@corp.com"}, "prompt", false)
+	if err != nil || !dup || againID != uuid.Nil {
+		t.Fatalf("duplicate delivery: run=%s duplicate=%v err=%v (want duplicate, no run)", againID, dup, err)
+	}
+	if after := countTasks(t, store); after != before {
+		t.Fatalf("duplicate delivery created %d run(s)", after-before)
+	}
+	// A different key → a new run.
+	otherID, dup, err := store.SpawnEmailRun(ctx, trig, &models.TriggerEvent{IdempotencyKey: "<m2>", Sender: "a@corp.com"}, "prompt", false)
+	if err != nil || dup || otherID == uuid.Nil || otherID == firstID {
+		t.Fatalf("second key: run=%s duplicate=%v err=%v (want a new run)", otherID, dup, err)
+	}
+}
+
+// TestSpawnEmailRun_FailedRunInsertRecordsNothing: the trigger event and the
+// run commit together, so a run insert that fails leaves no event behind, and
+// the same delivery again is not a duplicate but starts the run.
+func TestSpawnEmailRun_FailedRunInsertRecordsNothing(t *testing.T) {
+	t.Parallel()
+
+	store, database := newTestStore(t)
+	trig := seedEmailTrigger(t, store, seedTemplateTask(t, store, nil, nil), "f1")
+	ctx := context.Background()
+	conn := database.Conn()
+
+	// NOT VALID: the template row is not checked, only the run insert.
+	if _, err := conn.ExecContext(ctx, `ALTER TABLE sched.tasks ADD CONSTRAINT refuse_runs CHECK (prompt <> 'refused prompt') NOT VALID`); err != nil {
+		t.Fatalf("add constraint: %v", err)
+	}
+	runID, dup, err := store.SpawnEmailRun(ctx, trig, &models.TriggerEvent{IdempotencyKey: "<f1>"}, "refused prompt", false)
+	if err == nil || dup || runID != uuid.Nil {
+		t.Fatalf("spawn with a failing run insert: run=%s duplicate=%v err=%v (want an error)", runID, dup, err)
+	}
+	var events int
+	if err := conn.QueryRowContext(ctx, `SELECT count(*) FROM sched.trigger_events`).Scan(&events); err != nil {
+		t.Fatal(err)
+	}
+	if events != 0 {
+		t.Fatalf("a spawn that created no run left %d trigger event(s)", events)
 	}
 
-	first, err := store.RecordTriggerEvent(ctx, &models.TriggerEvent{TriggerID: trigID, IdempotencyKey: "<m1>", Sender: "a@corp.com"})
-	if err != nil || !first {
-		t.Fatalf("first record: inserted=%v err=%v (want true,nil)", first, err)
+	if _, err := conn.ExecContext(ctx, `ALTER TABLE sched.tasks DROP CONSTRAINT refuse_runs`); err != nil {
+		t.Fatalf("drop constraint: %v", err)
 	}
-	// Same key again → NOT inserted (dedup).
-	dup, err := store.RecordTriggerEvent(ctx, &models.TriggerEvent{TriggerID: trigID, IdempotencyKey: "<m1>", Sender: "a@corp.com"})
-	if err != nil || dup {
-		t.Fatalf("duplicate record: inserted=%v err=%v (want false,nil)", dup, err)
-	}
-	// A different key → inserted.
-	other, err := store.RecordTriggerEvent(ctx, &models.TriggerEvent{TriggerID: trigID, IdempotencyKey: "<m2>", Sender: "a@corp.com"})
-	if err != nil || !other {
-		t.Fatalf("second key: inserted=%v err=%v (want true,nil)", other, err)
+	runID, dup, err = store.SpawnEmailRun(ctx, trig, &models.TriggerEvent{IdempotencyKey: "<f1>"}, "refused prompt", false)
+	if err != nil || dup || runID == uuid.Nil {
+		t.Fatalf("the same delivery again: run=%s duplicate=%v err=%v (want a run)", runID, dup, err)
 	}
 }
 
@@ -206,26 +255,27 @@ func TestTriggerEvent_RunLinkage(t *testing.T) {
 	t.Parallel()
 
 	store, _ := newTestStore(t)
-	task := seedTemplateTask(t, store, nil, nil)
+	trig := seedEmailTrigger(t, store, seedTemplateTask(t, store, nil, nil), "l1")
 	ctx := context.Background()
-	trigID := uuid.New()
-	if err := store.CreateTrigger(ctx, &models.TaskTrigger{ID: trigID, TaskID: task.ID, Slug: "l1", Secret: "s", Kind: models.TriggerKindEmail, EmailPolicy: &models.EmailTriggerPolicy{}}); err != nil {
-		t.Fatalf("CreateTrigger: %v", err)
-	}
-	ev := &models.TriggerEvent{TriggerID: trigID, IdempotencyKey: "<link>", Sender: "a@corp.com", Subject: "hi", MessageID: "<link>"}
-	if _, err := store.RecordTriggerEvent(ctx, ev); err != nil {
-		t.Fatalf("record: %v", err)
-	}
-	runID := uuid.New()
-	if err := store.SetTriggerEventRunID(ctx, ev.ID, runID); err != nil {
-		t.Fatalf("SetTriggerEventRunID: %v", err)
+	ev := &models.TriggerEvent{IdempotencyKey: "<link>", Sender: "a@corp.com", Subject: "hi", MessageID: "<link>"}
+	runID, _, err := store.SpawnEmailRun(ctx, trig, ev, "prompt", false)
+	if err != nil {
+		t.Fatalf("SpawnEmailRun: %v", err)
 	}
 	got, err := store.GetTriggerEventByRunID(ctx, runID)
 	if err != nil {
 		t.Fatalf("GetTriggerEventByRunID: %v", err)
 	}
-	if got.RunID == nil || *got.RunID != runID || got.Sender != "a@corp.com" || got.MessageID != "<link>" {
-		t.Errorf("linked event wrong: %+v", got)
+	if got.RunID == nil || *got.RunID != runID || got.ID != ev.ID || got.TriggerID != trig.ID || got.Sender != "a@corp.com" || got.MessageID != "<link>" {
+		t.Errorf("linked event wrong: %+v (spawned with %+v)", got, ev)
+	}
+	// The same event by its key, and no event for a key never recorded.
+	byKey, err := store.GetTriggerEventByKey(ctx, trig.ID, "<link>")
+	if err != nil || byKey.ID != ev.ID || byKey.RunID == nil || *byKey.RunID != runID {
+		t.Errorf("GetTriggerEventByKey = %+v, %v; want the linked event", byKey, err)
+	}
+	if _, err := store.GetTriggerEventByKey(ctx, trig.ID, "<never>"); !errors.Is(err, sql.ErrNoRows) {
+		t.Errorf("GetTriggerEventByKey for an unrecorded key: err = %v, want sql.ErrNoRows", err)
 	}
 }
 
@@ -236,11 +286,11 @@ func TestSpawnEmailRun_ConnectorGating(t *testing.T) {
 	mcp := models.MCPSelection{{Server: "github"}}
 	cred := models.CredentialAllowlist{{Server: "github"}}
 	task := seedTemplateTask(t, store, mcp, cred)
-	trig := &models.TaskTrigger{TaskID: task.ID, Kind: models.TriggerKindEmail}
+	trig := seedEmailTrigger(t, store, task, "g1")
 	ctx := context.Background()
 
 	// Opt-out: NO connectors (neither MCP selection nor credential allowlist).
-	outID, err := store.SpawnEmailRun(ctx, trig, "prompt", false)
+	outID, _, err := store.SpawnEmailRun(ctx, trig, &models.TriggerEvent{IdempotencyKey: "<out>"}, "prompt", false)
 	if err != nil {
 		t.Fatalf("SpawnEmailRun opt-out: %v", err)
 	}
@@ -257,7 +307,7 @@ func TestSpawnEmailRun_ConnectorGating(t *testing.T) {
 	}
 
 	// Opt-in: inherits BOTH.
-	inID, err := store.SpawnEmailRun(ctx, trig, "prompt", true)
+	inID, _, err := store.SpawnEmailRun(ctx, trig, &models.TriggerEvent{IdempotencyKey: "<in>"}, "prompt", true)
 	if err != nil {
 		t.Fatalf("SpawnEmailRun opt-in: %v", err)
 	}
