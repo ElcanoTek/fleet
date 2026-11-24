@@ -150,11 +150,18 @@ func (s *Server) fetchAccountGroups(ctx context.Context, src clientconfig.Accoun
 	// The source server's default account, through the credential owner's own
 	// scope gate (ADR-0042), with no user identity: groups are the
 	// deployment's, not one person's.
-	broker, release, err := s.accountGroupSourceBroker(ctx, src.Server)
+	broker, catalog, release, err := s.accountGroupSourceBroker(ctx, src.Server)
 	if err != nil {
 		return nil, err
 	}
 	defer release()
+	// The server's own word on the tool, from the scope's discovery: a tool
+	// it marks critical is approval-gated in every turn whatever its name,
+	// so it is never a host read, and a tool it does not export is not
+	// called on the manifest's say-so.
+	if err := sourceToolCallable(catalog, src.Server, src.Tool); err != nil {
+		return nil, err
+	}
 	text, isErr, err := broker.CallMCP(ctx, src.Server, src.Tool, map[string]any{})
 	switch {
 	case err != nil:
@@ -168,17 +175,17 @@ func (s *Server) fetchAccountGroups(ctx context.Context, src clientconfig.Accoun
 // accountGroupSourceBroker opens a scope holding only the source server, or
 // falls back to the engine's shared broker where there is no scope opener
 // (the transitional local-client mode), as approval execution does.
-func (s *Server) accountGroupSourceBroker(ctx context.Context, server string) (agentcore.MCPBroker, func(), error) {
+func (s *Server) accountGroupSourceBroker(ctx context.Context, server string) (agentcore.MCPBroker, []mcp.ServerTool, func(), error) {
 	scope, err := s.agent.OpenApprovalMCPScope(ctx, agentcore.MCPSelection{{Server: server}}, "", agentcore.MCPUserIdentity{})
 	if err != nil {
-		return nil, nil, fmt.Errorf("open MCP scope for %s: %w", server, err)
+		return nil, nil, nil, fmt.Errorf("open MCP scope for %s: %w", server, err)
 	}
 	if scope == nil {
 		broker := s.agent.MCPBroker()
 		if broker == nil {
-			return nil, nil, errors.New("MCP broker not initialized")
+			return nil, nil, nil, errors.New("MCP broker not initialized")
 		}
-		return broker, func() {}, nil
+		return broker, s.agent.MCPCatalog(), func() {}, nil
 	}
 	release := func() {
 		closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), approvalScopeCloseTimeout)
@@ -187,7 +194,24 @@ func (s *Server) accountGroupSourceBroker(ctx context.Context, server string) (a
 			logging.From(ctx).Error("account groups: close MCP scope failed", "err", err)
 		}
 	}
-	return scope.Broker, release, nil
+	return scope.Broker, scope.Catalog, release, nil
+}
+
+// sourceToolCallable checks the source tool against the catalog the server
+// itself published for this scope: it must be there, and must not carry the
+// server's critical marker.
+func sourceToolCallable(catalog []mcp.ServerTool, server, tool string) error {
+	full := agentcore.MCPToolName(server, tool)
+	for _, st := range catalog {
+		if st.ServerName != server || st.Tool.Name != tool {
+			continue
+		}
+		if st.Tool.Critical {
+			return fmt.Errorf("%s is not called: the server marks it critical", full)
+		}
+		return nil
+	}
+	return fmt.Errorf("%s is not called: the server does not export it", full)
 }
 
 // parseSourcedAccountGroups validates a source's answer:

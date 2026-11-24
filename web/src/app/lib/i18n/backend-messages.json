@@ -554,6 +554,18 @@
       ]
     },
     {
+      "message": "{0} is not called: the server does not export it",
+      "fields": [
+        "%s"
+      ]
+    },
+    {
+      "message": "{0} is not called: the server marks it critical",
+      "fields": [
+        "%s"
+      ]
+    },
+    {
       "message": "{0} is required",
       "fields": [
         "%s"

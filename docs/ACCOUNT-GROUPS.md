@@ -90,6 +90,8 @@ to the host-read rules ([ADR-0119](adr/0119-account-groups-source-is-a-host-read
   name (`mcp_<server>_<tool>`) and must not be critical, and no `pre_tool_use`
   hook may match it. Otherwise it is never called: `fleet validate-config`
   reports each of the three (the `agent_policy` check) and boot logs it.
+- The server's own tool list is checked before each call: the tool must be
+  exported, and must not be one the server marks critical.
 - The call goes through the credential owner's scope gate, on the server's
   default account, with no user identity. The list is the deployment's.
 - An answer is used for `refresh_seconds`. One read after boot waits for the

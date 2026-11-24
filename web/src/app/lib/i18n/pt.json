@@ -5220,6 +5220,8 @@
   "unknown": "desconhecido",
   "unknown account {0} for connection {1}": "Conta {0} desconhecida para a ligação {1}",
   "unknown account {0} for connector {1}": "Conta {0} desconhecida para o conector {1}",
+  "{0} is not called: the server marks it critical": "{0} não é chamado: o servidor marca-o como crítico",
+  "{0} is not called: the server does not export it": "{0} não é chamado: o servidor não o exporta",
   "MCP broker not initialized": "O intermediário MCP não está inicializado",
   "answer carries a secret-like value; refused": "A resposta contém um valor que parece um segredo; foi recusada",
   "answer has no \"groups\" list": "A resposta não tem uma lista \"groups\"",

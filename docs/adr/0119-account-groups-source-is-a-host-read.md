@@ -35,8 +35,11 @@ constraints:
    be critical. `fleet validate-config` reports a source that is not
    (`agentcore.HostReadProblems`, which also reports a matching hook, rule
    2), boot logs it, and the check runs again before every call under the
-   installed policy (`agentcore.HostReadRefusal`). fleet never calls a critical tool
-   outside the approval path.
+   installed policy (`agentcore.HostReadRefusal`). The server's own
+   discovery is checked as well, in the scope the call is about to use: the
+   tool must be exported there and must not carry the server's `critical`
+   marker, which gates a tool in every turn whatever its name. fleet never
+   calls a critical tool outside the approval path.
 2. **No hook is bypassed.** A `pre_tool_use` hook that matches the tool
    cannot run outside the loop, so the call is skipped rather than made
    without it.

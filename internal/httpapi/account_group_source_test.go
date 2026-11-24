@@ -12,6 +12,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
+	"github.com/ElcanoTek/fleet/internal/mcp"
 )
 
 func TestParseSourcedAccountGroups(t *testing.T) {
@@ -125,9 +126,17 @@ func (b *sourceBroker) set(answer string, err error) {
 type sourceEngine struct {
 	*fakeTurnEngine
 	broker *sourceBroker
+	// catalog is what the source server published; nil = the tool, unmarked.
+	catalog []mcp.ServerTool
 }
 
 func (e *sourceEngine) MCPBroker() agentcore.MCPBroker { return e.broker }
+func (e *sourceEngine) MCPCatalog() []mcp.ServerTool {
+	if e.catalog != nil {
+		return e.catalog
+	}
+	return []mcp.ServerTool{{ServerName: "deals", Tool: mcp.Tool{Name: "list_account_groups"}}}
+}
 func (e *sourceEngine) MCPServerCatalog() []agent.OptionalServerInfo {
 	return []agent.OptionalServerInfo{{Name: "ix", Accounts: []string{"twc"}, Tools: []string{"get_deal"}, ToolCount: 1}}
 }
@@ -238,6 +247,32 @@ func TestSourcedAccountGroupsCallsOnlyADeclaredRead(t *testing.T) {
 			agentcore.ConfigureAgentPolicy(policy)
 			broker := &sourceBroker{answer: twoGroups}
 			s := &Server{store: newFakeChatStore(), agent: &sourceEngine{fakeTurnEngine: &fakeTurnEngine{}, broker: broker}}
+			if got := s.sourcedAccountGroups(context.Background(), src); len(got) != 0 {
+				t.Fatalf("groups = %v, want none", got)
+			}
+			if broker.callCount() != 0 {
+				t.Fatalf("the tool was called %d times", broker.callCount())
+			}
+		})
+	}
+}
+
+// The server's own discovery decides too: a tool it marks critical is
+// approval-gated in every turn, so it is never called as a host read even
+// when the bundle lists it as parallel-safe, and a tool it does not export is
+// not called at all.
+func TestSourcedAccountGroupsRespectsTheServersOwnCatalog(t *testing.T) {
+	sourcePolicy(t, "mcp_deals_list_account_groups")
+	src := &clientconfig.AccountGroupsSource{Server: "deals", Tool: "list_account_groups", RefreshSeconds: 300}
+	cases := map[string][]mcp.ServerTool{
+		"marked critical by the server": {{ServerName: "deals", Tool: mcp.Tool{Name: "list_account_groups", Critical: true}}},
+		"not exported":                  {{ServerName: "deals", Tool: mcp.Tool{Name: "something_else"}}},
+		"exported by another server":    {{ServerName: "other", Tool: mcp.Tool{Name: "list_account_groups"}}},
+	}
+	for name, catalog := range cases {
+		t.Run(name, func(t *testing.T) {
+			broker := &sourceBroker{answer: twoGroups}
+			s := &Server{store: newFakeChatStore(), agent: &sourceEngine{fakeTurnEngine: &fakeTurnEngine{}, broker: broker, catalog: catalog}}
 			if got := s.sourcedAccountGroups(context.Background(), src); len(got) != 0 {
 				t.Fatalf("groups = %v, want none", got)
 			}
