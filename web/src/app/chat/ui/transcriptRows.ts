@@ -10,6 +10,9 @@ import type { Message } from "./history";
 import { isRenderableCardCall } from "./genui/transcript";
 
 export type TranscriptRow =
+  // "Load earlier messages": the conversation has turns older than the ones
+  // loaded (docs/CHAT-HISTORY-WINDOW.md). Always the first row.
+  | { kind: "load-earlier" }
   // Live compaction progress card (only while summarizing).
   | { kind: "summarizing" }
   // Compaction error banner.
@@ -158,6 +161,8 @@ export type BuildTranscriptRowsInput = {
   summaryExpanded: boolean;
   isSummarizing: boolean;
   summarizeError: string | null;
+  /** Older turns exist on the server that are not loaded. */
+  hasEarlier?: boolean;
 };
 
 /**
@@ -174,8 +179,11 @@ export function buildTranscriptRows({
   summaryExpanded,
   isSummarizing,
   summarizeError,
+  hasEarlier = false,
 }: BuildTranscriptRowsInput): TranscriptRow[] {
   const out: TranscriptRow[] = [];
+  // First, above everything loaded: it stands for what precedes all of it.
+  if (hasEarlier) out.push({ kind: "load-earlier" });
   if (isSummarizing) out.push({ kind: "summarizing" });
   if (summarizeError) out.push({ kind: "summarize-error" });
   const collapsed = summaryIndex >= 0 && !summaryExpanded;

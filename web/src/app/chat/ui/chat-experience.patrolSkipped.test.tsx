@@ -3,6 +3,7 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { ChatExperience, type ConversationSummary } from "./chat-experience";
 import { clearChatSession } from "./chatSessionStore";
 import type { ChatSchedule } from "./history";
+import { withoutHistoryWindow } from "./historyWindow.testing";
 
 // A scheduled patrol run skipped for a waiting approval card queues no turn,
 // so nothing streams to the open chat. The page re-reads the schedules once
@@ -38,7 +39,7 @@ function mockBackend(nowSec: number) {
     skipped: { reason: "approval_pending", count: 1, slots: [nowSec - 19] },
   });
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = String(input);
+    const url = withoutHistoryWindow(String(input));
     if (init?.method && init.method !== "GET") return json({}, 500);
     if (url === "/api/conversations") return json({ conversations: CONVS });
     if (url === "/api/conversations?archived=true") return json({ conversations: [] });

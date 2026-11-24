@@ -99,6 +99,11 @@ type chatStore interface {
 
 	// History + summaries.
 	LoadHistory(ctx context.Context, convID string) ([]agent.HistoryEntry, error)
+	// A windowed read of the history (docs/CHAT-HISTORY-WINDOW.md): a suffix
+	// that begins where a turn opens, and the outline of what precedes it.
+	LoadHistoryTail(ctx context.Context, convID string, limit int, beforeID int64) (store.HistoryWindow, error)
+	LoadHistoryFrom(ctx context.Context, convID string, fromID int64) (store.HistoryWindow, error)
+	LoadHistoryOutline(ctx context.Context, convID string, beforeID int64) ([]agent.HistoryEntry, error)
 	AppendHistory(ctx context.Context, convID string, entries []agent.HistoryEntry) ([]int64, error)
 	// Durable turn journal + gated canonical projection (#798).
 	CommitUserMessage(ctx context.Context, convID, turnID string, entry agent.HistoryEntry) (int64, error)

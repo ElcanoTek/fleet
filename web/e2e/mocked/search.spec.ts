@@ -128,7 +128,7 @@ test("clicking a message hit loads that conversation", async ({ page }) => {
   await mockChatBoot(page);
   await mockSearch(page);
   // The result click calls loadConversation → GET /api/conversations/<id>.
-  await page.route("**/api/conversations/conv-search-1", (r: Route) =>
+  await page.route(/\/api\/conversations\/conv-search-1(?:\?|$)/, (r: Route) =>
     r.fulfill({
       json: {
         conversation: {

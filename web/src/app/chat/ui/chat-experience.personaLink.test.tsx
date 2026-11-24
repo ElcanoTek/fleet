@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { ChatExperience, type ConversationSummary } from "./chat-experience";
 import { clearChatSession } from "./chatSessionStore";
 import { bootstrapFailureDestination } from "./bootstrapFailure";
+import { withoutHistoryWindow } from "./historyWindow.testing";
 
 // Wrapped, not replaced: the real destination is computed, and the test can
 // read what the boot passed and got back.
@@ -24,7 +25,7 @@ const CONVS: ConversationSummary[] = [
 function mockBackend() {
   const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = String(input);
+    const url = withoutHistoryWindow(String(input));
     if (init?.method && init.method !== "GET") return json({}, 500);
     if (url === "/api/conversations") return json({ conversations: CONVS });
     if (url === "/api/conversations?archived=true") return json({ conversations: [] });
@@ -80,7 +81,7 @@ describe("persona new-chat link", () => {
     expect(composer.tagName).toBe("TEXTAREA");
     expect(window.location.search).toBe("");
     // The most recent conversation is NOT opened over the new chat.
-    expect(fetchMock.mock.calls.some(([u]) => String(u) === "/api/conversations/conv-a")).toBe(false);
+    expect(fetchMock.mock.calls.some(([u]) => withoutHistoryWindow(String(u)) === "/api/conversations/conv-a")).toBe(false);
   });
 
   // The gateway parks a signed-out link through sign-in; a session revoked
@@ -176,7 +177,7 @@ describe("persona new-chat link", () => {
     const base = fetchMock.getMockImplementation()!;
     let createdPayload: Record<string, unknown> | null = null;
     fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
+      const url = withoutHistoryWindow(String(input));
       if (url === "/api/chat/autonomous-accept" && init?.method === "POST") {
         return new Response(
           JSON.stringify({ autonomous_accepted: true, autonomous_policy_version: 1 }),

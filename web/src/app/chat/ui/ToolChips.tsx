@@ -86,7 +86,10 @@ export function PythonOutput({
   if (!stdout.trim() && !hasErr && !stream.executionMs) {
     return figures;
   }
-  const stdoutLines = stdout ? stdout.split("\n").length : 0;
+  // Counted, not split: this runs on every render of a collapsed block, and
+  // a cell's output can be tens of kilobytes.
+  let stdoutLines = stdout ? 1 : 0;
+  for (let i = stdout.indexOf("\n"); i !== -1; i = stdout.indexOf("\n", i + 1)) stdoutLines += 1;
   const summaryBits = [
     stdoutLines ? plural(stdoutLines, "line") : "",
     stream.executionMs ? `${stream.executionMs}ms` : "",
@@ -354,9 +357,21 @@ export function taskTrackerDisplayForMessage(
     }
   }
   if (!tracker) return null;
-  const baseTasks = tracker.resultText
-    ? parseTaskList(tracker.resultText)
-    : parseTaskList(tracker.input);
+  // Every mounted reply calls this on every render, and a streamed delta
+  // re-renders the transcript: the list is parsed once per tool-call object
+  // (they are reused across renders) and again only if its text changed.
+  const src = tracker.resultText ? tracker.resultText : tracker.input;
+  const hit = taskTrackerCache.get(tracker);
+  if (hit && hit.src === src) return hit.value;
+  const value = taskTrackerDisplayOf(src);
+  taskTrackerCache.set(tracker, { src, value });
+  return value;
+}
+
+const taskTrackerCache = new WeakMap<ToolCall, { src: string; value: TaskTrackerDisplay | null }>();
+
+function taskTrackerDisplayOf(src: string): TaskTrackerDisplay | null {
+  const baseTasks = parseTaskList(src);
   if (baseTasks.length === 0) return null;
 
   const activeTask =

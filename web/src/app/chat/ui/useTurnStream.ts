@@ -584,6 +584,14 @@ export interface TurnStreamDeps {
   // Component-owned refs the loop reads/mutates.
   activeConversationIdRef: RefObject<string | null>;
   messagesByConvRef: RefObject<ReadonlyMap<string, Message[]>>;
+  /**
+   * The query a read of this conversation's history carries so it covers
+   * exactly the part held in messagesByConvRef (docs/CHAT-HISTORY-WINDOW.md):
+   * "" when the conversation is held whole. The recovery checks below compare
+   * the server's history with the local messages turn for turn, so both must
+   * span the same turns.
+   */
+  heldHistoryQuery?: (convId: string) => string;
   pendingApprovalScrollRef: RefObject<string | null>;
   serverModelByConvRef?: RefObject<Map<string, string>>;
   // Component state values (read-only in the loop).
@@ -762,6 +770,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     setSpreadsheetNudgeDismissed,
     activeConversationIdRef,
     messagesByConvRef,
+    heldHistoryQuery = () => "",
     pendingApprovalScrollRef,
     serverModelByConvRef,
     selectedModel,
@@ -1052,7 +1061,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
   ): Promise<PersistedReconcile> => {
     if (isPendingKey(convId)) return "absent";
     // An id that fails the URL gate has no server copy we could ask for.
-    const url = conversationApiUrl(convId);
+    const url = conversationApiUrl(convId, heldHistoryQuery(convId));
     if (!url) return "absent";
     try {
       const res = await fetch(url, {
@@ -1095,7 +1104,9 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     // timeout is "could not ask", so it reads as unknown.
     const queued = await refreshQueue(convId, recoveryRequestSignal());
     if (queued?.some((q) => q.submission_id === submissionId)) return "yes";
-    const url = conversationApiUrl(convId);
+    // The same turns the local messages span: a copy of this text in a turn
+    // older than the held part must not read as the submission having landed.
+    const url = conversationApiUrl(convId, heldHistoryQuery(convId));
     if (!url) return queued ? "no" : "unknown";
     try {
       const res = await fetch(url, { cache: "no-store", signal: recoveryRequestSignal() });

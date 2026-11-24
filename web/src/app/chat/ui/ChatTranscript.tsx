@@ -214,6 +214,16 @@ export type ChatTranscriptProps = {
   uiAutoSubmits?: ReadonlyMap<string, UIAutoSubmitState>;
   onPauseAutoSubmit?: (cardId: string) => void | Promise<void | AutoSubmitPauseResult>;
   onAutoSubmitDue?: (cardId: string) => void;
+
+  // The windowed load (docs/CHAT-HISTORY-WINDOW.md). `messages` may be only
+  // the newest part of the conversation:
+  //  - cardMessages is what card state is derived from: `messages` preceded
+  //    by the cards older than them (the same array when all is loaded);
+  //  - earlierMessages says whether older turns exist and how the request for
+  //    them stands; onLoadEarlier asks for the next page.
+  cardMessages?: Message[];
+  earlierMessages?: "none" | "available" | "loading" | "failed";
+  onLoadEarlier?: () => void;
 };
 
 // The transcript is virtualized (@tanstack/react-virtual): only the rows near
@@ -274,6 +284,49 @@ function VirtualTranscriptRow({
   );
 }
 
+/**
+ * The first row of a conversation loaded only in part: a button that loads
+ * the page before it. While the request runs it says so (aria-busy, and a
+ * polite status a screen reader announces); a failed request says so and the
+ * button offers it again.
+ */
+function LoadEarlierMessages({
+  state,
+  onLoad,
+}: {
+  state: "none" | "available" | "loading" | "failed";
+  onLoad: () => void;
+}) {
+  const loading = state === "loading";
+  return (
+    <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-1">
+      <button
+        type="button"
+        data-load-earlier="true"
+        data-testid="load-earlier-messages"
+        className="mx-auto flex w-full items-center justify-center gap-2 rounded-[0.6rem] border border-dashed border-[var(--color-border-strong)] bg-[var(--color-overlay-soft)] px-3 py-2 text-[0.75rem] text-[var(--color-text-muted)] transition hover:border-[var(--color-accent)] hover:text-[var(--color-text-primary)] aria-disabled:cursor-progress aria-disabled:opacity-70"
+        aria-busy={loading}
+        // aria-disabled, not disabled: a disabled button drops the keyboard
+        // focus the moment it is pressed.
+        aria-disabled={loading}
+        onClick={() => {
+          if (!loading) onLoad();
+        }}
+      >
+        <Icon name="arrow-up" className="size-3" />
+        {loading ? tr("Loading earlier messages…") : tr("Load earlier messages")}
+      </button>
+      <p role="status" aria-live="polite" className={state === "failed" ? "text-center text-[0.75rem] text-[var(--color-danger)]" : "sr-only"}>
+        {state === "failed"
+          ? tr("Could not load earlier messages. Try again.")
+          : loading
+            ? tr("Loading earlier messages…")
+            : ""}
+      </p>
+    </div>
+  );
+}
+
 export function ChatTranscript({
   conversationRef,
   streamEndRef,
@@ -324,6 +377,9 @@ export function ChatTranscript({
   onPauseAutoSubmit,
   onAutoSubmitDue,
   approvalJumpRequest = null,
+  cardMessages,
+  earlierMessages = "none",
+  onLoadEarlier,
 }: ChatTranscriptProps) {
   "use no memo";
   const { setModelPickerOpen, setModelSearchQuery, loadRankedModels, loadCatalogModels } = modelCatalog;
@@ -345,8 +401,9 @@ export function ChatTranscript({
         summaryExpanded,
         isSummarizing,
         summarizeError,
+        hasEarlier: earlierMessages !== "none",
       }),
-    [messages, summaryIndex, summaryExpanded, isSummarizing, summarizeError],
+    [messages, summaryIndex, summaryExpanded, isSummarizing, summarizeError, earlierMessages],
   );
   const turnSenderMap = useMemo(() => turnSendersByMessageId(messages), [messages]);
 
@@ -420,6 +477,7 @@ export function ChatTranscript({
     getScrollElement: () => conversationRef.current,
     estimateSize: (index) => {
       const row = rows[index];
+      if (row?.kind === "load-earlier") return 44;
       if (!row || row.kind !== "message") return 110;
       const text = row.message.content ?? "";
       if (row.message.role === "user") {
@@ -439,6 +497,8 @@ export function ChatTranscript({
     getItemKey: (index) => {
       const row = rows[index];
       switch (row.kind) {
+        case "load-earlier":
+          return "row:load-earlier";
         case "summarizing":
           return "row:summarizing";
         case "summarize-error":
@@ -467,6 +527,65 @@ export function ChatTranscript({
     contentHeight: virtualizer.getTotalSize(),
     conversationKey: currentConvKey,
   });
+
+  // "Load earlier messages" puts a page of rows ABOVE what the reader is
+  // looking at. Nothing else compensates for rows inserted above (the
+  // virtualizer adjusts only for a measured row changing size, and the
+  // scroller opts out of browser scroll anchoring), so without this the view
+  // would jump to the top of the new page. The row the reader had first stays
+  // where it was: the scroll offset moves by exactly the height that arrived
+  // above it. A reader pinned to the end stays pinned (the same arithmetic).
+  const firstLoadedKey = (() => {
+    const first = rows.find((r) => r.kind === "message" || r.kind === "summary");
+    return first ? `${currentConvKey}:${first.message.id}` : null;
+  })();
+  const prependAnchorRef = useRef<{ conv: string; firstKey: string | null; keys: Set<string>; total: number }>({
+    conv: currentConvKey,
+    firstKey: null,
+    keys: new Set(),
+    total: 0,
+  });
+  const totalSize = virtualizer.getTotalSize();
+  // The control unmounts when its page arrives (it moves far above, or goes
+  // away with the last page). If it held the keyboard focus, the focus goes
+  // to the transcript rather than being dropped to the page.
+  const restoreFocusAfterEarlierRef = useRef(false);
+  const loadEarlier = useCallback(() => {
+    restoreFocusAfterEarlierRef.current =
+      document.activeElement instanceof HTMLElement &&
+      document.activeElement.dataset.loadEarlier === "true";
+    onLoadEarlier?.();
+  }, [onLoadEarlier]);
+  useLayoutEffect(() => {
+    const prev = prependAnchorRef.current;
+    const keys = new Set<string>();
+    for (const r of rows) {
+      if (r.kind === "message" || r.kind === "summary") keys.add(`${currentConvKey}:${r.message.id}`);
+    }
+    const prepended =
+      prev.conv === currentConvKey &&
+      prev.firstKey !== null &&
+      firstLoadedKey !== null &&
+      firstLoadedKey !== prev.firstKey &&
+      keys.has(prev.firstKey) &&
+      !prev.keys.has(firstLoadedKey);
+    if (prepended) {
+      const el = conversationRef.current;
+      const delta = totalSize - prev.total;
+      // The reader is being kept at the row they were on, which is the app
+      // placing them: the follow-the-end logic must not also move them for
+      // this change. (A reader who is at the end is still at the end after
+      // the offset moves, and the scroll event below pins them again.)
+      requestHoldPosition();
+      if (el && delta > 0) el.scrollTop += delta;
+      if (restoreFocusAfterEarlierRef.current) {
+        restoreFocusAfterEarlierRef.current = false;
+        el?.focus({ preventScroll: true });
+      }
+    }
+    prependAnchorRef.current = { conv: currentConvKey, firstKey: firstLoadedKey, keys, total: totalSize };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows, currentConvKey, totalSize]);
 
   // ── Message minimap (Codex-style jump rail) ────────────────────────────────
   // One dash per user message currently present in the row model (a collapsed
@@ -533,7 +652,9 @@ export function ChatTranscript({
 
   // Card state (spec, submission, replaced) is derived from the transcript
   // itself — see genui/transcript.ts.
-  const derivedGenUi = useMemo(() => deriveGenUiState(messages), [messages]);
+  // cardMessages: the cards older than the loaded messages count too, so an
+  // answer to one keeps its labels and a later card still replaces it.
+  const derivedGenUi = useMemo(() => deriveGenUiState(cardMessages ?? messages), [cardMessages, messages]);
   const genUi = useMemo(
     () => ({
       ...derivedGenUi,
@@ -619,6 +740,10 @@ export function ChatTranscript({
             // keeps getByRole("region", { name: "Conversation" }) — used by the
             // mocked/live/canary Playwright specs — resolving to this element.
             aria-label={tr("Conversation")}
+            // Focusable from script only (no tab stop): where the keyboard
+            // focus goes when "Load earlier messages" is replaced by the
+            // messages it loaded.
+            tabIndex={-1}
             // overflow-x-hidden: belt-and-suspenders against a stray wide
             // child (long unbreakable token, syntax-highlighted long line)
             // creating a horizontal scroll inside the chat column on mobile.
@@ -746,6 +871,14 @@ export function ChatTranscript({
                           seenIds={animatedIdsRef.current}
                         >
                           {(enterClass) => {
+                            if (row.kind === "load-earlier") {
+                              return (
+                                <LoadEarlierMessages
+                                  state={earlierMessages}
+                                  onLoad={loadEarlier}
+                                />
+                              );
+                            }
                             if (row.kind === "summarizing") {
                               return (
                                 <SummarizeProgressCard

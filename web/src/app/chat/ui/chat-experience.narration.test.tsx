@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { ChatExperience } from "./chat-experience";
 import { ChatToastProvider } from "./ChatToasts";
 import { clearChatSession } from "./chatSessionStore";
+import { withoutHistoryWindow } from "./historyWindow.testing";
 
 // jsdom has no layout, so the real virtualizer mounts no transcript rows.
 vi.mock("@tanstack/react-virtual", () => ({
@@ -77,7 +78,7 @@ function mockBackend(stream: ReturnType<typeof controlledStream>) {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
+      const url = withoutHistoryWindow(String(input));
       const method = init?.method ?? "GET";
       if (method === "POST" && url === "/api/chat") {
         return new Response(stream.body, {

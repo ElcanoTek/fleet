@@ -98,6 +98,24 @@ describe("buildTranscriptRows", () => {
     expect(rows[1]).toEqual({ kind: "summarize-error" });
   });
 
+  // docs/CHAT-HISTORY-WINDOW.md: a conversation loaded in part offers the
+  // turns before it as the first row, above everything loaded.
+  it("puts the load-earlier row first when older turns are not loaded", () => {
+    const messages = [
+      userMsg(1, "old q"),
+      assistantMsg(2, "old a"),
+      { ...assistantMsg(3, "summary text"), kind: "summary" as const },
+      userMsg(4, "new q"),
+    ];
+    expect(build([userMsg(1, "q")], { hasEarlier: true }).map((r) => r.kind)).toEqual(["load-earlier", "message"]);
+    expect(
+      build(messages, { hasEarlier: true, summaryIndex: 2, summaryExpanded: false, isSummarizing: true }).map((r) => r.kind),
+    ).toEqual(["load-earlier", "summarizing", "expander", "summary", "message"]);
+    // Nothing older: no row, as before the window existed.
+    expect(build([userMsg(1, "q")]).map((r) => r.kind)).toEqual(["message"]);
+    expect(build([userMsg(1, "q")], { hasEarlier: false }).map((r) => r.kind)).toEqual(["message"]);
+  });
+
   it("collapses the pre-summary range behind a single expander", () => {
     const messages = [
       userMsg(1, "old q"),

@@ -28,6 +28,7 @@ import {
   type ToolCall,
   type TurnSummary,
 } from "./history";
+import { withEarlierTotals, type EarlierTotals } from "./historyWindow";
 import { Icon } from "./Icon";
 import { formatBytes, formatDuration, formatTokens } from "./formatters";
 import { formatCredits } from "@/app/shared/lib/credits";
@@ -294,9 +295,14 @@ export function SummaryBanner({
  */
 export function ConversationTotalsChip({
   messages,
+  earlier = null,
   usage,
 }: {
   messages: Message[];
+  // The server's sum for the turns older than the loaded part of the
+  // conversation (docs/CHAT-HISTORY-WINDOW.md), so the total is the whole
+  // conversation's whether or not all of it is loaded. Null when it is.
+  earlier?: EarlierTotals | null;
   // Provided by the parent so both the stats panel and the composer
   // ring read from the same computation — no duplicate memos, no
   // chance of the two surfaces disagreeing.
@@ -317,8 +323,8 @@ export function ConversationTotalsChip({
     [messages],
   );
 
-  if (summaries.length === 0) return null;
-  const totals = conversationTotals(summaries);
+  if (summaries.length === 0 && !earlier) return null;
+  const totals = withEarlierTotals(conversationTotals(summaries), earlier);
   if (totals.turns === 0) return null;
 
   const parts: string[] = [];

@@ -18,7 +18,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/safe"
@@ -30,6 +29,8 @@ import (
 // memory proposals — everything a reload needs to re-hydrate the transcript.
 // ?omit_history=1 skips LoadHistory so a terminal approval review does not
 // have to download an unbounded transcript before POSTing a decision.
+// ?limit / ?before / ?from read a window of the history instead of all of it
+// (history_window.go, docs/CHAT-HISTORY-WINDOW.md).
 func (s *Server) isAcceptedAutonomousConversation(ctx context.Context, conv *store.Conversation) bool {
 	if conv == nil || conv.EffectiveApprovalMode() != store.ConversationApprovalAutonomous {
 		return false
@@ -98,32 +99,29 @@ func (s *Server) withViewerPin(ctx context.Context, viewer string, conv *store.C
 	return &shown
 }
 
-func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, user, id string, conv *store.Conversation) {
-	isAutonomousConv := s.isAcceptedAutonomousConversation(r.Context(), conv)
-	if approvalID := r.URL.Query().Get("approval_id"); approvalID != "" {
-		s.handleConversationApprovalGetWithMode(w, r, user, id, approvalID, isAutonomousConv)
-		return
+func (s *Server) loadConversationHistoryForGet(ctx context.Context, id, user, owner string, omitHistory, windowed bool, window historyWindowRequest) ([]historyEntryResponse, *historyPage, error) {
+	if omitHistory {
+		return []historyEntryResponse{}, nil, nil
 	}
-	omitHistory := r.URL.Query().Get("omit_history") == "1"
-	var history []agent.HistoryEntry
-	if !omitHistory {
-		var err error
-		history, err = s.store.LoadHistory(r.Context(), id)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
+	if windowed {
+		return loadHistoryPage(ctx, s.store, id, user, owner, window)
 	}
-	pending, err := s.store.ListPendingApprovals(r.Context(), user, id)
+	history, err := s.store.LoadHistory(ctx, id)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+		return nil, nil, err
 	}
+	// historyForParticipant: the owner's own entries carry
+	// `injected_context`; another multiplayer participant's are omitted
+	// so their attachment paths are not exposed.
+	return historyForParticipant(history, user, owner), nil, nil
+}
+
+func (s *Server) formatPendingApprovalCards(pending []store.Approval, id string, approvalIndex, isAutonomousConv bool) []map[string]any {
 	// Shape pending approvals the same way tool.approval_required
 	// events do, so the frontend reuses its render path.
 	approvals := make([]map[string]any, 0, len(pending))
 	for _, a := range pending {
-		if r.URL.Query().Get("approval_index") == "1" {
+		if approvalIndex {
 			approvals = append(approvals, map[string]any{"approval_id": a.ID})
 			continue
 		}
@@ -152,6 +150,35 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, u
 		withApprovalNarrowable(card, &a)
 		approvals = append(approvals, card)
 	}
+	return approvals
+}
+
+func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, user, id string, conv *store.Conversation) {
+	isAutonomousConv := s.isAcceptedAutonomousConversation(r.Context(), conv)
+	if approvalID := r.URL.Query().Get("approval_id"); approvalID != "" {
+		s.handleConversationApprovalGetWithMode(w, r, user, id, approvalID, isAutonomousConv)
+		return
+	}
+	omitHistory := r.URL.Query().Get("omit_history") == "1"
+	// A windowed read (?limit / ?before / ?from, history_window.go) returns a
+	// suffix of the history; without those parameters the whole history is
+	// read, as every caller before the window existed expects.
+	window, windowed, werr := parseHistoryWindow(r.URL.Query())
+	if werr != nil {
+		http.Error(w, werr.Error(), http.StatusBadRequest)
+		return
+	}
+	historyPayload, page, err := s.loadConversationHistoryForGet(r.Context(), id, user, conv.UserEmail, omitHistory, windowed, window)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	pending, err := s.store.ListPendingApprovals(r.Context(), user, id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	approvals := s.formatPendingApprovalCards(pending, id, r.URL.Query().Get("approval_index") == "1", isAutonomousConv)
 	// Resolved approvals re-hydrate too, so the transcript keeps the shape
 	// it had live: the "Email sent ✓" outcome card, a timed-out card, and —
 	// load-bearing for notify mode (#1153) — the "ran without asking" record
@@ -279,7 +306,6 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, u
 	if serr != nil || schedules == nil {
 		schedules = []store.ChatSchedule{}
 	}
-	historyPayload := historyForParticipant(history, user, conv.UserEmail)
 	autonomousAccepted := s.hasAcceptedAutonomous(r.Context(), user)
 	conv = s.sanitizeConversationForViewer(r.Context(), user, isOwner, autonomousAccepted, conv)
 	var uiAutoSubmits []store.UIAutoSubmit
@@ -294,12 +320,9 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, u
 	if uiAutoSubmits == nil {
 		uiAutoSubmits = []store.UIAutoSubmit{}
 	}
-	writeJSON(w, r, map[string]any{
-		"conversation":  conv,
-		"branch_origin": origin,
-		// historyForParticipant: the owner's own entries carry
-		// `injected_context`; another multiplayer participant's are omitted
-		// so their attachment paths are not exposed.
+	body := map[string]any{
+		"conversation":             conv,
+		"branch_origin":            origin,
 		"history":                  historyPayload,
 		"pending_approvals":        approvals,
 		"resolved_approvals":       resolvedCards,
@@ -311,7 +334,13 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, u
 		"ui_autosubmits":            uiAutoSubmits,
 		"autonomous_accepted":       autonomousAccepted,
 		"autonomous_policy_version": store.CurrentAutonomousPolicyVersion,
-	})
+	}
+	// Only a windowed read names its page, so the whole-history response
+	// keeps exactly the keys it always had.
+	if page != nil {
+		body["history_page"] = page
+	}
+	writeJSON(w, r, body)
 }
 
 // handleConversationApprovalGet bounds one-shot review to the requested card;

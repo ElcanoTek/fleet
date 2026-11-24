@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { ChatExperience, type ConversationSummary } from "./chat-experience";
 import { clearChatSession } from "./chatSessionStore";
 import type { BranchOrigin } from "./teamSharing";
+import { withoutHistoryWindow } from "./historyWindow.testing";
 
 // One chat, one door (docs/TEAM-SHARING.md): a teammate's Multiplayer chat
 // opens LIVE for someone who may take part in it, whichever way they reach
@@ -53,7 +54,7 @@ type Backend = {
 function mockBackend({ teamLink, liveStatus = 200, origin = null }: Backend) {
   const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = String(input);
+    const url = withoutHistoryWindow(String(input));
     if (init?.method && init.method !== "GET") return json({}, 500);
     if (url === "/api/conversations") return json({ conversations: [OWN] });
     if (url === "/api/conversations?archived=true") return json({ conversations: [] });
@@ -90,7 +91,7 @@ function mockBackend({ teamLink, liveStatus = 200, origin = null }: Backend) {
 }
 
 const fetched = (fetchMock: ReturnType<typeof mockBackend>, url: string) =>
-  fetchMock.mock.calls.some(([u]) => String(u) === url);
+  fetchMock.mock.calls.some(([u]) => withoutHistoryWindow(String(u)) === url);
 
 beforeEach(() => {
   vi.stubGlobal(

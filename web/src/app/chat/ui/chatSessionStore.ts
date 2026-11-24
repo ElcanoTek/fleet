@@ -23,6 +23,7 @@
 // state, so keeping it around costs no extra memory beyond one pointer each.
 
 import type { Message } from "./history";
+import type { HistoryWindow } from "./historyWindow";
 import type { SkillInfo } from "./skillSlash";
 import type { ConversationSummary, ServerConfig } from "./chat-experience";
 
@@ -33,6 +34,11 @@ export type ChatSessionSnapshot = {
   // js/remote-property-injection sink CodeQL flags (a conv id of
   // `__proto__` would otherwise reach Object.prototype).
   messagesByConv: ReadonlyMap<string, Message[]>;
+  // The conversations of messagesByConv held only in part, with where the
+  // held part starts (docs/CHAT-HISTORY-WINDOW.md). Without it a warm return
+  // would show the cached window with no way to load what precedes it, and
+  // its background reload would ask for the whole history.
+  historyWindowByConv?: ReadonlyMap<string, HistoryWindow>;
   // Sidebar conversation lists.
   conversations: ConversationSummary[];
   archivedConversations: ConversationSummary[];

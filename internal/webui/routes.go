@@ -125,6 +125,11 @@ func (g *Gateway) handleChatRoute(rt chatRoute) http.HandlerFunc {
 			c.body, c.contentLength = bodyOrNil(r)
 			h.Set("Content-Type", "application/json")
 		}
+		if rt.out.gzip && r.Method == http.MethodGet {
+			var finish func()
+			w, finish = withGzip(w, r)
+			defer finish()
+		}
 		g.dispatch(w, r, g.chat, "chat-server", c, rt.out)
 	}
 }
@@ -174,7 +179,7 @@ func conv(r *http.Request) string { return "/conversations/" + p(r, "id") }
 // (cmd/fleet) holds the table to that.
 func chatRoutes() []chatRoute {
 	textOK := out{headers: contentTypeOnly, ctFallback: "application/json", okOn204: true}
-	jsonForced := out{headers: contentTypeOnly, ctForce: "application/json"}
+	jsonForced := out{headers: contentTypeOnly, ctForce: "application/json", gzip: true}
 	jsonForcedOK := out{headers: contentTypeOnly, ctForce: "application/json", okOn204: true}
 	textPlainFallback := out{headers: contentTypeOnly, ctFallback: "text/plain"}
 
@@ -310,7 +315,13 @@ func chatRoutes() []chatRoute {
 		{"GET /api/sidebar", fixed("/sidebar"), noBody, textJSON},
 		{"PUT /api/sidebar", fixed("/sidebar"), jsonBodyIfAny, textJSON},
 		{"DELETE /api/sidebar", fixed("/sidebar"), jsonBodyIfAny, textJSON},
-		{"GET /api/conversations/{id}", conv, noBody, textJSON},
+		// omit_history, and the history window (limit/before/from,
+		// docs/CHAT-HISTORY-WINDOW.md): the only parameters of the read a
+		// browser may name. approval_id and the terminal's review flags stay
+		// off this route, as they always were.
+		{"GET /api/conversations/{id}", func(r *http.Request) string {
+			return conv(r) + passThroughQuery(r, "omit_history", "limit", "before", "from")
+		}, noBody, textJSON},
 		{"DELETE /api/conversations/{id}", conv, noBody, textOK},
 		{"POST /api/conversations/{id}/approval-groups/{groupId}", func(r *http.Request) string {
 			return conv(r) + "/approval-groups/" + p(r, "groupId")
