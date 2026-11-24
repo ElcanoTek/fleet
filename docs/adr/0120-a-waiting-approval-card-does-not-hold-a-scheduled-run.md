@@ -53,7 +53,7 @@ Three facts made the hold unnecessary as well as costly:
 
 **A pending approval card never turns a scheduled fire away.**
 
-1. `store.DeliverChatScheduleFire` does not read `chat.approvals`. A scheduled
+1. `store.DeliverChatScheduleFire` does not look for a pending card. A scheduled
    fire is `busy` only when a patrol turn of the owner's is already queued or
    running in the chat (`patrol_in_flight`) or the chat's input queue is full
    (`queue_full`). This holds for recurring patrols and one-shot timers, in
