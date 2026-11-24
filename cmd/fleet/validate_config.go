@@ -1245,6 +1245,16 @@ func checkAgentPolicy(bundle *clientconfig.Bundle, bundleErr error) checkResult 
 		CriticalToolModes:    p.CriticalToolModes,
 		CriticalToolStop:     p.CriticalToolStop,
 	})...)
+	// account_groups.source: fleet calls this tool on its own, with no turn
+	// and no approval behind it (ADR-0119), so it must be a declared read
+	// that no pre_tool_use hook matches. A source that is not is never
+	// called, and the picker shows only the manifest's fixed groups.
+	if src := bundle.AccountGroups().Source; src != nil {
+		problems = append(problems, agentcore.HostReadProblems(agentcore.AgentPolicy{
+			ParallelSafeTools:    p.ParallelSafeTools,
+			CriticalToolSuffixes: p.CriticalToolSuffixes,
+		}, bundle.AgentcoreHooks(), "account_groups.source", src.Server, src.Tool)...)
+	}
 	// interactive_hidden_tools: a member the boot install drops (a blank one)
 	// fails the check.
 	problems = append(problems, agentcore.InteractiveHiddenToolProblems(agentcore.AgentPolicy{

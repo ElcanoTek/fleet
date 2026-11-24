@@ -407,7 +407,6 @@ func run() error {
 	// agentcore stays on its base generic critical suffixes. Must run before any
 	// turn starts.
 	agentcore.ConfigureAgentPolicy(bundle.AgentcorePolicy())
-
 	// Connector credentials cross exactly one process boundary at boot: the child
 	// inherits the current environment, proves liveness + public discovery, then
 	// the parent erases connector env keys and every resolved connector config
@@ -422,6 +421,15 @@ func run() error {
 	// the agentcore form and install them process-wide. The generic bundle ships
 	// none, so this is a no-op by default. Must run before any turn starts.
 	agentcore.ConfigureLifecycleHooks(bundle.AgentcoreHooks())
+	// An account-groups source that is not a declared read, or that a
+	// pre_tool_use hook matches, is never called (ADR-0119); say so once at
+	// boot rather than only when a picker opens. After both installs above,
+	// so it is judged by everything the call-time check reads.
+	if src := bundle.AccountGroups().Source; src != nil {
+		if why := agentcore.HostReadRefusal(agentcore.MCPToolName(src.Server, src.Tool)); why != "" {
+			slog.Warn("account_groups.source will not be called: "+why+" (docs/ACCOUNT-GROUPS.md)", "server", src.Server, "tool", src.Tool)
+		}
+	}
 
 	// Install the bundle's custom model-pricing overrides (#297). The generic
 	// bundle ships none, so cost accounting stays on the OpenRouter-returned

@@ -238,3 +238,36 @@ account_groups:
 		t.Fatalf("status with gamma turned off in Settings = %q, want %q", got, accountGroupMemberConnectorMissing)
 	}
 }
+
+func writeSourceBundle(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	manifest := `
+mcp_servers:
+  - name: ix
+    display_name: Index Exchange
+    description: Deals.
+    command: /bin/true
+    optional: true
+    always: true
+  - name: deals
+    display_name: Deals
+    description: Reads clients.
+    command: /bin/true
+    always: true
+    tools: [list_account_groups]
+account_groups:
+  label: Clients
+  groups:
+    - id: house
+      name: House
+      accounts: [{server: ix}]
+  source:
+    server: deals
+    tool: list_account_groups
+`
+	if err := os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
