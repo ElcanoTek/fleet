@@ -45,9 +45,11 @@ type accountGroupSource struct {
 	mu sync.Mutex
 	// groups is the last good answer; nil until the first one.
 	groups []clientconfig.AccountGroup
-	// loaded reports whether any refresh has finished, good or bad: the first
-	// read waits only for that.
-	loaded bool
+	// waited reports whether a read has already waited for the first answer.
+	// Exactly one does: the wait is for the picker that opens right after
+	// boot, and a source that takes longer than that must not hold every
+	// reader that arrives while its first refresh is still running.
+	waited bool
 	// nextRefresh is when the cached answer (or the last failure) goes stale.
 	nextRefresh time.Time
 	// refreshing is non-nil while a refresh runs; it is closed when it ends.
@@ -76,7 +78,8 @@ func (s *Server) sourcedAccountGroups(ctx context.Context, src *clientconfig.Acc
 			s.refreshAccountGroups(refreshCtx, source)
 		})
 	}
-	if !c.loaded {
+	if !c.waited {
+		c.waited = true
 		wait = c.refreshing
 	}
 	c.mu.Unlock()
@@ -103,7 +106,6 @@ func (s *Server) refreshAccountGroups(ctx context.Context, src clientconfig.Acco
 	c := &s.accountGroupSource
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.loaded = true
 	c.refreshing = nil
 	if err != nil {
 		c.nextRefresh = time.Now().Add(accountGroupSourceRetry)

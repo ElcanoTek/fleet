@@ -259,7 +259,18 @@ func TestSourcedAccountGroupsDoesNotBlockOnASlowSource(t *testing.T) {
 	if waited := time.Since(start); waited > time.Second {
 		t.Fatalf("a cancelled read waited %v", waited)
 	}
-	// The refresh it started outlives that caller.
+	// Only one read waits for the first answer. A source that takes longer
+	// than that must not hold every reader that arrives while its first
+	// refresh is still running: this one has a live request and still
+	// returns at once, with nothing yet.
+	start = time.Now()
+	if got := s.sourcedAccountGroups(context.Background(), src); len(got) != 0 {
+		t.Fatalf("groups before the source answered: %v", got)
+	}
+	if waited := time.Since(start); waited > accountGroupSourceFirstWait/2 {
+		t.Fatalf("a second read waited %v for the first refresh", waited)
+	}
+	// The refresh the first read started outlives its caller.
 	close(broker.gate)
 	waitForRefresh(t, s)
 	if got := s.sourcedAccountGroups(context.Background(), src); len(got) != 2 {

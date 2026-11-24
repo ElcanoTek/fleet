@@ -12,11 +12,14 @@ import "fmt"
 // actually installed.
 
 // HostReadProblems reports why the tool `tool` on `server` could not be
-// called as a host read under policy p, for a manifest key named key
-// ("account_groups.source"). Empty when it could. A host read must be listed
-// in parallel_safe_tools under its registered name (how a bundle declares a
-// read-only tool) and must not be critical under the merged suffix list.
-func HostReadProblems(p AgentPolicy, key, server, tool string) []string {
+// called as a host read under policy p and the bundle's hooks, for a manifest
+// key named key ("account_groups.source"). Empty when it could. A host read
+// must be listed in parallel_safe_tools under its registered name (how a
+// bundle declares a read-only tool), must not be critical under the merged
+// suffix list, and must not be matched by a pre_tool_use hook: every rule
+// HostReadRefusal applies at call time, so a bundle that passes here is one
+// whose read is actually made.
+func HostReadProblems(p AgentPolicy, hooks []LifecycleHook, key, server, tool string) []string {
 	full := MCPToolName(server, tool)
 	var problems []string
 	critical := append([]string(nil), baseCriticalToolSuffixes...)
@@ -36,6 +39,12 @@ func HostReadProblems(p AgentPolicy, key, server, tool string) []string {
 	}
 	if !listed {
 		problems = append(problems, fmt.Sprintf("%s: tool %q is not in agent_policy.parallel_safe_tools, which is how a bundle declares a read-only tool; fleet will not call it", key, full))
+	}
+	for _, h := range hooks {
+		if h.Event == HookPreToolUse && matchesTool(h.Matcher, full) {
+			problems = append(problems, fmt.Sprintf("%s: pre_tool_use hook %q (matcher %q) matches tool %q; fleet calls this tool outside the loop, where the hook cannot run, so it will not call it", key, h.ID, h.Matcher, full))
+			break
+		}
 	}
 	return problems
 }

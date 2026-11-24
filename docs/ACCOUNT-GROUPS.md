@@ -89,12 +89,13 @@ to the host-read rules ([ADR-0119](adr/0119-account-groups-source-is-a-host-read
 - The tool must be in `agent_policy.parallel_safe_tools` under its registered
   name (`mcp_<server>_<tool>`) and must not be critical, and no `pre_tool_use`
   hook may match it. Otherwise it is never called: `fleet validate-config`
-  reports it (the `agent_policy` check) and boot logs it.
+  reports each of the three (the `agent_policy` check) and boot logs it.
 - The call goes through the credential owner's scope gate, on the server's
   default account, with no user identity. The list is the deployment's.
-- An answer is used for `refresh_seconds`. Only the first read after boot
-  waits for the source, at most two seconds; later reads get the last answer
-  while a refresh runs. A failed refresh keeps the last good answer and
+- An answer is used for `refresh_seconds`. One read after boot waits for the
+  source, at most two seconds; every other read, including one that arrives
+  while that first call is still running, gets the last answer (none yet, at
+  first) while a refresh runs. A failed refresh keeps the last good answer and
   retries after a minute. Each call has fifteen seconds.
 - The answer is display data. It never reaches a model.
 

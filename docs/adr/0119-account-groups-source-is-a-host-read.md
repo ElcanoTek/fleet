@@ -32,9 +32,10 @@ constraints:
 
 1. **Only a declared read.** The tool must be listed in
    `agent_policy.parallel_safe_tools` under its registered name and must not
-   be critical. `fleet validate-config` reports a source that is not, boot
-   logs it, and the check runs again before every call under the installed
-   policy (`agentcore.HostReadRefusal`). fleet never calls a critical tool
+   be critical. `fleet validate-config` reports a source that is not
+   (`agentcore.HostReadProblems`, which also reports a matching hook, rule
+   2), boot logs it, and the check runs again before every call under the
+   installed policy (`agentcore.HostReadRefusal`). fleet never calls a critical tool
    outside the approval path.
 2. **No hook is bypassed.** A `pre_tool_use` hook that matches the tool
    cannot run outside the loop, so the call is skipped rather than made
@@ -51,8 +52,9 @@ constraints:
 5. **Bounded, cached, never in the request's way.** Fifteen seconds per call,
    as a deadline and as the child's per-call budget; no retries inside a
    call. An answer is served for `refresh_seconds` (default 300, at least
-   60). Only the first read after boot waits, for at most two seconds. Every
-   other read is served the last answer while one refresh runs behind it. A
+   60). One read after boot waits, for at most two seconds. Every other
+   read, including one that arrives while that first call is still running,
+   is served the last answer while one refresh runs behind it. A
    failed refresh keeps the last good answer and is tried again after a
    minute.
 6. **Display data only.** The answer never reaches a model, a transcript or a
