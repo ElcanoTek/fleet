@@ -430,6 +430,20 @@ each piece yourself):
    >   limit and the spend counted in its current window apply to the later
    >   account until an admin removes it. What goes and what stays:
    >   [IDENTITY.md](IDENTITY.md), "Deleting an account".
+   > - **During a database outage** the server stops admitting account work
+   >   within about a second of its presence lock's connection dropping:
+   >   account requests, uploads and webhook turns are answered `503` with
+   >   `Retry-After` (`the server is reconnecting to its database; try
+   >   again`), queued messages wait, and the log says `server presence
+   >   lock: its connection dropped; account work is refused until the lock
+   >   is taken again`. `/livez`, `/readyz` and `/healthz` answer as before
+   >   (`/readyz` reports the database). Once the database is back the
+   >   server takes the lock again within about a second, logs `server
+   >   presence lock: taken again; account work is admitted again`, and
+   >   serves. A `fleet admin rm` started meanwhile that got the lock first
+   >   sees the server's heartbeat within five seconds and refuses with
+   >   nothing deleted; the server serves once it lets go. A CLI deletion
+   >   takes about five seconds longer than before for that second look.
    > - **Everyone, break-glass** — rotate `APP_SESSION_SECRET` in
    >   `/etc/fleet/fleet.env` and `fleet restart`. Every
    >   outstanding cookie fails signature verification at once, so all users

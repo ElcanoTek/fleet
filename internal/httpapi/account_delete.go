@@ -349,11 +349,16 @@ func (s *Server) accountHoldsAddress(ctx context.Context, email string) (bool, e
 // refuseUnlessAccountFilesWritable answers the request and returns false
 // when files may not be written for user now (accountFilesWritable): 403
 // not_a_member, as membershipMiddleware answers the account's requests once
-// its deletion has begun, or 500 when the account could not be looked up.
+// its deletion has begun, 500 when the account could not be looked up, or
+// 503 while this server does not hold its presence lock (presenceLost).
 // The lookup does not end with the request: a deletion cancels the request
 // when it begins, and one that is then refused leaves the account there, its
 // upload to finish.
 func (s *Server) refuseUnlessAccountFilesWritable(w http.ResponseWriter, r *http.Request, user string) bool {
+	if s.presenceLost() {
+		writeServerReconnecting(w)
+		return false
+	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
 	defer cancel()
 	ok, err := s.accountFilesWritable(ctx, user)

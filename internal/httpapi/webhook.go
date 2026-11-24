@@ -63,9 +63,10 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	// Draining (#278): once graceful shutdown begins, admit no new turns.
-	if s.IsDraining() {
-		http.Error(w, "server is shutting down", http.StatusServiceUnavailable)
+	// Draining (#278): once graceful shutdown begins, admit no new turns;
+	// nor while the server does not hold its presence lock (presenceLost).
+	if err := s.notTakingTurns(); err != nil {
+		writeNotTakingTurns(w, err)
 		return
 	}
 

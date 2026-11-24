@@ -72,6 +72,9 @@ type Store struct {
 	// keeps every chat upload, even when an earlier start completed the
 	// record: each start first records messages added since the last one.
 	uploadRefsScanned atomic.Bool
+	// presenceLost is set while this server's presence lock connection has
+	// dropped and the lock is not held again yet (ServerPresenceLost).
+	presenceLost atomic.Bool
 	// tokenCipher encrypts the per-user remote-MCP OAuth secrets at rest (#443).
 	// nil = the remote-MCP-OAuth feature is disabled (no FLEET_MCP_OAUTH_ENCRYPTION_KEY);
 	// the token CRUD then fails closed via secretbox.ErrNoCipher rather than

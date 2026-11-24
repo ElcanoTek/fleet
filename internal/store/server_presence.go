@@ -30,6 +30,14 @@ import (
 //     replaced. A row older than serverHeartbeatFresh (a crashed server's)
 //     blocks nobody.
 //
+// A server whose lock connection drops (the database restarted, say) admits
+// no account work until it holds the lock again (ServerPresenceLost): a CLI
+// deletion may have taken it exclusive meanwhile. It tries to take the lock
+// again every serverPresenceRetry, writing its heartbeat on every try, and a
+// CLI deletion that took the lock looks at the heartbeats once more after
+// serverPresenceGrace, longer than a server takes to notice the drop, before
+// it deletes anything (ExcludeServers): so the two never run together.
+//
 // Advisory locks and the row are per database, so neither depends on a unit
 // name, a port or a host; the row is stamped with the database's clock.
 const serverPresenceLockKey int64 = 0x464c545f53525652 // "FLT_SRVR"
@@ -41,7 +49,18 @@ var ErrServerRunning = errors.New("a fleet server is running against this databa
 var (
 	// serverPresenceCheck is how often the held lock's connection is
 	// checked; a connection found dead is replaced and the lock taken again.
-	serverPresenceCheck = 15 * time.Second
+	serverPresenceCheck = time.Second
+	// serverPresencePing bounds one check of the lock's connection, and one
+	// try to take the lock again or write the heartbeat while it is lost.
+	serverPresencePing = 2 * time.Second
+	// serverPresenceRetry is how often a server whose lock connection
+	// dropped tries to take the lock again.
+	serverPresenceRetry = 500 * time.Millisecond
+	// serverPresenceGrace is how long a CLI deletion holds the lock before
+	// it looks at the heartbeats a second time: longer than a running server
+	// takes to notice its lock connection dropped (serverPresenceCheck plus
+	// serverPresencePing) and write its heartbeat (serverPresenceRetry).
+	serverPresenceGrace = 5 * time.Second
 	// serverHeartbeatEvery is how often a running server writes its row.
 	serverHeartbeatEvery = 15 * time.Second
 	// serverHeartbeatFresh is how recent a row must be to block a CLI
@@ -83,7 +102,7 @@ func (s *Store) HoldServerPresence(ctx context.Context) (release func(), err err
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		s.keepPresenceLock(life, conn)
+		s.keepPresenceLock(life, conn, instance)
 	}()
 	go func() {
 		defer wg.Done()
@@ -153,38 +172,77 @@ func (s *Store) unlockPresence(ctx context.Context, conn *sql.Conn) {
 	_ = conn.Close()
 }
 
+// ServerPresenceLost reports whether this server's presence lock connection
+// dropped and the lock has not been taken again yet (HoldServerPresence).
+// Meanwhile a CLI deletion may hold the lock exclusive, so the server admits
+// no account work. False on a store that holds no presence.
+func (s *Store) ServerPresenceLost() bool {
+	if s == nil {
+		return false
+	}
+	return s.presenceLost.Load()
+}
+
 // keepPresenceLock holds conn (and with it the lock) until ctx ends, then
-// unlocks it. A connection found dead is discarded and the lock taken again
-// on a new one; meanwhile the heartbeat row keeps CLI deletions refused.
-func (s *Store) keepPresenceLock(ctx context.Context, conn *sql.Conn) {
+// unlocks it. Its connection is checked every serverPresenceCheck; one found
+// dead is discarded, ServerPresenceLost reports true, and the lock is taken
+// again on a new connection (retakePresenceLock) before it reports false.
+func (s *Store) keepPresenceLock(ctx context.Context, conn *sql.Conn, instance string) {
+	defer s.presenceLost.Store(false)
 	t := time.NewTicker(serverPresenceCheck)
 	defer t.Stop()
 	for {
 		select {
 		case <-ctx.Done():
-			if conn != nil {
-				s.unlockPresence(ctx, conn)
-			}
+			s.unlockPresence(ctx, conn)
 			return
 		case <-t.C:
-			if conn != nil {
-				pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-				err := conn.PingContext(pingCtx)
-				cancel()
-				if err == nil || ctx.Err() != nil {
-					continue
-				}
-				logging.From(ctx).Warn("server presence lock: its connection dropped; taking the lock again", "err", err)
-				discardSQLConn(conn)
-				conn = nil
+		}
+		pingCtx, cancel := context.WithTimeout(ctx, serverPresencePing)
+		err := conn.PingContext(pingCtx)
+		cancel()
+		if err == nil || ctx.Err() != nil {
+			continue
+		}
+		s.presenceLost.Store(true)
+		logging.From(ctx).Warn("server presence lock: its connection dropped; account work is refused until the lock is taken again", "err", err)
+		discardSQLConn(conn)
+		if conn = s.retakePresenceLock(ctx, instance); conn == nil {
+			return
+		}
+		s.presenceLost.Store(false)
+		logging.From(ctx).Info("server presence lock: taken again; account work is admitted again")
+	}
+}
+
+// retakePresenceLock takes the lock again after its connection dropped,
+// trying every serverPresenceRetry until it has it, or ctx ends (nil), and
+// writes the heartbeat row once it has it. A try that does not get it writes
+// the row too: a CLI deletion that took the lock exclusive in the meantime
+// then finds a running server when it looks again (ExcludeServers) and lets
+// go, and the next try gets it.
+func (s *Store) retakePresenceLock(ctx context.Context, instance string) *sql.Conn {
+	lastLog := time.Now()
+	for {
+		tryCtx, cancel := context.WithTimeout(ctx, serverPresencePing)
+		conn, got, err := s.tryPresenceLock(tryCtx)
+		hbErr := s.heartbeat(tryCtx, instance)
+		cancel()
+		if got {
+			if hbErr != nil && ctx.Err() == nil {
+				logging.From(ctx).Warn("server presence heartbeat: writing it failed; retrying", "err", hbErr)
 			}
-			c, got, err := s.tryPresenceLock(ctx)
-			switch {
-			case err != nil:
-				logging.From(ctx).Warn("server presence lock: taking it again failed; retrying", "err", err)
-			case got:
-				conn = c
-			}
+			return conn
+		}
+		if ctx.Err() != nil {
+			return nil
+		}
+		if time.Since(lastLog) >= serverPresenceWaitLog {
+			logging.From(ctx).Warn("server presence lock: still taking it again; account work stays refused", "err", errors.Join(err, hbErr))
+			lastLog = time.Now()
+		}
+		if !sleepCtx(ctx, serverPresenceRetry) {
+			return nil
 		}
 	}
 }
@@ -226,9 +284,13 @@ func (s *Store) heartbeat(ctx context.Context, instance string) error {
 // ExcludeServers takes the server-presence lock exclusive without waiting, on
 // a connection of its own, and returns the function that releases it. It
 // answers ErrServerRunning, holding nothing, when a fleet server holds the
-// lock or wrote its heartbeat within serverHeartbeatFresh. A CLI account
-// deletion holds it while it runs, so no server runs alongside it — and a
-// server starting meanwhile waits for it (HoldServerPresence).
+// lock or wrote its heartbeat within serverHeartbeatFresh — looked at when it
+// takes the lock and again serverPresenceGrace later, so a server whose lock
+// connection dropped (a database outage longer than serverHeartbeatFresh
+// leaves its row stale) and that has not taken the lock back yet is seen by
+// the heartbeat it writes while it tries. A CLI account deletion holds it
+// while it runs, so no server runs alongside it — and a server starting
+// meanwhile waits for it (HoldServerPresence).
 func (s *Store) ExcludeServers(ctx context.Context) (release func(), err error) {
 	if s == nil || s.db == nil {
 		return func() {}, nil
@@ -255,16 +317,22 @@ func (s *Store) ExcludeServers(ctx context.Context) (release func(), err error) 
 		}
 		_ = conn.Close()
 	}
-	var fresh bool
-	if err := conn.QueryRowContext(ctx,
-		`SELECT EXISTS (SELECT 1 FROM core.server_presence WHERE last_seen > now() - make_interval(secs => $1))`,
-		serverHeartbeatFresh.Seconds()).Scan(&fresh); err != nil {
-		unlock()
-		return nil, fmt.Errorf("server presence check: %w", err)
-	}
-	if fresh {
-		unlock()
-		return nil, ErrServerRunning
+	for look := 0; look < 2; look++ {
+		if look == 1 && !sleepCtx(ctx, serverPresenceGrace) {
+			unlock()
+			return nil, ctx.Err()
+		}
+		var fresh bool
+		if err := conn.QueryRowContext(ctx,
+			`SELECT EXISTS (SELECT 1 FROM core.server_presence WHERE last_seen > now() - make_interval(secs => $1))`,
+			serverHeartbeatFresh.Seconds()).Scan(&fresh); err != nil {
+			unlock()
+			return nil, fmt.Errorf("server presence check: %w", err)
+		}
+		if fresh {
+			unlock()
+			return nil, ErrServerRunning
+		}
 	}
 	var once sync.Once
 	return func() { once.Do(unlock) }, nil

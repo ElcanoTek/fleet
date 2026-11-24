@@ -1349,6 +1349,130 @@ func TestServerPresenceExcludesCLIDeletion(t *testing.T) {
 	}
 }
 
+// takePresenceLockFromTheServer drops the connection a running server holds
+// its presence lock on (as a database restart does) and takes the lock
+// exclusive the moment it is free, as a CLI deletion would, on a connection
+// of its own; it returns the function that lets go. A server quick enough to
+// take its lock back first gets its connection dropped again.
+func takePresenceLockFromTheServer(t *testing.T, s *Store) (letGo func()) {
+	t.Helper()
+	ctx := context.Background()
+	for attempt := 0; attempt < 5; attempt++ {
+		if _, err := s.db.ExecContext(ctx, `
+			SELECT pg_terminate_backend(pid) FROM pg_locks
+			 WHERE locktype = 'advisory' AND granted AND objsubid = 1
+			   AND classid::bigint = $1 AND objid::bigint = $2
+			   AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`,
+			serverPresenceLockKey>>32, serverPresenceLockKey&0xffffffff); err != nil {
+			t.Fatal(err)
+		}
+		conn, err := s.db.Conn(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		deadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(deadline) {
+			var got bool
+			if err := conn.QueryRowContext(ctx, `SELECT pg_try_advisory_lock($1)`, serverPresenceLockKey).Scan(&got); err != nil {
+				t.Fatal(err)
+			}
+			if got {
+				return func() {
+					_, _ = conn.ExecContext(ctx, `SELECT pg_advisory_unlock($1)`, serverPresenceLockKey)
+					_ = conn.Close()
+				}
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		_ = conn.Close()
+	}
+	t.Fatal("never took the presence lock from the server")
+	return nil
+}
+
+// waitPresenceLost waits until s.ServerPresenceLost reports want.
+func waitPresenceLost(t *testing.T, s *Store, want bool) {
+	t.Helper()
+	deadline := time.Now().Add(15 * time.Second)
+	for s.ServerPresenceLost() != want {
+		if time.Now().After(deadline) {
+			t.Fatalf("ServerPresenceLost stayed %v", !want)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// A server whose presence lock connection drops reports its presence lost
+// until it holds the lock again; while a CLI deletion holds the lock
+// exclusive it stays lost (writing its heartbeat, so the CLI's second look
+// sees it), and once the CLI lets go it takes the lock back and reports it
+// held.
+func TestServerPresenceLostUntilTheLockIsTakenAgain(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	ctx := context.Background()
+	release, err := s.HoldServerPresence(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	if s.ServerPresenceLost() {
+		t.Fatal("a server holding its lock reports it lost")
+	}
+	// A long outage: the row is stale, so only a fresh write counts.
+	if _, err := s.db.ExecContext(ctx, `UPDATE core.server_presence SET last_seen = now() - interval '1 minute'`); err != nil {
+		t.Fatal(err)
+	}
+	letGo := takePresenceLockFromTheServer(t, s)
+	waitPresenceLost(t, s, true)
+	time.Sleep(1500 * time.Millisecond)
+	if !s.ServerPresenceLost() {
+		t.Fatal("the server reported its presence held while a CLI deletion held the lock")
+	}
+	var fresh bool
+	if err := s.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM core.server_presence WHERE last_seen > now() - interval '10 seconds')`).Scan(&fresh); err != nil || !fresh {
+		t.Fatalf("no fresh heartbeat from the server taking its lock back (%v, %v)", fresh, err)
+	}
+	letGo()
+	waitPresenceLost(t, s, false)
+	var got bool
+	if err := s.db.QueryRowContext(ctx, `SELECT pg_try_advisory_lock($1)`, serverPresenceLockKey).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got {
+		_, _ = s.db.ExecContext(ctx, `SELECT pg_advisory_unlock($1)`, serverPresenceLockKey)
+		t.Fatal("the server reports its presence held without holding the lock")
+	}
+}
+
+// A CLI deletion looks at the heartbeats again after serverPresenceGrace,
+// holding the lock: a row written meanwhile — a server that lost its lock
+// connection and is taking it back — refuses it, although every row was
+// stale when it took the lock.
+func TestCLIDeletionLooksAgainBeforeDeleting(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	ctx := context.Background()
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO core.server_presence (instance_id, last_seen) VALUES ('reconnecting', now() - interval '1 minute')`); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		unlock, err := s.ExcludeServers(ctx)
+		if unlock != nil {
+			unlock()
+		}
+		done <- err
+	}()
+	time.Sleep(time.Second)
+	if _, err := s.db.ExecContext(ctx, `UPDATE core.server_presence SET last_seen = now()`); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; !errors.Is(err, ErrServerRunning) {
+		t.Fatalf("err %v, want ErrServerRunning from the second look", err)
+	}
+}
+
 // A server whose lock connection dropped still has its heartbeat: a CLI
 // deletion refuses while a row is fresh, even with the lock free, and goes
 // ahead once the row is stale (a crashed server's).

@@ -1483,6 +1483,57 @@ func TestAdminDeleteWithAnUnconfirmedOutcomeHoldsTheFiles(t *testing.T) {
 	}
 }
 
+// presenceStore is the real store whose presence lock this test says is
+// lost or held (store.Store.ServerPresenceLost).
+type presenceStore struct {
+	*store.Store
+	lost *atomic.Bool
+}
+
+func (p presenceStore) ServerPresenceLost() bool { return p.lost.Load() }
+
+// While the server does not hold its presence lock (its connection to the
+// database dropped; a CLI deletion may hold the lock), account work is
+// refused with 503 and Retry-After: requests through the membership check,
+// and the upload writer. Once the lock is held again it is admitted.
+func TestAccountWorkRefusedWhileTheServerPresenceIsLost(t *testing.T) {
+	t.Parallel()
+	s := memberFixture(t, "u@x.com")
+	att := t.TempDir()
+	s.cfg.EmailAttachmentDir = att
+	lost := new(atomic.Bool)
+	lost.Store(true)
+	s.store = presenceStore{Store: s.concreteStore(t), lost: lost}
+	upload := func() *httptest.ResponseRecorder {
+		body, ct := multipartBody(t, map[string][]byte{"report.csv": []byte("a,b\n")})
+		req := httptest.NewRequestWithContext(asUser(context.Background(), "u@x.com"), http.MethodPost, "/attachments", body)
+		req.Header.Set("Content-Type", ct)
+		w := httptest.NewRecorder()
+		s.postAttachments(w, req)
+		return w
+	}
+
+	w := do(t, s.Routes(), http.MethodGet, "/auth/membership", nil, "u@x.com")
+	if w.Code != http.StatusServiceUnavailable || w.Header().Get("Retry-After") == "" ||
+		strings.TrimSpace(w.Body.String()) != errServerReconnecting.Error() {
+		t.Fatalf("membership: status %d (Retry-After %q) body %q, want 503 %q", w.Code, w.Header().Get("Retry-After"), w.Body.String(), errServerReconnecting)
+	}
+	if w := upload(); w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("upload writer: status %d body %s, want 503", w.Code, w.Body.String())
+	}
+	if _, err := os.Stat(accountdelete.UploadsDir(att, "u@x.com")); !os.IsNotExist(err) {
+		t.Fatalf("the upload writer wrote while the presence was lost (stat err %v)", err)
+	}
+
+	lost.Store(false)
+	if w := do(t, s.Routes(), http.MethodGet, "/auth/membership", nil, "u@x.com"); w.Code != http.StatusOK {
+		t.Fatalf("membership once the lock is held again: status %d body %s", w.Code, w.Body.String())
+	}
+	if w := upload(); w.Code != http.StatusOK {
+		t.Fatalf("upload once the lock is held again: status %d body %s", w.Code, w.Body.String())
+	}
+}
+
 // blockingDeleteStore is the real store with a DeleteUser that never finishes
 // on its own: it returns only when its context ends.
 type blockingDeleteStore struct{ *store.Store }

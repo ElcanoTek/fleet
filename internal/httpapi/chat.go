@@ -747,8 +747,11 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	// Explicit cancellation (the Stop button) routes through
 	// POST /conversations/{id}/cancel, which fires the cancel func we
 	// register here.
-	if s.IsDraining() {
-		fail(http.StatusServiceUnavailable, errors.New("server is shutting down"))
+	// Shutting down, or (presenceLost) a CLI account deletion may hold the
+	// presence lock: no turn starts, and a drained row goes back to the
+	// queue to be tried again.
+	if err := s.notTakingTurns(); err != nil {
+		fail(http.StatusServiceUnavailable, err)
 		return true
 	}
 	steer := newSteerMailbox(s.store, user, conv.ID, "", nil)

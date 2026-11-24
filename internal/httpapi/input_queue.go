@@ -488,6 +488,10 @@ func (s *Server) maybeDrainQueue(convID string) {
 		}
 		return // rows stay durable; boot recovery re-queues, never auto-runs
 	}
+	if s.presenceLost() {
+		s.rekickDrainAfter(convID, 3*time.Second)
+		return // no turn starts until the presence lock is held again
+	}
 	if s.stopSweepPending(convID) {
 		return // a Stop is sweeping the queue; endStopSweep re-kicks
 	}

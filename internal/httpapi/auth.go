@@ -228,6 +228,13 @@ func roleFromCtx(ctx context.Context) string {
 // (rejectViewerWrites, adminMiddleware) don't re-query.
 func (s *Server) membershipMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// While this server does not hold its presence lock (its connection
+		// to the database dropped and the lock is not taken again yet), a CLI
+		// account deletion may hold it: no account work is admitted.
+		if s.presenceLost() {
+			writeServerReconnecting(w)
+			return
+		}
 		ctx := r.Context()
 		p, _ := principal.From(ctx)
 
@@ -326,6 +333,54 @@ func (s *Server) bindUserKey(ctx context.Context, keyID string, account *identit
 		logging.From(ctx).Error("user key: binding to its account failed", "key_id", keyID, "err", err)
 	}
 	return err
+}
+
+// errServerReconnecting answers account work while this server does not hold
+// its presence lock (presenceLost).
+var errServerReconnecting = errors.New("the server is reconnecting to its database; try again")
+
+// presenceLost reports whether this server's presence lock connection dropped
+// and the lock is not held again yet (store.Store.ServerPresenceLost): a CLI
+// account deletion may hold it exclusive meanwhile, so the server admits no
+// account work — requests through membershipMiddleware, the upload writer,
+// turn starts and queue drains, webhook turns. False for a store that holds
+// no presence.
+func (s *Server) presenceLost() bool {
+	q, ok := s.store.(interface{ ServerPresenceLost() bool })
+	return ok && q.ServerPresenceLost()
+}
+
+// writeServerReconnecting answers 503 with Retry-After while presenceLost.
+func writeServerReconnecting(w http.ResponseWriter) {
+	w.Header().Set("Retry-After", "2")
+	http.Error(w, errServerReconnecting.Error(), http.StatusServiceUnavailable)
+}
+
+// errServerShuttingDown answers a turn asked for once graceful shutdown has
+// begun (#278).
+var errServerShuttingDown = errors.New("server is shutting down")
+
+// notTakingTurns is why no turn starts now: the server is shutting down
+// (IsDraining), or it does not hold its presence lock (presenceLost). nil
+// while turns start.
+func (s *Server) notTakingTurns() error {
+	switch {
+	case s.IsDraining():
+		return errServerShuttingDown
+	case s.presenceLost():
+		return errServerReconnecting
+	}
+	return nil
+}
+
+// writeNotTakingTurns answers a request refused by notTakingTurns: 503, with
+// Retry-After while the server reconnects.
+func writeNotTakingTurns(w http.ResponseWriter, err error) {
+	if errors.Is(err, errServerReconnecting) {
+		writeServerReconnecting(w)
+		return
+	}
+	http.Error(w, err.Error(), http.StatusServiceUnavailable)
 }
 
 // errKeyStoreBusy is the answer to a not-yet-bound user key whose binding

@@ -247,7 +247,20 @@ advises on each demoted split admin, unknown role and duplicate username in it.
   exclusive (`store.ExcludeServers`) and also refuses while any heartbeat is
   younger than 45 seconds — which covers a server whose lock connection
   dropped and is being replaced, while a crashed server's row stops counting
-  after those 45 seconds. Both are per database, so the check does not depend
+  after those 45 seconds. A server checks its lock connection every second.
+  From the moment it finds it dropped (a database outage or restart) until
+  it holds the lock again, it admits no account work: requests through the
+  membership check, the upload writer and webhook turns are answered 503
+  with Retry-After (`the server is reconnecting to its database; try
+  again`), and no turn starts (a queued message waits, and is tried again
+  every few seconds). It tries to take the lock again every half second and
+  writes its heartbeat on every try. The CLI, once it holds the lock, looks
+  at the heartbeats a second time five seconds later, before it deletes
+  anything: a server that lost its lock in an outage longer than 45 seconds
+  (its row stale) and has not taken it back yet is seen by the heartbeat it
+  writes meanwhile, and the CLI lets go and refuses; the server then takes
+  the lock. So a CLI deletion and a server never run together, also after
+  an outage. Both are per database, so the check does not depend
   on a unit name, a port or a host. Two CLI deletions do not overlap
   either: the second finds the lock taken and is refused the same way. A
   server starting while a CLI deletion
