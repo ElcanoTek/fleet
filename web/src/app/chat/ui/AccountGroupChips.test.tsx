@@ -65,6 +65,19 @@ describe("AccountGroupChips", () => {
     expect(arena).not.toHaveAttribute("aria-disabled");
   });
 
+  it("says when the house account is out of reach because the user's default is a named one", () => {
+    const house: AccountGroups = {
+      label: "Clients",
+      groups: [{ id: "house", name: "House", accounts: [{ server: "ix", account: "", status: "ok" }, { server: "ox", account: "", status: "ok" }] }],
+    };
+    const mine = [{ ...rows[0], default_account: "twc" }, rows[1]];
+    render(<AccountGroupChips accountGroups={house} rows={mine} query="" appName="Elcano" onApply={() => {}} />);
+    expect(screen.getByRole("button", { name: /House/ })).toHaveAttribute(
+      "title",
+      "Not set up here: Index Exchange (your default account there is twc, not Elcano).",
+    );
+  });
+
   it("a group with nothing usable here cannot be pressed", () => {
     const onApply = vi.fn();
     render(<AccountGroupChips accountGroups={groups} rows={rows} query="" appName="Elcano" onApply={onApply} />);

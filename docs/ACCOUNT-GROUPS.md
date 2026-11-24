@@ -88,7 +88,9 @@ change of the rows (`accountGroupState`) and answers each chip from that, so a
 bundle with hundreds of groups costs one pass, not one pass per chip.
 
 - **A group is on** when every member that can be used here is: its connector
-  is on in this chat and runs as that account.
+  is on in this chat and runs as that account. Accounts are compared by name:
+  for a user who set a named default under Settings → Connections, a row on
+  "my default" runs as that account, so a group that names it is on.
 - **Turning a group on** switches its connectors on with its accounts. On a
   connector no other group that is on names, or one that was off, the group's
   accounts replace whatever it had, so the first client replaces the
@@ -112,6 +114,10 @@ A group with a member that is not `ok` is flagged with a warning icon, and its
 tooltip and accessible name say which connectors or accounts are missing. A
 click still applies the members that can be used. A group with none is
 disabled.
+
+A member on the deployment's own account (`account: ""`) cannot be used by a
+user whose Settings default for that connector is a named account: "my default"
+would run as that account under this group's name. The chip says so.
 
 A missing member is never replaced by the default account. That would run a
 client's request on the deployment's own account under the client's name.

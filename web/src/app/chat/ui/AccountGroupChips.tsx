@@ -41,11 +41,17 @@ function chipNote(
   const missing = unusableMembersIn(state, group);
   if (missing.length > 0) {
     const list = missing
-      .map((m) =>
-        m.status === "account_missing" || state.rowsByName.has(m.server)
+      .map((m) => {
+        const row = state.rowsByName.get(m.server);
+        // The deployment's own account, for a user whose Settings default
+        // there is a named one: say so, it is not a setup gap.
+        if (m.account === "" && row?.default_account) {
+          return tr("{0} (your default account there is {1}, not {2})", [name(m.server), row.default_account, appName]);
+        }
+        return m.status === "account_missing" || row
           ? tr("{0} (account {1})", [name(m.server), m.account || appName])
-          : name(m.server),
-      )
+          : name(m.server);
+      })
       .join(", ");
     notes.push(tr("Not set up here: {0}.", [list]));
   }

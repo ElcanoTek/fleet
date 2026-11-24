@@ -261,6 +261,7 @@
   "Account for this chat": "Cuenta para este chat",
   "Account for {0}": "Cuenta para {0}",
   "Account for {0}: {1}": "Cuenta para {0}: {1}",
+  "{0} (your default account there is {1}, not {2})": "{0} (tu cuenta predeterminada ahí es {1}, no {2})",
   "Account groups": "Grupos de cuentas",
   "{0} (account {1})": "{0} (cuenta {1})",
   "Not set up here: {0}.": "Sin configurar aquí: {0}.",

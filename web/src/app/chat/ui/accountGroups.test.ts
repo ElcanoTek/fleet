@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   accountGroupState,
+  effectiveAccounts,
   groupChangeBlock,
   isGroupOn,
   matchingGroups,
@@ -164,6 +165,39 @@ describe("toggleAccountGroup", () => {
     const none: AccountGroup = { id: "n", name: "N", accounts: [{ server: "gone", account: "x" }] };
     expect(toggleAccountGroup(rows(), [none], none)).toEqual({ ok: false, reason: "unusable" });
     expect(isGroupOn(none, rows())).toBe(false);
+  });
+});
+
+// A user who chose a named default under Settings → Connections runs a
+// connector as that account while its row still reads "" ("my default").
+describe("a named default account", () => {
+  const named = (): GroupRow[] => [
+    { name: "ix", enabled: true, accounts: ["arena", "twc"], default_account: "twc" },
+    { name: "ox", enabled: true, accounts: ["twc"], default_account: "twc" },
+    { name: "pm", enabled: true, accounts: ["arena"] },
+  ];
+
+  it("a group that names the default account is on", () => {
+    expect(effectiveAccounts(named()[0])).toEqual(["twc"]);
+    expect(isGroupOn(twc, named())).toBe(true);
+  });
+
+  it("a second group adds beside it, by name", () => {
+    const after = apply(named(), arena);
+    expect(state(after)).toMatchObject({ ix: ["arena", "twc"], pm: ["arena"] });
+    expect(isGroupOn(twc, after)).toBe(true);
+  });
+
+  it("turning the group off removes the default account too", () => {
+    expect(state(apply(named(), twc))).toMatchObject({ ix: "off", ox: "off" });
+    const both = apply(named(), arena);
+    expect(state(apply(both, twc))).toMatchObject({ ix: ["arena"], ox: "off" });
+  });
+
+  it("a member on the deployment's own account cannot be used: it would run as the named default", () => {
+    const house: AccountGroup = { id: "house", name: "House", accounts: [{ server: "ix", account: "" }, { server: "pm", account: "" }] };
+    expect(usableMembers(house, named())).toEqual([{ server: "pm", account: "" }]);
+    expect(unusableMembers(house, named())).toEqual([{ server: "ix", account: "" }]);
   });
 });
 

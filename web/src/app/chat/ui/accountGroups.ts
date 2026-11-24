@@ -36,6 +36,9 @@ export type AccountGroups = {
 /** The part of a catalog row the group rules read and write. */
 export type GroupRow = AccountRow & {
   enabled: boolean;
+  /** The user's Settings default for this connector; "" / absent = the
+   *  deployment's own account. */
+  default_account?: string;
   always_on?: boolean;
   status?: "available" | "needs_setup" | "unavailable";
 };
@@ -46,6 +49,22 @@ function switchable(row: GroupRow | undefined): row is GroupRow {
 }
 
 const key = (server: string, account: string) => `${server}\u0000${account}`;
+
+/**
+ * The accounts a row runs as, by name. A row's "" is "my default", and a user
+ * who chose a named default under Settings → Connections runs as THAT account,
+ * so it is the name a group's member has to be compared with. "" stays ""
+ * only for a user with no named default: the deployment's own account.
+ */
+export function effectiveAccounts(row: GroupRow): string[] {
+  const named = row.default_account ?? "";
+  const out: string[] = [];
+  for (const a of selectedAccounts(row)) {
+    const account = a === "" ? named : a;
+    if (!out.includes(account)) out.push(account);
+  }
+  return out;
+}
 
 /**
  * Everything the chips need to know about the groups against the picker's
@@ -73,7 +92,11 @@ function usableIn(group: AccountGroup, rowsByName: ReadonlyMap<string, GroupRow>
     if (m.status && m.status !== "ok") return false;
     const row = rowsByName.get(m.server);
     if (!switchable(row)) return false;
-    return m.account === "" || (row.accounts ?? []).includes(m.account);
+    // The deployment's own account cannot be picked by a user whose default
+    // is a named one: "" would run as that default, another account under
+    // this group's name.
+    if (m.account === "") return !row.default_account;
+    return (row.accounts ?? []).includes(m.account);
   });
 }
 
@@ -88,7 +111,7 @@ export function accountGroupState<T extends GroupRow>(
     if (!row || !row.enabled) return false;
     let set = chosen.get(server);
     if (!set) {
-      set = new Set(selectedAccounts(row));
+      set = new Set(effectiveAccounts(row));
       chosen.set(server, set);
     }
     return set.has(account);
@@ -171,7 +194,7 @@ function planGroupChange(state: AccountGroupState, group: AccountGroup): GroupPl
       // is one of those recorded, so "another" is more than one.
       accounts.set(
         server,
-        selectedAccounts(row).filter((a) => !mine.includes(a) || (state.onByMember.get(key(server, a)) ?? 0) > 1),
+        effectiveAccounts(row).filter((a) => !mine.includes(a) || (state.onByMember.get(key(server, a)) ?? 0) > 1),
       );
     }
     return { ok: true, turnOff: true, accounts };
@@ -184,7 +207,7 @@ function planGroupChange(state: AccountGroupState, group: AccountGroup): GroupPl
     // or one picked by hand), and the group replaces it. The group itself is
     // off, so every on-group counted here is another one.
     const replace = !row.enabled || (state.onByServer.get(server) ?? 0) === 0;
-    const merged = replace ? mine : [...new Set([...selectedAccounts(row), ...mine])];
+    const merged = replace ? mine : [...new Set([...effectiveAccounts(row), ...mine])];
     if (merged.length > MAX_ACCOUNTS_PER_CONNECTOR) return { ok: false, reason: "cap", server };
     accounts.set(server, merged);
   }
