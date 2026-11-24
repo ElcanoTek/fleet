@@ -1264,6 +1264,111 @@ func TestUploadRefusedForAnAccountBeingDeletedOrGone(t *testing.T) {
 	})
 }
 
+// seedAccountTrees writes a file in email's upload tree and in its private
+// workspace tree of one conversation under att, and returns the directories
+// those trees sit in.
+func seedAccountTrees(t *testing.T, att, email string) (uploadsParent, participants string) {
+	t.Helper()
+	uploads := accountdelete.UploadsDir(att, email)
+	participants = filepath.Join(accountdelete.PrivateWorkspaceRoot(att), "conv-1", "participants")
+	for _, f := range []string{filepath.Join(uploads, "tok", "f.txt"), filepath.Join(participants, accountdelete.Digest(email), "f.txt")} {
+		if err := os.MkdirAll(filepath.Dir(f), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(f, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return filepath.Dir(uploads), participants
+}
+
+// assertNoTreeUnder fails when a tree of email, or one set aside, is left in
+// any of dirs.
+func assertNoTreeUnder(t *testing.T, email string, dirs ...string) {
+	t.Helper()
+	for _, dir := range dirs {
+		entries, _ := os.ReadDir(dir)
+		for _, e := range entries {
+			if e.Name() == accountdelete.Digest(email) || accountdelete.IsAside(e.Name()) {
+				t.Errorf("%s is left in %s", e.Name(), dir)
+			}
+		}
+	}
+}
+
+// The server runs one deletion of an account at a time: a second one while
+// the first runs is refused with 409 and changes nothing; the first deletes
+// the account and its trees; tried again, the second finds the account gone.
+func TestSecondDeletionOfAnAccountWhileOneRunsIsRefused(t *testing.T) {
+	t.Parallel()
+	s := memberFixture(t, "boss@x.com", "boss2@x.com", "u@x.com")
+	setRole(t, s, "boss@x.com", "admin", "")
+	setRole(t, s, "boss2@x.com", "admin", "")
+	att := t.TempDir()
+	s.cfg.EmailAttachmentDir = att
+	uploadsParent, participants := seedAccountTrees(t, att, "u@x.com")
+	stopped, proceed := make(chan struct{}), make(chan struct{})
+	s.afterAccountWorkStopped = func() {
+		close(stopped)
+		<-proceed
+	}
+	h := s.Routes()
+	first := make(chan *httptest.ResponseRecorder, 1)
+	go func() { first <- do(t, h, http.MethodDelete, "/admin/users/u@x.com", nil, "boss@x.com") }()
+	<-stopped
+
+	w := do(t, h, http.MethodDelete, "/admin/users/U@x.com", nil, "boss2@x.com")
+	if w.Code != http.StatusConflict || strings.TrimSpace(w.Body.String()) != errAccountDeletionRunning {
+		t.Fatalf("second deletion: status %d body %q, want 409 %q", w.Code, w.Body.String(), errAccountDeletionRunning)
+	}
+	close(proceed)
+	if w := <-first; w.Code != http.StatusNoContent {
+		t.Fatalf("first deletion: status %d body %s, want 204", w.Code, w.Body.String())
+	}
+	assertNoTreeUnder(t, "u@x.com", uploadsParent, participants)
+	if w := do(t, h, http.MethodDelete, "/admin/users/u@x.com", nil, "boss2@x.com"); w.Code != http.StatusNotFound {
+		t.Fatalf("the second deletion tried again: status %d body %s, want 404", w.Code, w.Body.String())
+	}
+}
+
+// racingDeleteStore is the real store in which another deletion of the
+// account (a whole accountdelete.Delete, as another process would run it)
+// commits right before this deletion's own database step.
+type racingDeleteStore struct {
+	*store.Store
+	att   string
+	other chan error
+}
+
+func (r racingDeleteStore) DeleteAccount(ctx context.Context, email, expectedID string) (string, error) {
+	_, err := accountdelete.Delete(ctx, r.Store, email, accountdelete.Options{AttachmentDir: r.att})
+	r.other <- err
+	return r.Store.DeleteAccount(ctx, email, expectedID)
+}
+
+// Two deletions of one account at once that this server's claim does not
+// serialise (another process ran one): exactly one commits, and the one that
+// finds the account gone at its database step removes the trees it had moved
+// aside instead of putting them back, so nothing is left under the address.
+func TestDeletionThatLosesARaceLeavesNoTreeUnderTheAddress(t *testing.T) {
+	t.Parallel()
+	s := memberFixture(t, "boss@x.com", "u@x.com")
+	setRole(t, s, "boss@x.com", "admin", "")
+	att := t.TempDir()
+	s.cfg.EmailAttachmentDir = att
+	uploadsParent, participants := seedAccountTrees(t, att, "u@x.com")
+	other := make(chan error, 1)
+	s.store = racingDeleteStore{Store: s.concreteStore(t), att: att, other: other}
+	w := do(t, s.Routes(), http.MethodDelete, "/admin/users/u@x.com", nil, "boss@x.com")
+	if err := <-other; err != nil {
+		t.Fatalf("the other deletion: %v", err)
+	}
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("this deletion: status %d body %s, want 404 (the other one deleted the account)", w.Code, w.Body.String())
+	}
+	assertNoTreeUnder(t, "u@x.com", uploadsParent, participants)
+}
+
 // blockingDeleteStore is the real store with a DeleteUser that never finishes
 // on its own: it returns only when its context ends.
 type blockingDeleteStore struct{ *store.Store }

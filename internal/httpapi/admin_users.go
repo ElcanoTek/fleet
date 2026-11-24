@@ -130,6 +130,15 @@ func (s *Server) handleAdminUserDelete(w http.ResponseWriter, r *http.Request, e
 		http.Error(w, "refusing to delete your own account", http.StatusBadRequest)
 		return
 	}
+	// One deletion of an account at a time: a second one while the first
+	// runs is refused (409) and changes nothing; tried again once the first
+	// is over, it finds that one's outcome (404 when the account is gone).
+	release, ok := s.accounts.claimDeletion(email)
+	if !ok {
+		http.Error(w, errAccountDeletionRunning, http.StatusConflict)
+		return
+	}
+	defer release()
 	// What the deletion would refuse is refused before the account's running
 	// work is stopped; DeleteUser checks again in its own transaction.
 	if pf, ok := s.store.(interface {
@@ -227,6 +236,10 @@ func (s *Server) handleAdminUserDelete(w http.ResponseWriter, r *http.Request, e
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
+
+// errAccountDeletionRunning answers a deletion of an account another
+// deletion of it is already running for (accountGate.claimDeletion).
+const errAccountDeletionRunning = "a deletion of this account is already running"
 
 // errAccountWorkStillRunning answers a deletion refused because some of the
 // account's requests or turns had not ended within accountDrainTimeout.

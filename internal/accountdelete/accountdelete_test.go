@@ -358,6 +358,76 @@ func TestDeleteThatDoesNotCommitPutsTheFilesBack(t *testing.T) {
 	}
 }
 
+// racedStore is a store in which another deletion of the account commits
+// between this deletion's read and its own database step: the first read
+// finds the account, every read after it finds after (or afterErr), and the
+// database step fails with fakeStore.err.
+type racedStore struct {
+	fakeStore
+	reads    int
+	after    string
+	afterErr error
+}
+
+func (s *racedStore) AccountForDeletion(context.Context, string) (string, error) {
+	s.reads++
+	if s.reads == 1 {
+		return "deleted-account-id", nil
+	}
+	return s.after, s.afterErr
+}
+
+// A deletion whose database step fails because another deletion of the
+// account committed meanwhile removes the trees it moved aside instead of
+// putting them back: the address no longer holds the account they belong
+// to. The same when a new account holds the address by then, or when whether
+// the account is still there cannot be read. The server's marks stay.
+func TestDeleteAfterAnotherDeletionRemovesTheTreesItMovedAside(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name     string
+		after    string
+		afterErr error
+		err      error
+	}{
+		{"the account is gone", "", errors.New("user not found"), errors.New("user not found")},
+		{"a new account holds the address", "new-account-id", nil, errors.New("the account changed while it was being deleted")},
+		{"the account cannot be read", "", errors.New("connection refused"), errors.New("statement timeout")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			att := t.TempDir()
+			files := seedFiles(t, att, "gone@x.com")
+			st := &racedStore{fakeStore: fakeStore{err: tc.err}, after: tc.after, afterErr: tc.afterErr}
+			undone := false
+			_, err := Delete(context.Background(), st, "gone@x.com", Options{Keys: &fakeKeys{}, AttachmentDir: att,
+				ServerSetAside: func(email string) ([]AsideTree, func(), error) {
+					aside, err := setAsidePrivateWorkspaces(PrivateWorkspaceRoot(att), email)
+					return aside, func() { undone = true }, err
+				}})
+			if !errors.Is(err, tc.err) {
+				t.Fatalf("err = %v, want the database's %v", err, tc.err)
+			}
+			for _, f := range files {
+				if _, err := os.Stat(f); !os.IsNotExist(err) {
+					t.Errorf("%s is under the address again (stat err %v)", f, err)
+				}
+			}
+			for _, dir := range []string{filepath.Join(att, "uploads"), filepath.Join(PrivateWorkspaceRoot(att), "conv-1", "participants"), filepath.Join(PrivateWorkspaceRoot(att), "conv-2", "participants")} {
+				entries, _ := os.ReadDir(dir)
+				for _, e := range entries {
+					if IsAside(e.Name()) {
+						t.Errorf("%s was left aside in %s", e.Name(), dir)
+					}
+				}
+			}
+			if undone {
+				t.Error("the server's marks were taken back")
+			}
+		})
+	}
+}
+
 // A tree written under the address after the account's trees were moved
 // aside — by something racing the deletion — is found after the commit and
 // removed while no account holds the address. Not parallel: it uses

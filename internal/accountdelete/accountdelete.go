@@ -38,6 +38,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/ElcanoTek/fleet/internal/identity"
 )
@@ -199,7 +200,8 @@ var afterDatabaseDeletion func()
 // address for those steps to tell apart: its keys are bound to its id first
 // and only those go (Keys.DeleteUserKeys), and its upload and private
 // workspace trees are moved aside (SetAside) while it still exists — then
-// removed after the commit, or moved back if the deletion does not commit.
+// removed after the commit, or moved back if the deletion does not commit
+// and the address still holds the account (settleUncommitted).
 // A tree that cannot be moved aside stops the deletion before anything is
 // deleted (*FilesNotSetAsideError); one written under the address after the
 // move is removed after the commit while no account has its digest
@@ -228,7 +230,7 @@ func Delete(ctx context.Context, st Store, email string, opt Options) (Result, e
 	}
 	accountID, err := st.DeleteAccount(ctx, email, id)
 	if err != nil {
-		return res, rollBackSetAside(err, aside, undo)
+		return res, settleUncommitted(ctx, st, email, id, err, aside, undo)
 	}
 	if afterDatabaseDeletion != nil {
 		afterDatabaseDeletion()
@@ -307,6 +309,33 @@ func (e *FilesNotSetAsideError) Error() string {
 }
 
 func (e *FilesNotSetAsideError) Unwrap() error { return e.Err }
+
+// settleUncommitted handles a database deletion that did not commit (err).
+// The trees moved aside go back only while the address still holds the same
+// account (id). When it does not — another deletion of the account committed
+// meanwhile (DeleteAccount then reports store.ErrUserNotFound, or
+// store.ErrAccountChanged once a new account holds the address) — or when
+// that cannot be read, they are removed, as that deletion's own cleanup would
+// have done: put back, they would be the deleted account's files under the
+// address, for an account created under it later to find. The server's marks
+// stay then too, so a turn of the account still swapping does not stash its
+// files back. err is returned, with what could not be put back or removed.
+func settleUncommitted(ctx context.Context, st Store, email, id string, err error, aside []AsideTree, undo func()) error {
+	// Its own deadline: err may be ctx's.
+	checkCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	if cur, cerr := st.AccountForDeletion(checkCtx, email); cerr == nil && cur == id {
+		return rollBackSetAside(err, aside, undo)
+	}
+	var rmErr error
+	for _, t := range aside {
+		rmErr = firstError(rmErr, os.RemoveAll(t.To))
+	}
+	if rmErr != nil {
+		return fmt.Errorf("%w; removing the account's files failed: %w", err, rmErr)
+	}
+	return err
+}
 
 // rollBackSetAside puts the trees moved aside back, takes back the marks the
 // server set (undo), and returns err — with what could not be put back, if

@@ -25,6 +25,9 @@ type accountGate struct {
 	mu     sync.Mutex
 	closed map[string]int // email → closers holding it shut
 	active map[string]map[*gateRequest]struct{}
+	// deleting holds the emails a deletion has claimed (claimDeletion): one
+	// deletion of an account runs at a time in this process.
+	deleting map[string]bool
 	// changed is broadcast whenever a request ends, a wait's deadline passes
 	// or its context ends; every waiter re-checks its own email. One
 	// condition for all emails, so two deletions of one account waiting at
@@ -73,6 +76,32 @@ func (g *accountGate) enter(ctx context.Context, email string) (_ context.Contex
 			delete(g.active, key)
 			g.condLocked().Broadcast()
 		}
+	}, true
+}
+
+// claimDeletion claims email for one deletion. ok is false while another
+// deletion of it runs in this process; release ends the claim. Two deletions
+// of one account at once would each move aside, put back or remove the
+// account's trees around the other's commit; one at a time, the second finds
+// the outcome of the first.
+func (g *accountGate) claimDeletion(email string) (release func(), ok bool) {
+	key := gateKey(email)
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.deleting[key] {
+		return func() {}, false
+	}
+	if g.deleting == nil {
+		g.deleting = map[string]bool{}
+	}
+	g.deleting[key] = true
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			g.mu.Lock()
+			defer g.mu.Unlock()
+			delete(g.deleting, key)
+		})
 	}, true
 }
 

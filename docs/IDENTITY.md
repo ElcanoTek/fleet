@@ -202,8 +202,11 @@ advises on each demoted split admin, unknown role and duplicate username in it.
     being deleted` — when the address holds another account by then);
   - its upload tree and its private workspace trees are moved aside (a
     `.removing-<digest>-…` name beside them) while the account still exists
-    and its work is stopped, then removed after the commit — or moved back
-    if the deletion does not commit. A new account's trees start empty. A
+    and its work is stopped, then removed after the commit. If the deletion
+    does not commit they are moved back while the address still holds the
+    same account; when it does not (another deletion of the account
+    committed meanwhile, from another server on the same database, say) or
+    that cannot be read, they are removed instead. A new account's trees start empty. A
     tree that cannot be moved aside (its directory not writable, say), or a
     directory the move must look into that cannot be read (the attachment
     directory included; only one that is not there means nothing to move),
@@ -227,7 +230,9 @@ advises on each demoted split admin, unknown role and duplicate username in it.
   younger than 45 seconds — which covers a server whose lock connection
   dropped and is being replaced, while a crashed server's row stops counting
   after those 45 seconds. Both are per database, so the check does not depend
-  on a unit name, a port or a host. A server starting while a CLI deletion
+  on a unit name, a port or a host. Two CLI deletions do not overlap
+  either: the second finds the lock taken and is refused the same way. A
+  server starting while a CLI deletion
   runs waits for it, without a deadline, before it opens its listeners
   (logging every 30 seconds that it is waiting; a stop signal meanwhile exits
   cleanly). The message says to delete the account from Settings →
@@ -240,7 +245,11 @@ advises on each demoted split admin, unknown role and duplicate username in it.
   digest, and named in a warning (left in place) when an account created
   under the address since holds it.
 
-  **Work in flight.** The web route first refuses what the deletion would
+  **Work in flight.** The server runs one deletion of an account at a time:
+  a second one while the first runs is answered 409 `a deletion of this
+  account is already running` and changes nothing; tried again afterwards,
+  it finds the first one's outcome (404 once the account is gone). The web
+  route first refuses what the deletion would
   refuse (no such account: 404; a team-shared project still owned: 409),
   without touching anything. Then it stops the account's work in this
   process before the rows go: its requests are cancelled and new ones
