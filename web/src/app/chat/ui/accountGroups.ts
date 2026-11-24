@@ -87,6 +87,21 @@ export type AccountGroupState<T extends GroupRow = GroupRow> = {
   onByMember: ReadonlyMap<string, number>;
 };
 
+/**
+ * The catalog's rows by connector name, for looking up a group's members. A
+ * group names bundled connectors, and a hosted connection can carry the same
+ * name as one (its name is the user's own), in which case the catalog lists
+ * both: the bundled row is the one a member means, wherever it sits.
+ */
+function bundledRowsByName<T extends GroupRow>(rows: readonly T[]): Map<string, T> {
+  const out = new Map<string, T>();
+  for (const row of rows) {
+    const held = out.get(row.name);
+    if (!held || (held.remote && !row.remote)) out.set(row.name, row);
+  }
+  return out;
+}
+
 function usableIn(group: AccountGroup, rowsByName: ReadonlyMap<string, GroupRow>): AccountGroupMember[] {
   return group.accounts.filter((m) => {
     if (m.status && m.status !== "ok") return false;
@@ -104,7 +119,7 @@ export function accountGroupState<T extends GroupRow>(
   rows: readonly T[],
   groups: readonly AccountGroup[],
 ): AccountGroupState<T> {
-  const rowsByName = new Map(rows.map((row) => [row.name, row]));
+  const rowsByName = bundledRowsByName(rows);
   const chosen = new Map<string, Set<string>>();
   const runsAs = (server: string, account: string) => {
     const row = rowsByName.get(server);
@@ -142,7 +157,7 @@ export function accountGroupState<T extends GroupRow>(
  * it.
  */
 export function usableMembers(group: AccountGroup, rows: readonly GroupRow[]): AccountGroupMember[] {
-  return usableIn(group, new Map(rows.map((row) => [row.name, row])));
+  return usableIn(group, bundledRowsByName(rows));
 }
 
 /** The members that cannot be used here, for the chip's warning. */
@@ -252,7 +267,9 @@ export function toggleAccountGroupIn<T extends GroupRow>(
   return {
     ok: true,
     rows: state.rows.map((row) => {
-      const accounts = plan.accounts.get(row.name);
+      // Only the row the members were looked up on: a hosted connection of
+      // the same name is someone's own login and is left alone.
+      const accounts = state.rowsByName.get(row.name) === row ? plan.accounts.get(row.name) : undefined;
       if (!accounts) return row;
       if (plan.turnOff) {
         return accounts.length > 0

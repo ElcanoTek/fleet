@@ -168,6 +168,24 @@ describe("toggleAccountGroup", () => {
   });
 });
 
+// A hosted connection's name is the user's own, so it can match a bundled
+// connector's; the catalog then lists both rows.
+describe("a hosted connection named like a bundled connector", () => {
+  const hosted: GroupRow = { name: "ix", enabled: true, remote: true, accounts: ["work"], account: "work" };
+
+  it("the group acts on the bundled row, whichever comes first, and leaves the hosted one alone", () => {
+    for (const list of [[...rows(), hosted], [hosted, ...rows()]]) {
+      expect(usableMembers(twc, list)).toHaveLength(2);
+      const change = toggleAccountGroup(list, groups, twc);
+      if (!change.ok) throw new Error("refused");
+      const after = change.rows;
+      expect(after.find((r) => r.name === "ix" && !r.remote)).toMatchObject({ enabled: true, account: "twc" });
+      expect(after.find((r) => r.remote)).toBe(hosted);
+      expect(isGroupOn(twc, after)).toBe(true);
+    }
+  });
+});
+
 // A user who chose a named default under Settings → Connections runs a
 // connector as that account while its row still reads "" ("my default").
 describe("a named default account", () => {

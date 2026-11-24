@@ -2547,10 +2547,13 @@ export function ChatExperience({
     rows: { name: string; enabled: boolean; account?: string; selected_accounts?: string[] }[],
   ) => {
     const prev = mcpServers;
-    const changed = new Map(rows.map((row) => [row.name, row]));
-    const nextServers = prev.map((s) => {
-      const row = changed.get(s.name);
-      if (!row || (row.enabled === s.enabled && sameAccounts(row, s))) return s;
+    // Row for row: the chips were given these very rows, in this order. Names
+    // alone would not do, since a hosted connection can share a bundled
+    // connector's name. If the catalog changed under the click, do nothing.
+    if (rows.length !== prev.length || rows.some((row, i) => row.name !== prev[i].name)) return;
+    const nextServers = prev.map((s, i) => {
+      const row = rows[i];
+      if (row.enabled === s.enabled && sameAccounts(row, s)) return s;
       return withSelectedAccounts({ ...s, enabled: row.enabled }, selectedAccounts(row));
     });
     if (nextServers.every((row, i) => row === prev[i])) return;
