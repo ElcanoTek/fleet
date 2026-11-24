@@ -94,12 +94,15 @@ func (db *Database) ExpireStrandedWakeTasks(ctx context.Context, grace time.Dura
 // paused_at stamps the park instant (#1116) for one consistent "entered its
 // pause" record across both parked states; the wake expiry itself stays
 // wake_at-driven (wake_at is ALWAYS set), so paused_at joins no wake predicate.
+// finished_run_id records the run that parked (migration 0213), as in
+// PauseTaskForQuestion.
 func (db *Database) PauseTaskForWake(ctx context.Context, taskID, leaseOwner uuid.UUID, wakeAt time.Time, eventKey, note string) (bool, error) {
 	res, err := db.conn.ExecContext(ctx, `
 		UPDATE tasks SET status = 'paused_awaiting_wake',
 			wake_at = $1, wake_event_key = NULLIF($2, ''), wake_note = $3, wake_reason = NULL,
 			wake_cycles = wake_cycles + 1,
 			paused_at = now(),
+			finished_run_id = lease_owner,
 			lease_owner = NULL, lease_expires_at = NULL
 		WHERE id = $4 AND lease_owner = $5 AND status = 'running'`,
 		wakeAt.UTC(), eventKey, note, taskID, leaseOwner)

@@ -261,6 +261,14 @@ type Pool struct {
 	// paused_awaiting_wake (releasing the sandbox/lease) instead of a
 	// terminal write. mu guards it alongside pauseRequested.
 	wakeRequested map[uuid.UUID]tools.WakeSpec
+	// heldTokens are the lease tokens of this pool's claims, from just before
+	// each claim commits until its worker has returned — after the run's
+	// outcome write landed, was refused, or was abandoned at shutdown. Lease
+	// recovery in this process skips rows leased by them (HeldLeaseTokens,
+	// Storage.SetLeaseHolder): a run retrying its outcome through a database
+	// outage longer than the lease must not be re-queued or dead-lettered by
+	// its own process's sweep the moment the database answers. mu guards it.
+	heldTokens map[uuid.UUID]struct{}
 	// stopRequested records WHO asked a task to stop (task ID → operator
 	// label) between StopTask firing the cancel and executeTask classifying
 	// the outcome — the marker that routes the run to the "stopped" terminal
@@ -293,6 +301,31 @@ type Pool struct {
 	// beforeSuccessCommit is a package-private deterministic test seam at the
 	// post-stillOwns/pre-transaction boundary. Production leaves it nil.
 	beforeSuccessCommit func(*models.Task, uuid.UUID)
+
+	// afterOutcomeAttempt is a package-private test seam: it sees each outcome
+	// write attempt's error (nil when the write landed) and returns the error
+	// recordOutcome acts on — how a test loses a COMMIT's result in transit.
+	// Production leaves it nil.
+	afterOutcomeAttempt func(what string, err error) error
+	// afterReadBack is the matching seam for recordOutcome's read-back: it
+	// sees the read's error and returns the one recordOutcome acts on.
+	// Production leaves it nil.
+	afterReadBack func(err error) error
+
+	// The outcome-write retry shape (outcome.go): the bound on one attempt,
+	// the backoff between attempts, and how long writes keep trying after a
+	// force-cancel. NewPool sets the defaults; tests shrink them.
+	outcomeAttemptTimeout time.Duration
+	outcomeRetryBase      time.Duration
+	outcomeRetryMax       time.Duration
+	outcomeShutdownWindow time.Duration
+
+	// forceStop is closed, and forceStopAt stamped, when the pool
+	// force-cancels its runs (the drain grace expired, or ForceCancel). It
+	// opens the one shutdown window that bounds every pending outcome write.
+	forceStop     chan struct{}
+	forceStopOnce sync.Once
+	forceStopAt   atomic.Int64
 
 	// wallTimeout is the resolved per-run wall-clock ceiling (#724). 0 = disabled
 	// (no per-run deadline). See Config.WallClockTimeout.
@@ -354,6 +387,7 @@ func NewPool(store *storage.Storage, runner TaskRunner, cfg Config) *Pool {
 		drainGrace:         grace,
 		leaseOwner:         uuid.New(),
 		active:             make(map[uuid.UUID]activeRun),
+		heldTokens:         make(map[uuid.UUID]struct{}),
 		stopRequested:      make(map[uuid.UUID]string),
 		pauseRequested:     make(map[uuid.UUID]string),
 		wakeRequested:      make(map[uuid.UUID]tools.WakeSpec),
@@ -364,6 +398,12 @@ func NewPool(store *storage.Storage, runner TaskRunner, cfg Config) *Pool {
 		emailReplier:       cfg.EmailReplier,
 		wallTimeout:        wall,
 		admitScheduled:     cfg.AdmitScheduled,
+
+		outcomeAttemptTimeout: defaultOutcomeAttemptTimeout,
+		outcomeRetryBase:      defaultOutcomeRetryBase,
+		outcomeRetryMax:       defaultOutcomeRetryMax,
+		outcomeShutdownWindow: defaultOutcomeShutdownWindow,
+		forceStop:             make(chan struct{}),
 	}
 }
 
@@ -423,9 +463,16 @@ func (p *Pool) Run(ctx context.Context) {
 	// ctx: cancelling ctx (a shutdown signal) stops NEW claims immediately, but
 	// running tasks keep their context until the grace period expires — so a task
 	// finishing within drainGrace records its real outcome instead of being marked
-	// interrupted. taskCancel fires on grace expiry (below) or via ForceCancel.
-	taskCtx, taskCancel := context.WithCancel(context.Background())
-	defer taskCancel()
+	// interrupted. taskCancel fires on grace expiry (below) or via ForceCancel;
+	// it first opens the shutdown window that bounds outcome writes still
+	// retrying (outcome.go), so an interrupted run's outcome and any write
+	// waiting out a database outage get a last, bounded chance to land.
+	taskCtx, cancelTasks := context.WithCancel(context.Background())
+	defer cancelTasks()
+	taskCancel := func() {
+		p.signalForceStop()
+		cancelTasks()
+	}
 	p.mu.Lock()
 	p.taskCancel = taskCancel
 	p.mu.Unlock()
@@ -628,10 +675,14 @@ func (p *Pool) tryClaim(ctx, taskCtx context.Context) {
 
 		// Persist a fresh owner for every claim, including reclaims by this same
 		// process. The token therefore fences both the in-memory active entry and
-		// every lease-checked database write against ABA after recovery.
+		// every lease-checked database write against ABA after recovery. It is
+		// held BEFORE the claim commits, so there is no instant at which the row
+		// carries a token this process's lease recovery does not know is live.
 		token := uuid.New()
+		p.holdToken(token)
 		task, err := p.store.ClaimNextPendingTask(ctx, token.String())
 		if err != nil {
+			p.releaseToken(token)
 			if ctx.Err() == nil {
 				logging.From(ctx).Error("runner: claim failed", "err", err)
 			}
@@ -640,6 +691,7 @@ func (p *Pool) tryClaim(ctx, taskCtx context.Context) {
 		}
 		if task == nil {
 			// Nothing to claim: release the slot and stop this tick.
+			p.releaseToken(token)
 			release()
 			return
 		}
@@ -659,6 +711,8 @@ func (p *Pool) tryClaim(ctx, taskCtx context.Context) {
 			if rerr != nil {
 				logging.From(ctx).Warn("runner: could not release drained claim for task; lease recovery will reclaim on restart", "task_id", task.ID, "err", rerr)
 			}
+			// Nothing will run under this claim: recovery may have the row.
+			p.releaseToken(token)
 			release()
 			return
 		}
@@ -711,6 +765,11 @@ func (p *Pool) tryClaim(ctx, taskCtx context.Context) {
 					delete(p.pauseRequested, task.ID)
 					delete(p.wakeRequested, task.ID)
 				}
+				// Last of all, after the run's outcome write (and the panic
+				// recovery's) has returned: from here on lease recovery may
+				// take a row this claim still leases — one whose outcome was
+				// abandoned at shutdown or refused.
+				delete(p.heldTokens, token)
 				p.mu.Unlock()
 				release() // release AFTER cleanup
 			}()
@@ -730,9 +789,10 @@ func (p *Pool) tryClaim(ctx, taskCtx context.Context) {
 			runLogCtx := logging.WithTask(ctx, task.ID.String(), token.String())
 			defer safe.RecoverContext(runLogCtx, "runner.worker", func(val any) {
 				if p.stillOwns(task.ID, token) {
-					if _, err := p.reportStatus(task.ID, token, models.TaskStatusError, "task panicked during execution"); err != nil {
-						logging.From(runLogCtx).Error("runner: failed to mark panicked task errored", "task_id", task.ID, "err", err)
-					}
+					// Recorded like every other outcome (outcome.go): a panic
+					// is terminal, and a failed write must not hand the task
+					// to lease recovery to run again.
+					p.recordTerminalError(runLogCtx, task.ID, token, "panic", "task panicked during execution")
 				}
 				model := ""
 				if task.Model != nil {
@@ -823,7 +883,7 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 	})
 
 	// Report running (sets StartedAt + renews lease).
-	if _, err := p.reportStatus(task.ID, token, models.TaskStatusRunning, "Starting task execution"); err != nil {
+	if _, err := p.reportStatus(context.WithoutCancel(taskCtx), task.ID, token, models.TaskStatusRunning, "Starting task execution"); err != nil {
 		logging.From(taskCtx).Error("runner: failed to report running for task", "task_id", task.ID, "err", err)
 	}
 	// Resumed-after-ask (#510): the run injects the pending Q&A from the
@@ -1046,10 +1106,17 @@ func captureRunFailure(ctx context.Context, task *models.Task, model string, run
 // retry/dead-letter/error-analysis.
 func (p *Pool) parkForQuestion(ctx context.Context, task *models.Task, session *models.LogSession, pauseQuestion string, token uuid.UUID, start time.Time) {
 	p.submitLog(ctx, task, session, "Paused awaiting human input: "+pauseQuestion)
-	if ok, err := p.store.PauseTaskForQuestion(context.WithoutCancel(ctx), task.ID, token, pauseQuestion); err != nil {
-		logging.From(ctx).Error("runner: task pause write failed", "task_id", task.ID, "err", err)
-	} else if !ok {
-		logging.From(ctx).Warn("runner: task pause did not apply (lease lost or not running)", "task_id", task.ID)
+	_, result, err := p.recordOutcome(ctx, task.ID, token, outcomeWrite{
+		what:   "ask pause",
+		status: models.TaskStatusPausedAwaitingInput,
+		apply: parkWrite(func(actx context.Context) (bool, error) {
+			return p.store.PauseTaskForQuestion(actx, task.ID, token, pauseQuestion)
+		}),
+	})
+	if result != outcomeLanded {
+		// Nothing is waiting for an answer: do not ask anyone for one.
+		logging.From(ctx).Error("runner: task pause write did not land", "task_id", task.ID, "result", result.String(), "err", err)
+		return
 	}
 	p.notifyProgress(task, "Task is paused and needs your answer: "+pauseQuestion, "")
 	logging.From(ctx).Info("runner: task paused awaiting input", "task_id", task.ID, "elapsed", time.Since(start).Round(time.Second))
@@ -1078,10 +1145,11 @@ func (p *Pool) finishLeaseLost(ctx context.Context, task *models.Task, session *
 
 // finishSuccess commits the successful terminal transition: it persists the
 // published-artifact manifest under the held lease, atomically commits
-// output_json + success, and fires the success side effects ONLY when the
-// terminal write actually landed (#580). terminalFrame is executeTask's
-// deferred terminal SSE frame — it is flipped to "succeeded" only after the
-// success transaction returns a landed row (fail closed).
+// output_json + success through recordOutcome (retried while the run keeps
+// its lease, idempotent on read-back), and fires the success side effects ONLY
+// when the terminal write actually landed (#580). terminalFrame is
+// executeTask's deferred terminal SSE frame — it is flipped to "succeeded"
+// only after the success transaction lands (fail closed).
 func (p *Pool) finishSuccess(ctx context.Context, task *models.Task, session *models.LogSession, outputJSON json.RawMessage, artifactColl *scheduledrun.ArtifactCollector, token uuid.UUID, start time.Time, terminalFrame map[string]any) {
 	// Persist the published-artifact manifest (#204) under the held lease,
 	// before the terminal success clears it. No-op when nothing was published.
@@ -1089,36 +1157,43 @@ func (p *Pool) finishSuccess(ctx context.Context, task *models.Task, session *mo
 	if p.beforeSuccessCommit != nil {
 		p.beforeSuccessCommit(task, token)
 	}
-	landedTask, err := p.reportSuccess(task.ID, token, outputJSON, session)
-	if err != nil {
+	landedTask, result, err := p.recordOutcome(ctx, task.ID, token, outcomeWrite{
+		what:   "success",
+		status: models.TaskStatusSuccess,
+		apply: func(actx context.Context) (*models.Task, error) {
+			return p.reportSuccess(actx, task.ID, token, outputJSON, session)
+		},
+	})
+	if result != outcomeLanded {
 		terminalFrame["status"] = "failed"
-		logging.From(ctx).Error("runner: failed to commit success for task; suppressing success side effects", "task_id", task.ID, "err", err)
+		logging.From(ctx).Error("runner: failed to commit success for task; suppressing success side effects", "task_id", task.ID, "result", result.String(), "err", err)
 		// Never borrow a success row to justify this run's notification/session
-		// side effects. A Commit error is genuinely outcome-unknown: only a
-		// reread that still shows this exact claim's token on a nonterminal row
-		// proves the success did not land and permits the normal persistence-
-		// failure path. Every terminal, differently owned, or unreadable state
-		// remains ambiguous and suppresses all side effects.
-		if errors.Is(err, storage.ErrTaskLeaseNotHeld) {
+		// side effects: only a landed write (or a read-back finding this run's
+		// own token on it) counts. A lost lease means the row's outcome belongs
+		// to whoever holds it now; a write still failing at shutdown is left to
+		// lease recovery, which dead-letters a finished run instead of running
+		// it again.
+		if result != outcomeRefused {
 			return
 		}
-		current, readErr := p.store.GetTask(task.ID)
-		currentClaim := readErr == nil && current != nil && current.AttemptCount == task.AttemptCount &&
-			current.LeaseOwner != nil && *current.LeaseOwner == token.String()
-		if !currentClaim || current.Status.IsTerminal() {
+		// Refused for good while this claim still holds the row. A declared
+		// structured contract gives the failure the structured-output
+		// persistence class (non-retryable unless retry_on opts in).
+		if len(task.OutputSchema) > 0 {
+			persistErr := fmt.Errorf("%w: commit validated output and success under lease: %w", agentcore.ErrStructuredOutputPersistence, err)
+			p.submitLog(ctx, task, session, persistErr.Error())
+			p.handleRunFailure(ctx, task, session, persistErr, token, start)
 			return
 		}
-		// Only a declared structured contract gives this write failure the
-		// structured-output persistence class. Preserve the historical
-		// free-form behavior: a failed terminal status write suppresses
-		// success side effects but is not reclassified as an output failure.
-		if len(task.OutputSchema) == 0 {
-			p.submitLog(ctx, task, session, err.Error())
-			return
+		// A free-form run did its work, and its success cannot be recorded:
+		// record that as a terminal error rather than leave the row running
+		// for lease recovery to run again.
+		msg := truncate.Runes("Task finished, but its success could not be recorded ("+err.Error()+"); it was not run again", maxTerminalMessageRunes, "…")
+		landed := p.recordTerminalError(ctx, task.ID, token, "unrecordable success", msg)
+		p.submitLog(ctx, task, session, msg)
+		if landed {
+			p.notifyTerminal(ctx, task, notify.StatusFailure, session, time.Since(start))
 		}
-		persistErr := fmt.Errorf("%w: commit validated output and success under lease: %w", agentcore.ErrStructuredOutputPersistence, err)
-		p.submitLog(ctx, task, session, persistErr.Error())
-		p.handleRunFailure(ctx, task, session, persistErr, token, start)
 		return
 	}
 	if landedTask != nil {
@@ -1259,11 +1334,7 @@ func (p *Pool) failAuditAborted(ctx context.Context, task *models.Task, session 
 		msg += ": " + detail
 	}
 	p.clearPendingQA(ctx, task, leaseOwner)
-	landed := true
-	if _, err := p.reportStatus(task.ID, leaseOwner, models.TaskStatusError, msg); err != nil {
-		landed = false
-		logging.From(ctx).Error("runner: failed to report audit abort for task", "task_id", task.ID, "err", err)
-	}
+	landed := p.recordTerminalError(ctx, task.ID, leaseOwner, "audit abort", msg)
 	p.submitLog(ctx, task, session, msg)
 	logging.From(ctx).Warn("runner: task aborted by self-audit", "task_id", task.ID, "elapsed", time.Since(start).Round(time.Second))
 	if landed {
@@ -1290,16 +1361,13 @@ func auditAbortDetail(runErr error) string {
 
 // failInterrupted records the terminal state for a run the shutdown grace period
 // (or a ForceCancel) killed mid-flight. Extracted from executeTask's switch to
-// keep that function under the gocyclo ceiling; the behavior is unchanged, and
-// it now reads as a sibling of the other two terminal-write helpers.
+// keep that function under the gocyclo ceiling; it reads as a sibling of the
+// other two terminal-write helpers. The write runs inside the pool's shutdown
+// window (outcome.go), which the force-cancel that interrupted the run opened.
 func (p *Pool) failInterrupted(ctx context.Context, task *models.Task, session *models.LogSession, leaseOwner uuid.UUID, start time.Time) {
 	msg := "Task interrupted: server shutdown (grace period expired)"
 	p.clearPendingQA(ctx, task, leaseOwner)
-	landed := true
-	if _, err := p.reportStatus(task.ID, leaseOwner, models.TaskStatusError, msg); err != nil {
-		landed = false
-		logging.From(ctx).Error("runner: failed to report interrupt for task", "task_id", task.ID, "err", err)
-	}
+	landed := p.recordTerminalError(ctx, task.ID, leaseOwner, "interrupted", msg)
 	p.submitLog(ctx, task, session, msg)
 	logging.From(ctx).Info("runner: task interrupted", "task_id", task.ID, "elapsed", time.Since(start).Round(time.Second))
 	// Terminal failure: fire the outbound notification off-thread (#208) — only
@@ -1318,11 +1386,7 @@ func (p *Pool) failInterrupted(ctx context.Context, task *models.Task, session *
 func (p *Pool) failWallTimeout(ctx context.Context, task *models.Task, session *models.LogSession, leaseOwner uuid.UUID, start time.Time) {
 	msg := fmt.Sprintf("Task failed: exceeded the wall-clock timeout of %s (FLEET_TASK_WALL_TIMEOUT); the run was cancelled", p.wallTimeout)
 	p.clearPendingQA(ctx, task, leaseOwner)
-	landed := true
-	if _, err := p.reportStatus(task.ID, leaseOwner, models.TaskStatusError, msg); err != nil {
-		landed = false
-		logging.From(ctx).Error("runner: failed to report wall-clock timeout for task", "task_id", task.ID, "err", err)
-	}
+	landed := p.recordTerminalError(ctx, task.ID, leaseOwner, "wall-clock timeout", msg)
 	p.submitLog(ctx, task, session, msg)
 	logging.From(ctx).Error("runner: task exceeded the wall-clock timeout; failed", "task_id", task.ID, "wall_timeout", p.wallTimeout, "elapsed", time.Since(start).Round(time.Second))
 	// Terminal failure: fire the outbound notification off-thread (#208) — only
@@ -1399,8 +1463,11 @@ func connectorInfraRetryDelay(retry int) time.Duration {
 
 // requeueForConnectorOutage re-runs an occurrence whose declared connector
 // was unavailable, on the runner's infra budget. It reports whether the
-// re-run was scheduled; false sends the caller down the ordinary
-// classification (budget spent, or the requeue write failed).
+// failure is handled: true when the re-run was scheduled, and also when the
+// write could not land because the lease is gone or shutdown ended its
+// retries (no other write could land either). false sends the caller down
+// the ordinary classification (budget spent, or the database refused the
+// requeue for good).
 func (p *Pool) requeueForConnectorOutage(ctx context.Context, task *models.Task, session *models.LogSession, runErr error, leaseOwner uuid.UUID) bool {
 	if task.InfraRetryCount >= maxConnectorInfraRetries {
 		return false
@@ -1409,9 +1476,25 @@ func (p *Pool) requeueForConnectorOutage(ctx context.Context, task *models.Task,
 	when := time.Now().UTC().Add(delay)
 	msg := fmt.Sprintf("Task could not start (%s, infra re-run %d of %d); re-running in %s without spending a retry: %v",
 		models.FailureConnectorUnavailable, task.InfraRetryCount+1, maxConnectorInfraRetries, delay.Round(time.Second), runErr)
-	if _, err := p.store.RequeueTaskForInfraRetryWithContext(context.WithoutCancel(ctx), task.ID, leaseOwner, when, msg); err != nil {
+	_, result, err := p.recordOutcome(ctx, task.ID, leaseOwner, outcomeWrite{
+		what:   "connector-outage re-run",
+		status: models.TaskStatusScheduled,
+		rerun:  true,
+		apply: func(actx context.Context) (*models.Task, error) {
+			return p.store.RequeueTaskForInfraRetryWithContext(actx, task.ID, leaseOwner, when, msg)
+		},
+	})
+	switch result {
+	case outcomeLanded:
+	case outcomeRefused:
 		logging.From(ctx).Warn("runner: failed to re-queue task after a connector outage; classifying normally", "task_id", task.ID, "err", err)
 		return false
+	default:
+		logging.From(ctx).Error("runner: failed to re-queue task after a connector outage", "task_id", task.ID, "result", result.String(), "err", err)
+		// The transcript still says why the run stopped; it no longer
+		// promises a re-run this write did not schedule.
+		p.submitLog(ctx, task, session, fmt.Sprintf("Task could not start (%s): %v", models.FailureConnectorUnavailable, runErr))
+		return true
 	}
 	logging.From(ctx).Warn("runner: task could not start; scheduling an infra re-run", "task_id", task.ID, "reason", models.FailureConnectorUnavailable, "re_run", task.InfraRetryCount+1, "max_re_runs", maxConnectorInfraRetries, "at", when.Format(time.RFC3339))
 	p.submitLog(ctx, task, session, msg)
@@ -1450,19 +1533,37 @@ func (p *Pool) handleRunFailure(ctx context.Context, task *models.Task, session 
 		msg := fmt.Sprintf("Task attempt %d failed (%s); retrying in %s: %v",
 			task.AttemptCount+1, class, backoff.Round(time.Second), runErr)
 		// Pending Q&A deliberately survives a successful requeue (#582).
-		if _, err := p.store.RequeueTaskForRetryWithContext(context.WithoutCancel(ctx), task.ID, leaseOwner, when, msg); err != nil {
+		_, result, err := p.recordOutcome(ctx, task.ID, leaseOwner, outcomeWrite{
+			what:   "retry requeue",
+			status: models.TaskStatusScheduled,
+			rerun:  true,
+			apply: func(actx context.Context) (*models.Task, error) {
+				return p.store.RequeueTaskForRetryWithContext(actx, task.ID, leaseOwner, when, msg)
+			},
+		})
+		// The transcript's closing line says what actually happened: the
+		// "retrying in …" line only when the requeue landed.
+		logLine := msg
+		switch result {
+		case outcomeLanded:
+			logging.From(ctx).Warn("runner: task attempt failed; re-queued for retry", "task_id", task.ID, "attempt", task.AttemptCount+1, "class", class, "retry_at", when.Format(time.RFC3339))
+		case outcomeRefused:
+			// Refused for good while this claim holds the row: record the
+			// failure terminally rather than leave the row running.
 			logging.From(ctx).Warn("runner: failed to re-queue task for retry; marking error", "task_id", task.ID, "err", err)
+			logLine = "Task failed: " + runErr.Error()
 			p.clearPendingQA(ctx, task, leaseOwner)
-			if _, rerr := p.reportStatus(task.ID, leaseOwner, models.TaskStatusError, "Task failed: "+runErr.Error()); rerr != nil {
-				logging.From(ctx).Error("runner: failed to report error for task", "task_id", task.ID, "err", rerr)
-			} else {
+			if p.recordTerminalError(ctx, task.ID, leaseOwner, "failure", logLine) {
 				p.notifyTerminal(ctx, task, notify.StatusFailure, session, time.Since(start))
 				p.maybeAnalyzeFailure(task, session, runErr)
 			}
-		} else {
-			logging.From(ctx).Warn("runner: task attempt failed; re-queued for retry", "task_id", task.ID, "attempt", task.AttemptCount+1, "class", class, "retry_at", when.Format(time.RFC3339))
+		default:
+			// The lease is gone, or shutdown ended the retries: no other
+			// write could land either.
+			logging.From(ctx).Error("runner: failed to re-queue task for retry", "task_id", task.ID, "result", result.String(), "err", err)
+			logLine = fmt.Sprintf("Task attempt %d failed (%s): %v", task.AttemptCount+1, class, runErr)
 		}
-		p.submitLog(ctx, task, session, msg)
+		p.submitLog(ctx, task, session, logLine)
 		return
 	}
 
@@ -1523,25 +1624,33 @@ func retryBackoff(attempt int, policy *models.RetryPolicy) time.Duration {
 // what preserves a recurring schedule (ADR-0070): DeadLetterTaskWithContext
 // spawns the next occurrence after it commits, unless the consecutive-dead-
 // letter breaker parks the chain — this function does not add a second spawn.
-// If the storage transition fails (e.g. the lease was recovered out from under
-// us), it falls back to a plain terminal error so the task never strands as
+// The transition goes through recordOutcome: a transient failure is retried
+// while the run keeps its lease. If the database refuses it for good, it
+// falls back to a plain terminal error so the task never strands as
 // running — preserving the invariant that every finished run lands in SOME
 // terminal state. The error fallback still spawns via
 // UpdateTaskStatusAtomicWithContext, so a recurring chain does not die just
-// because the DLQ write lost the race. It reports whether a terminal state
+// because the DLQ write was refused. It reports whether a terminal state
 // actually landed (dead-lettered, or the fallback error) so the caller can
-// gate the failure notification + diagnosis on it (#580): when even the
-// fallback is rejected the DB no longer records this run's outcome and no
-// external side effect may fire.
+// gate the failure notification + diagnosis on it (#580): when the lease is
+// gone, or nothing landed before shutdown, the DB does not record this run's
+// outcome and no external side effect may fire.
 func (p *Pool) sendToDeadLetter(ctx context.Context, task *models.Task, session *models.LogSession, runErr error, reason, reasonClass, outcome, outcomeDetail string, leaseOwner uuid.UUID, start time.Time) bool {
 	attempts := task.AttemptCount + 1
-	dl, err := p.store.DeadLetterTaskWithOutcomeWithContext(context.WithoutCancel(ctx), task.ID, leaseOwner, reason, attempts, outcome, outcomeDetail)
-	if err != nil {
-		logging.From(ctx).Warn("runner: failed to dead-letter task; falling back to error status", "task_id", task.ID, "err", err)
-		landed := true
-		if _, rerr := p.reportStatus(task.ID, leaseOwner, models.TaskStatusError, "Task failed: "+runErr.Error()); rerr != nil {
-			landed = false
-			logging.From(ctx).Error("runner: failed to report fallback error for task", "task_id", task.ID, "err", rerr)
+	dl, result, err := p.recordOutcome(ctx, task.ID, leaseOwner, outcomeWrite{
+		what:   "dead-letter",
+		status: models.TaskStatusDeadLettered,
+		apply: func(actx context.Context) (*models.Task, error) {
+			return p.store.DeadLetterTaskWithOutcomeWithContext(actx, task.ID, leaseOwner, reason, attempts, outcome, outcomeDetail)
+		},
+	})
+	if result != outcomeLanded {
+		landed := false
+		if result == outcomeRefused {
+			logging.From(ctx).Warn("runner: failed to dead-letter task; falling back to error status", "task_id", task.ID, "err", err)
+			landed = p.recordTerminalError(ctx, task.ID, leaseOwner, "failure", "Task failed: "+runErr.Error())
+		} else {
+			logging.From(ctx).Error("runner: failed to dead-letter task", "task_id", task.ID, "result", result.String(), "err", err)
 		}
 		p.submitLog(ctx, task, session, reason)
 		return landed
@@ -1594,10 +1703,14 @@ func (p *Pool) parkForWake(ctx context.Context, task *models.Task, session *mode
 		what = "for event " + strconv.Quote(spec.EventKey) + " (timeout " + spec.WakeAt.UTC().Format(time.RFC3339) + ")"
 	}
 	p.submitLog(ctx, task, session, "Sleeping "+what)
-	if ok, err := p.store.PauseTaskForWake(context.WithoutCancel(ctx), task.ID, token, spec.WakeAt, spec.EventKey, spec.Note); err != nil {
-		logging.From(ctx).Error("runner: task wake park write failed", "task_id", task.ID, "err", err)
-	} else if !ok {
-		logging.From(ctx).Warn("runner: task wake park did not apply (lease lost or not running)", "task_id", task.ID)
+	if _, result, err := p.recordOutcome(ctx, task.ID, token, outcomeWrite{
+		what:   "wake park",
+		status: models.TaskStatusPausedAwaitingWake,
+		apply: parkWrite(func(actx context.Context) (bool, error) {
+			return p.store.PauseTaskForWake(actx, task.ID, token, spec.WakeAt, spec.EventKey, spec.Note)
+		}),
+	}); result != outcomeLanded {
+		logging.From(ctx).Error("runner: task wake park write did not land", "task_id", task.ID, "result", result.String(), "err", err)
 	}
 	logging.From(ctx).Info("runner: task sleeping", "task_id", task.ID, "sleep", safe.LogSafe(what), "elapsed", time.Since(start).Round(time.Second))
 }
@@ -1625,14 +1738,17 @@ func (p *Pool) clearPendingQA(ctx context.Context, task *models.Task, leaseOwner
 	}
 }
 
-// reportStatus writes a status update under leaseOwner using a background
-// context (shutdown-safe).
-func (p *Pool) reportStatus(taskID, leaseOwner uuid.UUID, status models.TaskStatus, message string) (*models.Task, error) {
+// reportStatus writes a status update under leaseOwner. Callers pass a
+// context that outlives the run's cancellation (the start report detaches
+// the run context, renewals use a background one, an outcome uses
+// recordOutcome's bounded attempt context), so the write still lands during
+// shutdown.
+func (p *Pool) reportStatus(ctx context.Context, taskID, leaseOwner uuid.UUID, status models.TaskStatus, message string) (*models.Task, error) {
 	var msgPtr *string
 	if message != "" {
 		msgPtr = &message
 	}
-	return p.store.UpdateTaskStatusAtomicWithContext(context.Background(), taskID, leaseOwner, &models.StatusUpdate{
+	return p.store.UpdateTaskStatusAtomicWithContext(ctx, taskID, leaseOwner, &models.StatusUpdate{
 		TaskID:  taskID,
 		Status:  status,
 		Message: msgPtr,
@@ -1653,7 +1769,7 @@ func (p *Pool) reportStatus(taskID, leaseOwner uuid.UUID, status models.TaskStat
 // outcome (completion.blocked_when) lands as a success carrying run outcome
 // "blocked" and its detail (migration 074), so the Operations Center and
 // `fleet sched` show it as Blocked rather than plain green.
-func (p *Pool) reportSuccess(taskID, leaseOwner uuid.UUID, output json.RawMessage, session *models.LogSession) (*models.Task, error) {
+func (p *Pool) reportSuccess(ctx context.Context, taskID, leaseOwner uuid.UUID, output json.RawMessage, session *models.LogSession) (*models.Task, error) {
 	msg := successMessage(session)
 	update := &models.StatusUpdate{
 		TaskID:     taskID,
@@ -1667,7 +1783,7 @@ func (p *Pool) reportSuccess(taskID, leaseOwner uuid.UUID, output json.RawMessag
 			update.RunOutcomeDetail = &detail
 		}
 	}
-	return p.store.UpdateTaskStatusAtomicWithContext(context.Background(), taskID, leaseOwner, update)
+	return p.store.UpdateTaskStatusAtomicWithContext(ctx, taskID, leaseOwner, update)
 }
 
 // maxRunOutcomeDetailRunes bounds the outcome detail persisted on the row.
@@ -1961,6 +2077,38 @@ func (p *Pool) priorRunHandoff(task *models.Task) string {
 // cheap and deterministic (no whole-transcript replay).
 const carryContextMaxChars = 2000
 
+// holdToken / releaseToken bracket one claim's lease token in heldTokens.
+func (p *Pool) holdToken(token uuid.UUID) {
+	p.mu.Lock()
+	if p.heldTokens == nil { // a Pool built without NewPool
+		p.heldTokens = make(map[uuid.UUID]struct{})
+	}
+	p.heldTokens[token] = struct{}{}
+	p.mu.Unlock()
+}
+
+func (p *Pool) releaseToken(token uuid.UUID) {
+	p.mu.Lock()
+	delete(p.heldTokens, token)
+	p.mu.Unlock()
+}
+
+// HeldLeaseTokens returns the lease tokens of this pool's live claims: a
+// claim about to commit, a run executing, or one still retrying its outcome
+// write. cmd/fleet registers it with Storage.SetLeaseHolder, so the
+// scheduler's lease recovery never re-queues or dead-letters a run this
+// process is still finishing (db.RecoverExpiredLeases). Safe from any
+// goroutine.
+func (p *Pool) HeldLeaseTokens() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := make([]string, 0, len(p.heldTokens))
+	for token := range p.heldTokens {
+		out = append(out, token.String())
+	}
+	return out
+}
+
 // stillOwns reports whether the pool still holds task with the given claim token
 // (the active-map entry hasn't been replaced by a re-claim after recovery).
 func (p *Pool) stillOwns(taskID, token uuid.UUID) bool {
@@ -2007,7 +2155,7 @@ func (p *Pool) renewActiveLeases() {
 	p.mu.Unlock()
 
 	for id, claim := range claims {
-		_, err := p.reportStatus(id, claim.token, models.TaskStatusRunning, "")
+		_, err := p.reportStatus(context.Background(), id, claim.token, models.TaskStatusRunning, "")
 		if err == nil {
 			continue
 		}

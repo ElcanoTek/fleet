@@ -1313,12 +1313,20 @@ the upgrade; existing `dead_lettered` rows are settled at migrate time and
 are not auto-resumed. A chain parked before the upgrade continues only if
 an operator replays it.
 
+Lease recovery dead-letters two more kinds of row: a task that crashed the
+process on every attempt past its retry budget (the crash-loop guard), and a
+run that finished but whose outcome never reached the row (the database was
+unreachable, or the server stopped first). That run is not run again,
+because its side effects may already have happened; see
+[MAINTENANCE.md](MAINTENANCE.md#when-a-runs-outcome-cannot-be-written).
+
 Entry into the DLQ also increments the
-`fleet_dead_letter_queued_total{reason}` counter (reason is the bounded class
-`retry_exhausted` or `non_retryable` — deliberately not a per-task label, to
-avoid unbounded metric cardinality). Dead-lettered tasks are **not** subject
-to the automatic retention sweep — quarantine is for review, so a DLQ task
-persists until it is replayed (or explicitly removed).
+`fleet_dead_letter_queued_total{reason}` counter. The reason is a bounded
+class: `retry_exhausted`, a non-retryable failure's class, `lease_recovery`
+(the crash-loop guard) or `outcome_unrecorded`. It is deliberately not a
+per-task label, to avoid unbounded metric cardinality. Dead-lettered tasks
+are **not** subject to the automatic retention sweep — quarantine is for
+review, so a DLQ task persists until it is replayed (or explicitly removed).
 
 ---
 

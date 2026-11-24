@@ -261,9 +261,87 @@ func (db *Database) SyncEffectivePriorityTx(ctx context.Context, tx *sql.Tx, tas
 	return nil
 }
 
+// MarkRunFinished stamps finished_run_id with the run's claim token the moment
+// the run ends, before the runner writes its outcome. Fenced on the caller
+// still holding the lease on a leased/running row, so a run that lost its
+// lease marks nothing; status-preserving (not a lifecycle edge). Reports
+// whether the stamp landed.
+//
+// The stamp is how lease recovery tells a run that reached an outcome from a
+// crashed one: a leased/running row whose lease expired with finished_run_id
+// equal to its lease_owner ended, but its outcome write never landed. Recovery
+// dead-letters such a row for review instead of running it again
+// (RecoverExpiredLeases). Every outcome write stamps the same token in its own
+// statement, so an outcome that lands is recognisable even when this stamp
+// did not.
+func (db *Database) MarkRunFinished(ctx context.Context, taskID uuid.UUID, leaseOwner string) (bool, error) {
+	res, err := db.conn.ExecContext(ctx, `
+		UPDATE tasks SET finished_run_id = $2
+		 WHERE id = $1
+		   AND lease_owner = $2
+		   AND status IN ($3, $4)`,
+		taskID, leaseOwner, string(models.TaskStatusLeased), string(models.TaskStatusRunning))
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+// ClearRunFinished removes this claim's finished stamp again, fenced on the
+// claim still holding the lease and on the stamp being its own. The runner
+// calls it before a write that asks for the task to run again (a retry
+// requeue, a connector-outage re-run): an earlier outcome write of the same
+// run may have stamped it — a structured success that was refused and is now
+// retried through retry_on — and a stamp left in place would make lease
+// recovery dead-letter, rather than re-queue, a run whose requeue never
+// landed. Status-preserving; reports whether it cleared a stamp.
+func (db *Database) ClearRunFinished(ctx context.Context, taskID uuid.UUID, leaseOwner string) (bool, error) {
+	res, err := db.conn.ExecContext(ctx, `
+		UPDATE tasks SET finished_run_id = NULL
+		 WHERE id = $1
+		   AND lease_owner = $2
+		   AND finished_run_id = $2`,
+		taskID, leaseOwner)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+// outcomeUnrecordedReason is the dead-letter reason lease recovery records for
+// a run that ended without its outcome reaching the row.
+const outcomeUnrecordedReason = "outcome not recorded: the run finished, but its result could not be saved before its lease expired (the database was unreachable, or the server stopped first); it was not run again because its emails and other actions may already have happened — read the run log, then replay it if it should run again"
+
 // RecoverExpiredLeases resets tasks with expired leases back to pending. This is
 // the crash-safe backstop: a worker that died mid-task (systemd restart) lets
 // its lease expire, and recovery re-queues the task for the next claim.
+//
+// A run that ENDED with an outcome is not run again by recovery. The runner
+// stamps finished_run_id with the run's claim token as the run ends
+// (MarkRunFinished), then writes the outcome — retrying it while the run
+// keeps its lease (runner.recordOutcome). A run that asked to run again (a
+// retry requeue, a connector-outage re-run) is deliberately not stamped
+// (ClearRunFinished), so if that request never lands it is recovered like a
+// crash, as below. A leased/running row whose lease expired with
+// finished_run_id = lease_owner therefore ended, and its outcome write never
+// landed: the database stayed unreachable until the server stopped, the
+// server was killed before the write, or the write and its fallback were
+// both refused (then the lease simply runs out after the worker returns).
+// Running
+// it again would repeat everything it already did — its emails, its MCP
+// writes — so that branch runs FIRST and dead-letters the row for review
+// (outcomeUnrecordedReason), whatever its retry budget, and clears the stamp
+// so the runner's read-back can never mistake this dead-letter for one it
+// wrote. The two crash branches below skip a stamped row, so a stamp landing
+// between these statements is handled by the next sweep, never re-queued.
+// Their test is NOT COALESCE(finished_run_id = lease_owner, FALSE), not IS
+// DISTINCT FROM: a leased/running row with no lease_owner at all (both
+// columns NULL) is a crash too, and the `lease_expires_at IS NULL` arm
+// exists to recover exactly such rows.
+// finished_run_id from an EARLIER claim (a later claim crashed mid-run) does
+// not match the current lease_owner, so that row is a crash like any other.
 //
 // Recovery is attempt-bounded (#1116): a task whose attempt budget is spent is
 // routed to the dead-letter queue instead of re-queued. Without the bound, a
@@ -277,18 +355,65 @@ func (db *Database) SyncEffectivePriorityTx(ctx context.Context, tx *sql.Tx, tas
 // quarantines rather than granting a free extra run of the task's external
 // side effects. (The issue text sketched a strict `>`; parity won in review.)
 //
-// The dead-letter branch mirrors DeadLetterTaskWithContext's column writes
+// The dead-letter branches mirror DeadLetterTaskWithContext's column writes
 // (status/completed_at/dead_lettered_at/dead_letter_reason/dead_letter_attempts/
 // error_message, output_json nulled, lease cleared, actual_duration_seconds
 // derived from started_at like maybeComputeActualDuration — NULL for a leased
 // row that never started) so a recovery-quarantined row reads identically in
-// the DLQ listing and is replayable the same way. It runs FIRST so a row never
-// both dead-letters and re-queues; the two predicates are disjoint on
-// attempt_count either way.
+// the DLQ listing and is replayable the same way. They run before the requeue
+// so a row never both dead-letters and re-queues; the crash predicates are
+// disjoint on attempt_count either way.
 //
-// Returns (requeued, deadLettered): the rows reset to pending, and the rows
-// quarantined. The storage wrapper owns the telemetry for the latter.
-func (db *Database) RecoverExpiredLeases(ctx context.Context, now time.Time) (int, int, error) {
+// held lists lease tokens a run in THIS process still holds (the runner
+// pool's HeldLeaseTokens, via Storage.SetLeaseHolder): no branch touches a row
+// leased by one of them, however expired its lease. Such a run is alive — it
+// is still executing, or retrying its outcome write through a database outage
+// that outlasted the lease — and its renewal or outcome write lands the
+// moment the database answers (both are fenced on lease_owner alone, not on
+// lease_expires_at). Without the exclusion this process's own sweep, running
+// first when the database came back, re-queued or dead-lettered a run that
+// was about to record its outcome. Rows leased by other processes are
+// recovered as before; nil or empty excludes nothing.
+//
+// Returns (requeued, deadLettered, unrecorded): the rows reset to pending, the
+// crash-loop rows quarantined, and the ended-but-unrecorded runs quarantined.
+// The storage wrapper owns the telemetry for the latter two.
+func (db *Database) RecoverExpiredLeases(ctx context.Context, now time.Time, held []string) (int, int, int, error) {
+	if held == nil {
+		held = []string{}
+	}
+	unrecordedRes, err := db.conn.ExecContext(ctx, `
+		UPDATE tasks SET
+			status = $1,
+			completed_at = $4,
+			dead_lettered_at = $4,
+			dead_letter_reason = $5,
+			dead_letter_attempts = attempt_count + 1,
+			error_message = $5,
+			output_json = NULL,
+			actual_duration_seconds = COALESCE(actual_duration_seconds, CASE
+				WHEN started_at IS NOT NULL
+				THEN GREATEST(0, EXTRACT(EPOCH FROM ($4::timestamptz - started_at)))::int
+			END),
+			lease_owner = NULL,
+			lease_expires_at = NULL,
+			finished_run_id = NULL
+		WHERE status IN ($2, $3)
+		AND (lease_expires_at < $4 OR lease_expires_at IS NULL)
+		AND finished_run_id = lease_owner
+		AND NOT COALESCE(lease_owner = ANY($6::text[]), FALSE)`,
+		string(models.TaskStatusDeadLettered),
+		string(models.TaskStatusLeased),
+		string(models.TaskStatusRunning),
+		now,
+		outcomeUnrecordedReason,
+		held,
+	)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	unrecorded, _ := unrecordedRes.RowsAffected()
+
 	quarantined, err := db.conn.ExecContext(ctx, `
 		UPDATE tasks SET
 			status = $1,
@@ -306,15 +431,18 @@ func (db *Database) RecoverExpiredLeases(ctx context.Context, now time.Time) (in
 			lease_expires_at = NULL
 		WHERE status IN ($2, $3)
 		AND (lease_expires_at < $4 OR lease_expires_at IS NULL)
+		AND NOT COALESCE(finished_run_id = lease_owner, FALSE)
+		AND NOT COALESCE(lease_owner = ANY($6::text[]), FALSE)
 		AND attempt_count >= max_retries`,
 		string(models.TaskStatusDeadLettered),
 		string(models.TaskStatusLeased),
 		string(models.TaskStatusRunning),
 		now,
 		"crash-loop guard: the worker's lease expired past the retry budget (the process likely crashed or stalled mid-run on every attempt)",
+		held,
 	)
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, int(unrecorded), err
 	}
 	deadLettered, _ := quarantined.RowsAffected()
 
@@ -329,15 +457,18 @@ func (db *Database) RecoverExpiredLeases(ctx context.Context, now time.Time) (in
 			attempt_count = attempt_count + 1
 		WHERE status IN ($2, $3)
 		AND (lease_expires_at < $4 OR lease_expires_at IS NULL)
+		AND NOT COALESCE(finished_run_id = lease_owner, FALSE)
+		AND NOT COALESCE(lease_owner = ANY($5::text[]), FALSE)
 		AND attempt_count < max_retries`,
 		string(models.TaskStatusPending),
 		string(models.TaskStatusLeased),
 		string(models.TaskStatusRunning),
 		now,
+		held,
 	)
 	if err != nil {
-		return 0, int(deadLettered), err
+		return 0, int(deadLettered), int(unrecorded), err
 	}
 	affected, _ := result.RowsAffected()
-	return int(affected), int(deadLettered), nil
+	return int(affected), int(deadLettered), int(unrecorded), nil
 }

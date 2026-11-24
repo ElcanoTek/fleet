@@ -47,7 +47,7 @@ func TestReportWorkspacePath_Persists(t *testing.T) {
 	}
 
 	// A terminal status update with no WorkspacePath must leave it intact.
-	if _, err := pool.reportStatus(task.ID, pool.leaseOwner, models.TaskStatusSuccess, "done"); err != nil {
+	if _, err := pool.reportStatus(context.Background(), task.ID, pool.leaseOwner, models.TaskStatusSuccess, "done"); err != nil {
 		t.Fatalf("report success: %v", err)
 	}
 	got, err = store.GetTask(task.ID)

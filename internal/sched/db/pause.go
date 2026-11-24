@@ -74,11 +74,14 @@ func (db *Database) ExpirePausedTasks(ctx context.Context, windowMinutes int) ([
 // would otherwise leave the prior answer dangling next to the new question.
 // paused_at stamps the pause instant (#1116) — ExpirePausedTasks counts the
 // ask window from it, so a long run's question gets the full TTL instead of
-// one already eroded by execution time.
+// one already eroded by execution time. finished_run_id records the run that
+// parked (migration 0213), so a runner that could not see this write's result
+// recognises it on the read-back.
 func (db *Database) PauseTaskForQuestion(ctx context.Context, taskID, leaseOwner uuid.UUID, question string) (bool, error) {
 	res, err := db.conn.ExecContext(ctx, `
 		UPDATE tasks SET status = 'paused_awaiting_input', pending_question = $1, pending_answer = NULL,
 			paused_at = now(),
+			finished_run_id = lease_owner,
 			lease_owner = NULL, lease_expires_at = NULL
 		WHERE id = $2 AND lease_owner = $3 AND status = 'running'`,
 		question, taskID, leaseOwner)

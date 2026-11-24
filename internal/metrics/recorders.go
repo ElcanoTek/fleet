@@ -167,13 +167,17 @@ func RecordIPBlocked(reason string) {
 }
 
 // RecordDeadLetterQueued counts one task routed to the dead-letter queue (#253),
-// labeled by the bounded reason class — "retry_exhausted" (a transient failure
-// that ran out of retries) or "non_retryable" (a deterministic failure quarantined
-// immediately). The label is deliberately a small fixed set rather than a per-task
-// name: a task-name label would grow the time-series set without bound (the
-// cardinality anti-pattern the #263 sandbox gauges call out). Per-task attribution
-// lives in the task row's dead_letter_reason + the DLQ listing, not the metrics
-// stream.
+// labeled by the bounded reason class: "retry_exhausted" (a retryable failure
+// that ran out of retries); the failure class of a non-retryable failure
+// quarantined immediately (models.Failure*: "terminal", "cost_ceiling",
+// "structured_output_format", …); "lease_recovery" (the crash-loop guard: a
+// lease expired past the retry budget); or "outcome_unrecorded" (a run that
+// finished but whose outcome never landed, dead-lettered by lease recovery
+// instead of being run again). The label is deliberately a small fixed set
+// rather than a per-task name: a task-name label would grow the time-series set
+// without bound (the cardinality anti-pattern the #263 sandbox gauges call
+// out). Per-task attribution lives in the task row's dead_letter_reason + the
+// DLQ listing, not the metrics stream.
 func RecordDeadLetterQueued(reason string) {
 	if reason == "" {
 		reason = "unknown"

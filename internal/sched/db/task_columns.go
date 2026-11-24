@@ -140,6 +140,7 @@ type taskScanBuf struct {
 	runOutcome             sql.NullString
 	runOutcomeDetail       sql.NullString
 	infraRetryCount        int
+	finishedRunID          sql.NullString
 }
 
 // taskColumn is one row of the task-column registry: one tasks-table column,
@@ -1174,6 +1175,27 @@ var taskColumnRegistry = []taskColumn{
 		value:    func(t *models.Task) any { return t.InfraRetryCount },
 		dest:     func(b *taskScanBuf) any { return &b.infraRetryCount },
 		assign:   func(b *taskScanBuf, t *models.Task) { t.InfraRetryCount = b.infraRetryCount },
+	},
+	{
+		name: "finished_run_id",
+		read: true, txUpdate: true,
+		// The claim token of the run whose outcome the row holds (migration
+		// 0213): stamped by db.MarkRunFinished as a run ends and by every
+		// outcome write under the lease. In UpdateTaskStatusAtomic's and the
+		// retry/dead-letter transitions' UpdateTaskTx so they stamp it; every
+		// other UpdateTaskTx caller writes back the value it scanned under the
+		// same row lock.
+		noInsert: "per-run bookkeeping (migration 0213): a new row has not run",
+		noUpsert: "per-run bookkeeping (migration 0213): a status write routed through the upsert must never fabricate or drop it",
+		noExport: reasonRuntimeState,
+		value:    func(t *models.Task) any { return t.FinishedRunID },
+		dest:     func(b *taskScanBuf) any { return &b.finishedRunID },
+		assign: func(b *taskScanBuf, t *models.Task) {
+			if b.finishedRunID.Valid && b.finishedRunID.String != "" {
+				v := b.finishedRunID.String
+				t.FinishedRunID = &v
+			}
+		},
 	},
 }
 

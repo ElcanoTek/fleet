@@ -1005,6 +1005,10 @@ func run() error {
 		AdmitScheduled: diskAdmissionGate(diskGuard),
 	})
 	slog.Info("worker pool: scheduled task cap set (shared box-wide limiter)", "cap", pool.Cap())
+	// The scheduler's lease recovery shares schedStorage: it must never take a
+	// row a run in this process still holds — one retrying its outcome write
+	// through a database outage that outlasted its lease (runner outcome.go).
+	schedStorage.SetLeaseHolder(pool.HeldLeaseTokens)
 
 	// Wire the live SSE run-log stream (#200): GET /tasks/{id}/stream attaches a
 	// client to the pool's per-task event buffer for an in-progress task. The two

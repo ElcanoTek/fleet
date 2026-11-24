@@ -1,0 +1,25 @@
+-- 0213_task_finished_run: which run reached the outcome a task row holds.
+--
+-- finished_run_id is the claim token of a run (the run_id its log lines
+-- carry). The runner stamps it under the run's lease the moment the run ends,
+-- before it writes most outcomes (db.MarkRunFinished), and every outcome write
+-- (success or error, retry requeue, dead-letter, ask or wake park) stamps it
+-- again in the same statement. It answers two questions:
+--
+--   * After a write whose result the runner could not see (a connection reset
+--     at COMMIT), the runner reads the row back: its own token here, on a row
+--     it no longer leases, in the status it was writing, means the write
+--     landed, so the run's notification fires once and nothing is retried.
+--   * Lease recovery finds a leased or running row whose lease expired with
+--     finished_run_id equal to lease_owner: that run ended, but its outcome
+--     never reached the row (the database was unreachable, or the server
+--     stopped first). It is dead-lettered for review instead of being run
+--     again. A run whose outcome is a request to run again (a retry or
+--     connector-outage requeue) clears its stamp first (db.ClearRunFinished),
+--     so that if the requeue never lands, recovery re-queues it as a crash;
+--     when the requeue lands, it stamps the token itself. (A connector re-run
+--     with no retries left is then caught by the crash-loop guard instead.)
+--
+-- NULL until a run of the row ends; a new claim carries a new token, so a
+-- value left by an earlier run never matches a later lease.
+ALTER TABLE sched.tasks ADD COLUMN IF NOT EXISTS finished_run_id TEXT;
