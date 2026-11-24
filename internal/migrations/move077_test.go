@@ -293,6 +293,10 @@ func TestMigration077DownCountsAnUnsettledDeliveredFire(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = chat.Close() })
+	// A chat is an account's: CreateConversation needs one.
+	if _, err := chat.CreateUser(ctx, ownerMv, "seed-password-1"); err != nil {
+		t.Fatal(err)
+	}
 	conv, err := chat.CreateConversation(ctx, ownerMv, "Deals", "victoria", "", false)
 	if err != nil {
 		t.Fatal(err)

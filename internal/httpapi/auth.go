@@ -14,6 +14,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/pgtext"
 	"github.com/ElcanoTek/fleet/internal/principal"
 	"github.com/ElcanoTek/fleet/internal/safe"
+	"github.com/ElcanoTek/fleet/internal/sched/apikeys"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
@@ -227,6 +228,13 @@ func roleFromCtx(ctx context.Context) string {
 // (rejectViewerWrites, adminMiddleware) don't re-query.
 func (s *Server) membershipMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// While this server does not hold its presence lock (its connection
+		// to the database dropped and the lock is not taken again yet), a CLI
+		// account deletion may hold it: no account work is admitted.
+		if s.presenceLost() {
+			writeServerReconnecting(w)
+			return
+		}
 		ctx := r.Context()
 		p, _ := principal.From(ctx)
 
@@ -248,10 +256,56 @@ func (s *Server) membershipMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		resolved, _, err := principal.Resolve(ctx, s.directory(), p, principal.Enabled)
+		// The account gate first, on the principal's email, so a request that
+		// is admitted cannot be one a deletion that starts and ends while it
+		// resolves never saw: a deletion closes the gate, then cancels and
+		// waits for every request inside it (accountGate).
+		ctx, leave, open := s.accounts.enter(ctx, p.Email)
+		if !open {
+			writeNotAMember(w)
+			return
+		}
+		defer leave()
+		resolved, account, err := principal.Resolve(ctx, s.directory(), p, principal.Enabled)
+		if err != nil && ctx.Err() != nil && s.accounts.isClosed(p.Email) {
+			// The lookup was cut short because the account is being deleted.
+			writeNotAMember(w)
+			return
+		}
+		if (p.AuthMethod == principal.MethodAPIKey || p.AuthMethod == principal.MethodBearer) &&
+			p.KeyID != "" && p.KeyAccountID == "" && (err == nil || errors.Is(err, principal.ErrNotMember)) {
+			// A user key minted before keys named their account, on its first
+			// use: bind it to the account its email has now, or record that it
+			// has none, in which case it acts as no one from now on. A key
+			// minted before an account under its email was deleted was that
+			// account's: it is recorded as acting as no one too, and refused
+			// (apikeys.ErrKeyFromDeletedAccount). The key is admitted
+			// only once that is written: while another process keeps the key
+			// store locked the request is answered 503 with Retry-After (a
+			// later one binds it); any other failure is the server's.
+			if bindErr := s.bindUserKey(ctx, p.KeyID, account); bindErr != nil {
+				switch {
+				case errors.Is(bindErr, apikeys.ErrStoreLocked):
+					writeKeyStoreBusy(w)
+					return
+				case errors.Is(bindErr, apikeys.ErrKeyFromDeletedAccount):
+					writeKeyPredatesAccount(w)
+					return
+				}
+				http.Error(w, "membership check failed", http.StatusInternalServerError)
+				return
+			}
+			if account == nil {
+				writeKeyPredatesAccount(w)
+				return
+			}
+		}
 		switch {
 		case errors.Is(err, principal.ErrNotMember), errors.Is(err, principal.ErrNoIdentity):
 			writeNotAMember(w)
+			return
+		case errors.Is(err, principal.ErrKeyPredatesAccount):
+			writeKeyPredatesAccount(w)
 			return
 		case errors.Is(err, principal.ErrSessionRevoked):
 			writeSessionRevoked(w)
@@ -261,6 +315,99 @@ func (s *Server) membershipMiddleware(next http.Handler) http.Handler {
 			return
 		}
 		next.ServeHTTP(w, r.WithContext(principal.With(ctx, resolved)))
+	})
+}
+
+// bindUserKey records the account a not-yet-bound user key acts as: the
+// account's id, or — account nil — that its email has no account.
+func (s *Server) bindUserKey(ctx context.Context, keyID string, account *identity.User) error {
+	if s.apiKeys == nil {
+		return nil
+	}
+	id := ""
+	if account != nil {
+		id = account.ID.String()
+	}
+	err := s.apiKeys.RecordUserKeyAccount(ctx, keyID, id)
+	if err != nil && !errors.Is(err, apikeys.ErrKeyFromDeletedAccount) {
+		logging.From(ctx).Error("user key: binding to its account failed", "key_id", keyID, "err", err)
+	}
+	return err
+}
+
+// errServerReconnecting answers account work while this server does not hold
+// its presence lock (presenceLost).
+var errServerReconnecting = errors.New("the server is reconnecting to its database; try again")
+
+// presenceLost reports whether this server's presence lock connection dropped
+// and the lock is not held again yet (store.Store.ServerPresenceLost): a CLI
+// account deletion may hold it exclusive meanwhile, so the server admits no
+// account work — requests through membershipMiddleware, the upload writer,
+// turn starts and queue drains, webhook turns. False for a store that holds
+// no presence.
+func (s *Server) presenceLost() bool {
+	q, ok := s.store.(interface{ ServerPresenceLost() bool })
+	return ok && q.ServerPresenceLost()
+}
+
+// writeServerReconnecting answers 503 with Retry-After while presenceLost.
+func writeServerReconnecting(w http.ResponseWriter) {
+	w.Header().Set("Retry-After", "2")
+	http.Error(w, errServerReconnecting.Error(), http.StatusServiceUnavailable)
+}
+
+// errServerShuttingDown answers a turn asked for once graceful shutdown has
+// begun (#278).
+var errServerShuttingDown = errors.New("server is shutting down")
+
+// notTakingTurns is why no turn starts now: the server is shutting down
+// (IsDraining), or it does not hold its presence lock (presenceLost). nil
+// while turns start.
+func (s *Server) notTakingTurns() error {
+	switch {
+	case s.IsDraining():
+		return errServerShuttingDown
+	case s.presenceLost():
+		return errServerReconnecting
+	}
+	return nil
+}
+
+// writeNotTakingTurns answers a request refused by notTakingTurns: 503, with
+// Retry-After while the server reconnects.
+func writeNotTakingTurns(w http.ResponseWriter, err error) {
+	if errors.Is(err, errServerReconnecting) {
+		writeServerReconnecting(w)
+		return
+	}
+	http.Error(w, err.Error(), http.StatusServiceUnavailable)
+}
+
+// errKeyStoreBusy is the answer to a not-yet-bound user key whose binding
+// could not be written because another process keeps the key store locked.
+var errKeyStoreBusy = errors.New("the API-key store is busy with another change; try again in a few seconds")
+
+// writeKeyStoreBusy answers 503 {"error":"key_store_busy"} with Retry-After:
+// the key is fine, its first-use binding is not written yet.
+func writeKeyStoreBusy(w http.ResponseWriter) {
+	w.Header().Set("Retry-After", "5")
+	writeJSONStatus(w, nil, http.StatusServiceUnavailable, map[string]string{
+		"error":   "key_store_busy",
+		"message": errKeyStoreBusy.Error(),
+	})
+}
+
+// errKeyPredatesAccount is the refusal of a user API key that does not act as
+// the account its email names now (principal.ErrKeyPredatesAccount, or a key
+// whose email had no account when it was bound).
+var errKeyPredatesAccount = errors.New("this API key was minted for an earlier account under this email, or before the account existed; mint a new key for the account (fleet sched apikey create <name> --type user --user <email>)")
+
+// writeKeyPredatesAccount answers 403 {"error":"key_predates_account"}: the
+// account is fine, the key is not its own.
+func writeKeyPredatesAccount(w http.ResponseWriter) {
+	writeJSONStatus(w, nil, http.StatusForbidden, map[string]string{
+		"error":   "key_predates_account",
+		"message": errKeyPredatesAccount.Error(),
 	})
 }
 
@@ -294,6 +441,21 @@ func writeNotAMember(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusForbidden)
 	_, _ = w.Write([]byte(`{"error":"not_a_member"}`))
+}
+
+// writeAccountGone answers a write the store refused because the signed-in
+// account no longer exists (store.ErrUserNotFound from its account-row lock:
+// the account was deleted — by the CLI, say — while the request ran) as
+// membershipMiddleware answers every request after that: 403 not_a_member,
+// which the web app takes to its No access page. It reports whether err was
+// that refusal; the account writers' handlers call it before their own
+// error mapping.
+func writeAccountGone(w http.ResponseWriter, err error) bool {
+	if !errors.Is(err, store.ErrUserNotFound) {
+		return false
+	}
+	writeNotAMember(w)
+	return true
 }
 
 // headerSessionRevoked marks the response below for the web tier's proxy funnel.

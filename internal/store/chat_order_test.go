@@ -16,6 +16,7 @@ func TestChatOrder_Pinned(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "trader@elcanotek.com", "someone@elcanotek.com")
 	ctx := context.Background()
 	const me = "trader@elcanotek.com"
 	const other = "someone@elcanotek.com"
@@ -102,6 +103,7 @@ func TestChatOrder_Project(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "builder@elcanotek.com")
 	ctx := context.Background()
 	const me = "builder@elcanotek.com"
 	p, err := s.CreateProject(ctx, &Project{OwnerEmail: me, Name: "Roadmap"})

@@ -135,6 +135,26 @@ type Server struct {
 	// apiKeys validates the user API keys the listener's own port accepts
 	// (edge.go); nil accepts none.
 	apiKeys keyValidator
+	// accounts tracks each account's requests in flight, so deleting the
+	// account can stop them first (account_gate.go).
+	accounts accountGate
+	// afterAccountWorkStopped is a test seam: it runs in an account deletion
+	// right after the account's work stopped, before the rows go.
+	afterAccountWorkStopped func()
+	// afterAccountSnapshot is a test seam: it runs in the maintenance pass's
+	// account step right after the accounts are listed, before anything that
+	// listing marks as orphaned is removed.
+	afterAccountSnapshot func()
+	// beforeTurnRegister is a test seam: it runs right before a turn is
+	// registered (registerTurnChecked) — in startTurn, after the sender's
+	// access is re-checked.
+	beforeTurnRegister func()
+	// accountDrain overrides how long an account deletion waits for the
+	// account's work to stop (tests); 0 is defaultAccountDrainTimeout.
+	accountDrain time.Duration
+	// accountDeleteLimit overrides how long an account deletion may run once
+	// the account's work is stopped (tests); 0 is defaultAccountDeleteTimeout.
+	accountDeleteLimit time.Duration
 
 	// inflight tracks the currently-running turn for each conversation.
 	// Lets the server keep generating after the SSE connection drops
@@ -880,7 +900,13 @@ func envInt(key string, def int) int {
 // This ungated form serves turns with no steer mailbox and no queue row
 // (webhooks); chat submissions and queue drains go through registerTurnGated.
 func (s *Server) registerTurn(convID string, cancel context.CancelFunc) (*turnBuffer, string, uint64, bool) {
-	buf, turnID, token, ok, _ := s.registerTurnGated(convID, cancel, nil, nil, "")
+	return s.registerTurnFor(convID, "", cancel)
+}
+
+// registerTurnFor is registerTurn for a turn run as owner, the chat's owner
+// (a webhook's turn): it is refused while owner's account is being deleted.
+func (s *Server) registerTurnFor(convID, owner string, cancel context.CancelFunc) (*turnBuffer, string, uint64, bool) {
+	buf, turnID, token, ok, _ := s.registerTurnChecked(convID, owner, cancel, nil, nil, "")
 	return buf, turnID, token, ok
 }
 
@@ -905,7 +931,32 @@ func (s *Server) currentMultiplayerEpoch(convID string) uint64 {
 }
 
 func (s *Server) registerTurnGated(convID string, cancel context.CancelFunc, steer *steerMailbox, queued *queuedLaunch, submissionID string) (buf *turnBuffer, turnID string, token uint64, ok, swept bool) {
+	owner := ""
+	if steer != nil {
+		owner = steer.owner
+	}
+	return s.registerTurnChecked(convID, owner, cancel, steer, queued, submissionID)
+}
+
+// registerTurnChecked is registerTurnGated with the chat's owner named, for
+// the account check: no turn is registered while a deletion holds the gate of
+// the sender's (steer.user) or the owner's account. The check runs under
+// inflightMu, the lock stopAccountWork reads the running turns under once it
+// has closed the gate, so a turn is either refused here or seen — and
+// cancelled — by that read; none can start in between.
+func (s *Server) registerTurnChecked(convID, owner string, cancel context.CancelFunc, steer *steerMailbox, queued *queuedLaunch, submissionID string) (buf *turnBuffer, turnID string, token uint64, ok, swept bool) {
+	if s.beforeTurnRegister != nil {
+		s.beforeTurnRegister()
+	}
 	s.inflightMu.Lock()
+	sender := ""
+	if steer != nil {
+		sender = steer.user
+	}
+	if s.turnAccountClosed(sender, owner) {
+		s.inflightMu.Unlock()
+		return nil, "", 0, false, true
+	}
 	if steer != nil && steer.nonOwner && s.multiplayerEpochs[convID] != steer.mpEpoch {
 		s.inflightMu.Unlock()
 		return nil, "", 0, false, true
@@ -977,6 +1028,38 @@ func (s *Server) registerTurnGated(convID string, cancel context.CancelFunc, ste
 		prev.buf.Finish()
 	}
 	return buf, turnID, token, true, false
+}
+
+// dropTurnOfClosedAccount ends a launch whose turn registerTurnChecked
+// refused because the sender's or the chat owner's account is being deleted:
+// the admission slot goes back, a drained queue row is cancelled, a direct
+// claim is settled as not run, and the request is answered as the account's
+// later requests are (403 not_a_member).
+func (s *Server) dropTurnOfClosedAccount(w http.ResponseWriter, convID string, queued *queuedLaunch, directInputID string, releaseSlot func()) {
+	if releaseSlot != nil {
+		releaseSlot()
+	}
+	if queued != nil {
+		s.terminalizeQueueRow(convID, queued.rowID, queued.claimTurnID, store.InputStateCancelled)
+		return
+	}
+	if directInputID != "" {
+		s.settleDirectInput(directInputID, "")
+	}
+	if w != nil {
+		writeNotAMember(w)
+	}
+}
+
+// turnAccountClosed reports whether a deletion holds the account gate of any
+// of the addresses a turn is run for (empty ones are skipped).
+func (s *Server) turnAccountClosed(emails ...string) bool {
+	for _, e := range emails {
+		if e != "" && s.accounts.isClosed(e) {
+			return true
+		}
+	}
+	return false
 }
 
 // finishTurn seals the buffer and marks the entry finished, keeping it

@@ -678,12 +678,25 @@ func (s *Store) CreateApproval(ctx context.Context, convID, userEmail, toolName,
 	if seat.Server != "" {
 		serverArg, accountArg = seat.Server, seat.Account
 	}
-	_, err := s.db.ExecContext(ctx,
+	// The user's account row first (lockWriterAccountTx), then the insert,
+	// whose foreign key locks the chat row: a card staged for an account
+	// being deleted commits before the deletion or is refused after it.
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := lockWriterAccountTx(ctx, tx, userEmail, convID); err != nil {
+		return nil, err
+	}
+	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO approvals (id, conversation_id, user_email, tool_name, tool_call_id, args_json, status, created_at, expires_at, mcp_server, mcp_account)
 		 VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7, $8, $9, $10)`,
 		id, convID, userEmail, toolName, toolCallID, argsJSON, now, expiresArg, serverArg, accountArg,
-	)
-	if err != nil {
+	); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
 	return &Approval{

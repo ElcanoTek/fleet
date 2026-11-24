@@ -47,6 +47,7 @@ func mustSet(t *testing.T, sets map[string]func() (bool, error)) {
 func scanTestConversation(t *testing.T) (*Store, string) {
 	t.Helper()
 	s := newTestStore(t)
+	seedAccount(t, s, scanTestUser)
 	conv, err := s.CreateConversation(context.Background(), scanTestUser, "t", "victoria", "m", false)
 	if err != nil {
 		t.Fatal(err)

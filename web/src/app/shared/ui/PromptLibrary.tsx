@@ -509,7 +509,9 @@ export function PromptLibrary({
                                 {selected.read_only
                                   ? tr("Tracked in {0}", [selected.path])
                                   : selected.visibility === "workspace"
-                                    ? tr("Shared by {0}", [selected.owner_username])
+                                    ? selected.owner_deleted
+                                      ? tr("Shared by a deleted account")
+                                      : tr("Shared by {0}", [selected.owner_username])
                                     : tr("Only you can see this prompt")}
                               </span>
                               <button

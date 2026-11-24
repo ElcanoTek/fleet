@@ -21,6 +21,7 @@ func TestProjectExport_SetsContentDispositionFilename(t *testing.T) {
 	t.Parallel()
 
 	srv := serverFixture(t)
+	seedUsers(t, srv, "owner@x.com")
 	st := srv.store.(*store.Store)
 	ctx := context.Background()
 	const owner = "owner@x.com"
@@ -77,6 +78,7 @@ func TestProjectExport_FilenameSurvivesAnUnslugifiableName(t *testing.T) {
 	t.Parallel()
 
 	srv := serverFixture(t)
+	seedUsers(t, srv, "owner@x.com")
 	st := srv.store.(*store.Store)
 	ctx := context.Background()
 	const owner = "owner@x.com"

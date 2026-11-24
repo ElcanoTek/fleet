@@ -74,6 +74,7 @@ func mpPost(ctx context.Context, handler http.HandlerFunc, path string, body any
 func TestIdentityWritesRefuseControlCharacters(t *testing.T) {
 	t.Parallel()
 	srv := serverFixture(t)
+	seedUsers(t, srv, "alice@example.com")
 	ctx := context.Background()
 	st := srv.concreteStore(t)
 	conv, err := st.CreateConversation(ctx, "alice@example.com", "t", "victoria", "m", false)
@@ -123,6 +124,7 @@ func TestIdentityWritesRefuseControlCharacters(t *testing.T) {
 func TestMultiplayerChangeIsCheckedBeforeAnyWrite(t *testing.T) {
 	t.Parallel()
 	srv := serverFixture(t)
+	seedUsers(t, srv, "alice@example.com")
 	ctx := context.Background()
 	st := srv.concreteStore(t)
 	conv, err := st.CreateConversation(ctx, "alice@example.com", "t", "victoria", "m", false)
@@ -159,6 +161,7 @@ func TestMultiplayerChangeIsCheckedBeforeAnyWrite(t *testing.T) {
 func TestExistingControlCharacterIdentitiesCanBeRemoved(t *testing.T) {
 	t.Parallel()
 	srv := serverFixture(t)
+	seedUsers(t, srv, "alice@example.com")
 	ctx := context.Background()
 	st := srv.concreteStore(t)
 	const old = "old\x01@example.com"

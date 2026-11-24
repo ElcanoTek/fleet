@@ -58,6 +58,10 @@ func newChatScheduleFleet(t *testing.T) (*Scheduler, *store.Store, *storeDeliver
 	s := New(st, "UTC")
 	d := &storeDeliverer{chat: chat}
 	s.SetChatScheduleDeliverer(d)
+	// A chat is an account's: CreateConversation needs one.
+	if _, err := chat.CreateUser(context.Background(), "owner@elcanotek.com", "seed-password-1"); err != nil {
+		t.Fatal(err)
+	}
 	conv, err := chat.CreateConversation(context.Background(), "owner@elcanotek.com", "Patrol chat", "victoria", "", false)
 	if err != nil {
 		t.Fatal(err)

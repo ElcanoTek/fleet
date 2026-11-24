@@ -14,6 +14,7 @@ func TestRemoteMCPShares(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStoreWithCipher(t)
+	seedAccount(t, s, "owner@elcano.com")
 	ctx := context.Background()
 	const owner = "owner@elcano.com"
 	const mate = "mate@elcano.com"

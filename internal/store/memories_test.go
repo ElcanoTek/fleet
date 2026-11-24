@@ -21,6 +21,7 @@ func TestMemoryProposalConversationScope(t *testing.T) {
 	user := "test@example.com"
 	convA := "conv-a"
 	convB := "conv-b"
+	seedAccount(t, s, user) // a proposal is written only for an existing account
 
 	// Two proposals on conv-a, one on conv-b.
 	a1, err := s.CreateMemoryProposal(ctx, user, convA, MemoryProposalParams{Content: "first thought", Origin: "tool"})
@@ -140,6 +141,7 @@ func TestTypedMemoryLifecycle(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "typed@example.com")
 	ctx := context.Background()
 	user := "typed@example.com"
 
@@ -216,6 +218,7 @@ func TestAcceptMemoryProposalRetainsProvenance(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 	user := "prov@example.com"
+	seedAccount(t, s, user)
 	p, err := s.CreateMemoryProposal(ctx, user, "conv-42", MemoryProposalParams{Content: "team uses trunk-based dev", Kind: "constraint", Origin: "auto"})
 	if err != nil {
 		t.Fatal(err)
@@ -250,6 +253,7 @@ func TestAcceptMemoryProposalSupersede(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 	user := "supersede@example.com"
+	seedAccount(t, s, user)
 
 	mkTarget := func(content string) *Memory {
 		t.Helper()

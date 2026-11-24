@@ -14,9 +14,14 @@ import (
 )
 
 // keyValidator is the API-key store the chat listener's edge checks a
-// presented key against (apikeys.Manager, the orchestrator's store).
+// presented key against (apikeys.Manager, the orchestrator's store). Deleting
+// an account deletes the user keys that act as it through the same store
+// (internal/accountdelete).
 type keyValidator interface {
 	ValidateKeyOn(ctx context.Context, s apikeys.Surface, rawKey string, requiredPermission *models.Permission, ipAddress, userAgent *string) (bool, *apikeys.APIKey, string)
+	BindUnboundUserKeys(ctx context.Context, email, accountID string) (int, error)
+	DeleteUserKeys(ctx context.Context, email, accountID string) (int, error)
+	RecordUserKeyAccount(ctx context.Context, keyID, accountID string) error
 }
 
 // WithAPIKeys lets the chat listener's own port accept user API keys
@@ -37,9 +42,11 @@ const retiredServiceTokenHeader = "X-Chat-Server-Token" //nolint:gosec // G101: 
 // The credential is a user API key (apikeys.KeyTypeUser), as X-API-Key or
 // Authorization: Bearer. The principal is the account the key names; the
 // membership gate resolves that account on every request, so disabling it
-// ends the key's access too. No header names a person: a caller still
-// presenting the retired service token gets a 401 that says what replaced
-// it, never a silent fall-through.
+// ends the key's access too, and admits it only for the account it is bound
+// to (principal.Principal.KeyAccountID; membershipMiddleware binds a key
+// minted before keys named their account on its first use). No header names
+// a person: a caller still presenting the retired service token gets a 401
+// that says what replaced it, never a silent fall-through.
 func (s *Server) edgePrincipal(w http.ResponseWriter, r *http.Request) (principal.Principal, bool) {
 	if r.Header.Get(retiredServiceTokenHeader) != "" {
 		writeJSONStatus(w, r, http.StatusUnauthorized, map[string]string{
@@ -72,10 +79,17 @@ func (s *Server) edgePrincipal(w http.ResponseWriter, r *http.Request) (principa
 		writeJSONStatus(w, r, http.StatusUnauthorized, map[string]string{"error": "invalid_api_key", "message": reason})
 		return principal.Principal{}, false
 	}
+	// A key minted before keys named their account, whose email had no
+	// account when it was bound, acts as no one (apikeys.APIKey.AccountMissing).
+	if key.AccountMissing {
+		writeKeyPredatesAccount(w)
+		return principal.Principal{}, false
+	}
 	return principal.Principal{
-		Email:      strings.ToLower(strings.TrimSpace(key.UserEmail)),
-		KeyID:      key.KeyID,
-		AuthMethod: method,
+		Email:        strings.ToLower(strings.TrimSpace(key.UserEmail)),
+		KeyID:        key.KeyID,
+		KeyAccountID: key.AccountID,
+		AuthMethod:   method,
 	}, true
 }
 

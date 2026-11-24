@@ -96,6 +96,7 @@ func TestInflight_EchoesTheSubmissionTheRunningTurnBelongsTo(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "alice@x.com")
 	const user = "alice@x.com"
 	conv, err := s.store.CreateConversation(t.Context(), user, "q", "victoria", "openrouter/auto", false)
 	if err != nil {
@@ -156,6 +157,7 @@ func TestInflight_QueuedSubmissionKeepsItsIdentityAlongsideAnInputID(t *testing.
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "alice@x.com")
 	const user = "alice@x.com"
 	conv, err := s.store.CreateConversation(t.Context(), user, "q", "victoria", "openrouter/auto", false)
 	if err != nil {
@@ -198,6 +200,7 @@ func TestBusySubmit_SubmissionIDIsNotAnIdempotencyKey(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "alice@x.com")
 	const user = "alice@x.com"
 	conv, err := s.store.CreateConversation(t.Context(), user, "q", "victoria", "openrouter/auto", false)
 	if err != nil {
@@ -264,6 +267,7 @@ func TestInflight_OmitsSubmissionIDWhenTheTurnNamesNone(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "alice@x.com")
 	conv, err := s.store.CreateConversation(t.Context(), "alice@x.com", "hi", "victoria", "", false)
 	if err != nil {
 		t.Fatal(err)

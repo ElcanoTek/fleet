@@ -143,6 +143,7 @@ func (s *Server) userPersonaByID(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) userPersonaError(w http.ResponseWriter, err error) {
 	switch {
+	case writeAccountGone(w, err):
 	case errors.Is(err, store.ErrUserPersonaInvalid):
 		http.Error(w, err.Error(), http.StatusBadRequest)
 	case errors.Is(err, store.ErrUserPersonaNotFound):

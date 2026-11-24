@@ -87,6 +87,14 @@ const DefaultMaintenanceInterval = time.Hour
 // underlying sweeps are all idempotent set-based deletions — though the rate
 // gate means that is rare in practice. Exported so cmd/fleet can drive it.
 func (s *Server) RunMaintenance(ctx context.Context) {
+	s.maintenancePass(ctx, true)
+}
+
+// maintenancePass is the pass itself. hourly is true for the ticker's run
+// (RunMaintenance) and false for the opportunistic post-turn one, which skips
+// the steps that only need the hourly cadence: the sweep of what deleted
+// accounts left.
+func (s *Server) maintenancePass(ctx context.Context, hourly bool) {
 	s.sweepRetention(ctx)
 
 	// Attachment files older than the conversation window that nothing kept
@@ -122,6 +130,13 @@ func (s *Server) RunMaintenance(ctx context.Context) {
 		logging.From(ctx).Info("maintenance: workspace sweep removed orphan dirs", "removed", removed)
 	}
 	s.sweepOrphanPrivateWorkspaceStashes(ctx)
+	// What deleted accounts left: rows, upload and private workspace trees,
+	// in-memory approvals (account_delete.go). Hourly only: it lists every
+	// account and reads the live rows of three tables, and nothing it removes
+	// needs removing sooner.
+	if hourly {
+		s.sweepDeletedAccounts(ctx)
+	}
 	if s.sweepTaskWorkspaces != nil {
 		if taskRemoved, terr := s.sweepTaskWorkspaces(ctx, tools.WorkspaceDirForConversation(""), time.Duration(s.cfg.ConversationTTL)*24*time.Hour); terr != nil {
 			logging.From(ctx).Error("maintenance: task workspace sweep failed", "err", terr)
@@ -160,7 +175,7 @@ func (s *Server) runPostTurnMaintenance(ctx context.Context) {
 	if !s.claimMaintenanceSlot(time.Now()) {
 		return
 	}
-	s.RunMaintenance(ctx)
+	s.maintenancePass(ctx, false)
 }
 
 // claimMaintenanceSlot reports whether the caller may run the pass now, and

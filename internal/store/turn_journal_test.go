@@ -28,6 +28,7 @@ func mustJSON(t *testing.T, v any) json.RawMessage {
 func seedConvAndTurn(t *testing.T, s *Store, turnID string) string {
 	t.Helper()
 	ctx := context.Background()
+	seedAccount(t, s, "u@example.com")
 	conv, err := s.CreateConversation(ctx, "u@example.com", "t", "", "m", false)
 	if err != nil {
 		t.Fatalf("CreateConversation: %v", err)

@@ -1,0 +1,1735 @@
+package httpapi
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"golang.org/x/sys/unix"
+
+	"github.com/ElcanoTek/fleet/internal/accountdelete"
+	"github.com/ElcanoTek/fleet/internal/chattui"
+	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/identity"
+	"github.com/ElcanoTek/fleet/internal/sched/apikeys"
+	"github.com/ElcanoTek/fleet/internal/store"
+	"github.com/ElcanoTek/fleet/internal/tools"
+)
+
+// Deleting an account from Settings → Admin → Users deletes the user API keys
+// that act as it: the key stops authenticating at once, and a later account
+// under the same email does not get it.
+func TestAdminDeleteRemovesTheAccountsUserKeys(t *testing.T) {
+	t.Parallel()
+	s := memberFixture(t, "boss@x.com", "u@x.com")
+	setRole(t, s, "boss@x.com", "admin", "")
+	mgr, userKey, taskKey := edgeKeys(t) // userKey acts as u@x.com
+	s.apiKeys = mgr
+	srv := httptest.NewServer(s.Routes())
+	defer srv.Close()
+
+	if err := chattui.NewClient(chattui.Config{ServerURL: srv.URL, APIKey: userKey}).CheckIdentity(context.Background()); err != nil {
+		t.Fatalf("user key before the delete: %v", err)
+	}
+	if w := do(t, s.Routes(), http.MethodDelete, "/admin/users/u@x.com", nil, "boss@x.com"); w.Code != http.StatusNoContent {
+		t.Fatalf("delete: status %d (body %s)", w.Code, w.Body.String())
+	}
+	for _, k := range mgr.ListKeys() {
+		if strings.EqualFold(k.UserEmail, "u@x.com") {
+			t.Errorf("user key %s for the deleted account is still in the key store", k.KeyID)
+		}
+	}
+	seedUser(t, s.concreteStore(t), "u@x.com")
+	if err := chattui.NewClient(chattui.Config{ServerURL: srv.URL, APIKey: userKey}).CheckIdentity(context.Background()); err == nil {
+		t.Fatal("the deleted account's user key authenticates the account created after it")
+	}
+	if ok, _, reason := mgr.ValidateKey(context.Background(), taskKey, nil, nil, nil); !ok {
+		t.Fatalf("a key that names no account was removed with the account: %s", reason)
+	}
+}
+
+// A user API key acts only as the account it is bound to: a key left behind
+// by an account deleted outside this process (no key cleanup) does not
+// authenticate a later account under the same email, and a key minted for
+// the new account does.
+func TestUserKeyDoesNotActAsALaterAccount(t *testing.T) {
+	t.Parallel()
+	s := memberFixture(t, "u@x.com")
+	mgr, userKey, _ := edgeKeys(t)
+	s.apiKeys = mgr
+	srv := httptest.NewServer(s.Routes())
+	defer srv.Close()
+	ctx := context.Background()
+	st := s.concreteStore(t)
+
+	// edgeKeys mints the key without an account (as keys were before they
+	// named one): its first use binds it to u@x.com's account.
+	if err := chattui.NewClient(chattui.Config{ServerURL: srv.URL, APIKey: userKey}).CheckIdentity(ctx); err != nil {
+		t.Fatalf("first use: %v", err)
+	}
+	if err := st.DeleteUser(ctx, "u@x.com"); err != nil {
+		t.Fatal(err)
+	}
+	seedUser(t, st, "u@x.com")
+	err := chattui.NewClient(chattui.Config{ServerURL: srv.URL, APIKey: userKey}).CheckIdentity(ctx)
+	if err == nil || !strings.Contains(err.Error(), "minted for an earlier account") {
+		t.Fatalf("a key bound to the deleted account: %v, want refused as key_predates_account", err)
+	}
+
+	u, err := st.GetUser(ctx, "u@x.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, fresh, err := mgr.CreateBoundUserKey(ctx, "cli-2", "u@x.com", u.ID, 0, nil, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := chattui.NewClient(chattui.Config{ServerURL: srv.URL, APIKey: fresh}).CheckIdentity(ctx); err != nil {
+		t.Fatalf("a key minted for the new account: %v", err)
+	}
+}
+
+// A key minted before keys named their account, whose email has no account
+// on its first use, is marked as acting as no one: an account created under
+// the email afterwards does not make it work.
+func TestUnboundUserKeyWithoutAccountActsAsNoOne(t *testing.T) {
+	t.Parallel()
+	s := memberFixture(t)
+	mgr, _, _ := edgeKeys(t)
+	s.apiKeys = mgr
+	srv := httptest.NewServer(s.Routes())
+	defer srv.Close()
+	ctx := context.Background()
+	key, ghostKey, err := mgr.CreateUserKey(ctx, "ghost", "ghost@x.com", 0, nil, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, when := range []string{"with no account", "after an account is created under the email"} {
+		if i == 1 {
+			seedUser(t, s.concreteStore(t), "ghost@x.com")
+		}
+		err := chattui.NewClient(chattui.Config{ServerURL: srv.URL, APIKey: ghostKey}).CheckIdentity(ctx)
+		if err == nil || !strings.Contains(err.Error(), "minted for an earlier account") {
+			t.Fatalf("%s: %v, want refused as key_predates_account", when, err)
+		}
+	}
+	if k := mgr.GetKey(key.KeyID); !k.AccountMissing || k.AccountID != "" {
+		t.Fatalf("key = %+v, want marked as having no account", k)
+	}
+}
+
+// A key minted before keys named their account is admitted only once its
+// binding is written: while another process keeps the key store locked, its
+// first use is answered 503 with Retry-After and reaches no handler; once the
+// lock is free the next request binds it and is admitted.
+func TestUnboundUserKeyWaitsForItsBinding(t *testing.T) {
+	t.Parallel()
+	s := memberFixture(t, "u@x.com")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "api_keys.json")
+	mgr, err := apikeys.NewManager(path, filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, raw, err := mgr.CreateUserKey(context.Background(), "cli", "u@x.com", 0, nil, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mgr.SetFileLockWait(50 * time.Millisecond)
+	s.apiKeys = mgr
+	srv := httptest.NewServer(s.Routes())
+	defer srv.Close()
+	// me returns GET /me's status, Retry-After and "error" code.
+	me := func() (int, string, string) {
+		t.Helper()
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL+"/me", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("X-API-Key", raw)
+		resp, err := srv.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		var body struct {
+			Error string `json:"error"`
+		}
+		_ = json.NewDecoder(resp.Body).Decode(&body)
+		return resp.StatusCode, resp.Header.Get("Retry-After"), body.Error
+	}
+
+	holder, err := os.Open(path + ".lock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Close()
+	if err := unix.Flock(int(holder.Fd()), unix.LOCK_EX); err != nil {
+		t.Fatal(err)
+	}
+	if status, retry, code := me(); status != http.StatusServiceUnavailable || retry == "" || code != "key_store_busy" {
+		t.Fatalf("first use with the key store locked: status %d, Retry-After %q, error %q; want 503 key_store_busy with Retry-After",
+			status, retry, code)
+	}
+	if k := mgr.GetKey(key.KeyID); k.AccountID != "" || k.AccountMissing {
+		t.Fatalf("key = %+v, want still unbound", k)
+	}
+
+	if err := unix.Flock(int(holder.Fd()), unix.LOCK_UN); err != nil {
+		t.Fatal(err)
+	}
+	if status, _, _ := me(); status != http.StatusOK {
+		t.Fatalf("first use with the key store free: status %d, want 200", status)
+	}
+	u, err := s.concreteStore(t).GetUser(context.Background(), "u@x.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if k := mgr.GetKey(key.KeyID); k.AccountID != u.ID {
+		t.Fatalf("key = %+v, want bound to %s", k, u.ID)
+	}
+}
+
+// A deletion binds the account's keys that name no account to it before it
+// deletes anything; while another process holds the key store, the deletion
+// is refused with 503 and Retry-After, and the account stays.
+func TestAdminDeleteRefusedWhileTheKeyStoreIsBusy(t *testing.T) {
+	t.Parallel()
+	s := memberFixture(t, "boss@x.com", "u@x.com")
+	setRole(t, s, "boss@x.com", "admin", "")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "api_keys.json")
+	mgr, err := apikeys.NewManager(path, filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := mgr.CreateUserKey(context.Background(), "legacy", "u@x.com", 0, nil, ""); err != nil {
+		t.Fatal(err)
+	}
+	mgr.SetFileLockWait(50 * time.Millisecond)
+	s.apiKeys = mgr
+	holder, err := os.Open(path + ".lock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Close()
+	if err := unix.Flock(int(holder.Fd()), unix.LOCK_EX); err != nil {
+		t.Fatal(err)
+	}
+	w := do(t, s.Routes(), http.MethodDelete, "/admin/users/u@x.com", nil, "boss@x.com")
+	if w.Code != http.StatusServiceUnavailable || w.Header().Get("Retry-After") == "" || !strings.Contains(w.Body.String(), "nothing was deleted") {
+		t.Fatalf("status %d Retry-After %q body %q, want 503 saying nothing was deleted", w.Code, w.Header().Get("Retry-After"), w.Body.String())
+	}
+	if _, err := s.concreteStore(t).GetUser(context.Background(), "u@x.com"); err != nil {
+		t.Fatalf("the account was deleted: %v", err)
+	}
+}
+
+// A key minted before keys named their account is bound to the account
+// before the account is deleted, and goes with its keys: a later account
+// under the email never gets it.
+func TestDeletionLeavesNoUnboundKeyForALaterAccount(t *testing.T) {
+	t.Parallel()
+	s := memberFixture(t, "boss@x.com", "u@x.com")
+	setRole(t, s, "boss@x.com", "admin", "")
+	mgr := newTestKeyStore(t)
+	s.apiKeys = mgr
+	srv := httptest.NewServer(s.Routes())
+	defer srv.Close()
+	ctx := context.Background()
+	legacy, raw, err := mgr.CreateUserKey(ctx, "legacy", "u@x.com", 0, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w := do(t, s.Routes(), http.MethodDelete, "/admin/users/u@x.com", nil, "boss@x.com"); w.Code != http.StatusNoContent {
+		t.Fatalf("delete: status %d (body %s)", w.Code, w.Body.String())
+	}
+	if mgr.GetKey(legacy.KeyID) != nil {
+		t.Fatal("the key minted before keys named their account survived the deletion")
+	}
+	seedUser(t, s.concreteStore(t), "u@x.com")
+	if err := chattui.NewClient(chattui.Config{ServerURL: srv.URL, APIKey: raw}).CheckIdentity(ctx); err == nil {
+		t.Fatal("the deleted account's unbound key authenticates the account created after it")
+	}
+}
+
+// Account deletion removes the upload and private workspace trees by the
+// paths accountdelete computes; they must be the paths this package writes.
+func TestAccountDeletionPathsMatchTheServers(t *testing.T) {
+	t.Parallel()
+	for _, email := range []string{"u@x.com", " Mixed.Case@X.com "} {
+		if got, want := accountdelete.UploadsDir("/att", email), userUploadsRoot("/att", email); got != want {
+			t.Errorf("uploads of %q: accountdelete removes %q, the server writes %q", email, got, want)
+		}
+		if got, want := accountdelete.Digest(email), participantDigest(email); got != want {
+			t.Errorf("private workspace digest of %q: accountdelete removes %q, the server writes %q", email, got, want)
+		}
+	}
+	s := &Server{cfg: &config.Config{EmailAttachmentDir: "/att"}}
+	root, err := s.privateWorkspaceStashRoot()
+	if err != nil || root != accountdelete.PrivateWorkspaceRoot("/att") {
+		t.Errorf("private workspace root: server %q (err %v), accountdelete %q", root, err, accountdelete.PrivateWorkspaceRoot("/att"))
+	}
+}
+
+// The account gate: closing an email cancels its requests in flight and
+// refuses new ones until reopened; wait returns once they have ended.
+func TestAccountGate(t *testing.T) {
+	t.Parallel()
+	var g accountGate
+	ctx, leave, ok := g.enter(context.Background(), "U@x.com")
+	if !ok {
+		t.Fatal("an open gate refused a request")
+	}
+	other, leaveOther, _ := g.enter(context.Background(), "other@x.com")
+	defer leaveOther()
+	reopen := g.close(" u@x.com ")
+	if ctx.Err() == nil {
+		t.Fatal("closing did not cancel the request in flight")
+	}
+	if other.Err() != nil {
+		t.Fatal("closing one email cancelled another's request")
+	}
+	if _, _, ok := g.enter(context.Background(), "u@x.com"); ok {
+		t.Fatal("a closed gate admitted a request")
+	}
+	if drained, err := g.wait(context.Background(), "u@x.com", 50*time.Millisecond); drained || err != nil {
+		t.Fatalf("wait with a request still in flight = %v, %v; want not drained", drained, err)
+	}
+	// Two deletions of the account waiting at once are both woken when the
+	// last request ends, long before their deadline.
+	woke := make(chan time.Duration, 2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			start := time.Now()
+			if drained, err := g.wait(context.Background(), "u@x.com", 10*time.Second); !drained || err != nil {
+				t.Errorf("wait = %v, %v", drained, err)
+			}
+			woke <- time.Since(start)
+		}()
+	}
+	time.Sleep(50 * time.Millisecond)
+	leave()
+	for i := 0; i < 2; i++ {
+		if took := <-woke; took > 5*time.Second {
+			t.Errorf("a waiter woke only after %v", took)
+		}
+	}
+	// A wait whose context ends returns at once with its error.
+	_, leave2, _ := g.enter(context.Background(), "v@x.com")
+	defer leave2()
+	ctx2, cancel := context.WithCancel(context.Background())
+	go func() { time.Sleep(50 * time.Millisecond); cancel() }()
+	start := time.Now()
+	if _, err := g.wait(ctx2, "v@x.com", 10*time.Second); err == nil || time.Since(start) > 5*time.Second {
+		t.Fatalf("a cancelled wait: err %v after %v", err, time.Since(start))
+	}
+	reopen()
+	reopen() // idempotent
+	if _, l, ok := g.enter(context.Background(), "u@x.com"); !ok {
+		t.Fatal("a reopened gate refused a request")
+	} else {
+		l()
+	}
+}
+
+// While an account is being deleted its requests are refused as not a
+// member, through the membership check.
+func TestMembershipRefusesAnAccountBeingDeleted(t *testing.T) {
+	t.Parallel()
+	s := memberFixture(t, "u@x.com")
+	reopen := s.accounts.close("u@x.com")
+	if w := do(t, s.Routes(), http.MethodGet, "/auth/membership", nil, "u@x.com"); w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "not_a_member") {
+		t.Fatalf("during the deletion: status %d body %s", w.Code, w.Body.String())
+	}
+	reopen()
+	if w := do(t, s.Routes(), http.MethodGet, "/auth/membership", nil, "u@x.com"); w.Code != http.StatusOK {
+		t.Fatalf("after: status %d body %s", w.Code, w.Body.String())
+	}
+}
+
+// A deletion that completes but leaves a step answers 200 with the warnings
+// (not an error status: the account is gone, a retry would only meet 404).
+func TestAdminDeleteReportsStepsLeft(t *testing.T) {
+	t.Parallel()
+	s := memberFixture(t, "boss@x.com", "u@x.com")
+	setRole(t, s, "boss@x.com", "admin", "")
+	s.apiKeys = nil // no key store reachable: the key step cannot complete
+	w := do(t, s.Routes(), http.MethodDelete, "/admin/users/u@x.com", nil, "boss@x.com")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d body %s, want 200 with warnings", w.Code, w.Body.String())
+	}
+	var body struct {
+		Warnings []string `json:"warnings"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || len(body.Warnings) != 1 || !strings.Contains(body.Warnings[0], "API-key store") {
+		t.Fatalf("body %s (err %v), want one warning about the key store", w.Body.String(), err)
+	}
+	if _, err := s.concreteStore(t).GetUser(context.Background(), "u@x.com"); err == nil {
+		t.Fatal("the account survived")
+	}
+	// A complete deletion is still 204.
+	s.apiKeys = newTestKeyStore(t)
+	seedUser(t, s.concreteStore(t), "v@x.com")
+	if w := do(t, s.Routes(), http.MethodDelete, "/admin/users/v@x.com", nil, "boss@x.com"); w.Code != http.StatusNoContent {
+		t.Fatalf("complete deletion: status %d body %s", w.Code, w.Body.String())
+	}
+}
+
+// A refused deletion stops nothing: the account's requests keep being served.
+func TestAdminDeleteRefusalLeavesTheAccountRunning(t *testing.T) {
+	t.Parallel()
+	f := newTeamHTTPFixture(t)
+	req := httptest.NewRequest(http.MethodDelete, "/admin/users/alice%40x.com", nil)
+	req = req.WithContext(asUser(req.Context(), "root@x.com"))
+	w := httptest.NewRecorder()
+	f.srv.handleAdminUserDelete(w, req, "alice@x.com")
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status %d body %s, want the 409 refusal", w.Code, w.Body.String())
+	}
+	if _, leave, ok := f.srv.accounts.enter(context.Background(), "alice@x.com"); !ok {
+		t.Fatal("a refused deletion left the account's requests refused")
+	} else {
+		leave()
+	}
+}
+
+// The maintenance pass removes what an address with no account left — its
+// upload tree, its private workspace trees in multiplayer chats, its in-memory
+// approvals, its rows — and keeps a live account's.
+func TestMaintenanceSweepsDeletedAccounts(t *testing.T) {
+	t.Parallel()
+	s := memberFixture(t, "live@x.com")
+	s.sessionApprovals = NewSessionApprovalRegistry()
+	att := t.TempDir()
+	s.cfg.EmailAttachmentDir = att
+	ctx := context.Background()
+	var dirs []string
+	for _, e := range []string{"live@x.com", "gone@x.com"} {
+		for _, d := range []string{
+			filepath.Join(accountdelete.UploadsDir(att, e), "tok"),
+			filepath.Join(accountdelete.PrivateWorkspaceRoot(att), "conv-1", "participants", accountdelete.Digest(e)),
+		} {
+			if err := os.MkdirAll(d, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			dirs = append(dirs, d)
+		}
+		s.sessionApprovals.RegisterForUser("conv-1", e, "run_python", SessionApprovalPolicy{Mode: "approve"})
+	}
+	// A row an account deleted before deletion reached its table left behind
+	// (no account writes one for an address without an account any more).
+	if _, err := s.concreteStore(t).Identity().DB().ExecContext(ctx,
+		`INSERT INTO chat.push_subscriptions (id, user_email, endpoint, keys_auth, keys_p256dh, created_at, last_active_at)
+		 VALUES ('left-behind', 'gone@x.com', 'https://push.example/gone', 'a', 'k', 1, 1)`); err != nil {
+		t.Fatal(err)
+	}
+	s.sweepDeletedAccounts(ctx)
+	for i, d := range dirs {
+		_, err := os.Stat(d)
+		live := i < 2
+		if live && err != nil {
+			t.Errorf("a live account's %s was removed: %v", d, err)
+		}
+		if !live && !os.IsNotExist(err) {
+			t.Errorf("%s of an address with no account survived (err %v)", d, err)
+		}
+	}
+	if _, ok := s.sessionApprovals.MatchForUser("conv-1", "live@x.com", "run_python", "{}"); !ok {
+		t.Error("the live account's approval was dropped")
+	}
+	if _, ok := s.sessionApprovals.MatchForUser("conv-1", "gone@x.com", "run_python", "{}"); ok {
+		t.Error("the approval of an address with no account survived")
+	}
+	if subs, _ := s.concreteStore(t).ListPushSubscriptions(ctx, "gone@x.com"); len(subs) != 0 {
+		t.Errorf("%d push subscriptions of an address with no account survived", len(subs))
+	}
+}
+
+// An account created under an address after the maintenance pass listed the
+// accounts, while the address's old upload and private workspace trees are
+// still there, keeps both trees with what it wrote since, and its approvals.
+func TestMaintenanceKeepsAnAccountCreatedDuringTheSweep(t *testing.T) {
+	t.Parallel()
+	s := memberFixture(t, "live@x.com")
+	s.sessionApprovals = NewSessionApprovalRegistry()
+	att := t.TempDir()
+	s.cfg.EmailAttachmentDir = att
+	ctx := context.Background()
+	uploads := accountdelete.UploadsDir(att, "back@x.com")
+	stash := filepath.Join(accountdelete.PrivateWorkspaceRoot(att), "conv-1", "participants", accountdelete.Digest("back@x.com"))
+	for _, d := range []string{filepath.Join(uploads, "old-tok"), stash} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	freshUpload := filepath.Join(uploads, "fresh-tok")
+	freshStash := filepath.Join(stash, "notes.txt")
+	s.afterAccountSnapshot = func() {
+		seedUser(t, s.concreteStore(t), "back@x.com")
+		if err := os.MkdirAll(freshUpload, 0o700); err != nil {
+			t.Error(err)
+		}
+		if err := os.WriteFile(freshStash, []byte("x"), 0o600); err != nil {
+			t.Error(err)
+		}
+		s.sessionApprovals.RegisterForUser("conv-1", "back@x.com", "run_python", SessionApprovalPolicy{Mode: "approve"})
+	}
+	s.sweepDeletedAccounts(ctx)
+	for _, f := range []string{freshUpload, freshStash} {
+		if _, err := os.Stat(f); err != nil {
+			t.Errorf("%s of the account created during the sweep was removed: %v", f, err)
+		}
+	}
+	if _, ok := s.sessionApprovals.MatchForUser("conv-1", "back@x.com", "run_python", "{}"); !ok {
+		t.Error("the approval of the account created during the sweep was dropped")
+	}
+}
+
+// An upload tree an interrupted removal set aside is removed on the next
+// pass even when no tree is orphaned; a live account's tree stays.
+func TestMaintenanceRemovesSetAsideUploadsOnEveryPass(t *testing.T) {
+	t.Parallel()
+	s := memberFixture(t, "live@x.com")
+	att := t.TempDir()
+	s.cfg.EmailAttachmentDir = att
+	liveTree := filepath.Join(accountdelete.UploadsDir(att, "live@x.com"), "tok")
+	aside := filepath.Join(att, "uploads", ".removing-"+accountdelete.Digest("gone@x.com")+"-0123", "tok")
+	for _, d := range []string{liveTree, aside} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.sweepDeletedAccounts(context.Background())
+	if _, err := os.Stat(filepath.Dir(aside)); !os.IsNotExist(err) {
+		t.Errorf("the set-aside tree survived a pass with no orphan (err %v)", err)
+	}
+	if _, err := os.Stat(liveTree); err != nil {
+		t.Errorf("the live account's uploads were removed: %v", err)
+	}
+}
+
+// The store's one-digest check (the sweep's last look before a removal)
+// hashes an account's email as accountdelete.Digest names its trees.
+func TestStoreDigestCheckMatchesAccountDeletion(t *testing.T) {
+	t.Parallel()
+	s := memberFixture(t, "Mixed.Case@X.com")
+	st := s.concreteStore(t)
+	ctx := context.Background()
+	if live, err := st.AccountDigestLive(ctx, accountdelete.Digest(" Mixed.Case@X.com ")); err != nil || !live {
+		t.Fatalf("the account's own digest: live %v, err %v; want live", live, err)
+	}
+	if live, err := st.AccountDigestLive(ctx, accountdelete.Digest("nobody@x.com")); err != nil || live {
+		t.Fatalf("an address with no account: live %v, err %v; want not live", live, err)
+	}
+}
+
+// A write the store refuses because the account no longer exists — it was
+// deleted (by the CLI, say) after the request was admitted — is answered as
+// any later request of the account is: 403 not_a_member, not a 500.
+func TestWriteForAnAccountDeletedMidRequestIsNotAMember(t *testing.T) {
+	t.Parallel()
+	s := serverFixture(t)
+	// Admitted, as before the deletion; the account row is already gone.
+	s.isMember = func(context.Context, string) (bool, error) { return true, nil }
+	for _, c := range []struct {
+		path string
+		body map[string]any
+	}{
+		{"/conversations", map[string]any{"persona": "victoria"}},
+		{"/memories", map[string]any{"content": "a late fact"}},
+		{"/user-skills", map[string]any{"name": "late-skill", "description": "d", "body": "b"}},
+	} {
+		w := do(t, s.Routes(), http.MethodPost, c.path, c.body, "gone@x.com")
+		if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "not_a_member") {
+			t.Errorf("POST %s: status %d body %q, want 403 not_a_member", c.path, w.Code, w.Body.String())
+		}
+	}
+}
+
+// A deletion that begins while one of the account's /chat requests is past
+// its access check but has not registered its turn yet: the turn is refused
+// (the account's gate is closed), so when the account's work is reported
+// stopped no turn runs for it. Not parallel: it waits on timing.
+func TestTurnRegisteringWhileItsAccountIsDeletedNeverRuns(t *testing.T) {
+	s := memberFixture(t, "u@x.com")
+	s.cfg.MockMode = true
+	type stopResult struct {
+		stopped bool
+		err     error
+		running []string
+	}
+	result := make(chan stopResult, 1)
+	var reopen func()
+	s.beforeTurnRegister = func() {
+		s.beforeTurnRegister = nil
+		// The deletion begins: it closes the gate (cancelling this request)
+		// and stops the account's work while this request still holds its
+		// place in the gate.
+		reopen = s.accounts.close("u@x.com")
+		go func() {
+			stopped, err := s.stopAccountWork(context.Background(), "u@x.com")
+			result <- stopResult{stopped, err, s.runningTurnConvIDs()}
+		}()
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Cleanup(func() {
+		if reopen != nil {
+			reopen()
+		}
+	})
+	body, _ := json.Marshal(map[string]any{"message": "hello", "persona": "generic"})
+	req := httptest.NewRequestWithContext(gatewayContext("/chat", "u@x.com"), http.MethodPost, "/chat", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	s.Routes().ServeHTTP(w, req)
+	var res stopResult
+	select {
+	case res = <-result:
+	case <-time.After(20 * time.Second):
+		t.Fatal("stopping the account's work did not return")
+	}
+	if res.err != nil || !res.stopped {
+		t.Fatalf("stopAccountWork = %v, %v; want stopped", res.stopped, res.err)
+	}
+	if len(res.running) != 0 {
+		t.Fatalf("turns %v were running for the account when its work was reported stopped", res.running)
+	}
+	if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "not_a_member") {
+		t.Errorf("the request: status %d body %q, want 403 not_a_member", w.Code, w.Body.String())
+	}
+	// Nothing starts afterwards either.
+	time.Sleep(200 * time.Millisecond)
+	if running := s.runningTurnConvIDs(); len(running) != 0 {
+		t.Fatalf("turns %v started for the account after its work was stopped", running)
+	}
+}
+
+// The server's own cleanup after a deletion leaves a private workspace tree
+// alone when the address holds a new account by then (it is that account's
+// now), and removes it otherwise.
+func TestPurgeParticipantStashesSparesANewAccount(t *testing.T) {
+	t.Parallel()
+	s := &Server{cfg: &config.Config{EmailAttachmentDir: t.TempDir()}, inflight: make(map[string]inflightEntry)}
+	tree := filepath.Join(accountdelete.PrivateWorkspaceRoot(s.cfg.EmailAttachmentDir), "conv-1", "participants", accountdelete.Digest("back@x.com"))
+	if err := os.MkdirAll(tree, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	s.purgeParticipantPrivateStashes("back@x.com", func(string) (bool, error) { return true, nil })
+	if _, err := os.Stat(tree); err != nil {
+		t.Fatalf("the new account's private workspace tree was removed: %v", err)
+	}
+	s.purgeParticipantPrivateStashes("back@x.com", func(string) (bool, error) { return false, nil })
+	if _, err := os.Stat(tree); !os.IsNotExist(err) {
+		t.Fatalf("the deleted account's private workspace tree survived (err %v)", err)
+	}
+}
+
+// lateStashStore is the real store whose account-digest lookup fails, and
+// whose deletion first writes a private workspace tree back — as a turn still
+// running could after the deletion moved the trees aside.
+type lateStashStore struct {
+	*store.Store
+	tree string
+}
+
+func (l lateStashStore) DeleteAccount(ctx context.Context, email, expectedID string) (string, error) {
+	if err := os.MkdirAll(l.tree, 0o700); err != nil {
+		return "", err
+	}
+	return l.Store.DeleteAccount(ctx, email, expectedID)
+}
+
+func (lateStashStore) AccountDigestLive(context.Context, string) (bool, error) {
+	return false, errors.New("database unreachable")
+}
+
+// A private workspace tree the deletion could not remove is reported (200
+// with a warning, not 204) and is removed by a later maintenance pass, once
+// its digest is no account's.
+func TestAdminDeleteReportsAStashTreeItCouldNotRemove(t *testing.T) {
+	t.Parallel()
+	s := memberFixture(t, "boss@x.com", "u@x.com")
+	setRole(t, s, "boss@x.com", "admin", "")
+	s.cfg.EmailAttachmentDir = t.TempDir()
+	tree := filepath.Join(accountdelete.PrivateWorkspaceRoot(s.cfg.EmailAttachmentDir), "conv-1", "participants", accountdelete.Digest("u@x.com"))
+	st := s.concreteStore(t)
+	s.store = lateStashStore{st, tree}
+	w := do(t, s.Routes(), http.MethodDelete, "/admin/users/u@x.com", nil, "boss@x.com")
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "private workspace files failed") {
+		t.Fatalf("status %d body %s, want 200 with a private workspace warning", w.Code, w.Body.String())
+	}
+	if _, err := os.Stat(tree); err != nil {
+		t.Fatalf("the tree is gone although its removal was reported as failed: %v", err)
+	}
+	s.store = st
+	s.sweepDeletedAccounts(context.Background())
+	if _, err := os.Stat(tree); !os.IsNotExist(err) {
+		t.Fatalf("the maintenance pass left the deleted account's tree (err %v)", err)
+	}
+}
+
+// recreatingStore is the real store whose deletion creates the account again
+// under the same email the moment it commits, and runs then.
+type recreatingStore struct {
+	*store.Store
+	then func()
+}
+
+func (r recreatingStore) DeleteAccount(ctx context.Context, email, expectedID string) (string, error) {
+	id, err := r.Store.DeleteAccount(ctx, email, expectedID)
+	if err != nil {
+		return id, err
+	}
+	if _, err := r.CreateUser(ctx, email, "replacement-password-1"); err != nil {
+		return id, err
+	}
+	if r.then != nil {
+		r.then()
+	}
+	return id, nil
+}
+
+// An account created under the address the moment the deletion commits —
+// before the server's own steps after it run — gets nothing of the deleted
+// one: not its approve-all decisions, which are forgotten whatever holds the
+// address, and not its files, which were moved aside before the commit; what
+// it writes itself stays.
+func TestAdminDeleteGivesALaterAccountNothingOfTheDeletedOne(t *testing.T) {
+	t.Parallel()
+	s := memberFixture(t, "boss@x.com", "u@x.com")
+	setRole(t, s, "boss@x.com", "admin", "")
+	s.sessionApprovals = NewSessionApprovalRegistry()
+	att := t.TempDir()
+	s.cfg.EmailAttachmentDir = att
+	s.sessionApprovals.RegisterForUser("conv-1", "u@x.com", "run_python", SessionApprovalPolicy{Mode: "approve"})
+	old := []string{
+		filepath.Join(accountdelete.UploadsDir(att, "u@x.com"), "tok", "old.txt"),
+		filepath.Join(accountdelete.PrivateWorkspaceRoot(att), "conv-1", "participants", accountdelete.Digest("u@x.com"), "old.txt"),
+	}
+	fresh := filepath.Join(accountdelete.UploadsDir(att, "u@x.com"), "new-tok", "new.txt")
+	for _, f := range old {
+		if err := os.MkdirAll(filepath.Dir(f), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(f, []byte("old"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	st := s.concreteStore(t)
+	s.store = recreatingStore{st, func() {
+		// The new account uploads at once.
+		if err := os.MkdirAll(filepath.Dir(fresh), 0o700); err != nil {
+			t.Error(err)
+		}
+		if err := os.WriteFile(fresh, []byte("new"), 0o600); err != nil {
+			t.Error(err)
+		}
+	}}
+	// The new account's own upload, found under the address after the
+	// commit, is left in place and named in a warning.
+	if w := do(t, s.Routes(), http.MethodDelete, "/admin/users/u@x.com", nil, "boss@x.com"); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "were left in place") {
+		t.Fatalf("delete: status %d (body %s), want 200 naming the files left in place", w.Code, w.Body.String())
+	}
+	if _, ok := s.sessionApprovals.MatchForUser("conv-1", "u@x.com", "run_python", "{}"); ok {
+		t.Error("the account created after the commit inherited the deleted account's approve-all decision")
+	}
+	for _, f := range old {
+		if _, err := os.Stat(f); !os.IsNotExist(err) {
+			t.Errorf("the deleted account's %s is still under the address (err %v)", f, err)
+		}
+	}
+	if _, err := os.Stat(fresh); err != nil {
+		t.Errorf("the new account's own upload was removed: %v", err)
+	}
+}
+
+// Trees a deletion moved aside and never removed — the server stopped between
+// the move and the commit — are removed by the next maintenance pass.
+func TestMaintenanceRemovesTreesADeletionLeftAside(t *testing.T) {
+	t.Parallel()
+	s := memberFixture(t, "u@x.com")
+	att := t.TempDir()
+	s.cfg.EmailAttachmentDir = att
+	digest := accountdelete.Digest("u@x.com")
+	trees := []string{
+		filepath.Join(accountdelete.UploadsDir(att, "u@x.com"), "tok"),
+		filepath.Join(accountdelete.PrivateWorkspaceRoot(att), "conv-1", "participants", digest, "f"),
+	}
+	aside := make([]string, 0, len(trees))
+	for _, d := range trees {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		tr, moved, err := accountdelete.SetAside(filepath.Dir(d), digest)
+		if err != nil || !moved {
+			t.Fatalf("SetAside(%s) = %v, %v", filepath.Dir(d), moved, err)
+		}
+		aside = append(aside, tr.To)
+	}
+	s.sweepDeletedAccounts(context.Background())
+	for _, a := range aside {
+		if _, err := os.Stat(a); !os.IsNotExist(err) {
+			t.Errorf("%s survived the maintenance pass (err %v)", a, err)
+		}
+	}
+}
+
+// refusingDeleteStore is the real store whose database deletion fails (a
+// timeout, say), after everything before it ran.
+type refusingDeleteStore struct{ *store.Store }
+
+func (refusingDeleteStore) DeleteAccount(context.Context, string, string) (string, error) {
+	return "", errors.New("statement timeout")
+}
+
+// A deletion that marks a participant turn of the account (its files still
+// in the shared workspace) and then fails at the database takes the mark
+// back: the account is still there, and when the turn ends its files are
+// stashed as usual, not discarded as a deleted account's.
+// Not parallel: it sets the workspace root.
+func TestFailedDeletionLeavesARunningParticipantTurnUnmarked(t *testing.T) {
+	t.Setenv("FLEET_WORKSPACE_ROOT", t.TempDir())
+	s := memberFixture(t, "boss@x.com", "u@x.com")
+	setRole(t, s, "boss@x.com", "admin", "")
+	s.cfg.EmailAttachmentDir = t.TempDir()
+	conv := &store.Conversation{ID: "conv-running", UserEmail: "owner@x.com"}
+	s.setParticipantWorkspaceActive(conv.ID, "u@x.com", nil)
+	st := s.concreteStore(t)
+	s.store = refusingDeleteStore{st}
+	if w := do(t, s.Routes(), http.MethodDelete, "/admin/users/u@x.com", nil, "boss@x.com"); w.Code != http.StatusInternalServerError {
+		t.Fatalf("delete: status %d (body %s), want the database's 500", w.Code, w.Body.String())
+	}
+	// The running turn's files, in the conversation's workspace.
+	ws, err := tools.EnsureConversationDir(context.Background(), conv.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ws.MkdirAll(uploadsDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := ws.WriteFile(filepath.Join(uploadsDir, "notes.txt"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_ = ws.Close()
+	s.restoreTurnPrivateWorkspace(conv, "u@x.com")
+	stash, err := s.privateWorkspaceStashDir(conv.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(stash, "participants", participantDigest("u@x.com"), uploadsDir, "notes.txt")); err != nil {
+		t.Fatalf("the participant's files were not stashed when its turn ended: %v", err)
+	}
+}
+
+// A participant swap that ends once no account holds the participant's
+// address writes no stash for it: the staged files leave the shared workspace
+// and are removed, so a later account under the address does not find them.
+// Both writers: a turn ending, and the recovery of a swap an earlier process
+// left half done. Not parallel: it sets the workspace root.
+func TestParticipantSwapOfAGoneAccountWritesNoStash(t *testing.T) {
+	t.Setenv("FLEET_WORKSPACE_ROOT", t.TempDir())
+	s := memberFixture(t) // no account holds gone@x.com
+	s.cfg.EmailAttachmentDir = t.TempDir()
+	stage := func(convID string) {
+		t.Helper()
+		ws, err := tools.EnsureConversationDir(context.Background(), convID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer ws.Close()
+		if err := ws.MkdirAll(uploadsDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := ws.WriteFile(filepath.Join(uploadsDir, "notes.txt"), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	check := func(convID string) {
+		t.Helper()
+		stash, err := s.privateWorkspaceStashDir(convID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Stat(filepath.Join(stash, "participants", participantDigest("gone@x.com"))); !os.IsNotExist(err) {
+			t.Errorf("%s: a stash was written for the address (stat err %v)", convID, err)
+		}
+		ws, err := tools.EnsureConversationDir(context.Background(), convID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer ws.Close()
+		if _, err := ws.Stat(filepath.Join(uploadsDir, "notes.txt")); !os.IsNotExist(err) {
+			t.Errorf("%s: the staged file stayed in the shared workspace (stat err %v)", convID, err)
+		}
+	}
+
+	ended := &store.Conversation{ID: "conv-ended", UserEmail: "owner@x.com"}
+	s.setParticipantWorkspaceActive(ended.ID, "gone@x.com", nil)
+	stage(ended.ID)
+	s.restoreTurnPrivateWorkspace(ended, "gone@x.com")
+	check(ended.ID)
+
+	stage("conv-interrupted")
+	stash, err := s.privateWorkspaceStashDir("conv-interrupted")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(stash, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeStashMarker(stash, "active-participant", "gone@x.com"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.recoverWorkspaceForTransfer("conv-interrupted"); err != nil {
+		t.Fatal(err)
+	}
+	check("conv-interrupted")
+}
+
+// A private workspace tree the server cannot move aside before the commit
+// (its directory is not writable) stops the deletion: the route answers with
+// the reason and that nothing was deleted, the account and its trees stay
+// where they were, and no mark is left on the account's running turn.
+func TestAdminDeleteRefusedWhenAStashCannotBeMovedAside(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("directory permissions do not stop root")
+	}
+	t.Parallel()
+	s := memberFixture(t, "boss@x.com", "u@x.com")
+	setRole(t, s, "boss@x.com", "admin", "")
+	att := t.TempDir()
+	s.cfg.EmailAttachmentDir = att
+	upload := filepath.Join(accountdelete.UploadsDir(att, "u@x.com"), "tok", "f.txt")
+	participants := filepath.Join(accountdelete.PrivateWorkspaceRoot(att), "conv-1", "participants")
+	stash := filepath.Join(participants, accountdelete.Digest("u@x.com"), "f.txt")
+	for _, f := range []string{upload, stash} {
+		if err := os.MkdirAll(filepath.Dir(f), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(f, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Chmod(participants, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(participants, 0o700) })
+	s.setParticipantWorkspaceActive("conv-2", "u@x.com", nil)
+	w := do(t, s.Routes(), http.MethodDelete, "/admin/users/u@x.com", nil, "boss@x.com")
+	if w.Code != http.StatusInternalServerError || !strings.Contains(w.Body.String(), "nothing was deleted") {
+		t.Fatalf("status %d body %q, want 500 saying nothing was deleted", w.Code, w.Body.String())
+	}
+	if _, err := s.concreteStore(t).GetUser(context.Background(), "u@x.com"); err != nil {
+		t.Fatalf("the account was deleted: %v", err)
+	}
+	for _, f := range []string{upload, stash} {
+		if _, err := os.Stat(f); err != nil {
+			t.Errorf("%s is not where it was: %v", f, err)
+		}
+	}
+	if s.takeParticipantWorkspacePurged("conv-2", "u@x.com") {
+		t.Error("the account's running turn was left marked")
+	}
+}
+
+// Deleting an account stops the turns it has running — here one in its own
+// chat — and waits for them; another person's turn keeps running.
+func TestStopAccountWorkCancelsItsTurns(t *testing.T) {
+	t.Parallel()
+	s := memberFixture(t, "u@x.com", "mate@x.com")
+	ctx := context.Background()
+	own, err := s.store.CreateConversation(ctx, "u@x.com", "t", "victoria", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mates, err := s.store.CreateConversation(ctx, "mate@x.com", "t", "victoria", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancelled := map[string]bool{}
+	register := func(convID string) {
+		s.inflightMu.Lock()
+		defer s.inflightMu.Unlock()
+		s.inflight[convID] = inflightEntry{cancel: func() {
+			// The turn goroutine notices and ends a moment later.
+			go func() {
+				time.Sleep(20 * time.Millisecond)
+				s.inflightMu.Lock()
+				e := s.inflight[convID]
+				e.finishedAt = time.Now()
+				s.inflight[convID] = e
+				cancelled[convID] = true
+				s.inflightMu.Unlock()
+			}()
+		}}
+	}
+	register(own.ID)
+	register(mates.ID)
+	if stopped, err := s.stopAccountWork(ctx, "U@x.com"); !stopped || err != nil {
+		t.Fatalf("stopAccountWork = %v, %v; want stopped", stopped, err)
+	}
+	s.inflightMu.Lock()
+	defer s.inflightMu.Unlock()
+	if !cancelled[own.ID] {
+		t.Error("the turn in the account's own chat was not stopped")
+	}
+	if cancelled[mates.ID] {
+		t.Error("another person's turn was stopped")
+	}
+}
+
+// Two first requests at once with one key minted before keys named their
+// account: both are admitted and the key ends bound once. Run under -race:
+// the edge reads its own copy of the key record while a request binds it.
+func TestConcurrentFirstUsesOfAnUnboundKey(t *testing.T) {
+	t.Parallel()
+	s := memberFixture(t, "u@x.com")
+	mgr, userKey, _ := edgeKeys(t)
+	s.apiKeys = mgr
+	srv := httptest.NewServer(s.Routes())
+	defer srv.Close()
+	errs := make(chan error, 4)
+	for i := 0; i < 4; i++ {
+		go func() {
+			errs <- chattui.NewClient(chattui.Config{ServerURL: srv.URL, APIKey: userKey}).CheckIdentity(context.Background())
+		}()
+	}
+	for i := 0; i < 4; i++ {
+		if err := <-errs; err != nil {
+			t.Errorf("first use: %v", err)
+		}
+	}
+	u, err := s.concreteStore(t).GetUser(context.Background(), "u@x.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range mgr.ListKeys() {
+		if k.UserEmail == "u@x.com" && (k.AccountID != u.ID || k.AccountMissing) {
+			t.Fatalf("key = %+v, want bound to %s", k, u.ID)
+		}
+	}
+}
+
+// Stopping the account's work gives up as soon as the deleting request ends,
+// instead of waiting out the full drain time.
+func TestStopAccountWorkReturnsWhenItsRequestEnds(t *testing.T) {
+	t.Parallel()
+	s := memberFixture(t, "u@x.com")
+	// A request of the account that never ends on its own.
+	_, leave, _ := s.accounts.enter(context.Background(), "u@x.com")
+	defer leave()
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { time.Sleep(50 * time.Millisecond); cancel() }()
+	start := time.Now()
+	stopped, err := s.stopAccountWork(ctx, "u@x.com")
+	if err == nil || stopped || time.Since(start) > 5*time.Second {
+		t.Fatalf("stopAccountWork = %v, %v after %v; want the context's error at once", stopped, err, time.Since(start))
+	}
+}
+
+// Two administrators deleting each other at once: each deletion cancels the
+// other's request, and neither hangs for the drain time or answers 500.
+func TestAdminsDeletingEachOther(t *testing.T) {
+	t.Parallel()
+	s := memberFixture(t, "a@x.com", "b@x.com")
+	setRole(t, s, "a@x.com", "admin", "")
+	setRole(t, s, "b@x.com", "admin", "")
+	h := s.Routes()
+	type answer struct {
+		code int
+		took time.Duration
+	}
+	answers := make(chan answer, 2)
+	for _, pair := range [][2]string{{"a@x.com", "b@x.com"}, {"b@x.com", "a@x.com"}} {
+		go func(actor, target string) {
+			start := time.Now()
+			w := do(t, h, http.MethodDelete, "/admin/users/"+target, nil, actor)
+			answers <- answer{w.Code, time.Since(start)}
+		}(pair[0], pair[1])
+	}
+	for i := 0; i < 2; i++ {
+		a := <-answers
+		if a.took > defaultAccountDrainTimeout-time.Second {
+			t.Errorf("a deletion took %v", a.took)
+		}
+		if a.code != http.StatusNoContent && a.code != http.StatusServiceUnavailable && a.code != http.StatusForbidden && a.code != http.StatusNotFound {
+			t.Errorf("status %d, want 204, or 503 (interrupted), 403 or 404 for the one that lost", a.code)
+		}
+	}
+}
+
+// Once the account's work is stopped, the deletion runs to its end even when
+// the client goes away: the account is not left stopped but still there.
+func TestAdminDeleteFinishesAfterTheClientLeaves(t *testing.T) {
+	t.Parallel()
+	s := memberFixture(t, "boss@x.com", "u@x.com")
+	setRole(t, s, "boss@x.com", "admin", "")
+	ctx, cancel := context.WithCancel(asUser(context.Background(), "boss@x.com"))
+	s.afterAccountWorkStopped = cancel // the client leaves right after the stop
+	req := httptest.NewRequestWithContext(ctx, http.MethodDelete, "/admin/users/u%40x.com", nil)
+	w := httptest.NewRecorder()
+	s.handleAdminUserDelete(w, req, "u@x.com")
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("status %d body %s", w.Code, w.Body.String())
+	}
+	if _, err := s.concreteStore(t).GetUser(context.Background(), "u@x.com"); err == nil {
+		t.Fatal("the account survived a client that left after its work was stopped")
+	}
+}
+
+// A client that leaves before the work is stopped deletes nothing.
+func TestAdminDeleteInterruptedBeforeTheStopDeletesNothing(t *testing.T) {
+	t.Parallel()
+	s := memberFixture(t, "boss@x.com", "u@x.com")
+	setRole(t, s, "boss@x.com", "admin", "")
+	_, leave, _ := s.accounts.enter(context.Background(), "u@x.com") // a request of the account still running
+	ctx, cancel := context.WithCancel(asUser(context.Background(), "boss@x.com"))
+	go func() { time.Sleep(50 * time.Millisecond); cancel() }()
+	req := httptest.NewRequestWithContext(ctx, http.MethodDelete, "/admin/users/u%40x.com", nil)
+	w := httptest.NewRecorder()
+	s.handleAdminUserDelete(w, req, "u@x.com")
+	leave()
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status %d body %s, want 503", w.Code, w.Body.String())
+	}
+	if _, err := s.concreteStore(t).GetUser(context.Background(), "u@x.com"); err != nil {
+		t.Fatalf("the account was deleted: %v", err)
+	}
+	if _, l, ok := s.accounts.enter(context.Background(), "u@x.com"); !ok {
+		t.Fatal("the account's requests stay refused after an interrupted deletion")
+	} else {
+		l()
+	}
+}
+
+// hasActive reports whether email has a request in flight.
+func (g *accountGate) hasActive(email string) bool {
+	key := gateKey(email)
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return len(g.active[key]) > 0
+}
+
+// startUpload sends an upload of one file as user through the routes, with a
+// body that arrives in two parts. It returns once the upload handler is
+// reading the first part inside the account's gate; finish sends the rest
+// and returns the response.
+func startUpload(t *testing.T, s *Server, user string) (finish func() *httptest.ResponseRecorder) {
+	t.Helper()
+	body, ct := multipartBody(t, map[string][]byte{"report.csv": []byte("a,b\n1,2\n")})
+	raw := body.Bytes()
+	pr, pw := io.Pipe()
+	req := httptest.NewRequestWithContext(gatewayContext("/attachments", user), http.MethodPost, "/attachments", pr)
+	req.Header.Set("Content-Type", ct)
+	w := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		s.Routes().ServeHTTP(w, req)
+		_ = pr.Close() // a handler that answered without reading unblocks the writes below
+	}()
+	// The pipe hands the first part over only once the handler reads it.
+	if _, err := pw.Write(raw[:16]); err != nil {
+		<-done
+		t.Fatalf("the upload was answered before its body was read: %d %s", w.Code, w.Body.String())
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for !s.accounts.hasActive(user) {
+		if time.Now().After(deadline) {
+			t.Fatal("the upload never entered the account's gate")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	return func() *httptest.ResponseRecorder {
+		_, _ = pw.Write(raw[16:])
+		_ = pw.Close()
+		<-done
+		return w
+	}
+}
+
+// A request of the account that has not ended when the wait for the
+// account's work is over (here an upload whose body is still arriving)
+// refuses the deletion: 503 with Retry-After, the account and its files
+// stay where they were, its requests are served again, and the upload then
+// finishes.
+func TestAdminDeleteRefusedWhileAnUploadIsStillRunning(t *testing.T) {
+	t.Parallel()
+	s := memberFixture(t, "boss@x.com", "u@x.com")
+	setRole(t, s, "boss@x.com", "admin", "")
+	att := t.TempDir()
+	s.cfg.EmailAttachmentDir = att
+	s.accountDrain = 300 * time.Millisecond
+	uploads := accountdelete.UploadsDir(att, "u@x.com")
+	participants := filepath.Join(accountdelete.PrivateWorkspaceRoot(att), "conv-1", "participants")
+	seeded := []string{filepath.Join(uploads, "tok", "f.txt"), filepath.Join(participants, accountdelete.Digest("u@x.com"), "f.txt")}
+	for _, f := range seeded {
+		if err := os.MkdirAll(filepath.Dir(f), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(f, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	finish := startUpload(t, s, "u@x.com")
+	w := do(t, s.Routes(), http.MethodDelete, "/admin/users/u@x.com", nil, "boss@x.com")
+	if w.Code != http.StatusServiceUnavailable || w.Header().Get("Retry-After") == "" ||
+		strings.TrimSpace(w.Body.String()) != errAccountWorkStillRunning {
+		t.Fatalf("status %d (Retry-After %q) body %q, want 503 with Retry-After saying nothing was deleted",
+			w.Code, w.Header().Get("Retry-After"), w.Body.String())
+	}
+	if _, err := s.concreteStore(t).GetUser(context.Background(), "u@x.com"); err != nil {
+		t.Fatalf("the account was deleted: %v", err)
+	}
+	for _, f := range seeded {
+		if _, err := os.Stat(f); err != nil {
+			t.Errorf("%s is not where it was: %v", f, err)
+		}
+	}
+	for _, dir := range []string{filepath.Dir(uploads), participants} {
+		entries, _ := os.ReadDir(dir)
+		for _, e := range entries {
+			if accountdelete.IsAside(e.Name()) {
+				t.Errorf("%s was moved aside in %s", e.Name(), dir)
+			}
+		}
+	}
+	if s.accounts.isClosed("u@x.com") {
+		t.Fatal("the account's requests stay refused after the refused deletion")
+	}
+
+	up := finish()
+	if up.Code != http.StatusOK {
+		t.Fatalf("the upload: status %d body %s, want 200", up.Code, up.Body.String())
+	}
+	var resp struct {
+		Attachments []uploadedAttachment `json:"attachments"`
+	}
+	if err := json.Unmarshal(up.Body.Bytes(), &resp); err != nil || len(resp.Attachments) != 1 {
+		t.Fatalf("the upload's answer %s (err %v), want one attachment", up.Body.String(), err)
+	}
+	if _, err := os.Stat(filepath.FromSlash(resp.Attachments[0].Path)); err != nil {
+		t.Errorf("the uploaded file is missing: %v", err)
+	}
+}
+
+// The upload writer looks right before it writes: an upload whose body
+// arrives once the account's deletion has begun, or for an address no account
+// holds, writes nothing, not even the account's upload directory.
+func TestUploadRefusedForAnAccountBeingDeletedOrGone(t *testing.T) {
+	t.Parallel()
+	t.Run("being deleted", func(t *testing.T) {
+		t.Parallel()
+		s := memberFixture(t, "u@x.com")
+		att := t.TempDir()
+		s.cfg.EmailAttachmentDir = att
+		finish := startUpload(t, s, "u@x.com")
+		reopen := s.accounts.close("u@x.com")
+		defer reopen()
+		w := finish()
+		if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "not_a_member") {
+			t.Fatalf("status %d body %s, want 403 not_a_member", w.Code, w.Body.String())
+		}
+		if _, err := os.Stat(accountdelete.UploadsDir(att, "u@x.com")); !os.IsNotExist(err) {
+			t.Fatalf("the account's upload directory was written (stat err %v)", err)
+		}
+	})
+	t.Run("gone", func(t *testing.T) {
+		t.Parallel()
+		s := memberFixture(t) // no account holds gone@x.com
+		att := t.TempDir()
+		s.cfg.EmailAttachmentDir = att
+		body, ct := multipartBody(t, map[string][]byte{"report.csv": []byte("a,b\n")})
+		req := httptest.NewRequestWithContext(asUser(context.Background(), "gone@x.com"), http.MethodPost, "/attachments", body)
+		req.Header.Set("Content-Type", ct)
+		w := httptest.NewRecorder()
+		s.postAttachments(w, req)
+		if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "not_a_member") {
+			t.Fatalf("status %d body %s, want 403 not_a_member", w.Code, w.Body.String())
+		}
+		if _, err := os.Stat(accountdelete.UploadsDir(att, "gone@x.com")); !os.IsNotExist(err) {
+			t.Fatalf("an upload directory was written for the address (stat err %v)", err)
+		}
+	})
+}
+
+// seedAccountTrees writes a file in u@x.com's upload tree and in its private
+// workspace tree of one conversation under att, and returns the directories
+// those trees sit in.
+func seedAccountTrees(t *testing.T, att string) (uploadsParent, participants string) {
+	t.Helper()
+	const email = "u@x.com"
+	uploads := accountdelete.UploadsDir(att, email)
+	participants = filepath.Join(accountdelete.PrivateWorkspaceRoot(att), "conv-1", "participants")
+	for _, f := range []string{filepath.Join(uploads, "tok", "f.txt"), filepath.Join(participants, accountdelete.Digest(email), "f.txt")} {
+		if err := os.MkdirAll(filepath.Dir(f), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(f, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return filepath.Dir(uploads), participants
+}
+
+// assertNoTreeUnder fails when a tree of email, or one set aside, is left in
+// any of dirs.
+func assertNoTreeUnder(t *testing.T, email string, dirs ...string) {
+	t.Helper()
+	for _, dir := range dirs {
+		entries, _ := os.ReadDir(dir)
+		for _, e := range entries {
+			if e.Name() == accountdelete.Digest(email) || accountdelete.IsAside(e.Name()) {
+				t.Errorf("%s is left in %s", e.Name(), dir)
+			}
+		}
+	}
+}
+
+// The server runs one deletion of an account at a time: a second one while
+// the first runs is refused with 409 and changes nothing; the first deletes
+// the account and its trees; tried again, the second finds the account gone.
+func TestSecondDeletionOfAnAccountWhileOneRunsIsRefused(t *testing.T) {
+	t.Parallel()
+	s := memberFixture(t, "boss@x.com", "boss2@x.com", "u@x.com")
+	setRole(t, s, "boss@x.com", "admin", "")
+	setRole(t, s, "boss2@x.com", "admin", "")
+	att := t.TempDir()
+	s.cfg.EmailAttachmentDir = att
+	uploadsParent, participants := seedAccountTrees(t, att)
+	stopped, proceed := make(chan struct{}), make(chan struct{})
+	s.afterAccountWorkStopped = func() {
+		close(stopped)
+		<-proceed
+	}
+	h := s.Routes()
+	first := make(chan *httptest.ResponseRecorder, 1)
+	go func() { first <- do(t, h, http.MethodDelete, "/admin/users/u@x.com", nil, "boss@x.com") }()
+	<-stopped
+
+	w := do(t, h, http.MethodDelete, "/admin/users/U@x.com", nil, "boss2@x.com")
+	if w.Code != http.StatusConflict || strings.TrimSpace(w.Body.String()) != errAccountDeletionRunning {
+		t.Fatalf("second deletion: status %d body %q, want 409 %q", w.Code, w.Body.String(), errAccountDeletionRunning)
+	}
+	close(proceed)
+	if w := <-first; w.Code != http.StatusNoContent {
+		t.Fatalf("first deletion: status %d body %s, want 204", w.Code, w.Body.String())
+	}
+	assertNoTreeUnder(t, "u@x.com", uploadsParent, participants)
+	if w := do(t, h, http.MethodDelete, "/admin/users/u@x.com", nil, "boss2@x.com"); w.Code != http.StatusNotFound {
+		t.Fatalf("the second deletion tried again: status %d body %s, want 404", w.Code, w.Body.String())
+	}
+}
+
+// racingDeleteStore is the real store in which another deletion of the
+// account (a whole accountdelete.Delete, as another process would run it)
+// commits right before this deletion's own database step.
+type racingDeleteStore struct {
+	*store.Store
+	att   string
+	other chan error
+}
+
+func (r racingDeleteStore) DeleteAccount(ctx context.Context, email, expectedID string) (string, error) {
+	_, err := accountdelete.Delete(ctx, r.Store, email, accountdelete.Options{AttachmentDir: r.att})
+	r.other <- err
+	return r.Store.DeleteAccount(ctx, email, expectedID)
+}
+
+// Two deletions of one account at once that this server's claim does not
+// serialise (another process ran one): exactly one commits, and the one that
+// finds the account gone at its database step removes the trees it had moved
+// aside instead of putting them back, so nothing is left under the address.
+func TestDeletionThatLosesARaceLeavesNoTreeUnderTheAddress(t *testing.T) {
+	t.Parallel()
+	s := memberFixture(t, "boss@x.com", "u@x.com")
+	setRole(t, s, "boss@x.com", "admin", "")
+	att := t.TempDir()
+	s.cfg.EmailAttachmentDir = att
+	uploadsParent, participants := seedAccountTrees(t, att)
+	other := make(chan error, 1)
+	s.store = racingDeleteStore{Store: s.concreteStore(t), att: att, other: other}
+	w := do(t, s.Routes(), http.MethodDelete, "/admin/users/u@x.com", nil, "boss@x.com")
+	if err := <-other; err != nil {
+		t.Fatalf("the other deletion: %v", err)
+	}
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("this deletion: status %d body %s, want 404 (the other one deleted the account)", w.Code, w.Body.String())
+	}
+	assertNoTreeUnder(t, "u@x.com", uploadsParent, participants)
+}
+
+// unreadableAfterFailureStore is the real store whose database deletion
+// fails and whose account cannot be read once it has, while its address still
+// answers as live: the database became unreachable for some reads
+// mid-deletion. Its maintenance lookup by id fails too while down is set.
+type unreadableAfterFailureStore struct {
+	*store.Store
+	failed *atomic.Bool
+	down   *atomic.Bool
+}
+
+var errDatabaseDown = errors.New("connection refused")
+
+func (u unreadableAfterFailureStore) AccountForDeletion(ctx context.Context, email string) (string, error) {
+	if u.failed.Load() {
+		return "", errDatabaseDown
+	}
+	return u.Store.AccountForDeletion(ctx, email)
+}
+
+func (u unreadableAfterFailureStore) DeleteAccount(context.Context, string, string) (string, error) {
+	u.failed.Store(true)
+	return "", errors.New("statement timeout")
+}
+
+func (u unreadableAfterFailureStore) AccountDigestLive(context.Context, string) (bool, error) {
+	return true, nil
+}
+
+func (u unreadableAfterFailureStore) AccountEmailByID(ctx context.Context, id string) (string, error) {
+	if u.down.Load() {
+		return "", errDatabaseDown
+	}
+	return u.Store.AccountEmailByID(ctx, id)
+}
+
+// heldTreesUnder counts the trees an account deletion holds in dirs.
+func heldTreesUnder(t *testing.T, dirs ...string) int {
+	t.Helper()
+	n := 0
+	for _, dir := range dirs {
+		entries, _ := os.ReadDir(dir)
+		for _, e := range entries {
+			if accountdelete.IsHeld(e.Name()) {
+				n++
+			}
+		}
+	}
+	return n
+}
+
+// A deletion that did not complete, after which the account cannot be read
+// back although its address answers as live, holds the account's trees
+// rather than putting them back, and says so. Maintenance passes leave them
+// held while the account cannot be read (the sweep of set-aside trees does
+// not take them), put them back once the same account is read back, and
+// remove them when it is gone.
+func TestAdminDeleteWithAnUnconfirmedOutcomeHoldsTheFiles(t *testing.T) {
+	t.Parallel()
+	for _, gone := range []bool{false, true} {
+		t.Run(map[bool]string{false: "the account is still there", true: "the account is gone"}[gone], func(t *testing.T) {
+			t.Parallel()
+			s := memberFixture(t, "boss@x.com", "u@x.com")
+			setRole(t, s, "boss@x.com", "admin", "")
+			att := t.TempDir()
+			s.cfg.EmailAttachmentDir = att
+			uploadsParent, participants := seedAccountTrees(t, att)
+			upload := filepath.Join(accountdelete.UploadsDir(att, "u@x.com"), "tok", "f.txt")
+			stash := filepath.Join(participants, accountdelete.Digest("u@x.com"), "f.txt")
+			st := s.concreteStore(t)
+			down := new(atomic.Bool)
+			down.Store(true)
+			s.store = unreadableAfterFailureStore{Store: st, failed: new(atomic.Bool), down: down}
+			w := do(t, s.Routes(), http.MethodDelete, "/admin/users/u@x.com", nil, "boss@x.com")
+			if w.Code != http.StatusInternalServerError || strings.TrimSpace(w.Body.String()) != errAccountDeleteUnconfirmed {
+				t.Fatalf("status %d body %q, want 500 %q", w.Code, w.Body.String(), errAccountDeleteUnconfirmed)
+			}
+			for _, f := range []string{upload, stash} {
+				if _, err := os.Stat(f); !os.IsNotExist(err) {
+					t.Errorf("%s was put back under the address (stat err %v)", f, err)
+				}
+			}
+			if n := heldTreesUnder(t, uploadsParent, participants); n != 2 {
+				t.Fatalf("%d held trees, want the upload and the private workspace tree", n)
+			}
+
+			s.sweepDeletedAccounts(context.Background())
+			if n := heldTreesUnder(t, uploadsParent, participants); n != 2 {
+				t.Fatalf("after a pass that cannot read the account: %d held trees, want 2", n)
+			}
+
+			if gone {
+				if _, err := accountdelete.Delete(context.Background(), st, "u@x.com", accountdelete.Options{AttachmentDir: att}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			down.Store(false)
+			s.sweepDeletedAccounts(context.Background())
+			if n := heldTreesUnder(t, uploadsParent, participants); n != 0 {
+				t.Fatalf("after a pass that reads the account: %d held trees, want none", n)
+			}
+			for _, f := range []string{upload, stash} {
+				_, err := os.Stat(f)
+				switch {
+				case gone && !os.IsNotExist(err):
+					t.Errorf("%s is under the address of the deleted account (stat err %v)", f, err)
+				case !gone && err != nil:
+					t.Errorf("%s is not back: %v", f, err)
+				}
+			}
+		})
+	}
+}
+
+// holdAccountTrees seeds u@x.com's trees under att and runs a deletion of it
+// whose outcome cannot be confirmed, which holds them; s's store is the real
+// one again afterwards. It returns the directories the trees are held in.
+func holdAccountTrees(t *testing.T, s *Server, att string) (st *store.Store, uploadsParent, participants string) {
+	t.Helper()
+	uploadsParent, participants = seedAccountTrees(t, att)
+	st = s.concreteStore(t)
+	down := new(atomic.Bool)
+	down.Store(true)
+	s.store = unreadableAfterFailureStore{Store: st, failed: new(atomic.Bool), down: down}
+	if w := do(t, s.Routes(), http.MethodDelete, "/admin/users/u@x.com", nil, "boss@x.com"); w.Code != http.StatusInternalServerError {
+		t.Fatalf("status %d body %s, want the unconfirmed 500", w.Code, w.Body.String())
+	}
+	s.store = st
+	if n := heldTreesUnder(t, uploadsParent, participants); n != 2 {
+		t.Fatalf("%d held trees, want 2", n)
+	}
+	return st, uploadsParent, participants
+}
+
+// insideAccountRowStore is the real store that calls inside while it holds
+// an account's row for the maintenance pass (WithAccountRowByID), before the
+// held tree goes back.
+type insideAccountRowStore struct {
+	*store.Store
+	inside func()
+}
+
+func (h insideAccountRowStore) WithAccountRowByID(ctx context.Context, id string, fn func(string) error) (bool, error) {
+	return h.Store.WithAccountRowByID(ctx, id, func(email string) error {
+		h.inside()
+		return fn(email)
+	})
+}
+
+// A held tree goes back while its account is held still. A deletion of the
+// account from this server meanwhile is refused (409: the maintenance pass
+// holds the claim), and a deletion that does not go through this server's
+// claim (another process's) waits for the account's row and then removes the
+// tree with the rest. Either way nothing of the deleted account is left under
+// its address.
+func TestHeldTreeGoesBackWhileItsAccountIsHeldStill(t *testing.T) {
+	t.Parallel()
+	setup := func(t *testing.T) (*Server, *store.Store, string, []string) {
+		s := memberFixture(t, "boss@x.com", "u@x.com")
+		setRole(t, s, "boss@x.com", "admin", "")
+		att := t.TempDir()
+		s.cfg.EmailAttachmentDir = att
+		st, uploadsParent, participants := holdAccountTrees(t, s, att)
+		return s, st, att, []string{uploadsParent, participants}
+	}
+	// blockFirst makes the pass wait, inside the first account row it holds,
+	// until proceed is closed; locked is closed once it is there.
+	blockFirst := func(s *Server, st *store.Store) (locked, proceed chan struct{}) {
+		locked, proceed = make(chan struct{}), make(chan struct{})
+		var once sync.Once
+		s.store = insideAccountRowStore{Store: st, inside: func() {
+			once.Do(func() { close(locked) })
+			<-proceed
+		}}
+		return locked, proceed
+	}
+	nothingLeft := func(t *testing.T, dirs []string) {
+		t.Helper()
+		assertNoTreeUnder(t, "u@x.com", dirs...)
+		if n := heldTreesUnder(t, dirs...); n != 0 {
+			t.Errorf("%d held trees left", n)
+		}
+	}
+
+	t.Run("a deletion from this server", func(t *testing.T) {
+		t.Parallel()
+		s, st, att, dirs := setup(t)
+		locked, proceed := blockFirst(s, st)
+		swept := make(chan struct{})
+		go func() { defer close(swept); s.sweepDeletedAccounts(context.Background()) }()
+		<-locked
+		answer := make(chan *httptest.ResponseRecorder, 1)
+		go func() { answer <- do(t, s.Routes(), http.MethodDelete, "/admin/users/u@x.com", nil, "boss@x.com") }()
+		select {
+		case w := <-answer:
+			if w.Code != http.StatusConflict {
+				t.Errorf("a deletion while the tree goes back: status %d body %s, want 409", w.Code, w.Body.String())
+			}
+		case <-time.After(5 * time.Second):
+			t.Error("a deletion while the tree goes back was not refused")
+		}
+		close(proceed)
+		<-swept
+		if _, err := os.Stat(filepath.Join(accountdelete.UploadsDir(att, "u@x.com"), "tok", "f.txt")); err != nil {
+			t.Fatalf("the upload tree is not back: %v", err)
+		}
+		s.store = st
+		if w := do(t, s.Routes(), http.MethodDelete, "/admin/users/u@x.com", nil, "boss@x.com"); w.Code != http.StatusNoContent {
+			t.Fatalf("the deletion afterwards: status %d body %s, want 204", w.Code, w.Body.String())
+		}
+		nothingLeft(t, dirs)
+	})
+
+	t.Run("a deletion from another process", func(t *testing.T) {
+		t.Parallel()
+		s, st, att, dirs := setup(t)
+		locked, proceed := blockFirst(s, st)
+		swept := make(chan struct{})
+		go func() { defer close(swept); s.sweepDeletedAccounts(context.Background()) }()
+		<-locked
+		deleted := make(chan error, 1)
+		go func() {
+			_, err := accountdelete.Delete(context.Background(), st, "u@x.com", accountdelete.Options{AttachmentDir: att})
+			deleted <- err
+		}()
+		var err error
+		select {
+		case err = <-deleted:
+			t.Errorf("the deletion finished (err %v) while the account's row was held", err)
+			close(proceed)
+		case <-time.After(500 * time.Millisecond):
+			close(proceed)
+			err = <-deleted
+		}
+		<-swept
+		if err != nil {
+			t.Fatalf("the deletion: %v", err)
+		}
+		nothingLeft(t, dirs)
+	})
+}
+
+// presenceStore is the real store whose presence lock this test says is
+// lost or held (store.Store.ServerPresenceLost).
+type presenceStore struct {
+	*store.Store
+	lost *atomic.Bool
+}
+
+func (p presenceStore) ServerPresenceLost() bool { return p.lost.Load() }
+
+// While the server does not hold its presence lock (its connection to the
+// database dropped; a CLI deletion may hold the lock), account work is
+// refused with 503 and Retry-After: requests through the membership check,
+// and the upload writer. Once the lock is held again it is admitted.
+func TestAccountWorkRefusedWhileTheServerPresenceIsLost(t *testing.T) {
+	t.Parallel()
+	s := memberFixture(t, "u@x.com")
+	att := t.TempDir()
+	s.cfg.EmailAttachmentDir = att
+	lost := new(atomic.Bool)
+	lost.Store(true)
+	s.store = presenceStore{Store: s.concreteStore(t), lost: lost}
+	upload := func() *httptest.ResponseRecorder {
+		body, ct := multipartBody(t, map[string][]byte{"report.csv": []byte("a,b\n")})
+		req := httptest.NewRequestWithContext(asUser(context.Background(), "u@x.com"), http.MethodPost, "/attachments", body)
+		req.Header.Set("Content-Type", ct)
+		w := httptest.NewRecorder()
+		s.postAttachments(w, req)
+		return w
+	}
+
+	w := do(t, s.Routes(), http.MethodGet, "/auth/membership", nil, "u@x.com")
+	if w.Code != http.StatusServiceUnavailable || w.Header().Get("Retry-After") == "" ||
+		strings.TrimSpace(w.Body.String()) != errServerReconnecting.Error() {
+		t.Fatalf("membership: status %d (Retry-After %q) body %q, want 503 %q", w.Code, w.Header().Get("Retry-After"), w.Body.String(), errServerReconnecting)
+	}
+	if w := upload(); w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("upload writer: status %d body %s, want 503", w.Code, w.Body.String())
+	}
+	if _, err := os.Stat(accountdelete.UploadsDir(att, "u@x.com")); !os.IsNotExist(err) {
+		t.Fatalf("the upload writer wrote while the presence was lost (stat err %v)", err)
+	}
+
+	lost.Store(false)
+	if w := do(t, s.Routes(), http.MethodGet, "/auth/membership", nil, "u@x.com"); w.Code != http.StatusOK {
+		t.Fatalf("membership once the lock is held again: status %d body %s", w.Code, w.Body.String())
+	}
+	if w := upload(); w.Code != http.StatusOK {
+		t.Fatalf("upload once the lock is held again: status %d body %s", w.Code, w.Body.String())
+	}
+}
+
+// blockingDeleteStore is the real store with a DeleteUser that never finishes
+// on its own: it returns only when its context ends.
+type blockingDeleteStore struct{ *store.Store }
+
+func (blockingDeleteStore) DeleteAccount(ctx context.Context, _, _ string) (string, error) {
+	<-ctx.Done()
+	return "", ctx.Err()
+}
+
+// A deletion that gets stuck after the account's work stopped is bounded: it
+// gives up when its time is out, the account stays, and the account's
+// requests are served again.
+func TestAdminDeleteIsBounded(t *testing.T) {
+	t.Parallel()
+	s := memberFixture(t, "boss@x.com", "u@x.com")
+	setRole(t, s, "boss@x.com", "admin", "")
+	st := s.concreteStore(t)
+	s.store = blockingDeleteStore{st}
+	s.accountDeleteLimit = 300 * time.Millisecond
+	req := httptest.NewRequestWithContext(asUser(context.Background(), "boss@x.com"), http.MethodDelete, "/admin/users/u%40x.com", nil)
+	w := httptest.NewRecorder()
+	start := time.Now()
+	s.handleAdminUserDelete(w, req, "u@x.com")
+	if took := time.Since(start); took > 10*time.Second {
+		t.Fatalf("the stuck deletion held on for %v", took)
+	}
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status %d body %s, want 500", w.Code, w.Body.String())
+	}
+	if _, err := st.GetUser(context.Background(), "u@x.com"); err != nil {
+		t.Fatalf("the account is gone: %v", err)
+	}
+	if _, l, ok := s.accounts.enter(context.Background(), "u@x.com"); !ok {
+		t.Fatal("the account's requests stay refused after the deletion gave up")
+	} else {
+		l()
+	}
+}
+
+// slowDirectory is an account lookup that takes until its context ends.
+type slowDirectory struct{ started chan struct{} }
+
+func (d slowDirectory) GetByEmail(ctx context.Context, _ string) (*identity.User, error) {
+	close(d.started)
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (slowDirectory) LookupExternalSessionEpoch(context.Context, string, string) (string, error) {
+	return "", nil
+}
+
+// A request whose account lookup a deletion cuts short is answered as not a
+// member, not as a server failure.
+func TestLookupCutShortByADeletionIsNotAMember(t *testing.T) {
+	t.Parallel()
+	s := memberFixture(t, "u@x.com")
+	dir := slowDirectory{started: make(chan struct{})}
+	s.dir = dir
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() { done <- do(t, s.Routes(), http.MethodGet, "/auth/membership", nil, "u@x.com") }()
+	<-dir.started
+	reopen := s.accounts.close("u@x.com")
+	defer reopen()
+	w := <-done
+	if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "not_a_member") {
+		t.Fatalf("status %d body %s, want 403 not_a_member", w.Code, w.Body.String())
+	}
+}

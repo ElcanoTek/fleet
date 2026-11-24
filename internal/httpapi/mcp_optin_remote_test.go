@@ -36,6 +36,7 @@ func remoteMCPFixture(t *testing.T) (*Server, *store.Store, *store.RemoteMCPServ
 	t.Helper()
 	const user = "u@x.com"
 	srv := serverFixture(t)
+	seedUsers(t, srv, "u@x.com", "other@x.com")
 	srv.agent = &catalogEngine{catalog: []agent.OptionalServerInfo{{Name: "gamma"}}}
 
 	st, ok := srv.store.(*store.Store)

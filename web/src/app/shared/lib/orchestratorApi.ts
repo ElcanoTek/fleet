@@ -250,28 +250,10 @@ export type TaskTemplate = {
 
 // One entry in the hybrid prompt library. Git entries are bundle-owned and
 // read-only; workspace entries may be private or shared and are editable only
-// by their owner (or an admin).
-export type PromptLibraryItem = {
-  id: string;
-  name: string;
-  description?: string;
-  content: string;
-  source: "git" | "workspace";
-  visibility: "private" | "workspace";
-  read_only: boolean;
-  owned_by_caller: boolean;
-  owner_username?: string;
-  path?: string;
-  created_at?: string;
-  updated_at?: string;
-  /** Present only on a Git entry whose YAML declares a valid form
-   *  (docs/PROMPT-LIBRARY.md, "Form prompts"): the picker collects these
-   *  inputs and inserts `prompt_template` rendered with them, instead of
-   *  inserting `content`. Same field schema as an empty-state card. */
-  fields?: PillField[];
-  /** The form's template; `{key}` tokens name entries of `fields`. */
-  prompt_template?: string;
-};
+// by their owner (or an admin). The generated contract, with `fields` read as
+// the picker's PillField (the field schema of an empty-state card), as
+// EmailTemplate does.
+export type PromptLibraryItem = Omit<Schemas["PromptLibraryItem"], "fields"> & { fields?: PillField[] };
 
 // One bundle-owned email template (docs/EMAIL-TEMPLATES.md): the fixed shape
 // of an email the team sends repeatedly, with the bundle's rendered preview.

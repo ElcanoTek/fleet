@@ -167,6 +167,7 @@ func TestQueue_SecondSubmitQueuesThenDrainsAsSeparateTurn(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "alice@x.com")
 	const user = "alice@x.com"
 	conv, err := s.store.CreateConversation(t.Context(), user, "q", "victoria", "openrouter/auto", false)
 	if err != nil {
@@ -217,6 +218,7 @@ func TestQueue_DrainedLockdownTurnMigratesDelistedModel(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "alice@x.com")
 	s.cfg.SandboxImage = "ghcr.io/x/y:1"
 	s.cfg.LockdownAllowedModels = []string{"a/b", "c/d"}
 	const user = "alice@x.com"
@@ -312,6 +314,7 @@ func TestQueue_StopCoversQueuedWork(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "alice@x.com")
 	const user = "alice@x.com"
 	conv, err := s.store.CreateConversation(t.Context(), user, "q", "victoria", "openrouter/auto", false)
 	if err != nil {
@@ -368,6 +371,7 @@ func TestQueue_StopSweepInterlockDefersDrain(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "alice@x.com")
 	const user = "alice@x.com"
 	conv, err := s.store.CreateConversation(t.Context(), user, "q", "victoria", "openrouter/auto", false)
 	if err != nil {
@@ -485,6 +489,7 @@ func TestQueue_StopSweepGatesClaimedRowAtRegistration(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "alice@x.com")
 	const user = "alice@x.com"
 	conv, err := s.store.CreateConversation(t.Context(), user, "q", "victoria", "openrouter/auto", false)
 	if err != nil {
@@ -547,6 +552,7 @@ func TestQueue_SweptLaunchReleasesSlotBeforeQueueRefresh(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "alice@x.com")
 	const user = "alice@x.com"
 	conv, err := s.store.CreateConversation(t.Context(), user, "q", "victoria", "openrouter/auto", false)
 	if err != nil {
@@ -610,6 +616,7 @@ func TestQueue_StopSweepGenerationGatesSlowDrain(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "alice@x.com")
 	const user = "alice@x.com"
 	conv, err := s.store.CreateConversation(t.Context(), user, "q", "victoria", "openrouter/auto", false)
 	if err != nil {
@@ -650,6 +657,7 @@ func TestQueue_TerminalizeQueueRowRetries(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "alice@x.com")
 	const user = "alice@x.com"
 	conv, err := s.store.CreateConversation(t.Context(), user, "q", "victoria", "openrouter/auto", false)
 	if err != nil {
@@ -688,6 +696,7 @@ func TestQueue_TerminalizeRetryRespectsLaterClaim(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "alice@x.com")
 	const user = "alice@x.com"
 	conv, err := s.store.CreateConversation(t.Context(), user, "q", "victoria", "openrouter/auto", false)
 	if err != nil {
@@ -746,6 +755,7 @@ func TestQueue_StopSparesRowAcceptedAfterStop(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := serverFixture(t)
+			seedUsers(t, s, "alice@x.com")
 			const user = "alice@x.com"
 			conv, err := s.store.CreateConversation(t.Context(), user, "q", "victoria", "openrouter/auto", false)
 			if err != nil {
@@ -828,6 +838,7 @@ func TestQueue_StopSparesFollowUpSubmittedAfterStop(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "alice@x.com")
 	const user = "alice@x.com"
 	conv, err := s.store.CreateConversation(t.Context(), user, "q", "victoria", "openrouter/auto", false)
 	if err != nil {
@@ -890,6 +901,7 @@ func TestQueue_TerminalizeRetryRequeueRekicks(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "alice@x.com")
 	const user = "alice@x.com"
 	conv, err := s.store.CreateConversation(t.Context(), user, "q", "victoria", "openrouter/auto", false)
 	if err != nil {
@@ -927,6 +939,7 @@ func TestQueue_IdempotentSubmission(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "alice@x.com")
 	const user = "alice@x.com"
 	conv, err := s.store.CreateConversation(t.Context(), user, "q", "victoria", "openrouter/auto", false)
 	if err != nil {
@@ -961,6 +974,7 @@ func TestQueue_AckReportsPlaceInLine(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "alice@x.com")
 	const user = "alice@x.com"
 	conv, err := s.store.CreateConversation(t.Context(), user, "q", "victoria", "openrouter/auto", false)
 	if err != nil {
@@ -1033,6 +1047,7 @@ func TestDirectTurn_InputIDIsIdempotent(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "dora@x.com")
 	const user = "dora@x.com"
 	conv, err := s.store.CreateConversation(t.Context(), user, "q", "victoria", "openrouter/auto", false)
 	if err != nil {
@@ -1128,6 +1143,7 @@ func TestQueue_SteerInjectsMidTurnExactlyOnce(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "bob@x.com")
 	const user = "bob@x.com"
 	conv, err := s.store.CreateConversation(t.Context(), user, "q", "victoria", "openrouter/auto", false)
 	if err != nil {
@@ -1204,6 +1220,7 @@ func TestQueue_DrainedTurnPreCommitFailureRequeuesNotCompletes(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "alice@x.com")
 	const user = "alice@x.com"
 	conv, err := s.store.CreateConversation(t.Context(), user, "q", "victoria", "openrouter/auto", false)
 	if err != nil {
@@ -1269,6 +1286,7 @@ func TestQueue_DrainWorksAtConcurrencyCapOne(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "alice@x.com")
 	const user = "alice@x.com"
 	// The regression: with cap=1 the completion tail drained BEFORE the
 	// completing turn released its own slot — every drain failed Acquire and
@@ -1311,6 +1329,7 @@ func TestQueue_DrainedTurnStreamCarriesQueueSnapshot(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "alice@x.com")
 	const user = "alice@x.com"
 	conv, err := s.store.CreateConversation(t.Context(), user, "q", "victoria", "openrouter/auto", false)
 	if err != nil {
@@ -1493,6 +1512,7 @@ func TestQueue_UnconfirmedKeyedStopNeverRequeues(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			shortDirectPauses(t)
 			s := serverFixture(t)
+			seedUsers(t, s, "alice@x.com")
 			if tc.cancelFailed {
 				// The retry lands well after a (wrongly) re-queued row would
 				// have been drained and run again.

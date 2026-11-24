@@ -20,6 +20,7 @@ import (
 func TestTextWithNULIsStoredWithoutIt(t *testing.T) {
 	t.Parallel()
 	f := &nulFixture{s: newTestStore(t), ctx: context.Background()}
+	seedAccount(t, f.s, "u@example.com")
 	if !f.s.searchEnabled {
 		t.Fatal("search must be on, as by default")
 	}
@@ -244,6 +245,7 @@ func nulMemoryUpdate(t *testing.T, f *nulFixture) {
 }
 
 func nulMemoryProposal(t *testing.T, f *nulFixture) {
+	seedAccount(t, f.s, nulUser) // a proposal is written only for an existing account
 	conv := f.conv(t)
 	prop, err := f.s.CreateMemoryProposal(f.ctx, nulUser, conv.ID, MemoryProposalParams{Content: "proposed\x00", Kind: "fact", Origin: "tool"})
 	if err != nil {

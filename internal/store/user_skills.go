@@ -134,7 +134,10 @@ func (s *Store) CreateUserSkillProposal(ctx context.Context, userEmail, name, de
 		Description: strings.TrimSpace(description), Body: body,
 		Status: UserSkillStatusProposed, Visibility: UserSkillVisibilityPrivate, CreatedAt: now, UpdatedAt: now,
 	}
-	err := s.db.QueryRowContext(ctx, `
+	// Proposed by a turn, possibly after it ended: with the account gone by
+	// then, nothing is written (withAccountRow, ErrUserNotFound).
+	err := s.withAccountRow(ctx, email, func(tx *sql.Tx) error {
+		err := tx.QueryRowContext(ctx, `
 		INSERT INTO user_skills (id, user_email, name, description, body, status, visibility, created_at, updated_at)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$8)
 		ON CONFLICT (user_email, name) DO UPDATE
@@ -144,11 +147,11 @@ func (s *Store) CreateUserSkillProposal(ctx context.Context, userEmail, name, de
 		    updated_at = EXCLUDED.updated_at
 		WHERE user_skills.status = $6
 		RETURNING id, name, visibility, created_at`,
-		sk.ID, sk.UserEmail, sk.Name, sk.Description, sk.Body, sk.Status, sk.Visibility, now).Scan(&sk.ID, &sk.Name, &sk.Visibility, &sk.CreatedAt)
-	if errors.Is(err, sql.ErrNoRows) {
-		sk.ID = uuid.NewString()
-		sk.Name = proposalRevisionName(name)
-		err = s.db.QueryRowContext(ctx, `
+			sk.ID, sk.UserEmail, sk.Name, sk.Description, sk.Body, sk.Status, sk.Visibility, now).Scan(&sk.ID, &sk.Name, &sk.Visibility, &sk.CreatedAt)
+		if errors.Is(err, sql.ErrNoRows) {
+			sk.ID = uuid.NewString()
+			sk.Name = proposalRevisionName(name)
+			err = tx.QueryRowContext(ctx, `
 			INSERT INTO user_skills (id, user_email, name, description, body, status, visibility, created_at, updated_at)
 			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$8)
 			ON CONFLICT (user_email, name) DO UPDATE
@@ -157,8 +160,10 @@ func (s *Store) CreateUserSkillProposal(ctx context.Context, userEmail, name, de
 			    status = $6,
 			    updated_at = EXCLUDED.updated_at
 			RETURNING id, name, visibility, created_at`,
-			sk.ID, sk.UserEmail, sk.Name, sk.Description, sk.Body, sk.Status, sk.Visibility, now).Scan(&sk.ID, &sk.Name, &sk.Visibility, &sk.CreatedAt)
-	}
+				sk.ID, sk.UserEmail, sk.Name, sk.Description, sk.Body, sk.Status, sk.Visibility, now).Scan(&sk.ID, &sk.Name, &sk.Visibility, &sk.CreatedAt)
+		}
+		return err
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -198,10 +203,13 @@ func (s *Store) createUserSkill(ctx context.Context, userEmail, name, descriptio
 		Description: strings.TrimSpace(description), Body: body,
 		Status: status, Visibility: visibility, CreatedAt: now, UpdatedAt: now,
 	}
-	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO user_skills (id, user_email, name, description, body, status, visibility, created_at, updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$8)`,
-		sk.ID, sk.UserEmail, sk.Name, sk.Description, sk.Body, sk.Status, sk.Visibility, now)
+	err := s.withAccountRow(ctx, email, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `
+			INSERT INTO user_skills (id, user_email, name, description, body, status, visibility, created_at, updated_at)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$8)`,
+			sk.ID, sk.UserEmail, sk.Name, sk.Description, sk.Body, sk.Status, sk.Visibility, now)
+		return err
+	})
 	if err != nil {
 		if pgUniqueViolation(err) {
 			return nil, fmt.Errorf("%w: you already have a skill named %q", ErrUserSkillInvalid, name)

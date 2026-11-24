@@ -46,7 +46,11 @@ type steerMailbox struct {
 	// says it was read. A transfer in between refuses the registration.
 	ownerChecked bool
 	ownerEpoch   uint64
-	slot         chan agentcore.SteerMessage
+	// owner is the conversation's owner when the submission was admitted:
+	// the turn is refused while a deletion of the sender's or the owner's
+	// account is under way (registerTurnGated, accountGate).
+	owner string
+	slot  chan agentcore.SteerMessage
 }
 
 func newSteerMailbox(st chatStore, user, convID, turnID string, buf *turnBuffer) *steerMailbox {
@@ -483,6 +487,10 @@ func (s *Server) maybeDrainQueue(convID string) {
 			s.rekickDrainAfter(convID, 3*time.Second)
 		}
 		return // rows stay durable; boot recovery re-queues, never auto-runs
+	}
+	if s.presenceLost() {
+		s.rekickDrainAfter(convID, 3*time.Second)
+		return // no turn starts until the presence lock is held again
 	}
 	if s.stopSweepPending(convID) {
 		return // a Stop is sweeping the queue; endStopSweep re-kicks

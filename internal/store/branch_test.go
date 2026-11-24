@@ -57,6 +57,7 @@ func TestBranchConversation_RoundTrip(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "alice@example.com")
 	ctx := context.Background()
 	const owner = "alice@example.com"
 	parent := seedBranchConv(t, s, owner)
@@ -125,6 +126,7 @@ func TestBranchConversation_Errors(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "alice@example.com", "bob@example.com")
 	ctx := context.Background()
 	const owner = "alice@example.com"
 	parent := seedBranchConv(t, s, owner)
@@ -176,6 +178,7 @@ func TestBranchConversation_AtomicOnCopyFailure(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "alice@example.com")
 	ctx := context.Background()
 	const owner = "alice@example.com"
 	parent := seedBranchConv(t, s, owner)

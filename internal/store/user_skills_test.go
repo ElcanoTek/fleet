@@ -13,6 +13,7 @@ func TestUserSkills(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "me@elcano.com", "other@elcano.com")
 	ctx := context.Background()
 	const me = "me@elcano.com"
 	const other = "other@elcano.com"
@@ -93,6 +94,7 @@ func TestUserSkillProposalFlow(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 	const me = "proposer@elcano.com"
+	seedAccount(t, s, me) // a proposal is written only for an existing account
 
 	prop, err := s.CreateUserSkillProposal(ctx, me, "weekly-pacing", "compile the weekly pacing report the way this user likes it", "1. Pull numbers.\n2. Format.")
 	if err != nil {
@@ -176,6 +178,7 @@ func TestUserSkillsWorkspaceSharing(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "author@elcano.com")
 	ctx := context.Background()
 	const author = "author@elcano.com"
 	const teammate = "teammate@elcano.com"

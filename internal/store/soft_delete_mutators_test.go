@@ -18,6 +18,7 @@ func TestConversationMutators_SoftDeletedNotMutable(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "alice@x.com")
 	s.SetSoftDelete(true)
 	ctx := context.Background()
 	const owner = "alice@x.com"
@@ -90,6 +91,7 @@ func TestAdminStats_ExcludesSoftDeleted(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "alice@x.com")
 	s.SetSoftDelete(true)
 	ctx := context.Background()
 	const owner = "alice@x.com"

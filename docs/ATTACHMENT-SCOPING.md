@@ -94,7 +94,13 @@ rules itself; it follows whatever they decided:
 - rewinding a chat (`TruncateAfter`) releases the images of the messages it
   removed;
 - an upload never sent in any message is removed once it is older than the
-  window, as before.
+  window, as before;
+- deleting an account removes its whole `uploads/<user>` tree at once,
+  references or not (and the maintenance pass removes the tree of an address
+  with no account, `accountdelete`): its own chats go with it, and an image
+  it sent in someone else's Multiplayer chat goes too — that chat keeps the
+  message, and replay drops the missing file ([IDENTITY.md](IDENTITY.md),
+  "Deleting an account").
 
 A lookup that fails keeps the file and the pass reports the failure (with the
 count of what it did remove). The non-image original under `uploads/` is not
@@ -166,6 +172,13 @@ The segment is a hash rather than the email because the tree shows up in
 operator `du` output and in backups, and there is no reason for it to enumerate
 who uses the box. It is a namespace separator, not a secret; nothing treats it
 as one.
+
+Because the segment is derived from the email, an account later created under
+the same address would own the same subtree. Deleting an account therefore
+removes its subtree at once (`accountdelete.Delete`, from every deletion path —
+see [IDENTITY.md](IDENTITY.md), "Deleting an account"), along with its private
+workspace files in multiplayer chats, which use the same segment; the
+maintenance pass also removes any such tree whose segment is no account's.
 
 **Upgrade note.** Uploads written before this change sit at
 `uploads/<token>/<name>` and carry no owner, so they validate for nobody. They

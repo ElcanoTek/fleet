@@ -109,8 +109,11 @@ func scanUIAutoSubmitRows(rows *sql.Rows) ([]UIAutoSubmit, error) {
 	return out, rows.Err()
 }
 
+// normalizeAutonomousUserEmail is the store's one email normaliser
+// (normalizeEmail): acceptances are written and matched with it, as account
+// deletion matches them.
 func normalizeAutonomousUserEmail(userEmail string) string {
-	return strings.ToLower(strings.TrimSpace(userEmail))
+	return normalizeEmail(userEmail)
 }
 
 func escapeLikeLiteral(s string) string {
@@ -127,7 +130,7 @@ func (s *Store) GetAutonomousAcceptance(ctx context.Context, userEmail string) (
 	}
 	var version int
 	err := s.db.QueryRowContext(ctx,
-		`SELECT policy_version FROM chat.autonomous_acceptances WHERE LOWER(user_email) = $1 ORDER BY policy_version DESC LIMIT 1`,
+		`SELECT policy_version FROM chat.autonomous_acceptances WHERE user_email = $1 ORDER BY policy_version DESC LIMIT 1`,
 		email,
 	).Scan(&version)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -150,15 +153,18 @@ func (s *Store) AcceptAutonomousPolicy(ctx context.Context, userEmail string, ve
 		version = CurrentAutonomousPolicyVersion
 	}
 	now := time.Now().Unix()
-	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO chat.autonomous_acceptances (user_email, policy_version, accepted_at)
-		 VALUES ($1, $2, $3)
-		 ON CONFLICT (user_email) DO UPDATE
-		    SET policy_version = GREATEST(chat.autonomous_acceptances.policy_version, EXCLUDED.policy_version),
-		        accepted_at = EXCLUDED.accepted_at`,
-		email, version, now,
-	)
-	return err
+	// Only an account accepts (withAccountRow: ErrUserNotFound otherwise).
+	return s.withAccountRow(ctx, email, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx,
+			`INSERT INTO chat.autonomous_acceptances (user_email, policy_version, accepted_at)
+			 VALUES ($1, $2, $3)
+			 ON CONFLICT (user_email) DO UPDATE
+			    SET policy_version = GREATEST(chat.autonomous_acceptances.policy_version, EXCLUDED.policy_version),
+			        accepted_at = EXCLUDED.accepted_at`,
+			email, version, now,
+		)
+		return err
+	})
 }
 
 // CreateUIAutoSubmit arms a pending auto-submit countdown for a show_ui card
@@ -185,7 +191,7 @@ func (s *Store) CreateUIAutoSubmit(ctx context.Context, row UIAutoSubmit) (UIAut
 	if strings.TrimSpace(row.Status) == "" {
 		row.Status = UIAutoSubmitStatusPending
 	}
-	row.UserEmail = strings.TrimSpace(row.UserEmail)
+	row.UserEmail = normalizeEmail(row.UserEmail)
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -193,6 +199,10 @@ func (s *Store) CreateUIAutoSubmit(ctx context.Context, row UIAutoSubmit) (UIAut
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	// The arming person's account row before the chat's (lockWriterAccountTx).
+	if err := lockWriterAccountTx(ctx, tx, row.UserEmail, row.ConversationID); err != nil {
+		return UIAutoSubmit{}, err
+	}
 	if err := lockInputQueueConversation(ctx, tx, row.ConversationID); err != nil {
 		return UIAutoSubmit{}, err
 	}
@@ -833,7 +843,7 @@ func (s *Store) sweepOneUIAutoSubmit(ctx context.Context, id, convID string, now
 		`SELECT EXISTS (
 		   SELECT 1
 		     FROM chat.autonomous_acceptances
-		    WHERE LOWER(user_email) = $1
+		    WHERE user_email = $1
 		      AND policy_version >= $2
 		 )`,
 		normalizeAutonomousUserEmail(row.UserEmail),

@@ -19,6 +19,7 @@ func TestSuggestPrompt_ReturnsDraft(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "alice@x.com")
 	const user = "alice@x.com"
 	conv := seedConv(t, s, user)
 	s.agent = &fakeTurnEngine{libraryDraft: &agent.LibraryPromptDraft{
@@ -58,6 +59,7 @@ func TestSuggestPrompt_EmptyConversation(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "carol@x.com")
 	const user = "carol@x.com"
 	conv, err := s.store.CreateConversation(context.Background(), user, "empty", "victoria", "openrouter/auto", false)
 	if err != nil {
@@ -78,6 +80,7 @@ func TestSuggestPrompt_NotOwned(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "owner@x.com")
 	conv := seedConv(t, s, "owner@x.com")
 	s.agent = &fakeTurnEngine{libraryDraft: &agent.LibraryPromptDraft{Content: "x"}}
 
@@ -95,6 +98,7 @@ func TestSuggestPrompt_SynthesisFailure(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "dave@x.com")
 	const user = "dave@x.com"
 	conv := seedConv(t, s, user)
 	s.agent = &fakeTurnEngine{libraryDraftErr: errors.New("model unavailable")}
@@ -115,6 +119,7 @@ func TestSuggestPrompt_FeedsTheWorkflowNotJustTheText(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "alice@x.com")
 	const user = "alice@x.com"
 	conv := seedConvWithToolCall(t, s, user)
 	engine := &fakeTurnEngine{libraryDraft: &agent.LibraryPromptDraft{Name: "n", Content: "c"}}

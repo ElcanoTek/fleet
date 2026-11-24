@@ -18,6 +18,7 @@ func TestCreateConversation_IdempotencyKey(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "idem@x.com", "other@x.com")
 	const me = "idem@x.com"
 	create := func(body string) (int, string) {
 		t.Helper()

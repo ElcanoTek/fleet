@@ -32,3 +32,15 @@ it("localizes owned diagnostics separately from arbitrary error or user content"
   expect(localizeError("unit fleet", "pt")).toBe("unit fleet");
   expect(localizeError("my task is active", "es")).toBe("my task is active");
 });
+
+it("translates an account deletion's refusals and its warnings of steps left", () => {
+  expect(
+    localizeError("some of the account's requests or turns are still running; nothing was deleted; try again", "es"),
+  ).toBe("algunas solicitudes o turnos de la cuenta siguen en curso; no se eliminó nada; inténtalo de nuevo");
+  expect(localizeError("a deletion of this account is already running", "pt")).toBe(
+    "já está em curso uma eliminação desta conta",
+  );
+  expect(
+    localizeError("removing the account's uploads failed: disk full; the server's hourly maintenance pass tries again", "pt"),
+  ).toBe("não foi possível eliminar os ficheiros carregados da conta: disk full; a manutenção horária do servidor volta a tentar");
+});

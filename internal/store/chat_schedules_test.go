@@ -71,6 +71,7 @@ func TestChatSchedules_LifecycleAndClaim(t *testing.T) {
 	t.Parallel()
 
 	s, dsn := newTestStoreDSN(t)
+	seedAccount(t, s, "trader@elcanotek.com")
 	ctx := context.Background()
 
 	conv, err := s.CreateConversation(ctx, "trader@elcanotek.com", "Deal Pacing Chat", "victoria", "", false)
@@ -200,6 +201,7 @@ func TestListUserPatrols(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "me@elcanotek.com", "other@elcanotek.com")
 	ctx := context.Background()
 	const me, other = "me@elcanotek.com", "other@elcanotek.com"
 
@@ -241,9 +243,6 @@ func TestListUserPatrols(t *testing.T) {
 	theirConv, err := s.CreateConversation(ctx, other, "Team chat", "victoria", "", false)
 	if err != nil {
 		t.Fatalf("CreateConversation: %v", err)
-	}
-	if _, err := s.CreateUser(ctx, me, "test-password-123"); err != nil {
-		t.Fatalf("CreateUser: %v", err)
 	}
 	if _, err := s.SetConversationMultiplayer(ctx, other, theirConv.ID, true, []string{me}, nil); err != nil {
 		t.Fatalf("SetConversationMultiplayer: %v", err)
@@ -336,6 +335,7 @@ func TestClaimDueChatSchedules_IgnoresSuggestAdvancedModelApproval(t *testing.T)
 	t.Parallel()
 
 	s, dsn := newTestStoreDSN(t)
+	seedAccount(t, s, "patroller@elcanotek.com")
 	ctx := context.Background()
 	const user = "patroller@elcanotek.com"
 
@@ -384,6 +384,7 @@ func TestClaimDueChatSchedules_IgnoresSuggestAdvancedModelApproval(t *testing.T)
 func TestChatSchedulePauseBetweenDeliveryAndSettle(t *testing.T) {
 	t.Parallel()
 	s, dsn := newTestStoreDSN(t)
+	seedAccount(t, s, "pauser@elcanotek.com")
 	ctx := context.Background()
 	const user = "pauser@elcanotek.com"
 	sd := openSchedOn(t, dsn)
@@ -441,6 +442,7 @@ func TestChatSchedulePauseBetweenDeliveryAndSettle(t *testing.T) {
 func TestChatScheduleDeliveryTrustsOnlyPatrolMode(t *testing.T) {
 	t.Parallel()
 	s, dsn := newTestStoreDSN(t)
+	seedAccount(t, s, "trust@elcanotek.com")
 	ctx := context.Background()
 	const user = "trust@elcanotek.com"
 	conv, err := s.CreateConversation(ctx, user, "c", "victoria", "", false)
@@ -482,6 +484,7 @@ func TestChatScheduleDeliveryTrustsOnlyPatrolMode(t *testing.T) {
 func TestChatScheduleEditSupersedesAClaimedFire(t *testing.T) {
 	t.Parallel()
 	s, dsn := newTestStoreDSN(t)
+	seedAccount(t, s, "editor@elcanotek.com")
 	ctx := context.Background()
 	sd := openSchedOn(t, dsn)
 	const user = "editor@elcanotek.com"
@@ -565,6 +568,7 @@ func TestChatScheduleEditSupersedesAClaimedFire(t *testing.T) {
 func TestChatScheduleEditAfterDeliveryCountsTheRun(t *testing.T) {
 	t.Parallel()
 	s, dsn := newTestStoreDSN(t)
+	seedAccount(t, s, "late-editor@elcanotek.com")
 	ctx := context.Background()
 	sd := openSchedOn(t, dsn)
 	const user = "late-editor@elcanotek.com"
@@ -628,6 +632,7 @@ func TestChatSchedulesReportSlotsSkippedForApproval(t *testing.T) {
 	t.Parallel()
 
 	s, dsn := newTestStoreDSN(t)
+	seedAccount(t, s, "patroller@elcanotek.com")
 	ctx := context.Background()
 	const user = "patroller@elcanotek.com"
 
@@ -732,6 +737,7 @@ func TestChatScheduleBusyForPatrolInFlightIsNotReportedAsApproval(t *testing.T) 
 	t.Parallel()
 
 	s, dsn := newTestStoreDSN(t)
+	seedAccount(t, s, "patroller@elcanotek.com")
 	ctx := context.Background()
 	const user = "patroller@elcanotek.com"
 
@@ -880,6 +886,7 @@ func TestGetUserPatrolAndRuns(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "me@elcanotek.com")
 	ctx := context.Background()
 	const me, other = "me@elcanotek.com", "other@elcanotek.com"
 	conv, err := s.CreateConversation(ctx, me, "Deals chat", "victoria", "", false)
@@ -943,6 +950,7 @@ func TestGetUserPatrolAndRuns(t *testing.T) {
 func TestArchivePausesChatSchedules(t *testing.T) {
 	t.Parallel()
 	s, dsn := newTestStoreDSN(t)
+	seedAccount(t, s, "archiver@elcanotek.com")
 	ctx := context.Background()
 	const owner = "archiver@elcanotek.com"
 	conv, err := s.CreateConversation(ctx, owner, "Old patrol", "victoria", "", false)

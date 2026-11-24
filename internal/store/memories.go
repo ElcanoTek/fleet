@@ -153,13 +153,21 @@ func (s *Store) CreateMemory(ctx context.Context, userEmail, content, source, ki
 	kind = NormalizeMemoryKind(kind)
 	id := uuid.NewString()
 	now := time.Now().Unix()
-	row := s.db.QueryRowContext(ctx,
-		`INSERT INTO memories (id, user_email, content, source, kind, origin, learned_at, created_at, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, 'manual', $6, $6, $6)
-		 RETURNING `+memoryColumns,
-		id, normalizeEmail(userEmail), content, source, kind, now,
-	)
-	return scanMemory(row)
+	var m *Memory
+	err := s.withAccountRow(ctx, userEmail, func(tx *sql.Tx) error {
+		var err error
+		m, err = scanMemory(tx.QueryRowContext(ctx,
+			`INSERT INTO memories (id, user_email, content, source, kind, origin, learned_at, created_at, updated_at)
+			 VALUES ($1, $2, $3, $4, $5, 'manual', $6, $6, $6)
+			 RETURNING `+memoryColumns,
+			id, normalizeEmail(userEmail), content, source, kind, now,
+		))
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return m, nil
 }
 
 // ListMemories returns every memory for the user — active first (pinned, then
@@ -391,13 +399,24 @@ func (s *Store) CreateMemoryProposal(ctx context.Context, userEmail, conversatio
 	}
 	id := uuid.NewString()
 	now := time.Now().Unix()
-	row := s.db.QueryRowContext(ctx,
-		`INSERT INTO memories (id, user_email, conversation_id, content, source, kind, origin, supersedes, supersedes_hash, learned_at, created_at, updated_at)
-		 VALUES ($1, $2, $3, $4, 'proposed', $5, $6, $7, $8, $9, $9, $9)
-		 RETURNING `+memoryColumns,
-		id, normalizeEmail(userEmail), conversationID, content, kind, origin, supersedes, supersedesHash, now,
-	)
-	return scanMemory(row)
+	email := normalizeEmail(userEmail)
+	// A proposal is written after (or at the end of) a turn: with the account
+	// gone by then, nothing is written (withAccountRow, ErrUserNotFound).
+	var m *Memory
+	err := s.withAccountRow(ctx, email, func(tx *sql.Tx) error {
+		var err error
+		m, err = scanMemory(tx.QueryRowContext(ctx,
+			`INSERT INTO memories (id, user_email, conversation_id, content, source, kind, origin, supersedes, supersedes_hash, learned_at, created_at, updated_at)
+			 VALUES ($1, $2, $3, $4, 'proposed', $5, $6, $7, $8, $9, $9, $9)
+			 RETURNING `+memoryColumns,
+			id, email, conversationID, content, kind, origin, supersedes, supersedesHash, now,
+		))
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return m, nil
 }
 
 // Supersede outcomes for AcceptMemoryProposal. Every guard failure is a

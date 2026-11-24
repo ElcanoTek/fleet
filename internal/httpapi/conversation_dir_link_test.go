@@ -274,7 +274,7 @@ func TestPrivateStashLeavesNoEmptyOwnerDir(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(stash, "owner"), 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := recoverInterruptedParticipantWorkspace(other, stash); err != nil {
+	if err := recoverInterruptedParticipantWorkspace(other, stash, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Lstat(filepath.Join(wsRoot, other)); !os.IsNotExist(err) {
@@ -652,7 +652,7 @@ func TestRecoveryDoesNotTreatAnUnreadableOwnerStashAsEmpty(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.Chmod(ownerDir, 0o750) })
-	if err := recoverInterruptedParticipantWorkspace("conv-unreadable", stash); err == nil {
+	if err := recoverInterruptedParticipantWorkspace("conv-unreadable", stash, nil); err == nil {
 		t.Fatal("recovery reported nothing to do over an owner stash it could not read")
 	}
 }

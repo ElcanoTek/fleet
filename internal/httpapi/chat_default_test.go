@@ -1149,7 +1149,7 @@ func newDefaultChatServer(t *testing.T, engine turnEngine, st chatStore) *Server
 		EmailAttachmentDir: t.TempDir(),
 	}
 	srv := New(cfg, engine, st)
-	srv.isMember = allowAllMembers
+	srv.isMember = allowAllMembers(st)
 	return srv
 }
 

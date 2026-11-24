@@ -29,6 +29,7 @@ func noteChat(t *testing.T, s *Store) *Conversation {
 func TestAdminNote_Set(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
+	seedAccount(t, s, "dana@client.example")
 	ctx := context.Background()
 	c := noteChat(t, s)
 	if n, err := s.GetAdminNote(ctx, c.ID); err != nil || n != nil {
@@ -67,6 +68,7 @@ func TestAdminNote_Set(t *testing.T) {
 func TestAdminNote_AckAndReplace(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
+	seedAccount(t, s, "dana@client.example")
 	ctx := context.Background()
 	c := noteChat(t, s)
 	first, err := s.AdminSetNote(ctx, webAdmin, c.ID, "I fixed the 06:30 patrol.")
@@ -105,6 +107,7 @@ func TestAdminNote_AckAndReplace(t *testing.T) {
 func TestAdminNote_OutsideHistoryAndClear(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
+	seedAccount(t, s, "dana@client.example")
 	ctx := context.Background()
 	c := noteChat(t, s)
 	if _, err := s.AdminSetNote(ctx, webAdmin, c.ID, "I fixed the 06:30 patrol."); err != nil {
@@ -162,6 +165,7 @@ func TestAdminNote_OutsideHistoryAndClear(t *testing.T) {
 func TestAdminNote_DeletedChats(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
+	seedAccount(t, s, "dana@client.example")
 	ctx := context.Background()
 	c, err := s.CreateConversation(ctx, "dana@client.example", "Gone", "victoria", "m1", false)
 	if err != nil {
@@ -245,6 +249,7 @@ func seedAttentionChats(t *testing.T, s *Store) attentionFixture {
 func TestAdminChats_StateFilter(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
+	seedAccount(t, s, "dana@client.example", "li@client.example", "sam@client.example")
 	ctx := context.Background()
 	seedAttentionChats(t, s)
 	titles := func(f AdminChatFilter) string {
@@ -286,6 +291,7 @@ func TestAdminChats_StateFilter(t *testing.T) {
 func TestAdminChats_AttentionSignals(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
+	seedAccount(t, s, "dana@client.example", "li@client.example", "sam@client.example")
 	ctx := context.Background()
 	f := seedAttentionChats(t, s)
 	got, err := s.AdminGetChat(ctx, f.stuck.ID)
@@ -311,6 +317,7 @@ func TestAdminChats_AttentionSignals(t *testing.T) {
 func TestAdminChatOverview(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
+	seedAccount(t, s, "dana@client.example", "li@client.example", "sam@client.example")
 	ctx := context.Background()
 	seedAttentionChats(t, s)
 	o, err := s.AdminChatOverview(ctx, AdminChatFilter{})
@@ -344,6 +351,7 @@ func TestAdminChatOverview(t *testing.T) {
 func TestAdminChatTranscript_PagesBack(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
+	seedAccount(t, s, "dana@client.example")
 	ctx := context.Background()
 	c, err := s.CreateConversation(ctx, "dana@client.example", "Long chat", "victoria", "m1", false)
 	if err != nil {
@@ -384,6 +392,7 @@ func TestAdminChatTranscript_PagesBack(t *testing.T) {
 func TestAdminChats_LatestTurnIsTheLastCreated(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
+	seedAccount(t, s, "dana@client.example")
 	ctx := context.Background()
 	now := time.Now().Unix()
 	// Turn ids chosen so that sorting by id would pick the wrong turn in
@@ -436,6 +445,7 @@ func TestAdminChats_LatestTurnIsTheLastCreated(t *testing.T) {
 func TestAdminChatTranscript_NamesImagesWithoutPaths(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
+	seedAccount(t, s, "dana@client.example")
 	ctx := context.Background()
 	c := noteChat(t, s)
 	if _, err := s.AppendHistory(ctx, c.ID, []agent.HistoryEntry{
@@ -465,6 +475,7 @@ func TestAdminChatTranscript_NamesImagesWithoutPaths(t *testing.T) {
 func TestAdminNote_CompareAndSwap(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
+	seedAccount(t, s, "dana@client.example")
 	ctx := context.Background()
 	c := noteChat(t, s)
 	none := int64(0)
@@ -497,6 +508,7 @@ func TestAdminNote_CompareAndSwap(t *testing.T) {
 func TestAdminNote_ClearCompareAndSwap(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
+	seedAccount(t, s, "dana@client.example")
 	ctx := context.Background()
 	c := noteChat(t, s)
 	first, err := s.AdminSetNote(ctx, webAdmin, c.ID, "First.")
@@ -523,6 +535,7 @@ func TestAdminNote_ClearCompareAndSwap(t *testing.T) {
 func TestAdminChatTranscript_KeepsSummaryBoundaries(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
+	seedAccount(t, s, "dana@client.example")
 	ctx := context.Background()
 	c := noteChat(t, s)
 	if _, err := s.AppendHistory(ctx, c.ID, []agent.HistoryEntry{
@@ -548,6 +561,7 @@ func TestAdminChatTranscript_KeepsSummaryBoundaries(t *testing.T) {
 func TestAdminNote_VersionsAreNeverReused(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
+	seedAccount(t, s, "dana@client.example")
 	ctx := context.Background()
 	c := noteChat(t, s)
 	first, err := s.AdminSetNote(ctx, webAdmin, c.ID, "First.")
@@ -601,6 +615,7 @@ func TestAdminNote_VersionsAreNeverReused(t *testing.T) {
 func TestAdminChats_LatestTurnAfterASweep(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
+	seedAccount(t, s, "dana@client.example")
 	ctx := context.Background()
 	c := noteChat(t, s)
 	now := time.Now().Unix()
@@ -645,6 +660,7 @@ func TestAdminChats_LatestTurnAfterASweep(t *testing.T) {
 func TestAdminChats_LatestTurnWhenTheClockStepsBack(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
+	seedAccount(t, s, "dana@client.example")
 	ctx := context.Background()
 	c := noteChat(t, s)
 	now := time.Now().Unix()
@@ -674,6 +690,7 @@ func TestAdminChats_LatestTurnWhenTheClockStepsBack(t *testing.T) {
 // counts still cover every chat. (Not parallel: it lowers the package's limit.)
 func TestAdminChatOverview_SaysWhenPeopleAreTruncated(t *testing.T) {
 	s := newTestStore(t)
+	seedAccount(t, s, "a@client.example", "b@client.example", "c@client.example")
 	ctx := context.Background()
 	for _, owner := range []string{"a@client.example", "b@client.example", "c@client.example"} {
 		if _, err := s.CreateConversation(ctx, owner, "Chat", "victoria", "m1", false); err != nil {

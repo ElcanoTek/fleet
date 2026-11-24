@@ -156,6 +156,30 @@ func TestResolve(t *testing.T) {
 			t.Fatalf("err = %v", err)
 		}
 	})
+	t.Run("a user key acts only as the account it is bound to", func(t *testing.T) {
+		later := uuid.New()
+		d := &fakeDir{users: map[string]*identity.User{
+			"k@x.com": {ID: later, Email: "k@x.com", Role: identity.RoleMember, Enabled: true},
+		}}
+		for _, tc := range []struct {
+			name    string
+			account string
+			want    error
+		}{
+			{"bound to an earlier account under the email", id.String(), ErrKeyPredatesAccount},
+			{"bound to this account", later.String(), nil},
+			{"not bound (no user key, or one bound on first use)", "", nil},
+		} {
+			p := Principal{Email: "k@x.com", AuthMethod: MethodAPIKey, KeyID: "key_1", KeyAccountID: tc.account}
+			if _, _, err := Resolve(ctx, d, p, Enabled); !errors.Is(err, tc.want) {
+				t.Errorf("%s: err = %v, want %v", tc.name, err, tc.want)
+			}
+		}
+		// No account under the email at all is not a member, bound or not.
+		if _, _, err := Resolve(ctx, d, Principal{Email: "gone@x.com", AuthMethod: MethodAPIKey, KeyAccountID: id.String()}, Enabled); !errors.Is(err, ErrNotMember) {
+			t.Errorf("no account: err = %v, want ErrNotMember", err)
+		}
+	})
 	t.Run("no identity", func(t *testing.T) {
 		if _, _, err := Resolve(ctx, dir, Principal{AuthMethod: MethodGateway}, nil); !errors.Is(err, ErrNoIdentity) {
 			t.Fatalf("err = %v", err)

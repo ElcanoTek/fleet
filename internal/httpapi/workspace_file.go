@@ -5,8 +5,6 @@ package httpapi
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -19,6 +17,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/ElcanoTek/fleet/internal/accountdelete"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/tools"
 )
@@ -206,9 +205,11 @@ func (s *Server) handleWorkspaceFile(w http.ResponseWriter, r *http.Request, con
 // paths, goes to the log.
 var errWorkspaceUnavailable = errors.New("workspace unavailable")
 
+// participantDigest names a participant's private workspace tree: the one
+// digest account deletion and its maintenance sweep remove by
+// (accountdelete.Digest).
 func participantDigest(userEmail string) string {
-	sum := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(userEmail))))
-	return hex.EncodeToString(sum[:])[:32]
+	return accountdelete.Digest(userEmail)
 }
 
 func (s *Server) privateWorkspaceStashRoot() (string, error) {
@@ -251,30 +252,50 @@ func (s *Server) removeConversationPrivateStash(convID string) {
 	_ = os.RemoveAll(stashDir)
 }
 
-func (s *Server) purgeParticipantPrivateStashes(userEmail string) {
+// purgeParticipantPrivateStashes removes userEmail's participant trees from
+// every conversation's private workspace stash, each under the conversation's
+// swap lock and through accountdelete.RemoveOrphanTree (live), and returns the
+// first failure (the remaining trees are still tried). A tree left behind by a
+// failure is reported by the caller (accountdelete.PrivateWorkspacesFailed)
+// and removed by the maintenance pass once its digest is no account's
+// (removeOrphanParticipantStashes).
+func (s *Server) purgeParticipantPrivateStashes(userEmail string, live func(digest string) (bool, error)) error {
 	userEmail = strings.ToLower(strings.TrimSpace(userEmail))
 	if userEmail == "" {
-		return
-	}
-	s.inflightMu.Lock()
-	for convID, activeUser := range s.activeParticipantWorkspaces {
-		if strings.EqualFold(activeUser, userEmail) {
-			if s.purgedParticipantWorkspaces == nil {
-				s.purgedParticipantWorkspaces = make(map[string]bool)
-			}
-			s.purgedParticipantWorkspaces[convID+"\x00"+userEmail] = true
-		}
-	}
-	s.inflightMu.Unlock()
-	root, err := s.privateWorkspaceStashRoot()
-	if err != nil || root == "" {
-		return
-	}
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		return
+		return nil
 	}
 	digest := participantDigest(userEmail)
+	// A participant turn running under the address is the deleted account's
+	// unless a new account holds the address by now.
+	again, lerr := live(digest)
+	theirs := lerr != nil || !again
+	if theirs {
+		s.inflightMu.Lock()
+		for convID, activeUser := range s.activeParticipantWorkspaces {
+			if strings.EqualFold(activeUser, userEmail) {
+				if s.purgedParticipantWorkspaces == nil {
+					s.purgedParticipantWorkspaces = make(map[string]bool)
+				}
+				s.purgedParticipantWorkspaces[convID+"\x00"+userEmail] = true
+			}
+		}
+		s.inflightMu.Unlock()
+	}
+	root, err := s.privateWorkspaceStashRoot()
+	if err != nil {
+		return err
+	}
+	if root == "" {
+		return nil
+	}
+	entries, err := os.ReadDir(root)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var firstErr error
 	for _, d := range entries {
 		if !d.IsDir() {
 			continue
@@ -283,13 +304,96 @@ func (s *Server) purgeParticipantPrivateStashes(userEmail string) {
 		if !filepath.IsLocal(convID) || strings.ContainsAny(convID, `/\`) {
 			continue
 		}
+		path := filepath.Join(root, convID, "participants", digest)
 		unlock := s.workspaceSwapLocks.lock(convID)
-		if s.isActiveParticipantUser(convID, userEmail) {
+		if theirs && s.isActiveParticipantUser(convID, userEmail) {
 			s.markParticipantWorkspacePurged(convID, userEmail)
 		}
-		_ = os.RemoveAll(filepath.Join(root, convID, "participants", digest)) //nolint:gosec // server-derived stash path
+		// RemoveIfNoAccount asks live again right before the removal: a tree
+		// whose address holds a new account by then is left to it, and
+		// reported (accountdelete.ErrHeldByNewAccount); any other error
+		// leaves the tree and is reported.
+		if err := accountdelete.RemoveIfNoAccount(path, digest, live); err != nil && firstErr == nil {
+			firstErr = err
+		}
 		unlock()
 	}
+	return firstErr
+}
+
+// setAsideParticipantStashes moves userEmail's participant trees aside in
+// every conversation's private workspace stash (accountdelete.SetAside), each
+// under the conversation's swap lock, for an account deletion that has not
+// committed yet: the account still holds the address. Every participant turn
+// of the account still running is marked so it does not move its tree back
+// as it ends — whether or not a stash tree was there to move (a running
+// turn's files are in the conversation's workspace). It returns what it
+// moved, the undo that clears every mark it set (called when the deletion
+// does not commit), and the first failure.
+func (s *Server) setAsideParticipantStashes(userEmail string) ([]accountdelete.AsideTree, func(), error) {
+	userEmail = strings.ToLower(strings.TrimSpace(userEmail))
+	if userEmail == "" {
+		return nil, nil, nil
+	}
+	var marked []string
+	s.inflightMu.Lock()
+	for convID, activeUser := range s.activeParticipantWorkspaces {
+		if strings.EqualFold(activeUser, userEmail) {
+			marked = append(marked, convID)
+		}
+	}
+	s.inflightMu.Unlock()
+	for _, convID := range marked {
+		unlock := s.workspaceSwapLocks.lock(convID)
+		s.markParticipantWorkspacePurged(convID, userEmail)
+		unlock()
+	}
+	undo := func() {
+		for _, convID := range marked {
+			unlock := s.workspaceSwapLocks.lock(convID)
+			s.takeParticipantWorkspacePurged(convID, userEmail)
+			unlock()
+		}
+	}
+	root, err := s.privateWorkspaceStashRoot()
+	if err != nil || root == "" {
+		return nil, undo, err
+	}
+	entries, err := os.ReadDir(root)
+	if os.IsNotExist(err) {
+		return nil, undo, nil
+	}
+	if err != nil {
+		return nil, undo, err
+	}
+	digest := participantDigest(userEmail)
+	var aside []accountdelete.AsideTree
+	var firstErr error
+	for _, d := range entries {
+		convID := d.Name()
+		if !d.IsDir() || !filepath.IsLocal(convID) || strings.ContainsAny(convID, `/\`) {
+			continue
+		}
+		unlock := s.workspaceSwapLocks.lock(convID)
+		t, moved, err := accountdelete.SetAside(filepath.Join(root, convID, "participants", digest), digest)
+		unlock()
+		if err != nil {
+			firstErr = firstErrOf(firstErr, err)
+			continue
+		}
+		if moved {
+			aside = append(aside, t)
+		}
+	}
+	return aside, undo, firstErr
+}
+
+// firstErrOf is a when it is set, else b.
+func firstErrOf(a, b error) error {
+	if a != nil {
+		return a
+	}
+	return b
 }
 
 func (s *Server) markParticipantWorkspacePurged(convID, userEmail string) {
@@ -393,7 +497,7 @@ func (s *Server) sweepOrphanPrivateWorkspaceStashes(ctx context.Context) {
 		if s.isParticipantWorkspaceActiveInMemory(convID, "") {
 			continue
 		}
-		_ = recoverInterruptedParticipantWorkspace(convID, filepath.Join(root, convID))
+		_ = recoverInterruptedParticipantWorkspace(convID, filepath.Join(root, convID), s.stashOwner)
 	}
 }
 
@@ -417,7 +521,7 @@ func (s *Server) isParticipantWorkspaceActive(convID, ownerEmail string) bool {
 	// swap-phase marker left on disk came from an interrupted earlier process.
 	// Recover the owner's private workspace directories immediately before
 	// serving the request; fail closed if recovery cannot complete.
-	if err := recoverInterruptedParticipantWorkspace(convID, stashRoot); err != nil {
+	if err := recoverInterruptedParticipantWorkspace(convID, stashRoot, s.stashOwner); err != nil {
 		return true
 	}
 	return false
@@ -443,7 +547,7 @@ func (s *Server) activateTurnPrivateWorkspace(conv *store.Conversation, user str
 		unlock()
 		return err
 	}
-	if err := recoverInterruptedParticipantWorkspace(conv.ID, stashRoot); err != nil {
+	if err := recoverInterruptedParticipantWorkspace(conv.ID, stashRoot, s.stashOwner); err != nil {
 		unlock()
 		return err
 	}
@@ -511,7 +615,7 @@ func (s *Server) restoreTurnPrivateWorkspace(conv *store.Conversation, user stri
 	if conv.UserEmail != "" && !strings.EqualFold(conv.UserEmail, user) {
 		if stashRoot, err := s.privateWorkspaceStashDir(conv.ID); err == nil {
 			if ws, werr := tools.EnsureConversationDir(context.Background(), conv.ID); werr == nil {
-				_ = restoreParticipantWorkspaceToOwner(ws.Root, stashRoot, user)
+				_ = restoreParticipantWorkspaceToOwner(ws.Root, stashRoot, s.stashOwner(user))
 				_ = ws.Close()
 			}
 			if s.takeParticipantWorkspacePurged(conv.ID, user) {
@@ -534,8 +638,9 @@ func writeStashMarker(stashRoot, name, val string) error {
 // recoverInterruptedParticipantWorkspace finishes a swap an earlier process
 // left half done. The conversation directory is opened (created if missing,
 // never followed if it is a symbolic link) only when there is something to
-// move back into it.
-func recoverInterruptedParticipantWorkspace(convID, stashRoot string) error {
+// move back into it. stashFor, when set, names who the participant's staged
+// files go back to (Server.stashOwner: "" removes them instead).
+func recoverInterruptedParticipantWorkspace(convID, stashRoot string, stashFor func(email string) string) error {
 	marker := filepath.Join(stashRoot, "active-participant")
 	raw, err := os.ReadFile(marker) //nolint:gosec // server-derived stashRoot
 	if err == nil {
@@ -544,7 +649,11 @@ func recoverInterruptedParticipantWorkspace(convID, stashRoot string) error {
 			return werr
 		}
 		defer ws.Close()
-		return restoreParticipantWorkspaceToOwner(ws.Root, stashRoot, strings.TrimSpace(string(raw)))
+		participant := strings.TrimSpace(string(raw))
+		if stashFor != nil {
+			participant = stashFor(participant)
+		}
+		return restoreParticipantWorkspaceToOwner(ws.Root, stashRoot, participant)
 	}
 	if !os.IsNotExist(err) {
 		return err

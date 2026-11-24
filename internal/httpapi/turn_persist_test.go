@@ -64,6 +64,7 @@ func TestPersister_BackfillHealsDropsUnderBackpressure(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "alice@x.com")
 	conv, err := s.store.CreateConversation(t.Context(), "alice@x.com", "hi", "victoria", "", false)
 	if err != nil {
 		t.Fatal(err)
@@ -156,6 +157,7 @@ func TestPersister_LossyWhenBackfillFails(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "alice@x.com")
 	conv, err := s.store.CreateConversation(t.Context(), "alice@x.com", "hi", "victoria", "", false)
 	if err != nil {
 		t.Fatal(err)
@@ -222,6 +224,7 @@ func TestPersister_EventsPersistThenFinish(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "alice@x.com")
 	conv, err := s.store.CreateConversation(t.Context(), "alice@x.com", "hi", "victoria", "", false)
 	if err != nil {
 		t.Fatal(err)
@@ -286,6 +289,7 @@ func TestStreamEndpoint_DBFallback(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "alice@x.com")
 	expiredBefore := metricValue(`fleet_sse_reconnects_total{outcome="buffer_expired"}`)
 	conv, err := s.store.CreateConversation(t.Context(), "alice@x.com", "hi", "victoria", "", false)
 	if err != nil {
@@ -351,6 +355,7 @@ func TestStreamEndpoint_NoContentReconnectIsTallied(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "alice@x.com")
 	noContentBefore := metricValue(`fleet_sse_reconnects_total{outcome="no_content"}`)
 	conv, err := s.store.CreateConversation(t.Context(), "alice@x.com", "hi", "victoria", "", false)
 	if err != nil {
@@ -380,6 +385,7 @@ func TestSweepRetention_PrunesAgedTurnLedger(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "alice@x.com")
 	s.cfg.TurnEventRetentionDays = 14
 	conv, err := s.store.CreateConversation(t.Context(), "alice@x.com", "hi", "victoria", "", false)
 	if err != nil {

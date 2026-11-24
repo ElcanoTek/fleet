@@ -24,6 +24,7 @@ func TestQueue_DepthCapRejectsOverflowButAllowsReplay(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "cap@x.com")
 	const user = "cap@x.com"
 	conv, err := s.store.CreateConversation(t.Context(), user, "q", "victoria", "openrouter/auto", false)
 	if err != nil {
@@ -137,6 +138,7 @@ func TestQueue_ReplayCommitCompletesInjectedRows(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "replay@x.com")
 	ctx := context.Background()
 	const user = "replay@x.com"
 	conv, err := s.store.CreateConversation(ctx, user, "q", "victoria", "openrouter/auto", false)

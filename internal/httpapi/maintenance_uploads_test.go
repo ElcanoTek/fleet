@@ -52,7 +52,7 @@ func maintenanceUploadsFixture(t *testing.T) (*Server, *store.Store, *sql.DB, st
 		store:    st,
 		dir:      st.Identity(),
 		inflight: make(map[string]inflightEntry),
-		isMember: allowAllMembers,
+		isMember: allowAllMembers(st),
 	}
 	return srv, st, raw, attachDir
 }

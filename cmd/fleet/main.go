@@ -506,6 +506,24 @@ func run() error {
 	}
 	defer chatStore.Close()
 	slog.Info("chat DB connected + migrated")
+	// While this server runs, `fleet admin rm` / `fleet chat user del` refuse
+	// to delete an account against the same database (store.ExcludeServers):
+	// the server's own deletion stops the account's work and moves its files
+	// aside under its request gate, which a CLI cannot reach. A CLI deletion
+	// already running is waited for, without a deadline, before anything
+	// here opens a listener; a stop signal meanwhile exits cleanly.
+	presenceCtx, stopPresenceWait := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
+	releasePresence, err := chatStore.HoldServerPresence(presenceCtx)
+	stoppedWaiting := presenceCtx.Err() != nil
+	stopPresenceWait()
+	if err != nil {
+		if stoppedWaiting {
+			slog.Info("stopped while waiting for an account deletion run from the CLI to finish")
+			return nil
+		}
+		return fmt.Errorf("mark the server as running: %w", err)
+	}
+	defer releasePresence()
 
 	// Full-text search (#308): honor FLEET_SEARCH_ENABLED, then backfill the
 	// message-content index for any pre-FTS messages in the background so startup
@@ -745,6 +763,11 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("apikeys manager: %w", err)
 	}
+	// User keys minted before keys named their account are bound once, to the
+	// account their email has now; one whose email has none acts as no one
+	// from here on (apikeys.APIKey.AccountMissing). A key whose lookup fails
+	// is bound on its first use instead.
+	bindUserKeysAtBoot(keyMgr, chatStore)
 	chatOpts = append(chatOpts, httpapi.WithAPIKeys(keyMgr))
 
 	chatSrv := httpapi.New(cfg, mgr, chatStore, chatOpts...)

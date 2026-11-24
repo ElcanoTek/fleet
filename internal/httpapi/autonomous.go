@@ -89,7 +89,9 @@ func (s *Server) handleAutonomousAccept(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if err := s.store.AcceptAutonomousPolicy(r.Context(), user, store.CurrentAutonomousPolicyVersion); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		if !writeAccountGone(w, err) {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
 		return
 	}
 	writeJSON(w, r, map[string]any{

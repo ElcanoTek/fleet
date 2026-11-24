@@ -153,6 +153,7 @@ func TestMigration046_NormalizesLegacyPositionTies(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "u@example.com")
 	ctx := context.Background()
 	conv, err := s.CreateConversation(ctx, "u@example.com", "", "assistant", "", false)
 	if err != nil {

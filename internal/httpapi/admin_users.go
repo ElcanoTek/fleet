@@ -10,13 +10,17 @@
 package httpapi
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 
+	"github.com/ElcanoTek/fleet/internal/accountdelete"
 	"github.com/ElcanoTek/fleet/internal/identity"
 	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/safe"
+	"github.com/ElcanoTek/fleet/internal/sched/apikeys"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
@@ -126,44 +130,227 @@ func (s *Server) handleAdminUserDelete(w http.ResponseWriter, r *http.Request, e
 		http.Error(w, "refusing to delete your own account", http.StatusBadRequest)
 		return
 	}
-	affectedConvIDs := s.activeMultiplayerAndPendingConvIDsBestEffort(r.Context())
-	if err := s.store.DeleteUser(r.Context(), email); err != nil {
-		if errors.Is(err, store.ErrUserNotFound) {
-			http.Error(w, "user not found", http.StatusNotFound)
-			return
-		}
-		// The account still owns team-shared projects. Deleting it would take
-		// those projects — and every team learning in them — from people who
-		// are still here, so the delete fails closed and names what to transfer
-		// first (ADR-0057). 409, not 500: nothing is wrong, there is a step
-		// missing.
-		var owns *store.OwnsSharedProjectsError
-		if errors.As(err, &owns) {
-			// JSON, not http.Error's plain text, because the sentence alone was
-			// a dead end: it named the projects and gave the admin no route to
-			// the transfer control that resolves it, and the id cannot be
-			// recovered client-side (GET /projects is scoped to the caller's
-			// own and team-visible projects, and an admin is usually neither).
-			// `error` keeps the exact prose an older client already renders;
-			// `owns_shared_projects` carries {id, name} so the refusal can link
-			// straight at each project's transfer control (QA #21).
-			writeJSONStatus(w, r, http.StatusConflict, map[string]any{
-				"error": "this account still owns team-shared projects (" +
-					strings.Join(owns.ProjectNames(), ", ") +
-					") — transfer them to another member first, then delete the account",
-				"owns_shared_projects": owns.Projects,
-			})
-			return
-		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	// One deletion of an account at a time: a second one while the first
+	// runs is refused (409) and changes nothing; tried again once the first
+	// is over, it finds that one's outcome (404 when the account is gone).
+	release, ok := s.accounts.claimDeletion(email)
+	if !ok {
+		http.Error(w, errAccountDeletionRunning, http.StatusConflict)
 		return
 	}
+	defer release()
+	// What the deletion would refuse is refused before the account's running
+	// work is stopped; DeleteUser checks again in its own transaction.
+	if pf, ok := s.store.(interface {
+		DeleteUserPreflight(context.Context, string) error
+	}); ok {
+		if err := pf.DeleteUserPreflight(r.Context(), email); err != nil {
+			if r.Context().Err() != nil {
+				// This request was cancelled (its client went away, or the
+				// administrator deleting is being deleted): nothing happened.
+				http.Error(w, "the deletion was interrupted before it started; nothing was deleted", http.StatusServiceUnavailable)
+				return
+			}
+			writeAccountDeleteRefusal(w, r, err)
+			return
+		}
+	}
+	// The account's requests and turns stop first, so none of them writes
+	// after its rows are gone (account_gate.go, stopAccountWork). Requests
+	// for it are refused until the deletion is over.
+	reopen := s.accounts.close(email)
+	defer reopen()
+	stopped, err := s.stopAccountWork(r.Context(), email)
+	if err != nil {
+		// This request ended before the work stopped: its client went away,
+		// or the administrator deleting is being deleted. Nothing is deleted,
+		// though the account's requests in flight and its turns were already
+		// cancelled.
+		http.Error(w, "the deletion was interrupted before it started; nothing was deleted", http.StatusServiceUnavailable)
+		return
+	}
+	if !stopped {
+		// Some of the account's requests or turns had not ended within
+		// accountDrainTimeout. The deletion waits for all of them, so nothing
+		// is deleted: the gate reopens when this returns, and nothing was set
+		// aside yet. What was cancelled stays cancelled, so a retry usually
+		// finds it ended.
+		logging.From(r.Context()).Warn("admin users: the account's requests or turns did not stop in time; nothing was deleted", "email", safe.LogSafe(email))
+		w.Header().Set("Retry-After", "5")
+		http.Error(w, errAccountWorkStillRunning, http.StatusServiceUnavailable)
+		return
+	}
+	if s.afterAccountWorkStopped != nil {
+		s.afterAccountWorkStopped()
+	}
+	// From here the deletion runs to its end even if the client goes away:
+	// the account's work is already stopped and must not be left so with
+	// the account still there. It is still bounded, so a stuck deletion
+	// cannot hold the account's requests refused for ever.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), s.accountDeleteTimeout())
+	defer cancel()
+	// Read after the wait, so chats a stopped turn or request left in a
+	// changed state are counted.
+	affectedConvIDs := s.activeMultiplayerAndPendingConvIDsBestEffort(ctx)
+	// The same deletion as `fleet admin rm`: the store cascade, the user API
+	// keys that act as the account, and its upload and private workspace trees.
+	// The account's in-memory approve/deny-all decisions go now, while its
+	// work is stopped and the account still holds the address, and again
+	// after the commit, whatever holds the address by then: they are keyed
+	// by address, and forgetting one only means approving again.
 	s.sessionApprovals.ForgetUser(email)
-	s.reconcileAllMultiplayerAccess(r.Context(), affectedConvIDs...)
-	s.purgeParticipantPrivateStashes(email)
-	logging.From(r.Context()).Info("admin users: deleted", "email", safe.LogSafe(email), "actor", safe.LogSafe(actor))
+	opts := accountdelete.Options{
+		Keys: s.apiKeys,
+		// Before the rows go: move the account's private workspace trees
+		// aside under the locks a running turn takes.
+		ServerSetAside: s.setAsideParticipantStashes,
+		// After: forget the account's in-memory approvals, end its part in
+		// live multiplayer chats, and remove any private workspace tree still
+		// there (each only while no account has its digest).
+		ServerCleanup: func(email string, live func(digest string) (bool, error)) error {
+			s.sessionApprovals.ForgetUser(email)
+			s.reconcileAllMultiplayerAccess(ctx, affectedConvIDs...)
+			return s.purgeParticipantPrivateStashes(email, live)
+		},
+	}
+	if s.cfg != nil {
+		opts.AttachmentDir = s.cfg.EmailAttachmentDir
+	}
+	deleted, err := accountdelete.Delete(ctx, s.store, email, opts)
+	if err != nil {
+		writeAccountDeleteRefusal(w, r, err)
+		return
+	}
+	logAccountDeleteProblems(ctx, email, deleted.Problems)
+	warnings := make([]string, 0, len(deleted.Problems))
+	for _, p := range deleted.Problems {
+		warnings = append(warnings, accountDeleteWarning(p).Error())
+	}
+	logging.From(ctx).Info("admin users: deleted", "email", safe.LogSafe(email), "actor", safe.LogSafe(actor), "api_keys_deleted", deleted.KeysDeleted)
+	if len(warnings) > 0 {
+		// 200, not an error status: the account IS deleted, and a client that
+		// retried on an error would only meet a 404. The warnings say what is
+		// left and how to remove it.
+		writeJSONStatus(w, r, http.StatusOK, map[string]any{"warnings": warnings})
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
+
+// errAccountDeleteUnconfirmed answers a deletion that did not complete and
+// after which the account could not be read back: its files are held
+// (accountdelete.OutcomeUnconfirmedError) until the maintenance pass resolves
+// them.
+const errAccountDeleteUnconfirmed = "the deletion did not complete and the account could not be read back; its files are held until that is confirmed, and the next maintenance pass puts them back or removes them"
+
+// errAccountDeletionRunning answers a deletion of an account another
+// deletion of it is already running for (accountGate.claimDeletion).
+const errAccountDeletionRunning = "a deletion of this account is already running"
+
+// errAccountWorkStillRunning answers a deletion refused because some of the
+// account's requests or turns had not ended within accountDrainTimeout.
+const errAccountWorkStillRunning = "some of the account's requests or turns are still running; nothing was deleted; try again"
+
+// accountDeleteWarning words a step the deletion left for the admin users
+// page. Each wording is a fixed message the browser translates
+// (backend-messages.json); the values in it are the account, a directory or
+// an error.
+func accountDeleteWarning(p accountdelete.Problem) error {
+	switch p.Kind {
+	case accountdelete.KeysUnavailable:
+		return fmt.Errorf("the API-key store was not available, so the user API keys acting as %s were not deleted; list them with `fleet sched apikey list` and delete them with `fleet sched apikey delete <key_id>`", p.Email)
+	case accountdelete.KeysFailed:
+		return fmt.Errorf("deleting the user API keys acting as %s failed (%s); list them with `fleet sched apikey list` and delete them with `fleet sched apikey delete <key_id>`", p.Email, p.Err)
+	case accountdelete.AttachmentDirUnreadable:
+		return fmt.Errorf("the attachment directory %s could not be read (%s), so no upload or private workspace file was removed there; the server's maintenance pass removes them from the directory it uses", p.Path, p.Err)
+	case accountdelete.UploadsFailed:
+		return fmt.Errorf("removing the account's uploads failed: %s; the server's hourly maintenance pass tries again", p.Err)
+	case accountdelete.PrivateWorkspacesFailed:
+		return fmt.Errorf("removing the account's private workspace files failed: %s; the server's hourly maintenance pass tries again", p.Err)
+	case accountdelete.FilesHeldByNewAccount:
+		return fmt.Errorf("files under %s were left in place after the deletion: an account created under the address since holds them", p.Email)
+	}
+	return errors.New(p.String())
+}
+
+// writeAccountDeleteRefusal answers an account deletion the store refused:
+// 404 for no such account, 409 for one that still owns team-shared projects,
+// 500 for anything else.
+func writeAccountDeleteRefusal(w http.ResponseWriter, r *http.Request, err error) {
+	// The deletion did not commit and the account could not be read back:
+	// its files are held for the maintenance pass
+	// (accountdelete.OutcomeUnconfirmedError). First, since what did not
+	// commit may itself read as "not found".
+	var unconfirmed *accountdelete.OutcomeUnconfirmedError
+	if errors.As(err, &unconfirmed) {
+		attrs := []any{"err", safe.LogSafe(unconfirmed.Err.Error()), "read_err", safe.LogSafe(unconfirmed.ReadErr.Error())}
+		if unconfirmed.HoldErr != nil {
+			// Each tree that could not be held, and where it is now.
+			attrs = append(attrs, "hold_err", safe.LogSafe(unconfirmed.HoldErr.Error()))
+		}
+		logging.From(r.Context()).Error("admin users: a deletion did not complete and the account could not be read back; its files are held", attrs...)
+		// Fixed and short, so the page shows it whole; the causes are logged.
+		http.Error(w, errAccountDeleteUnconfirmed, http.StatusInternalServerError)
+		return
+	}
+	if errors.Is(err, store.ErrUserNotFound) {
+		http.Error(w, "user not found", http.StatusNotFound)
+		return
+	}
+	// The account still owns team-shared projects. Deleting it would take
+	// those projects — and every team learning in them — from people who
+	// are still here, so the delete fails closed and names what to transfer
+	// first (ADR-0057). 409, not 500: nothing is wrong, there is a step
+	// missing.
+	var owns *store.OwnsSharedProjectsError
+	if errors.As(err, &owns) {
+		// JSON, not http.Error's plain text, because the sentence alone was
+		// a dead end: it named the projects and gave the admin no route to
+		// the transfer control that resolves it, and the id cannot be
+		// recovered client-side (GET /projects is scoped to the caller's
+		// own and team-visible projects, and an admin is usually neither).
+		// `error` keeps the exact prose an older client already renders;
+		// `owns_shared_projects` carries {id, name} so the refusal can link
+		// straight at each project's transfer control (QA #21).
+		writeJSONStatus(w, r, http.StatusConflict, map[string]any{
+			"error": "this account still owns team-shared projects (" +
+				strings.Join(owns.ProjectNames(), ", ") +
+				") — transfer them to another member first, then delete the account",
+			"owns_shared_projects": owns.Projects,
+		})
+		return
+	}
+	// The account's unbound user API keys could not be bound to it first, so
+	// nothing was deleted (accountdelete.KeysNotBoundError): 503 with
+	// Retry-After while the key store is busy, 500 otherwise.
+	var notBound *accountdelete.KeysNotBoundError
+	if errors.As(err, &notBound) {
+		if errors.Is(err, apikeys.ErrStoreLocked) {
+			w.Header().Set("Retry-After", "5")
+			http.Error(w, errAccountDeleteKeysBusy, http.StatusServiceUnavailable)
+			return
+		}
+		http.Error(w, fmt.Sprintf("the account's user API keys could not be updated before the deletion (%s); nothing was deleted", notBound.Err), http.StatusInternalServerError)
+		return
+	}
+	// One of the account's trees could not be moved aside, so nothing was
+	// deleted (accountdelete.FilesNotSetAsideError).
+	var notMoved *accountdelete.FilesNotSetAsideError
+	if errors.As(err, &notMoved) {
+		http.Error(w, fmt.Sprintf("the account's files could not be moved aside before the deletion (%s), so nothing was deleted; fix that and try again", notMoved.Err), http.StatusInternalServerError)
+		return
+	}
+	// Another account took the address between the read and the deletion.
+	if errors.Is(err, store.ErrAccountChanged) {
+		http.Error(w, "the account changed while it was being deleted; nothing was deleted", http.StatusConflict)
+		return
+	}
+	http.Error(w, err.Error(), http.StatusInternalServerError)
+}
+
+// errAccountDeleteKeysBusy answers a deletion refused because the API-key
+// store was busy when its keys had to be bound first.
+const errAccountDeleteKeysBusy = "the API-key store is busy with another change, so nothing was deleted; try again in a few seconds"
 
 // handleAdminUserPassword serves PUT /admin/users/{email}/password — reset an
 // account's password. Body: {"password": ...}. The new password is never

@@ -65,6 +65,7 @@ func pendingScheduleApproval(t *testing.T, s *Server, user, convID string) *stor
 // + cron, and the response returns the approval-card payload + rationale.
 func TestPromoteToTask_StagesScheduleApproval(t *testing.T) {
 	s := serverFixture(t)
+	seedUsers(t, s, "alice@x.com")
 	const user = "alice@x.com"
 	conv := seedConv(t, s, user)
 	// The promoted task runs on the task tier, which follows the default
@@ -147,6 +148,7 @@ func TestPromoteToTask_InvalidCronFallsBack(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "bob@x.com")
 	const user = "bob@x.com"
 	conv := seedConv(t, s, user)
 	s.agent = &fakeTurnEngine{recurringProposal: &agent.RecurringTaskProposal{
@@ -177,6 +179,7 @@ func TestPromoteToTask_EmptyConversation(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "carol@x.com")
 	const user = "carol@x.com"
 	ctx := context.Background()
 	conv, err := s.store.CreateConversation(ctx, user, "empty", "victoria", "openrouter/auto", false)
@@ -201,6 +204,7 @@ func TestPromoteToTask_NotOwned(t *testing.T) {
 	t.Parallel()
 
 	s := serverFixture(t)
+	seedUsers(t, s, "owner@x.com")
 	conv := seedConv(t, s, "owner@x.com")
 	s.agent = &fakeTurnEngine{recurringProposal: &agent.RecurringTaskProposal{Prompt: "x", Cron: "0 9 * * *"}}
 

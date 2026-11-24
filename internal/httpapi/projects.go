@@ -1387,6 +1387,9 @@ func (s *Server) createConversationForRequest(w http.ResponseWriter, r *http.Req
 		conv, err = s.store.CreateConversation(r.Context(), user, title, persona, model, lockdown)
 	}
 	if err != nil {
+		if writeAccountGone(w, err) {
+			return nil, false
+		}
 		if errors.Is(err, store.ErrProjectNotAccessible) {
 			http.Error(w, "project not found", http.StatusNotFound)
 			return nil, false

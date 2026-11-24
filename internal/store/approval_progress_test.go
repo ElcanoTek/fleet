@@ -12,6 +12,7 @@ func TestSetApprovalProgress(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "alice@example.com")
 	ctx := context.Background()
 	conv, err := s.CreateConversation(ctx, "alice@example.com", "t", "victoria", "m", false)
 	if err != nil {

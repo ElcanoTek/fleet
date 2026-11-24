@@ -395,6 +395,15 @@ type rowQueryer interface {
 
 func (s *Store) lockAndVerifyOwnedOrMultiplayerTx(ctx context.Context, tx *sql.Tx, callerEmail, convID string) (string, error) {
 	callerEmail = normalizeEmail(callerEmail)
+	// The caller's account row first (key-share, when there is one: a chat a
+	// webhook started may belong to an address with none), then the
+	// conversation row — the order DeleteUser takes them in. A write for an
+	// account being deleted therefore either commits before the deletion
+	// starts, and the deletion removes it, or waits for it and finds no
+	// account (canParticipateInMultiplayer) or no conversation.
+	if _, err := tx.ExecContext(ctx, `SELECT 1 FROM core.users WHERE email = $1 FOR KEY SHARE`, callerEmail); err != nil {
+		return "", err
+	}
 	var (
 		ownerEmail   string
 		multiplayer  bool

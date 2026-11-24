@@ -14,6 +14,7 @@ func TestRecovery_OneFailingTurnDoesNotStrandTheRest(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "u@example.com")
 	ctx := context.Background()
 	now := time.Now().Unix()
 	seed := func(turnID string, startedAt int64) {
@@ -87,6 +88,7 @@ func TestRecovery_FailedTurnHoldsBackItsConversation(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "u@example.com")
 	ctx := context.Background()
 	now := time.Now().Unix()
 	conv, err := s.CreateConversation(ctx, "u@example.com", "t", "", "m", false)

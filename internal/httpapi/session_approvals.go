@@ -8,6 +8,7 @@ import (
 	"unicode"
 
 	"github.com/ElcanoTek/fleet/internal/approvalglob"
+	"github.com/ElcanoTek/fleet/internal/identity"
 	"github.com/ElcanoTek/fleet/internal/tools"
 )
 
@@ -98,6 +99,24 @@ func (r *SessionApprovalRegistry) ForgetUnauthorizedUsers(convID, ownerEmail str
 			continue
 		}
 		delete(r.entries, k)
+	}
+}
+
+// ForgetUsersExcept drops every pre-decision recorded for an email that is
+// not in accounts (each identity.NormalizeEmail'd; a key's email is compared
+// through the same function): what the accounts deleted outside this process
+// left in it. Nil-safe.
+func (r *SessionApprovalRegistry) ForgetUsersExcept(accounts map[string]bool) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for k := range r.entries {
+		parts := strings.SplitN(k, "\x00", 3)
+		if len(parts) == 3 && parts[1] != "" && !accounts[identity.NormalizeEmail(parts[1])] {
+			delete(r.entries, k)
+		}
 	}
 }
 

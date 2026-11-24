@@ -13,6 +13,7 @@ func TestCreateApproval_PersistsExpiresAt(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "alice@example.com")
 	ctx := context.Background()
 	conv, err := s.CreateConversation(ctx, "alice@example.com", "t", "victoria", "m", false)
 	if err != nil {
@@ -60,6 +61,7 @@ func TestListExpiredApprovals_FiltersCorrectly(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "alice@example.com")
 	ctx := context.Background()
 	conv, err := s.CreateConversation(ctx, "alice@example.com", "t", "victoria", "m", false)
 	if err != nil {
@@ -108,6 +110,7 @@ func TestClaimApproval_RefusesExpired(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "alice@example.com")
 	ctx := context.Background()
 	conv, err := s.CreateConversation(ctx, "alice@example.com", "t", "victoria", "m", false)
 	if err != nil {
@@ -167,6 +170,7 @@ func TestSetApprovalTimeout_RoundTrip(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "alice@example.com")
 	ctx := context.Background()
 	conv, err := s.CreateConversation(ctx, "alice@example.com", "t", "victoria", "m", false)
 	if err != nil {
@@ -220,6 +224,7 @@ func TestSetAutoApprove_RoundTrip(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "alice@example.com")
 	ctx := context.Background()
 	conv, err := s.CreateConversation(ctx, "alice@example.com", "t", "victoria", "m", false)
 	if err != nil {

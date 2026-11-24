@@ -95,6 +95,12 @@ type Principal struct {
 	Scopes []string
 	// KeyID is the API key's id, for an API-key or bearer principal.
 	KeyID string
+	// KeyAccountID is the account id (core.users.id) the user API key that
+	// named Email is bound to, or "" when no user key did or the key is not
+	// bound yet. Resolve admits such a principal only for that account: a key
+	// acts as the account it was minted for, never as a later account created
+	// under the same email.
+	KeyAccountID string
 	// AuthMethod is how the request authenticated.
 	AuthMethod AuthMethod
 	// Session is the session claim of a MethodSession principal.

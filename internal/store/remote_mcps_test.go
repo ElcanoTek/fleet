@@ -46,6 +46,7 @@ func TestRemoteMCPCreateListGetDelete(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStoreWithCipher(t)
+	seedAccount(t, s, "brad@elcano.com")
 	ctx := context.Background()
 	const email = "Brad@Elcano.com"
 
@@ -100,6 +101,7 @@ func TestRemoteMCPTokenLifecycle(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStoreWithCipher(t)
+	seedAccount(t, s, "u@x.com")
 	ctx := context.Background()
 	srv, err := s.CreateRemoteMCPServer(ctx, sampleServerInput("u@x.com"))
 	if err != nil {
@@ -158,6 +160,7 @@ func TestEnsureFreshTokenNeedsReauth(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStoreWithCipher(t)
+	seedAccount(t, s, "u@x.com")
 	ctx := context.Background()
 	srv, _ := s.CreateRemoteMCPServer(ctx, sampleServerInput("u@x.com"))
 	_ = s.StoreOAuthTokens(ctx, srv, RemoteMCPTokens{AccessToken: "at", RefreshToken: "rt", ExpiresAt: time.Now().Add(10 * time.Second).Unix()})
@@ -185,6 +188,7 @@ func TestEnsureFreshTokenNeedsReauthCarriesDetail(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStoreWithCipher(t)
+	seedAccount(t, s, "u@x.com")
 	ctx := context.Background()
 	srv, _ := s.CreateRemoteMCPServer(ctx, sampleServerInput("u@x.com"))
 	_ = s.StoreOAuthTokens(ctx, srv, RemoteMCPTokens{AccessToken: "at", RefreshToken: "rt", ExpiresAt: time.Now().Add(10 * time.Second).Unix()})
@@ -214,6 +218,7 @@ func TestEnsureFreshTokenNoRefreshTokenMarksNeedsReauth(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStoreWithCipher(t)
+	seedAccount(t, s, "u@x.com")
 	ctx := context.Background()
 	srv, _ := s.CreateRemoteMCPServer(ctx, sampleServerInput("u@x.com"))
 	if err := s.StoreOAuthTokens(ctx, srv, RemoteMCPTokens{AccessToken: "at", ExpiresAt: time.Now().Add(-10 * time.Second).Unix()}); err != nil {
@@ -246,6 +251,7 @@ func TestEnsureFreshTokenNoExpiryUsable(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStoreWithCipher(t)
+	seedAccount(t, s, "u@x.com")
 	ctx := context.Background()
 	srv, _ := s.CreateRemoteMCPServer(ctx, sampleServerInput("u@x.com"))
 	// A long-lived access token the AS issued with NO expires_in and NO refresh
@@ -270,6 +276,7 @@ func TestEnsureFreshTokenNeverAuthorized(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStoreWithCipher(t)
+	seedAccount(t, s, "u@x.com")
 	ctx := context.Background()
 	srv, _ := s.CreateRemoteMCPServer(ctx, sampleServerInput("u@x.com"))
 	_, err := s.EnsureFreshToken(ctx, srv, 300, func(context.Context, RemoteMCPTokens) (RefreshResult, error) {
@@ -285,6 +292,7 @@ func TestOAuthFlowSingleUse(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStoreWithCipher(t)
+	seedAccount(t, s, "u@x.com")
 	ctx := context.Background()
 	srv, _ := s.CreateRemoteMCPServer(ctx, sampleServerInput("u@x.com"))
 
@@ -308,6 +316,7 @@ func TestOAuthFlowExpiry(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStoreWithCipher(t)
+	seedAccount(t, s, "u@x.com")
 	ctx := context.Background()
 	srv, _ := s.CreateRemoteMCPServer(ctx, sampleServerInput("u@x.com"))
 	// Negative TTL → already expired.
@@ -343,6 +352,7 @@ func TestClearOAuthTokensKeepsRegistration(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStoreWithCipher(t)
+	seedAccount(t, s, "user@elcano.com")
 	ctx := context.Background()
 	const email = "user@elcano.com"
 
@@ -391,6 +401,7 @@ func TestRemoteMCPResourceIndicatorPersists(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStoreWithCipher(t)
+	seedAccount(t, s, "u@x.com", "v@x.com")
 	ctx := context.Background()
 	in := sampleServerInput("u@x.com")
 	in.URL, in.Resource = "https://mcp.slack.com/mcp", "https://mcp.slack.com"

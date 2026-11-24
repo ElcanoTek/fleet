@@ -150,7 +150,7 @@ func (k keyStore) fixOwnership() {
 	if !ok || uid == 0 {
 		return // root's own store (a dev box), nothing to hand back
 	}
-	for _, name := range []string{"api_keys.json", "audit_log.jsonl"} {
+	for _, name := range []string{"api_keys.json", "audit_log.jsonl", "api_keys.json.lock"} {
 		p := filepath.Join(k.Dir, name)
 		fi, err := os.Stat(p)
 		if err != nil {

@@ -156,6 +156,284 @@ advises on each demoted split admin, unknown role and duplicate username in it.
   store open migrates chat, core and sched together, so it always exists by
   the time a verb runs. (Before M6 such a verb, run first on a fresh database,
   stopped with "the identity table (core.users) does not exist yet".)
+- **Deleting an account.** Settings → Admin → Users (`DELETE
+  /admin/users/{email}`), `fleet admin rm` and `fleet chat user del` all run
+  `accountdelete.Delete`, so they delete the same things, and a later account
+  created under the same email starts with none of them:
+  - in the database (`store.DeleteUser`, one transaction): the account row,
+    its chats, memories, connectors with their stored sign-ins, connector
+    preferences, skills (team-visible ones too), personas, personal projects,
+    chat orders, sidebar layout and pins; its queued messages, approvals,
+    schedules and auto-submit countdowns in other people's chats; its place
+    in their multiplayer lists; its Autonomous-mode acceptance, browser push
+    subscriptions, the connectors other people shared with it, its central
+    sign-in session generations (which ends its fleet sessions from central
+    Auth) and its private prompts. Its workspace-shared prompts stay readable
+    by everyone, shown as **Shared by a deleted account** (`owner_deleted`
+    in the API), and only admins can edit them. Chat-administration work the
+    account asked for and no server has picked up is cancelled: a pending
+    request fails with a fixed reason and a queued admin-mode message it
+    sent is cancelled; a request a server is already carrying out, and an
+    admin-mode turn already running, finish as usual
+    ([CHAT-ADMINISTRATION.md](CHAT-ADMINISTRATION.md));
+  - in the API-key store (`api_keys.json`): the user API keys bound to its
+    id (see [PRINCIPAL.md](PRINCIPAL.md)) — the keys for its address that
+    named no account yet are bound to it before anything is deleted, and if
+    the key store is busy then the deletion is refused with nothing deleted
+    (503 with `Retry-After`; the CLI exits non-zero) — and its address's
+    keys marked as acting as no one;
+  - on disk, under `EMAIL_ATTACHMENT_DIR`: its uploads and its private
+    workspace files in multiplayer chats. Its chats' workspace directories are
+    reaped by the orphan-workspace sweep. Its uploads go even where a kept
+    chat still refers to them (the references the hourly cleanup keeps
+    uploads by, `chat.message_uploads`, see
+    [UPLOADS-AND-STORAGE.md](UPLOADS-AND-STORAGE.md)): its own chats go with
+    it, and an image it sent in someone else's multiplayer chat was its own
+    upload, so that chat keeps the message without the image — later turns
+    replay the chat without it, as they do for an upload the cleanup removed.
+
+  **A new account under the same address.** The address may hold a new
+  account the moment the database deletion commits (the CLI deleting while
+  someone signs up, say), before the steps after it run. So nothing of the
+  deleted account is left under the address for those steps to tell apart:
+  - its keys are bound to its id first, and only those go (the id is read
+    before the deletion and checked again by `store.DeleteAccount` under the
+    account row's lock, which refuses — `the account changed while it was
+    being deleted` — when the address holds another account by then);
+  - its upload tree and its private workspace trees are moved aside (a
+    `.removing-<digest>-…` name beside them) while the account still exists
+    and its work is stopped, then removed after the commit. If the deletion
+    does not commit they are moved back only when the same account (its
+    id) is read back under the address, and removed when the account is
+    confirmed gone (another deletion of it committed meanwhile, from another
+    server on the same database, say: no account holds the address, or
+    another one does). When neither is confirmed (the account cannot be read
+    back; an address that answers as live may hold a new account created
+    after a deletion that did commit), the trees are held: renamed beside
+    the address to `.held-<digest>-<hex of the account id>-…`, which no
+    sweep removes and the hourly cleanup of old uploads skips. Each tree is
+    tried under three such names; one that still cannot be held is put back
+    where it was, as a last resort, and named in the error and the log
+    (only a tree that may go is ever left under a `.removing-` name, which
+    the sweeps remove whatever the account). The web route
+    then answers 500 `the deletion did not complete and the account could
+    not be read back; its files are held until that is confirmed, and the
+    next maintenance pass puts them back or removes them` (the server logs
+    both causes; the CLI prints them), and the server's marks on the
+    account's turns stay, as for a deletion that went through. The hourly
+    maintenance pass resolves held trees, at most 100 per pass, by the id
+    each records: the account still there under the address, the tree goes
+    back (into what the account wrote since, entry by entry, never over an
+    entry it has again — that one stays held and the pass logs it), while
+    the account is held still — the server's claim on deleting it (a tree
+    whose account is being deleted waits for the next pass) and a key-share
+    lock on its row, so a deletion from elsewhere that starts meanwhile
+    waits, then removes the tree with the rest; no account with that id
+    (gone, or another account holds the address), the tree is removed; the
+    account unreadable, or now under another address, it stays held for a
+    later pass. A running server resolves them, also the ones a CLI
+    deletion held. A new account's trees start empty. A
+    tree that cannot be moved aside (its directory not writable, say), or a
+    directory the move must look into that cannot be read (the attachment
+    directory included; only one that is not there means nothing to move),
+    stops the deletion before anything is deleted: the trees already moved
+    go back, and the web route answers 500 (the CLI exits non-zero) with the
+    reason and that nothing was deleted. After the commit the address's
+    paths are checked once more (below); if
+    the server stops between the move and the commit, the maintenance pass
+    removes the trees left aside (the account was being deleted);
+  - its in-memory approve/deny-all decisions, which are kept by address,
+    are forgotten while its work is stopped and again after the commit,
+    whatever holds the address by then (forgetting one only means approving
+    again).
+
+  **The CLI deletes only while no server runs.** `fleet admin rm` and
+  `fleet chat user del` refuse, with nothing deleted, while a fleet server
+  runs against the same database. Every `fleet serve` holds a Postgres
+  advisory lock shared for as long as it runs and writes a heartbeat row
+  (`core.server_presence`) every 15 seconds; the CLI takes the lock
+  exclusive (`store.ExcludeServers`) and also refuses while any heartbeat is
+  younger than 45 seconds — which covers a server whose lock connection
+  dropped and is being replaced, while a crashed server's row stops counting
+  after those 45 seconds. A server checks its lock connection every second.
+  From the moment it finds it dropped (a database outage or restart) until
+  it holds the lock again, it admits no account work: requests through the
+  membership check, the upload writer and webhook turns are answered 503
+  with Retry-After (`the server is reconnecting to its database; try
+  again`), and no turn starts (a queued message waits, and is tried again
+  every few seconds). It tries to take the lock again every half second and
+  writes its heartbeat on every try. The CLI, once it holds the lock, looks
+  at the heartbeats a second time five seconds later, before it deletes
+  anything: a server that lost its lock in an outage longer than 45 seconds
+  (its row stale) and has not taken it back yet is seen by the heartbeat it
+  writes meanwhile, and the CLI lets go and refuses; the server then takes
+  the lock. So a CLI deletion and a server never run together, also after
+  an outage. Both are per database, so the check does not depend
+  on a unit name, a port or a host. Two CLI deletions do not overlap
+  either: the second finds the lock taken and is refused the same way. A
+  server starting while a CLI deletion
+  runs waits for it, without a deadline, before it opens its listeners
+  (logging every 30 seconds that it is waiting; a stop signal meanwhile exits
+  cleanly). The message says to delete the account from Settings →
+  Admin → Users while the server runs (that deletion stops the account's
+  requests and turns, forgets its in-memory decisions and moves its files
+  aside under the server's request gate, which a CLI cannot do for a server
+  it is not), or to stop the server first. After the commit, both paths look
+  at the address's upload and private workspace paths once more, whatever
+  was moved aside: a tree found there is removed while no account has its
+  digest, and named in a warning (left in place) when an account created
+  under the address since holds it.
+
+  **Work in flight.** The server runs one deletion of an account at a time:
+  a second one while the first runs is answered 409 `a deletion of this
+  account is already running` and changes nothing; tried again afterwards,
+  it finds the first one's outcome (404 once the account is gone). The web
+  route first refuses what the deletion would
+  refuse (no such account: 404; a team-shared project still owned: 409),
+  without touching anything. Then it stops the account's work in this
+  process before the rows go: its requests are cancelled and new ones
+  refused (`not_a_member`) until the deletion is over, and the turns it runs
+  — in its own chats and as a multiplayer participant — are cancelled; it
+  waits up to 15 seconds for both. If any of them is still running after
+  that, the deletion is refused with nothing deleted: 503 with Retry-After,
+  `some of the account's requests or turns are still running; nothing was
+  deleted; try again`; the account's requests are served again, and what was
+  cancelled stays cancelled, so a retry usually goes through. No turn starts
+  for the account once this begins: a request about to start one is refused
+  (`not_a_member`), and the running turns are cancelled after the account's
+  requests have ended, then looked for once more. The upload route looks
+  again right before it writes each file: once the account's deletion has
+  begun, or when no account holds the address, it writes nothing (not even
+  the account's upload directory) and answers 403 `not_a_member`. A
+  multiplayer participant's files staged in a shared chat go back to the
+  participant's private stash when the turn ends (or when an interrupted
+  swap is recovered) only while an account holds the address; otherwise
+  they are removed from the chat's workspace. The deletion also answers 503
+  and deletes nothing if its own request ends first (the client left, or the administrator deleting is
+  being deleted) — though by then the account's requests in flight and its
+  turns have already been cancelled. Once the work is stopped the deletion
+  runs to its end even if the client leaves, within two minutes. If the
+  deletion then fails (a project shared with a team after the preflight, a
+  database error, the two minutes), the account's requests were already
+  refused for its duration and its turns cancelled; the account itself is
+  untouched. Every write of a row the deletion removes by the account's
+  address takes a key-share lock on the account's row first, before any chat
+  row — the order the deletion takes them in — so a write still made for
+  the account by a turn or request in this process, or by a server while
+  the CLI deletes the account, either commits before the deletion starts
+  (and is removed by it) or waits for it and is refused
+  (`store.lockAccountTx`):
+  chats (created, branched, filed into a project), projects, memories
+  (personal and project, and the proposals a turn makes), skills, personas,
+  connectors and connector sign-ins, connector preferences, chat orders,
+  the sidebar layout, the Autonomous-mode acceptance, browser push
+  subscriptions and private prompts (`store.withAccountRow`, and for prompts
+  the Operations Center's `lockPromptOwnerTx`); queued, direct and
+  Stop-recorded messages (`EnqueueInput`, `ClaimDirectInput`,
+  `CancelInputKey`), approval cards (`CreateApproval`) and auto-submit
+  countdowns (`CreateUIAutoSubmit`); and every write checked by
+  `lockAndVerifyOwnedOrMultiplayerTx` (schedules created or fired,
+  approvals decided). For the writes in a chat the lock is taken for every
+  sender, the chat's owner included, and an address with no account is
+  refused unless it owns the chat (a chat a webhook started may belong to
+  one, and can still write). An approval resume and a countdown that fires
+  queue a message for the person behind the card while holding only the
+  chat's row, so the deletion first locks every chat in which the account
+  has an approval card or a countdown: such a message is written before the
+  deletion reads the queue, and removed with the rest, or after it, when its
+  cards are gone. These writes do not need the account and are left as they
+  are: a connector shared with an address and an address added to a
+  multiplayer chat's participants (both allowed before its account exists);
+  a central sign-in session generation (written at central sign-in, also
+  before the account exists, and by a central sign-out, which only ends
+  sessions); an administrator's message queued in a chat
+  (`QueueAdminMessage`: the row is the chat owner's and is written under the
+  chat's row lock, so deleting the owner deletes it with the chat); and the
+  one-time legacy import. A guard test
+  (`TestAccountKeyedWritersTakeTheAccountLock`) fails when a new insert into
+  such a table takes neither the lock nor a reviewed exemption. A write
+  refused this way while its request runs is answered 403 `not_a_member`,
+  as every later request of the account is. One consequence for webhook
+  chats: Connector Studio in a chat a webhook started for an address with
+  no account now gets a tool error instead of creating a connector for that
+  address.
+
+  **Steps left.** The database deletion alone decides whether the account is
+  deleted. A later step that does not complete (the key store, an upload or
+  private workspace tree — in the server's own cleanup too) is reported;
+  a tree left behind is
+  removed by the hourly maintenance pass while its digest is no account's
+  (a tree the address's new account holds is not a failure): the web
+  route answers 200 `{"warnings": [...]}` instead of 204
+  (not an error status — the account is gone, and a retry would only get
+  404), and Settings → Admin → Users shows the warnings above the table; the
+  CLI verbs print them and exit 6. The CLI verbs use the key store and
+  attachment directory of the `fleet.service` unit (as `fleet sched apikey`
+  does), stop with nothing deleted when the key store cannot be read or a
+  server runs against the database (below), and report an attachment
+  directory that does not exist.
+
+  **The hourly maintenance pass** (`RunMaintenance`, not the post-turn pass)
+  removes what names
+  an address with no account: rows in the tables only a signed-in account
+  writes (Autonomous-mode acceptances, push subscriptions, auto-submit
+  countdowns, the memory graph, private prompts not owned by an API key or
+  the admin key, a participant's queued messages, approvals and schedules in
+  someone else's chat, and central sign-in session generations older than
+  the longest session they could still back — only addresses stored in
+  normalized form, so the prompts the identity merge quarantined under a
+  losing duplicate username stay; of the queue, approvals and schedules
+  only live rows — waiting, pending, active or paused — are read), upload and private workspace
+  trees under the attachment directory whose digest is no account's (each
+  checked once more, for its own digest, right before it goes, and moved
+  aside before it is removed, so an account created under the address in
+  the meantime keeps the files it wrote; a tree left set aside by an
+  interrupted removal goes on the next pass), and the in-memory
+  approve/deny-all decisions of such addresses. It also resolves the trees
+  a deletion held because its outcome could not be confirmed (above). That
+  covers
+  accounts deleted before deletion reached these, a deletion from the CLI
+  while the server runs (a turn in flight can write a private workspace tree
+  back as it ends, and the CLI cannot reach the server's memory), and a CLI
+  that resolved another attachment directory. Connector share grants are not
+  swept: granting a connector to an address before its account exists is
+  allowed.
+
+  **Kept on purpose:** usage records (`turn_metrics`); the
+  chat-administration audit log, finished admin requests and administrators'
+  notes on chats; admin-set budgets —
+  a user budget is matched by email, so the limit and the spend already
+  counted in its current window apply to a later account under the same
+  email until an admin removes the budget; authorship labels on workspace
+  data; Operations Center tasks, their spend records (`task_iterations`) and
+  datasets, and the uploader records of staged task uploads
+  (`temp_uploads/.uploaders`, which age out with the uploads) — they record
+  the account's id, which a later account does not share; and central Auth's
+  last applied state for its subject. A webhook trigger whose notify address
+  (`NotifyUser`, in the bundle's trigger configuration) names a deleted
+  account keeps creating chats under that address — operator
+  configuration, which deletion does not edit — and a later account created
+  with that email sees them. When you delete an account, check the bundle's
+  webhook triggers for its address and point them at another account (or
+  remove them) before the address is given to someone else. Team-visible skills go with the account while
+  workspace-shared prompts stay: a skill is loaded by the agent into other
+  people's turns as instructions they do not see each time, so one left
+  without an author would keep steering turns with nobody to answer for it;
+  a prompt is text a person reads in their draft before sending it.
+
+  **Not foreign keys.** These tables match an account by its email without
+  a foreign key to `core.users`, and the deletion lists them by hand. A
+  foreign key on the raw email would turn any writer that normalizes the
+  address differently into a failed write, and existing rows of accounts
+  deleted earlier would make adding a validated one fail at upgrade; so the
+  list is kept honest by tests instead. `TestEveryAccountColumnHasADeletionRule`
+  (`internal/store/account_delete_test.go`) lists every column that can name
+  an account with what deletion does to it and why, and fails on a new one
+  until it is listed; `TestDeleteUserLeavesNoRowNamingTheAccount` seeds every
+  deleted or scrubbed column and checks nothing names the account afterwards;
+  `TestEveryAccountDeletionGoesThroughDelete` fails on code outside
+  `accountdelete` and the store that reaches `DeleteUser` or deletes from the
+  identity table.
 - Grants are exact strings: `admin`, `client`, `readonly`, `none`, `view`,
   `run`. Padded or re-cased values (`" none "`, `Admin`) are refused, not
   trimmed.

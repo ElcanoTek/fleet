@@ -342,6 +342,7 @@ func (s *Server) remoteMCPOAuthCallback(w http.ResponseWriter, r *http.Request) 
 // this error string, and pattern-matching alone would miss a novel bare token.
 func (s *Server) remoteMCPError(w http.ResponseWriter, err error) {
 	switch {
+	case writeAccountGone(w, err):
 	case errors.Is(err, store.ErrRemoteMCPNotFound):
 		http.Error(w, "remote MCP server not found", http.StatusNotFound)
 	case errors.Is(err, store.ErrOAuthFlowNotFound):

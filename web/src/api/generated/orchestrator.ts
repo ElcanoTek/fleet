@@ -3392,6 +3392,8 @@ export interface components {
             read_only: boolean;
             owned_by_caller: boolean;
             owner_username?: string;
+            /** @description True on a workspace-shared prompt whose author's account was deleted: no account owns it and only admins can edit it. owner_username is then omitted. */
+            owner_deleted?: boolean;
             path?: string;
             /** Format: date-time */
             created_at?: string;

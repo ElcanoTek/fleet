@@ -32,6 +32,7 @@ func TestSidebarLayout_User(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "rail@elcanotek.com")
 	ctx := context.Background()
 	const me = "Rail@Elcanotek.com"
 
@@ -165,6 +166,7 @@ func TestSidebarLayout_RevOrdersSaves(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "order@elcanotek.com")
 	ctx := context.Background()
 	const me = "order@elcanotek.com"
 	older := `{"version":1,"items":[],"sections":[],"home":"older"}`

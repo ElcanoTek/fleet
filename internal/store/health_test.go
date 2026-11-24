@@ -10,6 +10,7 @@ func TestLLMUsageSince(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "a@e.com")
 	ctx := context.Background()
 
 	c, err := s.CreateConversation(ctx, "a@e.com", "t", "assistant", "", false)

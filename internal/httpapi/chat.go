@@ -454,7 +454,9 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 		}
 		conv, err = s.store.CreateConversation(r.Context(), user, title, persona, reqModel, lockdown)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			if !writeAccountGone(w, err) {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+			}
 			return
 		}
 		// Seed the optional MCP server opt-in list (and seat overrides, #988)
@@ -745,27 +747,39 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	// Explicit cancellation (the Stop button) routes through
 	// POST /conversations/{id}/cancel, which fires the cancel func we
 	// register here.
-	if s.IsDraining() {
-		fail(http.StatusServiceUnavailable, errors.New("server is shutting down"))
+	// Shutting down, or (presenceLost) a CLI account deletion may hold the
+	// presence lock: no turn starts, and a drained row goes back to the
+	// queue to be tried again.
+	if err := s.notTakingTurns(); err != nil {
+		fail(http.StatusServiceUnavailable, err)
 		return true
 	}
 	steer := newSteerMailbox(s.store, user, conv.ID, "", nil)
+	steer.owner = conv.UserEmail
 	if !s.revalidateMultiplayerTurnAccess(reqCtx, user, conv, steer, queued, releaseSlot, fail) {
 		return true
 	}
 	turnCtx, turnCancel := context.WithTimeout(context.Background(), s.turnTimeout())
 	buf, turnID, turnToken, ok, swept := s.registerTurnGated(conv.ID, turnCancel, steer, gate, strings.TrimSpace(req.SubmissionID))
 	turnCtx = turnContext(turnCtx, reqCtx, conv.ID, turnID, user)
-	if swept && queued == nil {
-		// A Stop scope=all began while this direct claim's turn was being
-		// prepared, or a Stop named its key: the claim belongs to the
-		// stopped set, so it is cancelled, never launched.
-		turnCancel()
-		releaseSlot()
-		s.cancelStoppedDirectInput(w, directInputID)
-		return true
-	}
 	if swept {
+		if s.turnAccountClosed(user, conv.UserEmail) {
+			// The sender's or the chat owner's account is being deleted
+			// (registerTurnGated refused the turn): nothing starts, and
+			// the input goes with the account.
+			turnCancel()
+			s.dropTurnOfClosedAccount(w, conv.ID, queued, directInputID, releaseSlot)
+			return true
+		}
+		if queued == nil {
+			// A Stop scope=all began while this direct claim's turn was
+			// being prepared, or a Stop named its key: the claim belongs to
+			// the stopped set, so it is cancelled, never launched.
+			turnCancel()
+			releaseSlot()
+			s.cancelStoppedDirectInput(w, directInputID)
+			return true
+		}
 		// A Stop scope=all began after this drain decided its row was
 		// post-Stop (it may still be sweeping, or have finished while we
 		// were loading the conversation and history), and the drained row

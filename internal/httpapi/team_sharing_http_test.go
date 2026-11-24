@@ -359,6 +359,7 @@ func TestPromoteAndAcceptIntoProject(t *testing.T) {
 // into a tab.
 func TestProjectFilesExcludesBundleSymlinks(t *testing.T) {
 	srv := serverFixture(t)
+	seedUsers(t, srv, "owner@x.com")
 	st := srv.store.(*store.Store)
 	ctx := context.Background()
 	root := t.TempDir()

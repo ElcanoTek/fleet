@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -397,6 +398,7 @@ func TestEachStartRecordsMessagesWrittenWithoutReferences(t *testing.T) {
 	s, dsn := newTestStoreDSN(t)
 	ctx := context.Background()
 	completeUploadsBackfill(t, s)
+	seedAccount(t, s, "earlier@x.com")
 	conv, err := s.CreateConversation(ctx, "earlier@x.com", "t", "victoria", "", false)
 	if err != nil {
 		t.Fatal(err)
@@ -483,6 +485,28 @@ func TestAttachmentKeeperLookupsDoNotGrowWithKeptFiles(t *testing.T) {
 	}
 }
 
+// TestAttachmentKeeperKeepsHeldUploadTrees: an upload tree an account
+// deletion holds (its outcome unconfirmed) is kept whole, however old and
+// unreferenced its files, until the maintenance pass puts it back or removes
+// it; the rest of the uploads are swept as usual.
+func TestAttachmentKeeperKeepsHeldUploadTrees(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	refs := &countingReferences{referenced: map[string]struct{}{}, complete: true}
+	held := ".held-" + strings.Repeat("a", 32) + "-" + hex.EncodeToString([]byte("acct-1")) + "-0123456789abcdef"
+	kept := agedFile(t, filepath.Join(dir, AttachmentUploadsDir, held, "tok", "a.png"))
+	unsent := agedFile(t, filepath.Join(dir, AttachmentUploadsDir, "u", "tok", "b.png"))
+	if _, err := SweepAttachments(dir, uploadsTTL, AttachmentKeeper(context.Background(), refs, dir)); err != nil {
+		t.Fatal(err)
+	}
+	if !onDisk(t, kept) {
+		t.Error("a file of a held upload tree was removed by age")
+	}
+	if onDisk(t, unsent) {
+		t.Error("an unsent upload outside the held tree was kept")
+	}
+}
+
 // TestAttachmentKeeperKeepsEveryUploadUntilTheRecordIsComplete: until a
 // server of this release has finished recording earlier messages' uploads —
 // on a new, empty database too — no upload counts as unused.
@@ -520,6 +544,7 @@ func TestUnstorableImagePathsAreLeftOut(t *testing.T) {
 	}
 	paths := append([]string{good}, bad...)
 
+	seedAccount(t, s, user)
 	conv, err := s.CreateConversation(ctx, user, "t", "victoria", "", false)
 	if err != nil {
 		t.Fatal(err)
@@ -566,6 +591,7 @@ func backfillSkipFixture(t *testing.T) (*Store, [3]string) {
 	t.Helper()
 	s := newTestStore(t)
 	ctx := context.Background()
+	seedAccount(t, s, "skip@x.com")
 	conv, err := s.CreateConversation(ctx, "skip@x.com", "t", "victoria", "", false)
 	if err != nil {
 		t.Fatal(err)
@@ -721,6 +747,7 @@ func TestMessageUploadsBackfillCoversMessagesWrittenAfterTheMigration(t *testing
 	t.Parallel()
 	s := newTestStore(t)
 	ctx := context.Background()
+	seedAccount(t, s, "late@x.com")
 	conv, err := s.CreateConversation(ctx, "late@x.com", "t", "victoria", "", false)
 	if err != nil {
 		t.Fatal(err)
@@ -828,6 +855,7 @@ func TestDeleteUnpinnedOlderThanSparesAChatWithAPatrol(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 	const user = "patrol@x.com"
+	seedAccount(t, s, user)
 	old := time.Now().Add(-90 * 24 * time.Hour).Unix()
 
 	patrolled, err := s.CreateConversation(ctx, user, "patrolled", "victoria", "", false)
@@ -879,6 +907,7 @@ func TestUploadReferencesLandOnTheMessageThatNamesThem(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 	const user = "order@x.com"
+	seedAccount(t, s, user)
 	path := func(kind string, i int) string {
 		return fmt.Sprintf("/data/attachments/uploads/u/%s%03d/img.png", kind, i)
 	}

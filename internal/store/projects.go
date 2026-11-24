@@ -113,11 +113,14 @@ func (s *Store) CreateProject(ctx context.Context, p *Project) (*Project, error)
 	p.OwnerEmail = normalizeEmail(p.OwnerEmail)
 	now := time.Now().Unix()
 	p.CreatedAt, p.UpdatedAt = now, now
-	_, err = s.db.ExecContext(ctx,
-		`INSERT INTO projects (id, owner_email, name, instructions, team_id, default_persona, default_model, mcp_servers, created_at, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)`,
-		p.ID, p.OwnerEmail, p.Name, p.Instructions, p.TeamID, p.DefaultPersona, p.DefaultModel, string(mcps), now,
-	)
+	err = s.withAccountRow(ctx, p.OwnerEmail, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx,
+			`INSERT INTO projects (id, owner_email, name, instructions, team_id, default_persona, default_model, mcp_servers, created_at, updated_at)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)`,
+			p.ID, p.OwnerEmail, p.Name, p.Instructions, p.TeamID, p.DefaultPersona, p.DefaultModel, string(mcps), now,
+		)
+		return err
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -449,6 +452,9 @@ func (s *Store) CreateProjectConversation(ctx context.Context, userEmail, title,
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }() // no-op after a successful Commit
+	if err := lockAccountTx(ctx, tx, userEmail); err != nil {
+		return nil, err
+	}
 	if err := lockAccessibleProjectTx(ctx, tx, projectID, userEmail); err != nil {
 		return nil, err
 	}
@@ -605,13 +611,23 @@ func (s *Store) CreateProjectMemory(ctx context.Context, projectID, creatorEmail
 	kind = NormalizeMemoryKind(kind)
 	id := uuid.NewString()
 	now := time.Now().Unix()
-	row := s.db.QueryRowContext(ctx,
-		`INSERT INTO memories (id, user_email, project_id, content, source, kind, origin, learned_at, created_at, updated_at)
-		 VALUES ($1, $2, $3, $4, 'manual', $5, 'manual', $6, $6, $6)
-		 RETURNING `+memoryColumns,
-		id, normalizeEmail(creatorEmail), projectID, content, kind, now,
-	)
-	return scanMemory(row)
+	// The row names its creator, so it is written under the creator's
+	// account-row lock (withAccountRow), like a personal memory.
+	var m *Memory
+	err := s.withAccountRow(ctx, creatorEmail, func(tx *sql.Tx) error {
+		var err error
+		m, err = scanMemory(tx.QueryRowContext(ctx,
+			`INSERT INTO memories (id, user_email, project_id, content, source, kind, origin, learned_at, created_at, updated_at)
+			 VALUES ($1, $2, $3, $4, 'manual', $5, 'manual', $6, $6, $6)
+			 RETURNING `+memoryColumns,
+			id, normalizeEmail(creatorEmail), projectID, content, kind, now,
+		))
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return m, nil
 }
 
 // ListProjectMemories returns the project's shared memories (active first,

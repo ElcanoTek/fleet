@@ -27,6 +27,7 @@ func getProjectSub(t *testing.T, srv *Server, user, projectID, sub string) *http
 // member's chats or files (#237's conversations-stay-private rule).
 func TestProjectHome_ConversationsAndFilesAreCallerScoped(t *testing.T) {
 	srv := serverFixture(t)
+	seedUsers(t, srv, "owner@x.com", "other@x.com")
 	st := srv.store.(*store.Store)
 	ctx := context.Background()
 	const owner = "owner@x.com"
@@ -58,9 +59,6 @@ func TestProjectHome_ConversationsAndFilesAreCallerScoped(t *testing.T) {
 	// make the project team-shared and them a member, as a real teammate is
 	// (the store refuses filing into a project the caller cannot see).
 	team := "home"
-	if _, err := st.CreateUser(ctx, other, "pw-123456"); err != nil {
-		t.Fatalf("CreateUser (other): %v", err)
-	}
 	if _, err := st.SetUserRoleTeam(ctx, other, nil, &team); err != nil {
 		t.Fatalf("SetUserRoleTeam (other): %v", err)
 	}

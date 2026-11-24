@@ -67,6 +67,10 @@ func TestChatScheduleCascade_EitherMigrationOrder(t *testing.T) {
 			ctx := context.Background()
 			d, chat := openBoth(t, schedFirst)
 			const user = "owner@elcanotek.com"
+			// A chat is an account's: CreateConversation needs one.
+			if _, err := chat.CreateUser(ctx, user, "seed-password-1"); err != nil {
+				t.Fatal(err)
+			}
 			convA, err := chat.CreateConversation(ctx, user, "A", "victoria", "", false)
 			if err != nil {
 				t.Fatal(err)
@@ -132,6 +136,10 @@ func TestKeepChatScheduleCascade_RetriesUntilInstalled(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	d, chat := openBoth(t, true) // sched first: 077 could not install it
+	// A chat is an account's: CreateConversation needs one.
+	if _, err := chat.CreateUser(ctx, "owner@elcanotek.com", "seed-password-1"); err != nil {
+		t.Fatal(err)
+	}
 	conv, err := chat.CreateConversation(ctx, "owner@elcanotek.com", "A", "victoria", "", false)
 	if err != nil {
 		t.Fatal(err)

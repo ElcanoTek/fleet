@@ -51,7 +51,7 @@ keep the key in a file only you can read:
 
 ```sh
 fleet chat user add acp-bot@example.com --password -
-fleet sched apikey create acp-bot --type user --user acp-bot@example.com   # prints the key once
+fleet sched apikey create acp-bot --type user --user acp-bot@example.com   # prints the key once; the account must exist
 (umask 077; mkdir -p ~/.config/fleet; cat > ~/.config/fleet/api-key)      # paste it, then Ctrl-D
 fleet acp --email acp-bot@example.com
 ```
@@ -1108,7 +1108,7 @@ otherwise, and agent-shell shows `message`.
 | Failure | What the ACP client sees |
 | --- | --- |
 | No API key configured (or the retired `--token-file`) | `initialize` still succeeds; `session/new` answers `auth_required` (-32000) with the same fix-it text `fleet chat` prints. `fleet acp` keeps running, so the client shows the reason instead of "agent exited". |
-| Refused by the server (403) | `session/new` answers `auth_required`, with text naming the reason the server gave: a key that names no user (`not_a_user_key`) names `fleet sched apikey create … --type user`; an email that is not a provisioned fleet user (`not_a_member`) names the user and `fleet chat user add <email> --password -`; a viewer-role user (`read_only` on a prompt; the `viewer` role `GET /me` reports at `session/new`) names the user and `fleet chat user role <email> --role member`; a client address the server's IP filter refuses names `FLEET_IP_ALLOWLIST` / `FLEET_IP_DENYLIST`, without saying which list matched (the server does not say either). Any other 403 body (a reverse proxy's page, say) is quoted as a short one-line excerpt instead of being blamed on the token. The token value is never included. A refusal that starts after the session opened (a role changed mid-session, say) is answered the same way on the next prompt. |
+| Refused by the server (403) | `session/new` answers `auth_required`, with text naming the reason the server gave: a key that names no user (`not_a_user_key`) names `fleet sched apikey create … --type user`; an email that is not a provisioned fleet user (`not_a_member`) names the user and `fleet chat user add <email> --password -`; a key bound to an earlier account under its email, or minted before the account existed (`key_predates_account`), names the user and `fleet sched apikey create … --type user --user <email>` for a new key; a viewer-role user (`read_only` on a prompt; the `viewer` role `GET /me` reports at `session/new`) names the user and `fleet chat user role <email> --role member`; a client address the server's IP filter refuses names `FLEET_IP_ALLOWLIST` / `FLEET_IP_DENYLIST`, without saying which list matched (the server does not say either). Any other 403 body (a reverse proxy's page, say) is quoted as a short one-line excerpt instead of being blamed on the token. The token value is never included. A refusal that starts after the session opened (a role changed mid-session, say) is answered the same way on the next prompt. |
 | Any 401 | `session/new` answers `auth_required`, with text naming the user (or the next prompt does, when the 401 starts after the session opened). fleet sends one for a missing, unknown, disabled or expired key, and for the retired service token (`service_token_retired`); the text carries fleet's own reason. |
 | Any other error status from the server | Internal error (-32603) quoting the status and the server's reply |
 | Daemon down | Internal error (-32603) naming the unreachable server URL, on the prompt: `session/new` opens the session when the server cannot be reached (see `session/new`). |

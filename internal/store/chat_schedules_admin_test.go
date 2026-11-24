@@ -15,6 +15,7 @@ import (
 func TestAdminSetChatSchedulePrompt(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
+	seedAccount(t, s, "owner@client.example")
 	ctx := context.Background()
 	const owner = "owner@client.example"
 
@@ -130,6 +131,7 @@ func chatNotices(t *testing.T, s *Store, convID string) ([]agent.HistoryEntry, [
 func TestAdminChatScheduleLookupAndList(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
+	seedAccount(t, s, "a@x.example", "b@x.example", "c@x.example")
 	ctx := context.Background()
 
 	if _, err := s.AdminGetChatSchedule(ctx, "short"); !errors.Is(err, ErrInvalidChatSchedule) {
@@ -196,6 +198,7 @@ func TestAdminChatScheduleLookupAndList(t *testing.T) {
 func TestAdminSetChatSchedulePromptSupersedesClaimedFire(t *testing.T) {
 	t.Parallel()
 	s, dsn := newTestStoreDSN(t)
+	seedAccount(t, s, "owner@client.example")
 	sd := openSchedOn(t, dsn)
 	ctx := context.Background()
 	const owner = "owner@client.example"
@@ -255,6 +258,7 @@ func TestAdminSetChatSchedulePromptSupersedesClaimedFire(t *testing.T) {
 func TestAdminSetChatSchedulePromptRewritesQueuedRuns(t *testing.T) {
 	t.Parallel()
 	s, dsn := newTestStoreDSN(t)
+	seedAccount(t, s, "owner@client.example")
 	ctx := context.Background()
 	const owner = "owner@client.example"
 	conv, err := s.CreateConversation(ctx, owner, "Workbench", "victoria", "", false)
@@ -291,6 +295,7 @@ func TestAdminSetChatSchedulePromptRewritesQueuedRuns(t *testing.T) {
 func TestAdminSetChatSchedulePromptReportsRunningRun(t *testing.T) {
 	t.Parallel()
 	s, dsn := newTestStoreDSN(t)
+	seedAccount(t, s, "owner@client.example")
 	ctx := context.Background()
 	const owner = "owner@client.example"
 	conv, err := s.CreateConversation(ctx, owner, "Workbench", "victoria", "", false)
@@ -319,6 +324,7 @@ func TestAdminSetChatSchedulePromptReportsRunningRun(t *testing.T) {
 func TestAdminChatSchedulesHideDeletedChats(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
+	seedAccount(t, s, "owner@client.example")
 	ctx := context.Background()
 	const owner = "owner@client.example"
 	conv, err := s.CreateConversation(ctx, owner, "Gone", "victoria", "", false)
@@ -359,6 +365,7 @@ const adminCronOwner = "owner@client.example"
 func newAdminCronFixture(t *testing.T) adminCronFixture {
 	t.Helper()
 	s := newTestStore(t)
+	seedAccount(t, s, adminCronOwner)
 	ctx := context.Background()
 	conv, err := s.CreateConversation(ctx, adminCronOwner, "Opti Workbench", "victoria", "", false)
 	if err != nil {
@@ -582,6 +589,7 @@ func mustLoc(t *testing.T, name string) *time.Location {
 func TestUpdateChatScheduleValidatesPausedCron(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
+	seedAccount(t, s, "owner@client.example")
 	ctx := context.Background()
 	const owner = "owner@client.example"
 	conv, err := s.CreateConversation(ctx, owner, "Workbench", "victoria", "", false)
@@ -613,6 +621,7 @@ func TestUpdateChatScheduleValidatesPausedCron(t *testing.T) {
 func TestAdminSetChatScheduleCronSupersedesClaimedFire(t *testing.T) {
 	t.Parallel()
 	s, dsn := newTestStoreDSN(t)
+	seedAccount(t, s, "owner@client.example")
 	sd := openSchedOn(t, dsn)
 	ctx := context.Background()
 	const owner = "owner@client.example"

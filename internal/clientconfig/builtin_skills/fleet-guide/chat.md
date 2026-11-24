@@ -553,6 +553,13 @@ here and keeps everything shared with it shared with the renamed team.
 Otherwise, renaming a team here keeps everything shared with it shared with
 the renamed team; a new team that later takes the old name starts with
 nothing shared.
+**Delete user** in a person's row removes their account with their chats,
+memories, connected MCP servers, connector settings, skills, personal
+projects, API keys and uploaded files. Their requests and replies in progress
+are stopped first; if any is still running after about 15 seconds, nothing is
+deleted and the page says to try again. When the account is deleted but a step
+does not finish (their API keys could not be removed, say), the page says so
+in a notice above the table, with what is left and how to remove it.
 
 ### Customizing your sidebar
 
@@ -1774,7 +1781,7 @@ word, the prompt a task can run. It holds two kinds of entry:
 | Kind | What it is |
 | --- | --- |
 | Deployment prompts | Shipped with your deployment and kept up to date from outside the app. Read-only, marked **Git** in the list. Use them as they are, or insert one and adapt it into a prompt of your own. |
-| Workspace prompts | Created by your team. Each is either **Private**, visible only to its author, or **Workspace**, visible to everyone on the deployment. Only the author or an admin can edit or delete one. |
+| Workspace prompts | Created by your team. Each is either **Private**, visible only to its author, or **Workspace**, visible to everyone on the deployment. Only the author or an admin can edit or delete one. When an administrator deletes the author's account, their **Private** prompts are deleted with it; their **Workspace** prompts stay, marked **Shared by a deleted account**, and only an admin can edit or delete them. |
 
 ### Using a prompt
 

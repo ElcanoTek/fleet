@@ -325,10 +325,13 @@ func (s *Store) CreateUserPersona(ctx context.Context, userEmail string, in User
 	}
 	now := time.Now().Unix()
 	id := uuid.NewString()
-	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO user_personas (id, user_email, name, display_name, description, instructions, base_persona, kind, autonomy, patrols, status, replaces_name, created_at, updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,'',$12,$12)`,
-		id, email, in.Name, in.DisplayName, in.Description, in.Instructions, in.BasePersona, in.Kind, in.Autonomy, patrols, UserPersonaStatusActive, now)
+	err = s.withAccountRow(ctx, email, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `
+			INSERT INTO user_personas (id, user_email, name, display_name, description, instructions, base_persona, kind, autonomy, patrols, status, replaces_name, created_at, updated_at)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,'',$12,$12)`,
+			id, email, in.Name, in.DisplayName, in.Description, in.Instructions, in.BasePersona, in.Kind, in.Autonomy, patrols, UserPersonaStatusActive, now)
+		return err
+	})
 	if err != nil {
 		if pgUniqueViolation(err) {
 			return nil, fmt.Errorf("%w: you already have a persona named %q", ErrUserPersonaInvalid, in.Name)
@@ -400,7 +403,10 @@ func (s *Store) ProposeUserPersona(ctx context.Context, userEmail string, in Use
 	}
 	now := time.Now().Unix()
 	var id string
-	err = s.db.QueryRowContext(ctx, `
+	// Proposed by a turn, possibly after it ended: with the account gone by
+	// then, nothing is written (withAccountRow, ErrUserNotFound).
+	err = s.withAccountRow(ctx, email, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, `
 		INSERT INTO user_personas (id, user_email, name, display_name, description, instructions, base_persona, kind, autonomy, patrols, status, replaces_name, created_at, updated_at)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12,$13,$13)
 		ON CONFLICT (user_email, name) DO UPDATE
@@ -410,7 +416,8 @@ func (s *Store) ProposeUserPersona(ctx context.Context, userEmail string, in Use
 		    replaces_name=EXCLUDED.replaces_name, updated_at=EXCLUDED.updated_at
 		WHERE user_personas.status = $11
 		RETURNING id`,
-		uuid.NewString(), email, stageName, in.DisplayName, in.Description, in.Instructions, in.BasePersona, in.Kind, in.Autonomy, patrols, UserPersonaStatusProposed, replaces, now).Scan(&id)
+			uuid.NewString(), email, stageName, in.DisplayName, in.Description, in.Instructions, in.BasePersona, in.Kind, in.Autonomy, patrols, UserPersonaStatusProposed, replaces, now).Scan(&id)
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		// The staging name is held by an ACTIVE persona the user created by
 		// hand (e.g. they really have a persona called "<name>-draft").

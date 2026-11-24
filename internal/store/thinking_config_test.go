@@ -37,6 +37,7 @@ func TestSetThinkingConfigRoundTrip(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "brad@elcano.com")
 	ctx := context.Background()
 	const email = "brad@elcano.com"
 

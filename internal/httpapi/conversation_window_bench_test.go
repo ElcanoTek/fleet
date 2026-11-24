@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -23,6 +24,10 @@ import (
 func seedLongConversation(tb testing.TB, st *store.Store, owner string, turns, resultBytes int) (string, int) {
 	tb.Helper()
 	ctx := context.Background()
+	// A chat is an account's: CreateConversation needs one.
+	if _, err := st.CreateUser(ctx, owner, "seed-password-1"); err != nil && !errors.Is(err, store.ErrUserExists) {
+		tb.Fatalf("seed account: %v", err)
+	}
 	conv, err := st.CreateConversation(ctx, owner, "long thread", "generic", "", false)
 	if err != nil {
 		tb.Fatalf("create conversation: %v", err)
@@ -89,7 +94,7 @@ func BenchmarkConversationGet(b *testing.B) {
 		store:    st,
 		dir:      st.Identity(),
 		inflight: make(map[string]inflightEntry),
-		isMember: allowAllMembers,
+		isMember: allowAllMembers(st),
 	}
 	h := s.Routes()
 	id, entries := seedLongConversation(b, st, owner, 150, 20_000)

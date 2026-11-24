@@ -15,6 +15,7 @@ func TestSearchConversations_TitleAndContent(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "alice@example.com")
 	ctx := context.Background()
 
 	c, err := s.CreateConversation(ctx, "alice@example.com", "Python async patterns", "assistant", "", false)
@@ -60,6 +61,7 @@ func TestSearchConversations_ScopedByUser(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "alice@example.com", "bob@example.com")
 	ctx := context.Background()
 
 	mine, err := s.CreateConversation(ctx, "alice@example.com", "shared secret recipe", "assistant", "", false)
@@ -84,6 +86,7 @@ func TestSearchConversations_EmptyQuery(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "a@e.com")
 	ctx := context.Background()
 	if _, err := s.CreateConversation(ctx, "a@e.com", "anything", "assistant", "", false); err != nil {
 		t.Fatalf("CreateConversation: %v", err)
@@ -104,6 +107,7 @@ func TestBackfillSearchContent(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "alice@example.com")
 	ctx := context.Background()
 
 	c, err := s.CreateConversation(ctx, "alice@example.com", "untitled", "assistant", "", false)
@@ -151,6 +155,7 @@ func TestSearchDisabledSkipsIndexing(t *testing.T) {
 	t.Parallel()
 
 	s := newTestStore(t)
+	seedAccount(t, s, "alice@example.com")
 	s.SetSearchEnabled(false)
 	ctx := context.Background()
 

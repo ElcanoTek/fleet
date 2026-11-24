@@ -12,7 +12,6 @@
     "Failed to aggregate task usage",
     "Failed to cancel task",
     "Failed to cleanup history",
-    "Failed to create API key",
     "Failed to create temp dir",
     "Failed to create user",
     "Failed to delete budget",
@@ -109,6 +108,7 @@
     "Workspace is only available for completed tasks",
     "a Stop in this conversation cancelled this message before it started",
     "a credential argument contains \"[REDACTED]\", the placeholder the conversation shows in place of a secret, not a credential; ask the user to submit the credential again with show_ui and pass the reference that submission gives you",
+    "a deletion of this account is already running",
     "a draft is already being written; wait for it to finish",
     "a field is null; no card field is nullable",
     "a narrowed approval covers this call only; use scope once",
@@ -363,6 +363,7 @@
     "skill id required",
     "skill not found",
     "skill unreadable",
+    "some of the account's requests or turns are still running; nothing was deleted; try again",
     "source changed during copy",
     "source task has an invalid recurrence",
     "specify model, chat_model, task_model, fallback_model, or sync_current=true",
@@ -381,9 +382,14 @@
     "tenant_id must be a valid Microsoft Entra Directory (tenant) ID, domain, or 'organizations'/'common'",
     "that person can't take this chat: they need an active Fleet account that can chat",
     "that team already exists — ask an admin to add you to it",
+    "the API-key store is busy with another change, so nothing was deleted; try again in a few seconds",
+    "the API-key store is busy with another change; try again in a few seconds",
     "the Stop was sent, but the turn has not confirmed it yet",
+    "the account changed while it was being deleted; nothing was deleted",
     "the assistant could not draft this patrol; try again or edit the draft yourself",
     "the chat made with this client_request_id was deleted; retry with a new one",
+    "the deletion did not complete and the account could not be read back; its files are held until that is confirmed, and the next maintenance pass puts them back or removes them",
+    "the deletion was interrupted before it started; nothing was deleted",
     "the input could not be withdrawn from the queue",
     "the message could not be queued behind the running turn; send it again",
     "the message could not be recorded against its turn; send it again",
@@ -393,9 +399,12 @@
     "the schedule changed while it was being run; try again",
     "the scheduler is not running",
     "the server is not taking new turns right now; the run starts when it does",
+    "the server is reconnecting to its database; try again",
     "the turn ended before its input was saved",
     "the turn journal lost a write; refusing to record success for an incompletely journaled turn",
     "thinking_budget_tokens must be \u003e= 0 (0 = off, omit to inherit the default)",
+    "this API key was minted for an earlier account under this email, or before the account existed; mint a new key for the account (fleet sched apikey create \u003cname\u003e --type user --user \u003cemail\u003e)",
+    "this account no longer exists",
     "this action cannot be narrowed: approve or decline it whole",
     "this action cannot be stopped once it runs",
     "this action is not running: decline it instead",
@@ -1075,6 +1084,13 @@
       ]
     },
     {
+      "message": "deleting the user API keys acting as {0} failed ({1}); list them with `fleet sched apikey list` and delete them with `fleet sched apikey delete \u003ckey_id\u003e`",
+      "fields": [
+        "%s",
+        "%s"
+      ]
+    },
+    {
       "message": "description exceeds maximum length of {0} characters",
       "fields": [
         "%d"
@@ -1146,6 +1162,12 @@
       "fields": [
         "%d",
         "%s",
+        "%s"
+      ]
+    },
+    {
+      "message": "files under {0} were left in place after the deletion: an account created under the address since holds them",
+      "fields": [
         "%s"
       ]
     },
@@ -1519,6 +1541,18 @@
       ]
     },
     {
+      "message": "removing the account's private workspace files failed: {0}; the server's hourly maintenance pass tries again",
+      "fields": [
+        "%s"
+      ]
+    },
+    {
+      "message": "removing the account's uploads failed: {0}; the server's hourly maintenance pass tries again",
+      "fields": [
+        "%s"
+      ]
+    },
+    {
       "message": "replacing {0} needs expected_sha256: read the file first (view_file prints its sha256) so you never overwrite a newer version",
       "fields": [
         "%s"
@@ -1740,8 +1774,33 @@
       ]
     },
     {
+      "message": "the API-key store was not available, so the user API keys acting as {0} were not deleted; list them with `fleet sched apikey list` and delete them with `fleet sched apikey delete \u003ckey_id\u003e`",
+      "fields": [
+        "%s"
+      ]
+    },
+    {
+      "message": "the account's files could not be moved aside before the deletion ({0}), so nothing was deleted; fix that and try again",
+      "fields": [
+        "%s"
+      ]
+    },
+    {
+      "message": "the account's user API keys could not be updated before the deletion ({0}); nothing was deleted",
+      "fields": [
+        "%s"
+      ]
+    },
+    {
       "message": "the approval was narrowed, but its record {0}; nothing was run",
       "fields": [
+        "%s"
+      ]
+    },
+    {
+      "message": "the attachment directory {0} could not be read ({1}), so no upload or private workspace file was removed there; the server's maintenance pass removes them from the directory it uses",
+      "fields": [
+        "%s",
         "%s"
       ]
     },

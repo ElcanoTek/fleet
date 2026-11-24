@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/accountdelete"
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/safe"
@@ -64,9 +65,11 @@ type uploadedAttachment struct {
 // so a caller with no email still cannot reach anyone else's subtree. That is
 // a test-only shape: every route reaching here sits behind the auth + member
 // middleware, which refuses a request whose principal names no user.
+//
+// The segment is accountdelete.Digest, the one digest account deletion and its
+// maintenance sweep remove by.
 func userUploadsRoot(baseDir, userEmail string) string {
-	sum := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(userEmail))))
-	return filepath.Join(baseDir, store.AttachmentUploadsDir, hex.EncodeToString(sum[:])[:32])
+	return filepath.Join(baseDir, store.AttachmentUploadsDir, accountdelete.Digest(userEmail))
 }
 
 // postAttachments accepts one-or-more files via multipart/form-data under the
@@ -117,7 +120,14 @@ func (s *Server) postAttachments(w http.ResponseWriter, r *http.Request) {
 
 	// Per-caller subtree, derived from the authenticated identity (never from
 	// anything in the request body) — see userUploadsRoot.
-	baseDir := userUploadsRoot(s.cfg.EmailAttachmentDir, userFromCtx(r.Context()))
+	user := userFromCtx(r.Context())
+	baseDir := userUploadsRoot(s.cfg.EmailAttachmentDir, user)
+	// Reading the body can take long; the account may have begun to be
+	// deleted meanwhile. Nothing is written for it then, not even the
+	// directory (accountFilesWritable), and each file is checked again.
+	if !s.refuseUnlessAccountFilesWritable(w, r, user) {
+		return
+	}
 	if err := os.MkdirAll(baseDir, 0o755); err != nil { //nolint:gosec // host-side upload landing area, readable by the host user only
 		http.Error(w, "mkdir uploads: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -135,6 +145,9 @@ func (s *Server) postAttachments(w http.ResponseWriter, r *http.Request) {
 
 	out := make([]uploadedAttachment, 0, len(files))
 	for _, fh := range files {
+		if !s.refuseUnlessAccountFilesWritable(w, r, user) {
+			return
+		}
 		att, err := saveUpload(baseDir, fh)
 		if err != nil {
 			logging.From(r.Context()).Error("saveUpload failed", "filename", safe.LogSafe(fh.Filename), "err", safe.LogSafe(err.Error()))

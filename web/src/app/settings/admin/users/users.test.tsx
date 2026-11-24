@@ -791,6 +791,32 @@ describe("AdminUsersPage", () => {
     );
   });
 
+  it("removes the row and shows what is left when a delete completes with steps left", async () => {
+    mockFetch((url, init) => {
+      if (url === "/api/admin/users/bob%40x.com" && init?.method === "DELETE") {
+        return new Response(
+          JSON.stringify({ warnings: ["deleting the user API keys acting as bob@x.com failed (disk full)"] }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      return listImpl()(url);
+    });
+
+    render(<AdminUsersPage />);
+    await screen.findByText("bob@x.com");
+
+    openKebab("bob@x.com");
+    fireEvent.click(screen.getByRole("button", { name: "Delete user" }));
+    fireEvent.click(screen.getByRole("button", { name: /confirm delete/i }));
+    expect(
+      await screen.findByText("bob@x.com was deleted, but some steps did not finish:"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("deleting the user API keys acting as bob@x.com failed (disk full)"),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /confirm delete/i })).toBeNull();
+  });
+
   it("resets a password only on the confirming second click and shows the value once", async () => {
     const puts: { url: string; body: string }[] = [];
     mockFetch((url, init) => {

@@ -42,14 +42,14 @@ func TestChatCLIAuthenticatesWithAUserKey(t *testing.T) {
 		t.Fatalf("an unknown key: %v", err)
 	}
 
-	// The account is resolved on every request: a key for an address with no
-	// enabled account is refused.
+	// A key minted before keys named their account, for an address with no
+	// account, acts as no one (TestUnboundUserKeyWithoutAccountActsAsNoOne).
 	_, ghostKey, err := mgr.CreateUserKey(context.Background(), "ghost", "ghost@x.com", 0, nil, "test")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := chattui.NewClient(chattui.Config{ServerURL: srv.URL, APIKey: ghostKey}).CheckIdentity(context.Background()); err == nil ||
-		!strings.Contains(err.Error(), "not an enabled fleet user") {
+		!strings.Contains(err.Error(), "minted for an earlier account") {
 		t.Fatalf("a key for no account: %v", err)
 	}
 }

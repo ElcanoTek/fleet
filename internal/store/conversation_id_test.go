@@ -21,6 +21,7 @@ func TestConversationIDForCreateKey(t *testing.T) {
 	}
 
 	s := newTestStore(t)
+	seedAccount(t, s, "me@x.com")
 	ctx := WithNewConversationID(context.Background(), a)
 	c, err := s.CreateConversation(ctx, "me@x.com", "t", "victoria", "", false)
 	if err != nil || c.ID != a {
