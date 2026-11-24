@@ -425,34 +425,222 @@ func TestDeleteAfterAnotherDeletionRemovesTheTreesItMovedAside(t *testing.T) {
 }
 
 // A deletion whose database step fails and after which the account cannot
-// be read back (the database unreachable) puts the trees back, since the
-// account most likely still exists, and says the outcome is unconfirmed.
-func TestDeleteWithAnUnconfirmedOutcomePutsTheTreesBack(t *testing.T) {
+// be read back holds the trees it moved aside instead of putting them back:
+// an address that answers as live may hold a new account created after a
+// deletion that did commit. The held trees record the account's id, survive
+// the sweep of set-aside trees, and the server's marks stay.
+func TestDeleteWithAnUnconfirmedOutcomeHoldsTheTrees(t *testing.T) {
 	t.Parallel()
-	att := t.TempDir()
-	files := seedFiles(t, att, "gone@x.com")
 	down := errors.New("connection refused")
-	st := &racedStore{fakeStore: fakeStore{err: errors.New("statement timeout"), liveErr: down}, afterErr: down}
-	undone := false
-	_, err := Delete(context.Background(), st, "gone@x.com", Options{Keys: &fakeKeys{}, AttachmentDir: att,
-		ServerSetAside: func(email string) ([]AsideTree, func(), error) {
-			aside, err := setAsidePrivateWorkspaces(PrivateWorkspaceRoot(att), email)
-			return aside, func() { undone = true }, err
-		}})
-	var unconfirmed *OutcomeUnconfirmedError
-	if !errors.As(err, &unconfirmed) || !errors.Is(unconfirmed.ReadErr, down) ||
-		!strings.Contains(err.Error(), "statement timeout") || !strings.Contains(err.Error(), "files were put back") {
-		t.Fatalf("err = %v, want an OutcomeUnconfirmedError naming both causes", err)
+	for _, tc := range []struct {
+		name    string
+		live    map[string]bool
+		liveErr error
+	}{
+		{"the address is live but the account cannot be read", map[string]bool{Digest("gone@x.com"): true}, nil},
+		{"nothing can be read", nil, down},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			att := t.TempDir()
+			files := seedFiles(t, att, "gone@x.com")
+			st := &racedStore{fakeStore: fakeStore{err: errors.New("statement timeout"), live: tc.live, liveErr: tc.liveErr}, afterErr: down}
+			undone := false
+			_, err := Delete(context.Background(), st, "gone@x.com", Options{Keys: &fakeKeys{}, AttachmentDir: att,
+				ServerSetAside: func(email string) ([]AsideTree, func(), error) {
+					aside, err := setAsidePrivateWorkspaces(PrivateWorkspaceRoot(att), email)
+					return aside, func() { undone = true }, err
+				}})
+			var unconfirmed *OutcomeUnconfirmedError
+			if !errors.As(err, &unconfirmed) || !errors.Is(unconfirmed.ReadErr, down) ||
+				!strings.Contains(err.Error(), "statement timeout") || !strings.Contains(err.Error(), "held") {
+				t.Fatalf("err = %v, want an OutcomeUnconfirmedError naming both causes", err)
+			}
+			for _, f := range files {
+				if _, err := os.Stat(f); !os.IsNotExist(err) {
+					t.Errorf("%s was put back under the address (stat err %v)", f, err)
+				}
+			}
+			assertNothingAside(t, att)
+			dirs := []string{filepath.Join(att, "uploads"), filepath.Join(PrivateWorkspaceRoot(att), "conv-1", "participants"), filepath.Join(PrivateWorkspaceRoot(att), "conv-2", "participants")}
+			for _, dir := range dirs {
+				if err := RemoveAside(dir); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, dir := range dirs {
+				if got := heldIn(t, dir); len(got) != 1 || got[0] != "deleted-account-id" {
+					t.Errorf("held in %s: %v, want one tree recording deleted-account-id", dir, got)
+				}
+			}
+			if undone {
+				t.Error("the server's marks were taken back")
+			}
+		})
 	}
-	for _, f := range files {
-		if _, err := os.Stat(f); err != nil {
-			t.Errorf("%s is not back where it was: %v", f, err)
+}
+
+// heldIn lists the account ids the trees held in dir record.
+func heldIn(t *testing.T, dir string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	for _, e := range entries {
+		if digest, id, ok := parseHeld(e.Name()); ok {
+			if digest != Digest("gone@x.com") {
+				t.Errorf("%s records digest %s", e.Name(), digest)
+			}
+			ids = append(ids, id)
 		}
 	}
-	assertNothingAside(t, att)
-	if !undone {
-		t.Error("the server's marks were not taken back")
+	return ids
+}
+
+// The account TestResolveHeldIn's trees are held for.
+const heldEmail, heldID = "gone@x.com", "acct-1"
+
+// holdTree writes dir/<digest of heldEmail>/<names...> and holds it for
+// heldID, as a deletion with an unconfirmed outcome does.
+func holdTree(t *testing.T, dir string, names ...string) {
+	t.Helper()
+	email, id := heldEmail, heldID
+	path := filepath.Join(dir, Digest(email))
+	for _, n := range names {
+		f := filepath.Join(path, n, "f.txt")
+		if err := os.MkdirAll(filepath.Dir(f), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(f, []byte("held"), 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
+	tr, moved, err := SetAside(path, Digest(email))
+	if err != nil || !moved {
+		t.Fatalf("SetAside = %v, %v", moved, err)
+	}
+	if err := holdAside(tr, Digest(email), id); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The maintenance pass resolves a held tree by the account id it records:
+// back to the address when that account is still there (merged into what it
+// wrote since, never over it), removed when the account is gone or another
+// one holds the address, left held when the account cannot be read or now
+// has another address. It handles at most its budget.
+func TestResolveHeldIn(t *testing.T) {
+	t.Parallel()
+	email, id := heldEmail, heldID
+	lookupAs := func(found bool, addr string, err error) func(string) (string, bool, error) {
+		return func(got string) (string, bool, error) {
+			if got != id {
+				t.Errorf("looked up %q, want %q", got, id)
+			}
+			return addr, found, err
+		}
+	}
+	resolve := func(t *testing.T, dir string, lookup func(string) (string, bool, error)) (HeldStats, error) {
+		t.Helper()
+		budget := 10
+		return ResolveHeldIn(dir, lookup, &budget)
+	}
+	t.Run("the account is still there", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		holdTree(t, dir, "tok")
+		st, err := resolve(t, dir, lookupAs(true, email, nil))
+		if err != nil || st != (HeldStats{Restored: 1}) {
+			t.Fatalf("stats %+v, err %v; want one restored", st, err)
+		}
+		if _, err := os.Stat(filepath.Join(dir, Digest(email), "tok", "f.txt")); err != nil {
+			t.Fatalf("the tree is not back: %v", err)
+		}
+		if got := heldIn(t, dir); len(got) != 0 {
+			t.Fatalf("still held: %v", got)
+		}
+	})
+	t.Run("the account wrote files since", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		holdTree(t, dir, "tok-old", "attachments")
+		newer := filepath.Join(dir, Digest(email), "attachments", "f.txt")
+		if err := os.MkdirAll(filepath.Dir(newer), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(newer, []byte("newer"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		st, err := resolve(t, dir, lookupAs(true, email, nil))
+		if !errors.Is(err, ErrHeldEntriesLeft) || st != (HeldStats{Left: 1}) {
+			t.Fatalf("stats %+v, err %v; want one left with ErrHeldEntriesLeft", st, err)
+		}
+		if _, err := os.Stat(filepath.Join(dir, Digest(email), "tok-old", "f.txt")); err != nil {
+			t.Errorf("the entry the account did not have was not moved back: %v", err)
+		}
+		if got, _ := os.ReadFile(newer); string(got) != "newer" {
+			t.Errorf("the newer file reads %q, want it untouched", got)
+		}
+		if got := heldIn(t, dir); len(got) != 1 {
+			t.Errorf("held: %v, want the entry the account has again left held", got)
+		}
+	})
+	// The account gone, or another account holding the address since: either
+	// way no account has the recorded id any more.
+	t.Run("the account is gone or replaced", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		holdTree(t, dir, "tok")
+		st, err := resolve(t, dir, lookupAs(false, "", nil))
+		if err != nil || st != (HeldStats{Removed: 1}) {
+			t.Fatalf("stats %+v, err %v; want one removed", st, err)
+		}
+		entries, _ := os.ReadDir(dir)
+		if len(entries) != 0 {
+			t.Fatalf("left in the directory: %v", entries)
+		}
+	})
+	t.Run("the account cannot be read", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		holdTree(t, dir, "tok")
+		down := errors.New("connection refused")
+		st, err := resolve(t, dir, lookupAs(false, "", down))
+		if !errors.Is(err, down) || st != (HeldStats{Left: 1}) {
+			t.Fatalf("stats %+v, err %v; want one left with the read's error", st, err)
+		}
+		if got := heldIn(t, dir); len(got) != 1 {
+			t.Fatalf("held: %v, want the tree still held", got)
+		}
+	})
+	t.Run("the account has another address", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		holdTree(t, dir, "tok")
+		st, err := resolve(t, dir, lookupAs(true, "renamed@x.com", nil))
+		if err != nil || st != (HeldStats{Left: 1}) {
+			t.Fatalf("stats %+v, err %v; want one left", st, err)
+		}
+		if got := heldIn(t, dir); len(got) != 1 {
+			t.Fatalf("held: %v, want the tree still held", got)
+		}
+	})
+	t.Run("the budget", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		holdTree(t, dir, "tok-1")
+		holdTree(t, dir, "tok-2")
+		budget := 1
+		st, err := ResolveHeldIn(dir, lookupAs(false, "", nil), &budget)
+		if err != nil || st != (HeldStats{Removed: 1}) || budget != 0 {
+			t.Fatalf("stats %+v, err %v, budget %d; want one removed and the budget spent", st, err, budget)
+		}
+		if got := heldIn(t, dir); len(got) != 1 {
+			t.Fatalf("held: %v, want one left for the next pass", got)
+		}
+	})
 }
 
 // assertNothingAside fails when a tree is left set aside under att.

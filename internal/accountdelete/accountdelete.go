@@ -200,8 +200,9 @@ var afterDatabaseDeletion func()
 // address for those steps to tell apart: its keys are bound to its id first
 // and only those go (Keys.DeleteUserKeys), and its upload and private
 // workspace trees are moved aside (SetAside) while it still exists — then
-// removed after the commit, or moved back if the deletion does not commit
-// unless the account is confirmed gone by then (settleUncommitted).
+// removed after the commit; if the deletion does not commit, moved back when
+// the account is read back, removed when it is confirmed gone, and held for
+// the maintenance pass otherwise (settleUncommitted).
 // A tree that cannot be moved aside stops the deletion before anything is
 // deleted (*FilesNotSetAsideError); one written under the address after the
 // move is removed after the commit while no account has its digest
@@ -311,26 +312,39 @@ func (e *FilesNotSetAsideError) Error() string {
 func (e *FilesNotSetAsideError) Unwrap() error { return e.Err }
 
 // settleUncommitted handles a database deletion that did not commit (err).
-// The trees moved aside go back while the address still holds the same
-// account (id). When it confirmably does not — another deletion of the
-// account committed meanwhile (DeleteAccount then reports
-// store.ErrUserNotFound, or store.ErrAccountChanged once a new account holds
-// the address) — they are removed, as that deletion's own cleanup would have
-// done: put back, they would be the deleted account's files under the
-// address, for an account created under it later to find; the server's marks
-// stay then too, so a turn of the account still swapping does not stash its
-// files back. When the account cannot be read back (the database being
-// unreachable, most likely, and the account then still there), they go back
-// too, and the error says the outcome could not be confirmed
-// (*OutcomeUnconfirmedError). err is returned, with what could not be put
-// back or removed.
+// The trees moved aside go back only when the same account (id) is read back
+// under the address. When the account is confirmed gone — another account
+// holds the address, or none does (another deletion of the account committed
+// meanwhile: DeleteAccount then reports store.ErrUserNotFound, or
+// store.ErrAccountChanged once a new account holds the address) — they are
+// removed, as that deletion's own cleanup would have done: put back, they
+// would be the deleted account's files under the address, for an account
+// created under it later to find. The server's marks stay then too, so a turn
+// of the account still swapping does not stash its files back.
+//
+// When neither is confirmed (the account cannot be read back), the trees are
+// held (holdAside): kept beside the address under a name that records the
+// account's id, which no sweep removes, until the maintenance pass reads that
+// id (ResolveHeldIn) and puts them back or removes them. A live address alone
+// does not count as the same account: it may be a new one created after a
+// deletion that did commit. The server's marks stay, as for a deletion that
+// went through; the error is an *OutcomeUnconfirmedError. err is returned,
+// with what could not be put back, removed or held.
 func settleUncommitted(ctx context.Context, st Store, email, id string, err error, aside []AsideTree, undo func()) error {
 	// Its own deadline: err may be ctx's.
 	checkCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancel()
 	gone, readErr := accountGone(checkCtx, st, email, id)
 	if readErr != nil {
-		return rollBackSetAside(&OutcomeUnconfirmedError{Err: err, ReadErr: readErr}, aside, undo)
+		var holdErr error
+		for _, t := range aside {
+			holdErr = firstError(holdErr, holdAside(t, Digest(email), id))
+		}
+		unconfirmed := &OutcomeUnconfirmedError{Err: err, ReadErr: readErr}
+		if holdErr != nil {
+			return fmt.Errorf("%w; holding the account's files failed: %w", unconfirmed, holdErr)
+		}
+		return unconfirmed
 	}
 	if !gone {
 		return rollBackSetAside(err, aside, undo)
@@ -346,8 +360,9 @@ func settleUncommitted(ctx context.Context, st Store, email, id string, err erro
 }
 
 // accountGone reports whether the account id is confirmed gone from the
-// address: another account holds it, or no account does. readErr is set when
-// neither the account nor the address could be read.
+// address: another account holds it, or none does. readErr is set when
+// neither is confirmed: the account could not be read back, and the address
+// either could not be read or holds an account whose id is unknown.
 func accountGone(ctx context.Context, st Store, email, id string) (gone bool, readErr error) {
 	cur, err := st.AccountForDeletion(ctx, email)
 	if err == nil {
@@ -356,24 +371,21 @@ func accountGone(ctx context.Context, st Store, email, id string) (gone bool, re
 	// No account under the address (store.ErrUserNotFound), or a failed
 	// read: the address's digest tells them apart.
 	live, lerr := st.AccountDigestLive(ctx, Digest(email))
-	if lerr != nil {
+	if lerr != nil || live {
 		return false, err
-	}
-	if live {
-		return false, err // an account holds the address, yet it could not be read
 	}
 	return true, nil
 }
 
 // OutcomeUnconfirmedError is a deletion that did not commit (Err) after
-// which the account could not be read back (ReadErr): its files were put
-// back, since it most likely still exists, and whoever deletes it checks
-// that and tries again.
+// which the account could not be read back (ReadErr): its files are held
+// (holdAside) until the maintenance pass can tell whether the account is
+// still there, and then put back or removed.
 type OutcomeUnconfirmedError struct{ Err, ReadErr error }
 
 func (e *OutcomeUnconfirmedError) Error() string {
 	return "the deletion did not complete (" + e.Err.Error() + "), and whether the account still exists could not be read afterwards (" +
-		e.ReadErr.Error() + "), so its files were put back; check that the account is still there and delete it again"
+		e.ReadErr.Error() + "), so its files are held until that can be confirmed; the next maintenance pass of a running server puts them back or removes them"
 }
 
 func (e *OutcomeUnconfirmedError) Unwrap() error { return e.Err }

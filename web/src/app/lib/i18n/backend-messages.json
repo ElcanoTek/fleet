@@ -387,7 +387,7 @@
     "the account changed while it was being deleted; nothing was deleted",
     "the assistant could not draft this patrol; try again or edit the draft yourself",
     "the chat made with this client_request_id was deleted; retry with a new one",
-    "the deletion did not complete and the account could not be read back, so its files were put back; check that it still exists and delete it again",
+    "the deletion did not complete and the account could not be read back; its files are held until that is confirmed, and the next maintenance pass puts them back or removes them",
     "the deletion was interrupted before it started; nothing was deleted",
     "the input could not be withdrawn from the queue",
     "the message could not be queued behind the running turn; send it again",

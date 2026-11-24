@@ -1371,11 +1371,13 @@ func TestDeletionThatLosesARaceLeavesNoTreeUnderTheAddress(t *testing.T) {
 }
 
 // unreadableAfterFailureStore is the real store whose database deletion
-// fails and which cannot be read once it has: the database became
-// unreachable mid-deletion.
+// fails and whose account cannot be read once it has, while its address still
+// answers as live: the database became unreachable for some reads
+// mid-deletion. Its maintenance lookup by id fails too while down is set.
 type unreadableAfterFailureStore struct {
 	*store.Store
 	failed *atomic.Bool
+	down   *atomic.Bool
 }
 
 var errDatabaseDown = errors.New("connection refused")
@@ -1393,33 +1395,91 @@ func (u unreadableAfterFailureStore) DeleteAccount(context.Context, string, stri
 }
 
 func (u unreadableAfterFailureStore) AccountDigestLive(context.Context, string) (bool, error) {
-	return false, errDatabaseDown
+	return true, nil
+}
+
+func (u unreadableAfterFailureStore) AccountEmailByID(ctx context.Context, id string) (string, error) {
+	if u.down.Load() {
+		return "", errDatabaseDown
+	}
+	return u.Store.AccountEmailByID(ctx, id)
+}
+
+// heldTreesUnder counts the trees an account deletion holds in dirs.
+func heldTreesUnder(t *testing.T, dirs ...string) int {
+	t.Helper()
+	n := 0
+	for _, dir := range dirs {
+		entries, _ := os.ReadDir(dir)
+		for _, e := range entries {
+			if accountdelete.IsHeld(e.Name()) {
+				n++
+			}
+		}
+	}
+	return n
 }
 
 // A deletion that did not complete, after which the account cannot be read
-// back, puts the account's trees back and tells the administrator the
-// outcome could not be confirmed.
-func TestAdminDeleteWithAnUnconfirmedOutcomePutsTheFilesBack(t *testing.T) {
+// back although its address answers as live, holds the account's trees
+// rather than putting them back, and says so. Maintenance passes leave them
+// held while the account cannot be read (the sweep of set-aside trees does
+// not take them), put them back once the same account is read back, and
+// remove them when it is gone.
+func TestAdminDeleteWithAnUnconfirmedOutcomeHoldsTheFiles(t *testing.T) {
 	t.Parallel()
-	s := memberFixture(t, "boss@x.com", "u@x.com")
-	setRole(t, s, "boss@x.com", "admin", "")
-	att := t.TempDir()
-	s.cfg.EmailAttachmentDir = att
-	_, participants := seedAccountTrees(t, att, "u@x.com")
-	st := s.concreteStore(t)
-	s.store = unreadableAfterFailureStore{Store: st, failed: new(atomic.Bool)}
-	w := do(t, s.Routes(), http.MethodDelete, "/admin/users/u@x.com", nil, "boss@x.com")
-	if w.Code != http.StatusInternalServerError || strings.TrimSpace(w.Body.String()) != errAccountDeleteUnconfirmed {
-		t.Fatalf("status %d body %q, want 500 %q", w.Code, w.Body.String(), errAccountDeleteUnconfirmed)
-	}
-	if _, err := st.GetUser(context.Background(), "u@x.com"); err != nil {
-		t.Fatalf("the account is gone: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(participants, accountdelete.Digest("u@x.com"), "f.txt")); err != nil {
-		t.Errorf("the private workspace tree is not back: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(accountdelete.UploadsDir(att, "u@x.com"), "tok", "f.txt")); err != nil {
-		t.Errorf("the upload tree is not back: %v", err)
+	for _, gone := range []bool{false, true} {
+		t.Run(map[bool]string{false: "the account is still there", true: "the account is gone"}[gone], func(t *testing.T) {
+			t.Parallel()
+			s := memberFixture(t, "boss@x.com", "u@x.com")
+			setRole(t, s, "boss@x.com", "admin", "")
+			att := t.TempDir()
+			s.cfg.EmailAttachmentDir = att
+			uploadsParent, participants := seedAccountTrees(t, att, "u@x.com")
+			upload := filepath.Join(accountdelete.UploadsDir(att, "u@x.com"), "tok", "f.txt")
+			stash := filepath.Join(participants, accountdelete.Digest("u@x.com"), "f.txt")
+			st := s.concreteStore(t)
+			down := new(atomic.Bool)
+			down.Store(true)
+			s.store = unreadableAfterFailureStore{Store: st, failed: new(atomic.Bool), down: down}
+			w := do(t, s.Routes(), http.MethodDelete, "/admin/users/u@x.com", nil, "boss@x.com")
+			if w.Code != http.StatusInternalServerError || strings.TrimSpace(w.Body.String()) != errAccountDeleteUnconfirmed {
+				t.Fatalf("status %d body %q, want 500 %q", w.Code, w.Body.String(), errAccountDeleteUnconfirmed)
+			}
+			for _, f := range []string{upload, stash} {
+				if _, err := os.Stat(f); !os.IsNotExist(err) {
+					t.Errorf("%s was put back under the address (stat err %v)", f, err)
+				}
+			}
+			if n := heldTreesUnder(t, uploadsParent, participants); n != 2 {
+				t.Fatalf("%d held trees, want the upload and the private workspace tree", n)
+			}
+
+			s.sweepDeletedAccounts(context.Background())
+			if n := heldTreesUnder(t, uploadsParent, participants); n != 2 {
+				t.Fatalf("after a pass that cannot read the account: %d held trees, want 2", n)
+			}
+
+			if gone {
+				if _, err := accountdelete.Delete(context.Background(), st, "u@x.com", accountdelete.Options{AttachmentDir: att}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			down.Store(false)
+			s.sweepDeletedAccounts(context.Background())
+			if n := heldTreesUnder(t, uploadsParent, participants); n != 0 {
+				t.Fatalf("after a pass that reads the account: %d held trees, want none", n)
+			}
+			for _, f := range []string{upload, stash} {
+				_, err := os.Stat(f)
+				switch {
+				case gone && !os.IsNotExist(err):
+					t.Errorf("%s is under the address of the deleted account (stat err %v)", f, err)
+				case !gone && err != nil:
+					t.Errorf("%s is not back: %v", f, err)
+				}
+			}
+		})
 	}
 }
 

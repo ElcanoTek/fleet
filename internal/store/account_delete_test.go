@@ -1251,6 +1251,31 @@ func TestDeleteAccountRefusesAnotherAccountUnderTheEmail(t *testing.T) {
 	}
 }
 
+// AccountEmailByID reads the address of an account by its id, and answers
+// ErrUserNotFound once the account is deleted (or for an id no account has).
+func TestAccountEmailByID(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedAccount(t, s, "byid@x.com")
+	id, err := s.AccountForDeletion(ctx, "byid@x.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if email, err := s.AccountEmailByID(ctx, id); err != nil || email != "byid@x.com" {
+		t.Fatalf("AccountEmailByID = %q, %v; want byid@x.com", email, err)
+	}
+	if _, err := s.AccountEmailByID(ctx, "not-an-id"); !errors.Is(err, ErrUserNotFound) {
+		t.Fatalf("an id no account has: err %v, want ErrUserNotFound", err)
+	}
+	if _, err := s.DeleteAccount(ctx, "byid@x.com", id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AccountEmailByID(ctx, id); !errors.Is(err, ErrUserNotFound) {
+		t.Fatalf("after the deletion: err %v, want ErrUserNotFound", err)
+	}
+}
+
 // A running server holds the presence lock shared, and an account deletion
 // from the CLI cannot take it exclusive meanwhile; once the server lets go
 // it can. A server starting while the CLI holds it waits for it — without a

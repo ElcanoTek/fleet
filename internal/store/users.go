@@ -977,6 +977,18 @@ func (s *Store) AccountForDeletion(ctx context.Context, email string) (id string
 	return id, err
 }
 
+// AccountEmailByID reads the address of the account id (core.users.id), for
+// the maintenance pass to resolve the files a deletion held
+// (accountdelete.ResolveHeldIn). ErrUserNotFound when no account has that id.
+func (s *Store) AccountEmailByID(ctx context.Context, id string) (string, error) {
+	var email string
+	err := s.db.QueryRowContext(ctx, `SELECT email FROM core.users WHERE id::text = $1`, id).Scan(&email)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", ErrUserNotFound
+	}
+	return email, err
+}
+
 // DeleteAccount is DeleteUser for the account expectedID (core.users.id):
 // read in the deletion's own transaction, under the account row's lock, the
 // account under email must still be that one, or nothing is deleted

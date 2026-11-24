@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -481,6 +482,28 @@ func TestAttachmentKeeperLookupsDoNotGrowWithKeptFiles(t *testing.T) {
 	}
 	if refs.snapshots != 1 || refs.singles != 3 {
 		t.Errorf("lookups: %d snapshots and %d single-upload lookups for 200 kept and 3 removable uploads; want 1 and 3", refs.snapshots, refs.singles)
+	}
+}
+
+// TestAttachmentKeeperKeepsHeldUploadTrees: an upload tree an account
+// deletion holds (its outcome unconfirmed) is kept whole, however old and
+// unreferenced its files, until the maintenance pass puts it back or removes
+// it; the rest of the uploads are swept as usual.
+func TestAttachmentKeeperKeepsHeldUploadTrees(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	refs := &countingReferences{referenced: map[string]struct{}{}, complete: true}
+	held := ".held-" + strings.Repeat("a", 32) + "-" + hex.EncodeToString([]byte("acct-1")) + "-0123456789abcdef"
+	kept := agedFile(t, filepath.Join(dir, AttachmentUploadsDir, held, "tok", "a.png"))
+	unsent := agedFile(t, filepath.Join(dir, AttachmentUploadsDir, "u", "tok", "b.png"))
+	if _, err := SweepAttachments(dir, uploadsTTL, AttachmentKeeper(context.Background(), refs, dir)); err != nil {
+		t.Fatal(err)
+	}
+	if !onDisk(t, kept) {
+		t.Error("a file of a held upload tree was removed by age")
+	}
+	if onDisk(t, unsent) {
+		t.Error("an unsent upload outside the held tree was kept")
 	}
 }
 

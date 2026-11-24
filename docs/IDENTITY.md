@@ -203,16 +203,28 @@ advises on each demoted split admin, unknown role and duplicate username in it.
   - its upload tree and its private workspace trees are moved aside (a
     `.removing-<digest>-…` name beside them) while the account still exists
     and its work is stopped, then removed after the commit. If the deletion
-    does not commit they are moved back, unless the account is confirmed
-    gone by then (another deletion of it committed meanwhile, from another
+    does not commit they are moved back only when the same account (its
+    id) is read back under the address, and removed when the account is
+    confirmed gone (another deletion of it committed meanwhile, from another
     server on the same database, say: no account holds the address, or
-    another one does), in which case they are removed. When the account
-    cannot be read back (the database unreachable, most likely, and the
-    account then still there) they are moved back too, and the web route
-    answers 500 `the deletion did not complete and the account could not be
-    read back, so its files were put back; check that it still exists and
-    delete it again` (the server logs both causes; the CLI prints them). A
-    new account's trees start empty. A
+    another one does). When neither is confirmed (the account cannot be read
+    back; an address that answers as live may hold a new account created
+    after a deletion that did commit), the trees are held: renamed beside
+    the address to `.held-<digest>-<hex of the account id>-…`, which no
+    sweep removes and the hourly cleanup of old uploads skips. The web route
+    then answers 500 `the deletion did not complete and the account could
+    not be read back; its files are held until that is confirmed, and the
+    next maintenance pass puts them back or removes them` (the server logs
+    both causes; the CLI prints them), and the server's marks on the
+    account's turns stay, as for a deletion that went through. The hourly
+    maintenance pass resolves held trees, at most 100 per pass, by the id
+    each records: the account still there under the address, the tree goes
+    back (into what the account wrote since, entry by entry, never over an
+    entry it has again — that one stays held and the pass logs it); no
+    account with that id (gone, or another account holds the address), the
+    tree is removed; the account unreadable, or now under another address,
+    it stays held for a later pass. A running server resolves them, also
+    the ones a CLI deletion held. A new account's trees start empty. A
     tree that cannot be moved aside (its directory not writable, say), or a
     directory the move must look into that cannot be read (the attachment
     directory included; only one that is not there means nothing to move),
@@ -356,7 +368,9 @@ advises on each demoted split admin, unknown role and duplicate username in it.
   aside before it is removed, so an account created under the address in
   the meantime keeps the files it wrote; a tree left set aside by an
   interrupted removal goes on the next pass), and the in-memory
-  approve/deny-all decisions of such addresses. That covers
+  approve/deny-all decisions of such addresses. It also resolves the trees
+  a deletion held because its outcome could not be confirmed (above). That
+  covers
   accounts deleted before deletion reached these, a deletion from the CLI
   while the server runs (a turn in flight can write a private workspace tree
   back as it ends, and the CLI cannot reach the server's memory), and a CLI

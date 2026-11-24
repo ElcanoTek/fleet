@@ -8,8 +8,10 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/accountdelete"
 	"github.com/ElcanoTek/fleet/internal/agent"
 )
 
@@ -120,6 +122,10 @@ type UploadReferences interface {
 //     with no second copy of the retention rules; an upload never sent in any
 //     message is removed by age. Until the record of references is complete
 //     (BackfillMessageUploads, after an upgrade), every upload is kept;
+//   - an upload tree an account deletion holds (accountdelete.IsHeld: the
+//     deletion's outcome could not be confirmed) is kept whole until the
+//     maintenance pass puts it back or removes it: its paths are not the
+//     ones its messages refer to;
 //   - the Multiplayer private stash is always kept: it is removed with its
 //     conversation;
 //   - anything else (outbound email copies left by a crash, files an email
@@ -147,7 +153,7 @@ func AttachmentKeeper(ctx context.Context, refs UploadReferences, attachmentDir 
 		case isWithin(stash, p):
 			return true, nil
 		case isWithin(uploads, p):
-			if refs == nil {
+			if inHeldTree(uploads, p) || refs == nil {
 				return true, nil
 			}
 			if !loaded {
@@ -168,6 +174,17 @@ func AttachmentKeeper(ctx context.Context, refs UploadReferences, attachmentDir 
 			return false, nil
 		}
 	}
+}
+
+// inHeldTree reports whether path lies in a tree an account deletion holds
+// directly under dir (accountdelete.IsHeld).
+func inHeldTree(dir, path string) bool {
+	rel, err := filepath.Rel(dir, path)
+	if err != nil {
+		return false
+	}
+	first, _, _ := strings.Cut(filepath.ToSlash(rel), "/")
+	return accountdelete.IsHeld(first)
 }
 
 // isWithin reports whether path lies strictly below dir.

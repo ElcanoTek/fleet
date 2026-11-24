@@ -196,6 +196,7 @@ func (s *Server) sweepDeletedAccounts(ctx context.Context) {
 			logging.From(ctx).Error("maintenance: reading the uploads directory failed", "err", err)
 		}
 	}
+	s.resolveHeldTrees(ctx)
 	stashes := s.participantStashes()
 	emails, err := s.accountEmails(ctx)
 	if err != nil {
@@ -234,6 +235,86 @@ func (s *Server) sweepDeletedAccounts(ctx context.Context) {
 		liveEmails[e] = true
 	}
 	s.sessionApprovals.ForgetUsersExcept(liveEmails)
+}
+
+// heldTreesPerPass bounds how many trees held by account deletions one
+// maintenance pass resolves (resolveHeldTrees); the rest wait for the next.
+const heldTreesPerPass = 100
+
+// resolveHeldTrees is the maintenance pass's step for the trees an account
+// deletion held because its outcome could not be confirmed
+// (accountdelete.ResolveHeldIn): each goes back to its account's path when
+// the account it records is still there, is removed when that account is
+// gone, and otherwise waits for a later pass. Private workspace trees are
+// resolved under their conversation's swap lock, as a turn's swap moves them.
+func (s *Server) resolveHeldTrees(ctx context.Context) {
+	q, ok := s.store.(interface {
+		AccountEmailByID(context.Context, string) (string, error)
+	})
+	if !ok {
+		return
+	}
+	lookup := func(id string) (string, bool, error) {
+		email, err := q.AccountEmailByID(ctx, id)
+		switch {
+		case err == nil:
+			return email, true, nil
+		case errors.Is(err, store.ErrUserNotFound):
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	budget := heldTreesPerPass
+	var total accountdelete.HeldStats
+	resolve := func(dir string) {
+		st, err := accountdelete.ResolveHeldIn(dir, lookup, &budget)
+		total.Restored += st.Restored
+		total.Removed += st.Removed
+		total.Left += st.Left
+		if err != nil {
+			logging.From(ctx).Error("maintenance: resolving held account files failed", "dir", safe.LogSafe(dir), "err", safe.LogSafe(err.Error()))
+		}
+	}
+	if s.cfg != nil && s.cfg.EmailAttachmentDir != "" {
+		resolve(filepath.Join(s.cfg.EmailAttachmentDir, store.AttachmentUploadsDir))
+	}
+	if root, err := s.privateWorkspaceStashRoot(); err == nil && root != "" {
+		convs, _ := os.ReadDir(root)
+		for _, d := range convs {
+			convID := d.Name()
+			if budget <= 0 {
+				break
+			}
+			if !d.IsDir() || !filepath.IsLocal(convID) || strings.ContainsAny(convID, `/\`) {
+				continue
+			}
+			dir := filepath.Join(root, convID, "participants")
+			if !hasHeldTree(dir) {
+				continue
+			}
+			unlock := s.workspaceSwapLocks.lock(convID)
+			resolve(dir)
+			unlock()
+		}
+	}
+	if total != (accountdelete.HeldStats{}) {
+		logging.From(ctx).Info("maintenance: resolved files held by account deletions",
+			"restored", total.Restored, "removed", total.Removed, "left", total.Left)
+	}
+}
+
+// hasHeldTree reports whether dir has a tree an account deletion holds.
+func hasHeldTree(dir string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if accountdelete.IsHeld(e.Name()) {
+			return true
+		}
+	}
+	return false
 }
 
 // accountFilesWritable reports whether files may be written into email's

@@ -238,8 +238,10 @@ func (s *Server) handleAdminUserDelete(w http.ResponseWriter, r *http.Request, e
 }
 
 // errAccountDeleteUnconfirmed answers a deletion that did not complete and
-// after which the account could not be read back.
-const errAccountDeleteUnconfirmed = "the deletion did not complete and the account could not be read back, so its files were put back; check that it still exists and delete it again"
+// after which the account could not be read back: its files are held
+// (accountdelete.OutcomeUnconfirmedError) until the maintenance pass resolves
+// them.
+const errAccountDeleteUnconfirmed = "the deletion did not complete and the account could not be read back; its files are held until that is confirmed, and the next maintenance pass puts them back or removes them"
 
 // errAccountDeletionRunning answers a deletion of an account another
 // deletion of it is already running for (accountGate.claimDeletion).
@@ -276,11 +278,12 @@ func accountDeleteWarning(p accountdelete.Problem) error {
 // 500 for anything else.
 func writeAccountDeleteRefusal(w http.ResponseWriter, r *http.Request, err error) {
 	// The deletion did not commit and the account could not be read back:
-	// its files were put back (accountdelete.OutcomeUnconfirmedError). First,
-	// since what did not commit may itself read as "not found".
+	// its files are held for the maintenance pass
+	// (accountdelete.OutcomeUnconfirmedError). First, since what did not
+	// commit may itself read as "not found".
 	var unconfirmed *accountdelete.OutcomeUnconfirmedError
 	if errors.As(err, &unconfirmed) {
-		logging.From(r.Context()).Error("admin users: a deletion did not complete and the account could not be read back; its files were put back",
+		logging.From(r.Context()).Error("admin users: a deletion did not complete and the account could not be read back; its files are held",
 			"err", safe.LogSafe(unconfirmed.Err.Error()), "read_err", safe.LogSafe(unconfirmed.ReadErr.Error()))
 		// Fixed and short, so the page shows it whole; the causes are logged.
 		http.Error(w, errAccountDeleteUnconfirmed, http.StatusInternalServerError)
