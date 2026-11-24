@@ -323,9 +323,10 @@ func (e *FilesNotSetAsideError) Unwrap() error { return e.Err }
 // of the account still swapping does not stash its files back.
 //
 // When neither is confirmed (the account cannot be read back), the trees are
-// held (holdAside): kept beside the address under a name that records the
+// held (holdAll): kept beside the address under a name that records the
 // account's id, which no sweep removes, until the maintenance pass reads that
-// id (ResolveHeldIn) and puts them back or removes them. A live address alone
+// id (ResolveHeldIn) and puts them back or removes them. A tree that cannot
+// be held is put back, as a last resort, and the error names it. A live address alone
 // does not count as the same account: it may be a new one created after a
 // deletion that did commit. The server's marks stay, as for a deletion that
 // went through; the error is an *OutcomeUnconfirmedError. err is returned,
@@ -336,15 +337,7 @@ func settleUncommitted(ctx context.Context, st Store, email, id string, err erro
 	defer cancel()
 	gone, readErr := accountGone(checkCtx, st, email, id)
 	if readErr != nil {
-		var holdErr error
-		for _, t := range aside {
-			holdErr = firstError(holdErr, holdAside(t, Digest(email), id))
-		}
-		unconfirmed := &OutcomeUnconfirmedError{Err: err, ReadErr: readErr}
-		if holdErr != nil {
-			return fmt.Errorf("%w; holding the account's files failed: %w", unconfirmed, holdErr)
-		}
-		return unconfirmed
+		return &OutcomeUnconfirmedError{Err: err, ReadErr: readErr, HoldErr: holdAll(aside, Digest(email), id)}
 	}
 	if !gone {
 		return rollBackSetAside(err, aside, undo)
@@ -379,13 +372,18 @@ func accountGone(ctx context.Context, st Store, email, id string) (gone bool, re
 
 // OutcomeUnconfirmedError is a deletion that did not commit (Err) after
 // which the account could not be read back (ReadErr): its files are held
-// (holdAside) until the maintenance pass can tell whether the account is
-// still there, and then put back or removed.
-type OutcomeUnconfirmedError struct{ Err, ReadErr error }
+// (holdAll) until the maintenance pass can tell whether the account is still
+// there, and then put back or removed. HoldErr names each tree that could not
+// be held, and where it is (put back, as a last resort).
+type OutcomeUnconfirmedError struct{ Err, ReadErr, HoldErr error }
 
 func (e *OutcomeUnconfirmedError) Error() string {
-	return "the deletion did not complete (" + e.Err.Error() + "), and whether the account still exists could not be read afterwards (" +
+	msg := "the deletion did not complete (" + e.Err.Error() + "), and whether the account still exists could not be read afterwards (" +
 		e.ReadErr.Error() + "), so its files are held until that can be confirmed; the next maintenance pass of a running server puts them back or removes them"
+	if e.HoldErr != nil {
+		msg += "; some could not be held: " + e.HoldErr.Error()
+	}
+	return msg
 }
 
 func (e *OutcomeUnconfirmedError) Unwrap() error { return e.Err }

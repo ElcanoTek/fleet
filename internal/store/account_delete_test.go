@@ -1349,6 +1349,60 @@ func TestServerPresenceExcludesCLIDeletion(t *testing.T) {
 	}
 }
 
+// WithAccountRowByID runs its function with the account's address while a
+// deletion of the account waits for it; an id no account has runs nothing.
+func TestWithAccountRowByID(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedAccount(t, s, "row@x.com")
+	id, err := s.AccountForDeletion(ctx, "row@x.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if found, err := s.WithAccountRowByID(ctx, "not-an-id", func(string) error {
+		t.Error("ran for an id no account has")
+		return nil
+	}); found || err != nil {
+		t.Fatalf("an id no account has: found %v, err %v", found, err)
+	}
+	failed := errors.New("restore failed")
+	if found, err := s.WithAccountRowByID(ctx, id, func(string) error { return failed }); !found || !errors.Is(err, failed) {
+		t.Fatalf("a failing function: found %v, err %v; want found and its error", found, err)
+	}
+	inside, proceed := make(chan string), make(chan struct{})
+	held := make(chan error, 1)
+	go func() {
+		_, err := s.WithAccountRowByID(ctx, id, func(email string) error {
+			inside <- email
+			<-proceed
+			return nil
+		})
+		held <- err
+	}()
+	if email := <-inside; email != "row@x.com" {
+		t.Fatalf("ran with %q, want row@x.com", email)
+	}
+	deleted := make(chan error, 1)
+	go func() {
+		_, err := s.DeleteAccount(ctx, "row@x.com", id)
+		deleted <- err
+	}()
+	select {
+	case err := <-deleted:
+		close(proceed)
+		t.Fatalf("the deletion finished (err %v) while the row was held", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	close(proceed)
+	if err := <-held; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-deleted; err != nil {
+		t.Fatalf("the deletion after the row was let go: %v", err)
+	}
+}
+
 // takePresenceLockFromTheServer drops the connection a running server holds
 // its presence lock on (as a database restart does) and takes the lock
 // exclusive the moment it is free, as a CLI deletion would, on a connection

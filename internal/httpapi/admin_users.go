@@ -283,8 +283,12 @@ func writeAccountDeleteRefusal(w http.ResponseWriter, r *http.Request, err error
 	// commit may itself read as "not found".
 	var unconfirmed *accountdelete.OutcomeUnconfirmedError
 	if errors.As(err, &unconfirmed) {
-		logging.From(r.Context()).Error("admin users: a deletion did not complete and the account could not be read back; its files are held",
-			"err", safe.LogSafe(unconfirmed.Err.Error()), "read_err", safe.LogSafe(unconfirmed.ReadErr.Error()))
+		attrs := []any{"err", safe.LogSafe(unconfirmed.Err.Error()), "read_err", safe.LogSafe(unconfirmed.ReadErr.Error())}
+		if unconfirmed.HoldErr != nil {
+			// Each tree that could not be held, and where it is now.
+			attrs = append(attrs, "hold_err", safe.LogSafe(unconfirmed.HoldErr.Error()))
+		}
+		logging.From(r.Context()).Error("admin users: a deletion did not complete and the account could not be read back; its files are held", attrs...)
 		// Fixed and short, so the page shows it whole; the causes are logged.
 		http.Error(w, errAccountDeleteUnconfirmed, http.StatusInternalServerError)
 		return

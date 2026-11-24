@@ -989,6 +989,32 @@ func (s *Store) AccountEmailByID(ctx context.Context, id string) (string, error)
 	return email, err
 }
 
+// WithAccountRowByID runs fn with the address of the account id while holding
+// a key-share lock on its row (the lockAccountTx lock, by id): a deletion of
+// the account (DeleteAccount locks the row first) waits until fn returns.
+// The maintenance pass puts the files a deletion held back this way
+// (accountdelete.ResolveHeldIn), so a deletion that starts meanwhile finds
+// them where it removes the account's files. found is false, and fn not run,
+// when no account has that id; err is fn's or the database's.
+func (s *Store) WithAccountRowByID(ctx context.Context, id string, fn func(email string) error) (found bool, err error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var email string
+	switch err := tx.QueryRowContext(ctx, `SELECT email FROM core.users WHERE id::text = $1 FOR KEY SHARE`, id).Scan(&email); {
+	case errors.Is(err, sql.ErrNoRows):
+		return false, nil
+	case err != nil:
+		return false, err
+	}
+	if err := fn(email); err != nil {
+		return true, err
+	}
+	return true, tx.Commit()
+}
+
 // DeleteAccount is DeleteUser for the account expectedID (core.users.id):
 // read in the deletion's own transaction, under the account row's lock, the
 // account under email must still be that one, or nothing is deleted

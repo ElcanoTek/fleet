@@ -245,29 +245,41 @@ const heldTreesPerPass = 100
 // deletion held because its outcome could not be confirmed
 // (accountdelete.ResolveHeldIn): each goes back to its account's path when
 // the account it records is still there, is removed when that account is
-// gone, and otherwise waits for a later pass. Private workspace trees are
-// resolved under their conversation's swap lock, as a turn's swap moves them.
+// gone, and otherwise waits for a later pass. A tree goes back while its
+// account is held still: this server's claim on deleting it
+// (accountGate.claimDeletion; a tree whose account is being deleted waits
+// for the next pass) and a key-share lock on its row
+// (store.Store.WithAccountRowByID), so a deletion either finishes first, and
+// the tree is then removed, or starts after, and finds the tree where it
+// removes the account's files. Private workspace trees are resolved under
+// their conversation's swap lock too, as a turn's swap moves them.
 func (s *Server) resolveHeldTrees(ctx context.Context) {
 	q, ok := s.store.(interface {
 		AccountEmailByID(context.Context, string) (string, error)
+		WithAccountRowByID(context.Context, string, func(string) error) (bool, error)
 	})
 	if !ok {
 		return
 	}
-	lookup := func(id string) (string, bool, error) {
+	withAccount := func(id string, fn func(email string) error) (bool, error) {
 		email, err := q.AccountEmailByID(ctx, id)
 		switch {
-		case err == nil:
-			return email, true, nil
 		case errors.Is(err, store.ErrUserNotFound):
-			return "", false, nil
+			return false, nil
+		case err != nil:
+			return false, err
 		}
-		return "", false, err
+		release, ok := s.accounts.claimDeletion(email)
+		if !ok {
+			return false, accountdelete.ErrAccountBusy
+		}
+		defer release()
+		return q.WithAccountRowByID(ctx, id, fn)
 	}
 	budget := heldTreesPerPass
 	var total accountdelete.HeldStats
 	resolve := func(dir string) {
-		st, err := accountdelete.ResolveHeldIn(dir, lookup, &budget)
+		st, err := accountdelete.ResolveHeldIn(dir, withAccount, &budget)
 		total.Restored += st.Restored
 		total.Removed += st.Removed
 		total.Left += st.Left

@@ -21,6 +21,12 @@ import (
 // maintenance pass resolves it (ResolveHeldIn).
 const heldPrefix = ".held-"
 
+// holdRename is the rename holdAside makes; a test makes it fail.
+var holdRename = os.Rename
+
+// holdTries is how many held names holdAll tries for one tree.
+const holdTries = 3
+
 // holdAside renames t's set-aside tree to a held name beside it, recording
 // digest and accountID.
 func holdAside(t AsideTree, digest, accountID string) error {
@@ -29,7 +35,34 @@ func holdAside(t AsideTree, digest, accountID string) error {
 		return err
 	}
 	name := heldPrefix + digest + "-" + hex.EncodeToString([]byte(accountID)) + "-" + hex.EncodeToString(suffix[:])
-	return os.Rename(t.To, filepath.Join(filepath.Dir(t.To), name))
+	return holdRename(t.To, filepath.Join(filepath.Dir(t.To), name))
+}
+
+// holdAll holds every tree in aside (holdAside), trying holdTries names for
+// each and going on to the next tree when one fails. A tree that cannot be
+// held is put back where it was rather than left under its set-aside name,
+// which the sweeps remove whatever the account (only a tree that may go is
+// ever left under that name). It returns one error for each tree that could
+// not be held, saying where it is.
+func holdAll(aside []AsideTree, digest, accountID string) error {
+	var errs []error
+	for _, t := range aside {
+		var err error
+		for try := 0; try < holdTries; try++ {
+			if err = holdAside(t, digest, accountID); err == nil {
+				break
+			}
+		}
+		if err == nil {
+			continue
+		}
+		if rerr := os.Rename(t.To, t.From); rerr != nil {
+			errs = append(errs, fmt.Errorf("%s could not be held (%w) nor put back (%w); it is at %s", t.From, err, rerr, t.To))
+			continue
+		}
+		errs = append(errs, fmt.Errorf("%s could not be held (%w), so it was put back", t.From, err))
+	}
+	return errors.Join(errs...)
 }
 
 // IsHeld reports whether name is a tree a deletion holds (holdAside).
@@ -70,26 +103,35 @@ type HeldStats struct {
 	Left int
 }
 
+// ErrAccountBusy is what ResolveHeldIn's withAccount answers while a
+// deletion of the tree's account runs: the tree waits for a later pass.
+var ErrAccountBusy = errors.New("a deletion of the account is running")
+
 // ErrHeldEntriesLeft reports a held tree whose account is still there but
 // some of whose entries are left held: the address's path already has an
 // entry of that name (written since), which is never overwritten.
 var ErrHeldEntriesLeft = errors.New("entries the account has written again since are left held")
 
 // ResolveHeldIn resolves the trees held in dir (holdAside), at most *budget
-// of them, decrementing it. For each it reads the account by the id the name
-// records (lookup: its address, found false when no account has that id):
+// of them, decrementing it. For each it calls withAccount with the account id
+// the name records; withAccount runs its function with that account's
+// address while the account is held still (no deletion of it can run until
+// the function returns: the server claims the account and locks its row,
+// store.Store.WithAccountRowByID), and reports found false when no account
+// has that id:
 //   - the account is there under an address with the tree's digest: the tree
-//     goes back to dir/<digest>. When that path exists already (the account
-//     wrote files since), the held tree's top-level entries it does not have
-//     are moved into it; an entry it has is never overwritten, and stays held
-//     (ErrHeldEntriesLeft);
+//     goes back to dir/<digest>, inside that function. When that path exists
+//     already (the account wrote files since), the held tree's top-level
+//     entries it does not have are moved into it; an entry it has is never
+//     overwritten, and stays held (ErrHeldEntriesLeft);
 //   - no account has that id (the deletion did commit, whatever account holds
 //     the address now): the tree is removed;
-//   - the account is there under another address, or the read fails: the
-//     tree stays held for a later pass.
+//   - the account is there under another address, a deletion of it is
+//     running (ErrAccountBusy), or the read fails: the tree stays held for a
+//     later pass.
 //
 // It returns what it did and the first failure. A missing dir has none.
-func ResolveHeldIn(dir string, lookup func(accountID string) (email string, found bool, err error), budget *int) (HeldStats, error) {
+func ResolveHeldIn(dir string, withAccount func(accountID string, fn func(email string) error) (found bool, err error), budget *int) (HeldStats, error) {
 	var st HeldStats
 	entries, err := os.ReadDir(dir)
 	if os.IsNotExist(err) {
@@ -109,8 +151,17 @@ func ResolveHeldIn(dir string, lookup func(accountID string) (email string, foun
 		}
 		*budget--
 		held := filepath.Join(dir, e.Name())
-		email, found, err := lookup(id)
+		otherAddress := false
+		found, err := withAccount(id, func(email string) error {
+			if Digest(email) != digest {
+				otherAddress = true
+				return nil
+			}
+			return restoreHeld(held, filepath.Join(dir, digest))
+		})
 		switch {
+		case errors.Is(err, ErrAccountBusy):
+			st.Left++
 		case err != nil:
 			st.Left++
 			firstErr = firstError(firstErr, err)
@@ -121,14 +172,9 @@ func ResolveHeldIn(dir string, lookup func(accountID string) (email string, foun
 				continue
 			}
 			st.Removed++
-		case Digest(email) != digest:
+		case otherAddress:
 			st.Left++
 		default:
-			if err := restoreHeld(held, filepath.Join(dir, digest)); err != nil {
-				st.Left++
-				firstErr = firstError(firstErr, err)
-				continue
-			}
 			st.Restored++
 		}
 	}

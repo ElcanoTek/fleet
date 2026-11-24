@@ -211,7 +211,11 @@ advises on each demoted split admin, unknown role and duplicate username in it.
     back; an address that answers as live may hold a new account created
     after a deletion that did commit), the trees are held: renamed beside
     the address to `.held-<digest>-<hex of the account id>-…`, which no
-    sweep removes and the hourly cleanup of old uploads skips. The web route
+    sweep removes and the hourly cleanup of old uploads skips. Each tree is
+    tried under three such names; one that still cannot be held is put back
+    where it was, as a last resort, and named in the error and the log
+    (only a tree that may go is ever left under a `.removing-` name, which
+    the sweeps remove whatever the account). The web route
     then answers 500 `the deletion did not complete and the account could
     not be read back; its files are held until that is confirmed, and the
     next maintenance pass puts them back or removes them` (the server logs
@@ -220,11 +224,15 @@ advises on each demoted split admin, unknown role and duplicate username in it.
     maintenance pass resolves held trees, at most 100 per pass, by the id
     each records: the account still there under the address, the tree goes
     back (into what the account wrote since, entry by entry, never over an
-    entry it has again — that one stays held and the pass logs it); no
-    account with that id (gone, or another account holds the address), the
-    tree is removed; the account unreadable, or now under another address,
-    it stays held for a later pass. A running server resolves them, also
-    the ones a CLI deletion held. A new account's trees start empty. A
+    entry it has again — that one stays held and the pass logs it), while
+    the account is held still — the server's claim on deleting it (a tree
+    whose account is being deleted waits for the next pass) and a key-share
+    lock on its row, so a deletion from elsewhere that starts meanwhile
+    waits, then removes the tree with the rest; no account with that id
+    (gone, or another account holds the address), the tree is removed; the
+    account unreadable, or now under another address, it stays held for a
+    later pass. A running server resolves them, also the ones a CLI
+    deletion held. A new account's trees start empty. A
     tree that cannot be moved aside (its directory not writable, say), or a
     directory the move must look into that cannot be read (the attachment
     directory included; only one that is not there means nothing to move),

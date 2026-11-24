@@ -480,6 +480,80 @@ func TestDeleteWithAnUnconfirmedOutcomeHoldsTheTrees(t *testing.T) {
 	}
 }
 
+// A deletion with an unconfirmed outcome holds every tree it moved aside even
+// when holding one fails: that tree is tried under other names and, failing
+// every time, put back where it was, never left under its set-aside name
+// (which the sweeps remove whatever the account). Every other tree is held,
+// the error names the one put back, and no file is lost. Not parallel: it
+// replaces holdRename.
+func TestHoldingATreeThatFails(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		failures int
+		putBack  bool
+	}{
+		{"it fails twice, then is held", 2, false},
+		{"it always fails", 1 << 30, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			att := t.TempDir()
+			files := seedFiles(t, att, "gone@x.com")
+			conv1 := filepath.Join(PrivateWorkspaceRoot(att), "conv-1", "participants")
+			failures := tc.failures
+			holdRename = func(from, to string) error {
+				if filepath.Dir(from) == conv1 && failures > 0 {
+					failures--
+					return errors.New("no space left on device")
+				}
+				return os.Rename(from, to)
+			}
+			defer func() { holdRename = os.Rename }()
+			down := errors.New("connection refused")
+			st := &racedStore{fakeStore: fakeStore{err: errors.New("statement timeout"), liveErr: down}, afterErr: down}
+			_, err := Delete(context.Background(), st, "gone@x.com", Options{Keys: &fakeKeys{}, AttachmentDir: att})
+			var unconfirmed *OutcomeUnconfirmedError
+			if !errors.As(err, &unconfirmed) {
+				t.Fatalf("err = %v, want an OutcomeUnconfirmedError", err)
+			}
+			assertNothingAside(t, att)
+			uploads, conv2 := filepath.Join(att, "uploads"), filepath.Join(PrivateWorkspaceRoot(att), "conv-2", "participants")
+			for _, dir := range []string{uploads, conv2} {
+				if got := heldIn(t, dir); len(got) != 1 {
+					t.Errorf("held in %s: %v, want one tree", dir, got)
+				}
+			}
+			if tc.putBack {
+				if unconfirmed.HoldErr == nil || !strings.Contains(unconfirmed.HoldErr.Error(), "put back") {
+					t.Fatalf("HoldErr = %v, want it to name the tree put back", unconfirmed.HoldErr)
+				}
+				if _, err := os.Stat(files[1]); err != nil {
+					t.Errorf("the tree that could not be held is not back: %v", err)
+				}
+				if got := heldIn(t, conv1); len(got) != 0 {
+					t.Errorf("held in %s: %v, want none", conv1, got)
+				}
+			} else {
+				if unconfirmed.HoldErr != nil {
+					t.Fatalf("HoldErr = %v, want every tree held", unconfirmed.HoldErr)
+				}
+				if got := heldIn(t, conv1); len(got) != 1 {
+					t.Errorf("held in %s: %v, want one tree", conv1, got)
+				}
+			}
+			n := 0
+			_ = filepath.WalkDir(att, func(_ string, d os.DirEntry, err error) error {
+				if err == nil && d.Name() == "f.txt" {
+					n++
+				}
+				return nil
+			})
+			if n != len(files) {
+				t.Errorf("%d of the account's %d files are left", n, len(files))
+			}
+		})
+	}
+}
+
 // heldIn lists the account ids the trees held in dir record.
 func heldIn(t *testing.T, dir string) []string {
 	t.Helper()
@@ -534,18 +608,22 @@ func holdTree(t *testing.T, dir string, names ...string) {
 func TestResolveHeldIn(t *testing.T) {
 	t.Parallel()
 	email, id := heldEmail, heldID
-	lookupAs := func(found bool, addr string, err error) func(string) (string, bool, error) {
-		return func(got string) (string, bool, error) {
+	type withAccountFunc = func(string, func(string) error) (bool, error)
+	lookupAs := func(found bool, addr string, err error) withAccountFunc {
+		return func(got string, fn func(string) error) (bool, error) {
 			if got != id {
 				t.Errorf("looked up %q, want %q", got, id)
 			}
-			return addr, found, err
+			if err != nil || !found {
+				return found, err
+			}
+			return true, fn(addr)
 		}
 	}
-	resolve := func(t *testing.T, dir string, lookup func(string) (string, bool, error)) (HeldStats, error) {
+	resolve := func(t *testing.T, dir string, withAccount withAccountFunc) (HeldStats, error) {
 		t.Helper()
 		budget := 10
-		return ResolveHeldIn(dir, lookup, &budget)
+		return ResolveHeldIn(dir, withAccount, &budget)
 	}
 	t.Run("the account is still there", func(t *testing.T) {
 		t.Parallel()
@@ -610,6 +688,18 @@ func TestResolveHeldIn(t *testing.T) {
 		st, err := resolve(t, dir, lookupAs(false, "", down))
 		if !errors.Is(err, down) || st != (HeldStats{Left: 1}) {
 			t.Fatalf("stats %+v, err %v; want one left with the read's error", st, err)
+		}
+		if got := heldIn(t, dir); len(got) != 1 {
+			t.Fatalf("held: %v, want the tree still held", got)
+		}
+	})
+	t.Run("a deletion of the account is running", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		holdTree(t, dir, "tok")
+		st, err := resolve(t, dir, lookupAs(false, "", ErrAccountBusy))
+		if err != nil || st != (HeldStats{Left: 1}) {
+			t.Fatalf("stats %+v, err %v; want one left, no error", st, err)
 		}
 		if got := heldIn(t, dir); len(got) != 1 {
 			t.Fatalf("held: %v, want the tree still held", got)

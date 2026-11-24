@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1265,11 +1266,12 @@ func TestUploadRefusedForAnAccountBeingDeletedOrGone(t *testing.T) {
 	})
 }
 
-// seedAccountTrees writes a file in email's upload tree and in its private
+// seedAccountTrees writes a file in u@x.com's upload tree and in its private
 // workspace tree of one conversation under att, and returns the directories
 // those trees sit in.
-func seedAccountTrees(t *testing.T, att, email string) (uploadsParent, participants string) {
+func seedAccountTrees(t *testing.T, att string) (uploadsParent, participants string) {
 	t.Helper()
+	const email = "u@x.com"
 	uploads := accountdelete.UploadsDir(att, email)
 	participants = filepath.Join(accountdelete.PrivateWorkspaceRoot(att), "conv-1", "participants")
 	for _, f := range []string{filepath.Join(uploads, "tok", "f.txt"), filepath.Join(participants, accountdelete.Digest(email), "f.txt")} {
@@ -1307,7 +1309,7 @@ func TestSecondDeletionOfAnAccountWhileOneRunsIsRefused(t *testing.T) {
 	setRole(t, s, "boss2@x.com", "admin", "")
 	att := t.TempDir()
 	s.cfg.EmailAttachmentDir = att
-	uploadsParent, participants := seedAccountTrees(t, att, "u@x.com")
+	uploadsParent, participants := seedAccountTrees(t, att)
 	stopped, proceed := make(chan struct{}), make(chan struct{})
 	s.afterAccountWorkStopped = func() {
 		close(stopped)
@@ -1357,7 +1359,7 @@ func TestDeletionThatLosesARaceLeavesNoTreeUnderTheAddress(t *testing.T) {
 	setRole(t, s, "boss@x.com", "admin", "")
 	att := t.TempDir()
 	s.cfg.EmailAttachmentDir = att
-	uploadsParent, participants := seedAccountTrees(t, att, "u@x.com")
+	uploadsParent, participants := seedAccountTrees(t, att)
 	other := make(chan error, 1)
 	s.store = racingDeleteStore{Store: s.concreteStore(t), att: att, other: other}
 	w := do(t, s.Routes(), http.MethodDelete, "/admin/users/u@x.com", nil, "boss@x.com")
@@ -1435,7 +1437,7 @@ func TestAdminDeleteWithAnUnconfirmedOutcomeHoldsTheFiles(t *testing.T) {
 			setRole(t, s, "boss@x.com", "admin", "")
 			att := t.TempDir()
 			s.cfg.EmailAttachmentDir = att
-			uploadsParent, participants := seedAccountTrees(t, att, "u@x.com")
+			uploadsParent, participants := seedAccountTrees(t, att)
 			upload := filepath.Join(accountdelete.UploadsDir(att, "u@x.com"), "tok", "f.txt")
 			stash := filepath.Join(participants, accountdelete.Digest("u@x.com"), "f.txt")
 			st := s.concreteStore(t)
@@ -1481,6 +1483,134 @@ func TestAdminDeleteWithAnUnconfirmedOutcomeHoldsTheFiles(t *testing.T) {
 			}
 		})
 	}
+}
+
+// holdAccountTrees seeds u@x.com's trees under att and runs a deletion of it
+// whose outcome cannot be confirmed, which holds them; s's store is the real
+// one again afterwards. It returns the directories the trees are held in.
+func holdAccountTrees(t *testing.T, s *Server, att string) (st *store.Store, uploadsParent, participants string) {
+	t.Helper()
+	uploadsParent, participants = seedAccountTrees(t, att)
+	st = s.concreteStore(t)
+	down := new(atomic.Bool)
+	down.Store(true)
+	s.store = unreadableAfterFailureStore{Store: st, failed: new(atomic.Bool), down: down}
+	if w := do(t, s.Routes(), http.MethodDelete, "/admin/users/u@x.com", nil, "boss@x.com"); w.Code != http.StatusInternalServerError {
+		t.Fatalf("status %d body %s, want the unconfirmed 500", w.Code, w.Body.String())
+	}
+	s.store = st
+	if n := heldTreesUnder(t, uploadsParent, participants); n != 2 {
+		t.Fatalf("%d held trees, want 2", n)
+	}
+	return st, uploadsParent, participants
+}
+
+// insideAccountRowStore is the real store that calls inside while it holds
+// an account's row for the maintenance pass (WithAccountRowByID), before the
+// held tree goes back.
+type insideAccountRowStore struct {
+	*store.Store
+	inside func()
+}
+
+func (h insideAccountRowStore) WithAccountRowByID(ctx context.Context, id string, fn func(string) error) (bool, error) {
+	return h.Store.WithAccountRowByID(ctx, id, func(email string) error {
+		h.inside()
+		return fn(email)
+	})
+}
+
+// A held tree goes back while its account is held still. A deletion of the
+// account from this server meanwhile is refused (409: the maintenance pass
+// holds the claim), and a deletion that does not go through this server's
+// claim (another process's) waits for the account's row and then removes the
+// tree with the rest. Either way nothing of the deleted account is left under
+// its address.
+func TestHeldTreeGoesBackWhileItsAccountIsHeldStill(t *testing.T) {
+	t.Parallel()
+	setup := func(t *testing.T) (*Server, *store.Store, string, []string) {
+		s := memberFixture(t, "boss@x.com", "u@x.com")
+		setRole(t, s, "boss@x.com", "admin", "")
+		att := t.TempDir()
+		s.cfg.EmailAttachmentDir = att
+		st, uploadsParent, participants := holdAccountTrees(t, s, att)
+		return s, st, att, []string{uploadsParent, participants}
+	}
+	// blockFirst makes the pass wait, inside the first account row it holds,
+	// until proceed is closed; locked is closed once it is there.
+	blockFirst := func(s *Server, st *store.Store) (locked, proceed chan struct{}) {
+		locked, proceed = make(chan struct{}), make(chan struct{})
+		var once sync.Once
+		s.store = insideAccountRowStore{Store: st, inside: func() {
+			once.Do(func() { close(locked) })
+			<-proceed
+		}}
+		return locked, proceed
+	}
+	nothingLeft := func(t *testing.T, dirs []string) {
+		t.Helper()
+		assertNoTreeUnder(t, "u@x.com", dirs...)
+		if n := heldTreesUnder(t, dirs...); n != 0 {
+			t.Errorf("%d held trees left", n)
+		}
+	}
+
+	t.Run("a deletion from this server", func(t *testing.T) {
+		t.Parallel()
+		s, st, att, dirs := setup(t)
+		locked, proceed := blockFirst(s, st)
+		swept := make(chan struct{})
+		go func() { defer close(swept); s.sweepDeletedAccounts(context.Background()) }()
+		<-locked
+		answer := make(chan *httptest.ResponseRecorder, 1)
+		go func() { answer <- do(t, s.Routes(), http.MethodDelete, "/admin/users/u@x.com", nil, "boss@x.com") }()
+		select {
+		case w := <-answer:
+			if w.Code != http.StatusConflict {
+				t.Errorf("a deletion while the tree goes back: status %d body %s, want 409", w.Code, w.Body.String())
+			}
+		case <-time.After(5 * time.Second):
+			t.Error("a deletion while the tree goes back was not refused")
+		}
+		close(proceed)
+		<-swept
+		if _, err := os.Stat(filepath.Join(accountdelete.UploadsDir(att, "u@x.com"), "tok", "f.txt")); err != nil {
+			t.Fatalf("the upload tree is not back: %v", err)
+		}
+		s.store = st
+		if w := do(t, s.Routes(), http.MethodDelete, "/admin/users/u@x.com", nil, "boss@x.com"); w.Code != http.StatusNoContent {
+			t.Fatalf("the deletion afterwards: status %d body %s, want 204", w.Code, w.Body.String())
+		}
+		nothingLeft(t, dirs)
+	})
+
+	t.Run("a deletion from another process", func(t *testing.T) {
+		t.Parallel()
+		s, st, att, dirs := setup(t)
+		locked, proceed := blockFirst(s, st)
+		swept := make(chan struct{})
+		go func() { defer close(swept); s.sweepDeletedAccounts(context.Background()) }()
+		<-locked
+		deleted := make(chan error, 1)
+		go func() {
+			_, err := accountdelete.Delete(context.Background(), st, "u@x.com", accountdelete.Options{AttachmentDir: att})
+			deleted <- err
+		}()
+		var err error
+		select {
+		case err = <-deleted:
+			t.Errorf("the deletion finished (err %v) while the account's row was held", err)
+			close(proceed)
+		case <-time.After(500 * time.Millisecond):
+			close(proceed)
+			err = <-deleted
+		}
+		<-swept
+		if err != nil {
+			t.Fatalf("the deletion: %v", err)
+		}
+		nothingLeft(t, dirs)
+	})
 }
 
 // presenceStore is the real store whose presence lock this test says is
