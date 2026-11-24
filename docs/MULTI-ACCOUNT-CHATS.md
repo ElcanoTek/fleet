@@ -87,8 +87,13 @@ accounts and their tool-name prefixes, with four rules: a call acts on the one
 account in its tool name and ids do not cross accounts; name the account in
 every answer and before every action; ask when a request does not say which
 account; a change for several accounts is one call and one approval per
-account. The section is sorted and has no counters, so it is byte-stable for
-the same choice ([PROMPT-CACHE-CONTRACT.md](PROMPT-CACHE-CONTRACT.md)). A turn
+account. It is built from the turn scope's own tool catalog, not from the
+request: an account is a best-effort server and can fail to connect while the
+connector's other accounts come up. Such an account is listed as "NOT
+available this turn" with no tool prefix, and a fifth rule tells the assistant
+to say so and never do its work on another account. The section is sorted and
+has no counters, so it is byte-stable for the same choice and the same
+connections ([PROMPT-CACHE-CONTRACT.md](PROMPT-CACHE-CONTRACT.md)). A turn
 with one account per connector gets no section and an unchanged prompt.
 
 ### The picker

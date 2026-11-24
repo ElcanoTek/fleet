@@ -1814,7 +1814,6 @@ func (m *Manager) composeTurnSystemPrompt(ctx context.Context, in TurnInput, per
 			notes = got
 		}
 	}
-	hosted.multiAccount = multiAccountConnectors(in.OptionalMCPServersEnabled, in.MCPAccountDefaults, in.MCPExtraAccounts)
 	systemPrompt, err := m.buildSystemPrompt(persona, in.UserPersona, in.ConversationID, in.Memories, in.ProjectInstructions, notes, in.OptionalMCPServersEnabled, in.UserSkills, hosted, hidden)
 	if err != nil {
 		return "", fmt.Errorf("compose system prompt: %w", err)
@@ -2088,6 +2087,9 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 	if enableConnectorsWired {
 		hosted.availableOptional = in.AvailableOptionalMCPServers
 	}
+	// From the scope's own catalog, not the request: an account that failed to
+	// connect while its siblings came up must not be described as callable.
+	hosted.multiAccount = multiAccountConnectors(in.OptionalMCPServersEnabled, in.MCPAccountDefaults, in.MCPExtraAccounts, turnCatalog)
 	systemPrompt, err := m.composeTurnSystemPrompt(ctx, in, persona, hosted, hiddenTools)
 	if err != nil {
 		return nil, err
