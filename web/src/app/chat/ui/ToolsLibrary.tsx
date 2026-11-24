@@ -27,6 +27,7 @@ import {
   type PickerCategory,
   type PickerConnector,
 } from "./toolsPicker";
+import { allowsSeveralAccounts } from "./mcpAccounts";
 import { Highlight, SeatMenu, StatusDot, StatusIcon, StatusKicker, ToolSwitch } from "./ToolsPickerParts";
 
 // The Tools library: every connection, opened from the popover's expand icon
@@ -55,7 +56,7 @@ export type ToolsLibraryProps = {
   onClose: () => void;
   onToggle: (name: string) => void;
   onSetEnabled: (names: string[], enabled: boolean) => void;
-  onSetAccount: (name: string, account: string) => void;
+  onSetAccount: (name: string, accounts: string[]) => void;
 };
 
 // The rail's headings; below md the chips speak for themselves (each nav keeps
@@ -388,7 +389,7 @@ export function ToolsLibrary({
                   toolsOpen={toolsOpen}
                   onToggleTools={() => setToolsOpen((v) => !v)}
                   onToggle={() => onToggle(current.name)}
-                  onSetAccount={(account) => onSetAccount(current.name, account)}
+                  onSetAccount={(accounts) => onSetAccount(current.name, accounts)}
                 />
               ) : null}
             </section>
@@ -506,7 +507,7 @@ function Detail({
   toolsOpen: boolean;
   onToggleTools: () => void;
   onToggle: () => void;
-  onSetAccount: (account: string) => void;
+  onSetAccount: (accounts: string[]) => void;
 }) {
   const status = connectorStatus(c);
   const name = connectorLabel(c);
@@ -545,7 +546,7 @@ function Detail({
       ) : null}
       {hasSeats ? (
         <div className="flex flex-col gap-1.5">
-          <div className="text-[0.75rem] text-[var(--color-text-subtle)]">{tr("Account for this chat")}</div>
+          <div className="text-[0.75rem] text-[var(--color-text-subtle)]">{allowsSeveralAccounts(c) ? tr("Accounts for this chat") : tr("Account for this chat")}</div>
           <SeatMenu connector={c} appName={appName} variant="field" onChange={onSetAccount} />
         </div>
       ) : null}

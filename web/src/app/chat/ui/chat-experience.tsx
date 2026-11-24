@@ -83,7 +83,13 @@ import {
   type Message,
 } from "./history";
 import { type ModelPrices } from "@/app/shared/lib/modelCost";
-import { mcpAccountOverrides } from "./mcpAccounts";
+import {
+  mcpAccountOverrides,
+  parseAccountChoices,
+  sameAccounts,
+  selectedAccounts,
+  withSelectedAccounts,
+} from "./mcpAccounts";
 import { allocMessageIds } from "./messageIds";
 import {
   attachDeferredApprovals,
@@ -193,7 +199,12 @@ import {
 import { Composer } from "./Composer";
 import { mergeComposerSkills, type SkillInfo } from "./skillSlash";
 import { ChatTranscript } from "./ChatTranscript";
-import { ConnectorNamesContext, connectorNames } from "./approvalToolLabel";
+import {
+  ConnectorNamesContext,
+  DefaultAccountLabelsContext,
+  connectorNames,
+  defaultAccountLabels,
+} from "./approvalToolLabel";
 import { usePerConvComposerState } from "./usePerConvComposerState";
 import { useTurnStreamState } from "./useTurnStreamState";
 import {
@@ -455,6 +466,10 @@ export type MCPServerInfo = {
    *  Pre-chat it lives only in local state and rides on the first POST
    *  /api/chat as `mcp_accounts`. */
   account?: string;
+  /** The whole choice when a bundled connector runs as several accounts in
+   *  this conversation (docs/MULTI-ACCOUNT-CHATS.md): default ("") first,
+   *  `account` its first entry. Absent on one account. */
+  selected_accounts?: string[];
   /** A per-user remote (hosted) connection rather than a bundled connector. */
   remote?: boolean;
   /** A non-optional bundle connector. Informational and never persisted in
@@ -944,6 +959,16 @@ export function ChatExperience({
   const connectorNameMap = useMemo(
     () => connectorNames((JSON.parse(connectorNameKey) as [string, string][]).map(([name, display_name]) => ({ name, display_name }))),
     [connectorNameKey],
+  );
+  // Connectors this chat runs as several accounts: their approval cards name
+  // the default account too (approvalToolLabel.ts). Keyed on the names, for
+  // the same reason as above; empty for a chat with one account each.
+  const severalAccountsKey = JSON.stringify(
+    [...defaultAccountLabels(mcpServers, branding.app_name).keys()],
+  );
+  const defaultAccountLabelMap = useMemo(
+    () => new Map((JSON.parse(severalAccountsKey) as string[]).map((name) => [name, branding.app_name])),
+    [severalAccountsKey, branding.app_name],
   );
   // The Tools picker's category headings, in order, from the same catalog
   // responses (empty until the first one answers; the picker falls back).
@@ -2484,19 +2509,20 @@ export function ChatExperience({
     await postMcpServerState(conversationId, nextServers, prev);
   };
 
-  // setMcpServerAccount records which credential seat (login) a server
-  // should use in this conversation ("" = the user's default seat). Same
-  // optimistic-update + full-state POST + re-read-on-failure shape as the
-  // toggle above; pre-chat the choice stays local and rides on the first
-  // POST /chat body as `mcp_accounts`.
+  // setMcpServerAccount records which credential seats (logins) a server
+  // should use in this conversation: one account, or several for a bundled
+  // connector ("" = the user's default seat). Same optimistic-update +
+  // full-state POST + re-read-on-failure shape as the toggle above; pre-chat
+  // the choice stays local and rides on the first POST /chat body as
+  // `mcp_accounts`.
   const setMcpServerAccount = async (
     conversationId: string | null,
     name: string,
-    account: string,
+    accounts: string[],
   ) => {
     const prev = mcpServers;
     const nextServers = prev.map((s) =>
-      s.name === name ? { ...s, account } : s,
+      s.name === name ? withSelectedAccounts(s, accounts) : s,
     );
     supersedeMcpCatalogLoads();
     setMcpServers(nextServers);
@@ -2590,7 +2616,7 @@ export function ChatExperience({
     const edited = new Set<string>();
     for (const row of next) {
       const old = before.get(row.name);
-      if (old && (old.enabled !== row.enabled || old.account !== row.account)) {
+      if (old && (old.enabled !== row.enabled || !sameAccounts(old, row))) {
         edited.add(row.name);
       }
     }
@@ -2600,7 +2626,9 @@ export function ChatExperience({
     const sent = next.map((row) => {
       if (edited.has(row.name)) return row;
       const b = base.get(row.name);
-      return b ? { ...row, enabled: b.enabled, account: b.account } : row;
+      return b
+        ? withSelectedAccounts({ ...row, enabled: b.enabled }, selectedAccounts(b))
+        : row;
     });
     const requested = enabledOptionalMcpServerNames(sent);
     const baseRows = held ?? prev;
@@ -2642,13 +2670,7 @@ export function ChatExperience({
       // response's `accounts` is what was persisted; an older server that
       // omits it is trusted to have taken what was sent.
       const persistedAccounts =
-        body.accounts && typeof body.accounts === "object"
-          ? Object.fromEntries(
-              Object.entries(body.accounts as Record<string, unknown>).filter(
-                (e): e is [string, string] => typeof e[1] === "string",
-              ),
-            )
-          : mcpAccountOverrides(sent);
+        parseAccountChoices(body.accounts) ?? mcpAccountOverrides(sent);
       // Reconciling the CURRENT rows (not this request's snapshot) keeps
       // anything a catalog load put there meanwhile.
       if (isLatest() && stillShown()) {
@@ -5785,7 +5807,7 @@ export function ChatExperience({
     // Then refresh the preview in the background so prefs changed since
     // startup are picked up.
     setMcpServers((prev) =>
-      prev.map((s) => ({ ...s, enabled: seedServerEnabled(s), account: "" })),
+      prev.map((s) => withSelectedAccounts({ ...s, enabled: seedServerEnabled(s) }, [""])),
     );
     void loadMcpServerCatalogPreviewRef.current();
     // Lockdown is set per-conversation. New regular chat clears it;
@@ -8898,6 +8920,7 @@ export function ChatExperience({
             <OutputShareContext.Provider value={outputShareMarkers}>
             <WithheldFilesContext.Provider value={withheldFiles}>
             <ConnectorNamesContext.Provider value={connectorNameMap}>
+            <DefaultAccountLabelsContext.Provider value={defaultAccountLabelMap}>
             <ChatTranscript
               conversationRef={conversationRef}
               streamEndRef={streamEndRef}
@@ -8986,6 +9009,7 @@ export function ChatExperience({
               onPauseAutoSubmit={handlePauseAutoSubmit}
               onAutoSubmitDue={handleAutoSubmitDue}
             />
+            </DefaultAccountLabelsContext.Provider>
             </ConnectorNamesContext.Provider>
             </WithheldFilesContext.Provider>
             </OutputShareContext.Provider>

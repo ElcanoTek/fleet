@@ -61,12 +61,19 @@ func (s *Server) availableOptionalConnectorsForUser(ctx context.Context, user st
 		if !avail {
 			continue
 		}
-		if o := strings.TrimSpace(overrides[info.Name]); o != "" && slices.Contains(info.Accounts, o) {
-			seat = o
-		} else if o := strings.TrimSpace(overrides[key]); o != "" && slices.Contains(info.Accounts, o) {
-			seat = o
+		// Every account the conversation would run the connector as: a
+		// connector that is off keeps its account choice, and a persona policy
+		// can permit one account's tool names and not another's, so whether
+		// the persona may use it at all is asked of each (ToolSeats).
+		override := overrides[info.Name]
+		if strings.TrimSpace(override) == "" {
+			override = overrides[key]
 		}
-		info.SelectedAccount = seat
+		accounts := bundledTurnAccounts(info, override, seat)
+		info.SelectedAccount = accounts[0]
+		if len(accounts) > 1 {
+			info.SelectedAccounts = accounts
+		}
 		seen[key] = true
 		out = append(out, info)
 	}
@@ -384,11 +391,13 @@ func connectorPermittedInChat(info agent.OptionalServerInfo, hidden []string, po
 	if name == "" || name == agent.OptionalNativeImageGenName || info.Remote {
 		return false
 	}
-	regServer := agentcore.RegisteredMCPName(info.Name, info.SelectedAccount)
-	for _, t := range info.Tools {
-		full := agentcore.MCPToolName(regServer, t)
-		if !agentcore.InteractiveHiddenIn(hidden, full) && agentcore.PersonaPermitsTool(policy, full) {
-			return true
+	for _, seat := range info.ToolSeats() {
+		regServer := agentcore.RegisteredMCPName(info.Name, seat)
+		for _, t := range info.Tools {
+			full := agentcore.MCPToolName(regServer, t)
+			if !agentcore.InteractiveHiddenIn(hidden, full) && agentcore.PersonaPermitsTool(policy, full) {
+				return true
+			}
 		}
 	}
 	return false

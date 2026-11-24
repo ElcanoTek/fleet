@@ -275,7 +275,7 @@ export type ComposerProps = {
   setMcpServerAccount: (
     conversationId: string | null,
     name: string,
-    account: string,
+    accounts: string[],
   ) => void | Promise<void>;
 
   // Context usage / compaction
@@ -1322,8 +1322,8 @@ export function Composer({
                     onSetEnabled={(names, enabled) =>
                       void setMcpServersEnabled(activeConversationId, names, enabled)
                     }
-                    onSetAccount={(name, account) =>
-                      void setMcpServerAccount(activeConversationId, name, account)
+                    onSetAccount={(name, accounts) =>
+                      void setMcpServerAccount(activeConversationId, name, accounts)
                     }
                     onClose={() => {
                       setMcpPickerOpen(false);
@@ -1350,8 +1350,8 @@ export function Composer({
                     onSetEnabled={(names, enabled) =>
                       void setMcpServersEnabled(activeConversationId, names, enabled)
                     }
-                    onSetAccount={(name, account) =>
-                      void setMcpServerAccount(activeConversationId, name, account)
+                    onSetAccount={(name, accounts) =>
+                      void setMcpServerAccount(activeConversationId, name, accounts)
                     }
                   />
                 ) : null}

@@ -265,7 +265,10 @@ func TestManagerRunTurn_OpensAndClosesScopedMCP(t *testing.T) {
 		ConversationID:            "scope-test",
 		OptionalMCPServersEnabled: []string{"optional_on"},
 		MCPAccountDefaults:        map[string]string{"mandatory": "primary", "optional_on": "backup"},
-		MCPUser:                   agentcore.NewMCPUserIdentity("elyse@example.com"),
+		// A second account of the opted-in server is its own scope entry; one
+		// for a server that is off is not.
+		MCPExtraAccounts: map[string][]string{"optional_on": {"second"}, "optional_off": {"x"}},
+		MCPUser:          agentcore.NewMCPUserIdentity("elyse@example.com"),
 	}, &recordingSink{})
 	if err != nil {
 		t.Fatalf("RunTurn: %v", err)
@@ -278,6 +281,7 @@ func TestManagerRunTurn_OpensAndClosesScopedMCP(t *testing.T) {
 	want := agentcore.MCPSelection{
 		{Server: "mandatory", Account: "primary"},
 		{Server: "optional_on", Account: "backup"},
+		{Server: "optional_on", Account: "second"},
 	}
 	if !reflect.DeepEqual(gotSelection, want) {
 		t.Fatalf("scope selection = %#v, want %#v", gotSelection, want)

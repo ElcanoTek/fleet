@@ -83,15 +83,22 @@ func (s *Server) chatTaskConnectorsFor(user, convID string) func(context.Context
 		if conv == nil {
 			return out, nil
 		}
-		enabled, accounts := s.applyConnectorPrefs(ctx, user, s.effectiveOptionalMCPServersForCaller(ctx, user, conv), conv.MCPAccounts)
-		for _, name := range enabled {
-			name = strings.TrimSpace(name)
+		enabled, accounts, extra := s.applyConnectorPrefs(ctx, user, s.effectiveOptionalMCPServersForCaller(ctx, user, conv), conv.MCPAccounts)
+		for _, rawName := range enabled {
+			name := strings.TrimSpace(rawName)
 			if name == "" {
 				continue
 			}
-			out.Selection = append(out.Selection, TaskConnector{Server: name, Account: accounts[name]})
+			out.Selection = append(out.Selection, TaskConnector{Server: name, Account: accounts[rawName]})
+			// A connector the chat runs as several accounts pins every one of
+			// them, one {server, account} entry each, in the chat's order
+			// (docs/MULTI-ACCOUNT-CHATS.md).
+			for _, account := range extra[rawName] {
+				out.Selection = append(out.Selection, TaskConnector{Server: name, Account: account})
+			}
 		}
-		sort.Slice(out.Selection, func(i, j int) bool { return out.Selection[i].Server < out.Selection[j].Server })
+		// Stable, so one connector's accounts keep the order above.
+		sort.SliceStable(out.Selection, func(i, j int) bool { return out.Selection[i].Server < out.Selection[j].Server })
 		return out, nil
 	}
 }

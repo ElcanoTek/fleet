@@ -64,7 +64,7 @@ type chatRequest struct {
 	// (#988; server name → account label) alongside EnabledOptional, so a
 	// seat picked before the first message sticks. Same rules as POST
 	// /conversations/{id}/mcp-servers: an unknown seat fails the request.
-	MCPAccounts map[string]string `json:"mcp_accounts,omitempty"`
+	MCPAccounts map[string]mcpAccountChoice `json:"mcp_accounts,omitempty"`
 	// Lockdown mirrors createConversationRequest.Lockdown — honored
 	// only when no ConversationID is provided (lockdown is set once
 	// at conversation creation and immutable thereafter).
@@ -1113,7 +1113,7 @@ func buildUserMessageEvent(message, inputKind, injected string, conv *store.Conv
 // toggleable) so a bad frontend can't persist garbage (mirrors POST
 // /conversations/{id}/mcp-servers); a seat the user does not hold is a 400
 // rather than a silent drop. Returns false after writing an error response.
-func (s *Server) seedConversationMCP(w http.ResponseWriter, r *http.Request, user string, conv *store.Conversation, enabledOptional []string, mcpAccounts map[string]string, autoApprove *bool, approvalMode *string) bool {
+func (s *Server) seedConversationMCP(w http.ResponseWriter, r *http.Request, user string, conv *store.Conversation, enabledOptional []string, mcpAccounts map[string]mcpAccountChoice, autoApprove *bool, approvalMode *string) bool {
 	var parsedMode string
 	if approvalMode != nil {
 		var ok bool
@@ -1307,7 +1307,7 @@ func (s *Server) runTurnAsync(
 	// Availability layer (unified connector UX): drop opted-in servers the
 	// user has since disabled on the connections page, and carry their default
 	// credential-account seats into the turn.
-	optionalEnabled, accountDefaults := s.applyConnectorPrefs(turnCtx, user, s.effectiveOptionalMCPServersForCaller(turnCtx, user, conv), conv.MCPAccounts)
+	optionalEnabled, accountDefaults, extraAccounts := s.applyConnectorPrefs(turnCtx, user, s.effectiveOptionalMCPServersForCaller(turnCtx, user, conv), conv.MCPAccounts)
 
 	// User-authored skills (docs/SKILLS.md phase 2): sync the caller's active
 	// skills into this conversation's workspace and hand the roster to the
@@ -1350,6 +1350,7 @@ func (s *Server) runTurnAsync(
 		OptionalMCPServersEnabled:   optionalEnabled,
 		AvailableOptionalMCPServers: availableOptional,
 		MCPAccountDefaults:          accountDefaults,
+		MCPExtraAccounts:            extraAccounts,
 		UserSkills:                  userSkills,
 		SkillProposer:               &skillProposer{ctx: turnCtx, store: s.store, user: user},
 		Lockdown:                    conv.Lockdown,

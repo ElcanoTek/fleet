@@ -112,6 +112,15 @@ type TurnInput struct {
 	// of failing the turn.
 	MCPAccountDefaults map[string]string
 
+	// MCPExtraAccounts lists, per opted-in bundled server, the accounts the
+	// conversation runs it as IN ADDITION to MCPAccountDefaults[server]
+	// (docs/MULTI-ACCOUNT-CHATS.md); "" is the default seat. Each becomes its
+	// own {server, account} selection entry: a separate credentialed process
+	// whose tools carry the account in their names. nil for every
+	// conversation that uses one account per connector, which is then bound
+	// exactly as before. Validated by the HTTP layer like MCPAccountDefaults.
+	MCPExtraAccounts map[string][]string
+
 	// Memories are user-scoped long-term facts injected into the system prompt.
 	// Project-scoped shared memories (#509) ride the same slice, prefixed
 	// "[project] " by the HTTP layer.
@@ -1842,8 +1851,10 @@ func assembleTurnMessages(ctx context.Context, in TurnInput, now time.Time) ([]f
 
 // interactiveRunSelection maps the conversation's opt-in list to the per-run
 // MCP selection (default account). agentcore.buildFantasyTools registers the
-// opted-in servers' tools through the InteractivePolicy gate.
-func interactiveRunSelection(enabled []string, accountDefaults map[string]string) agentcore.MCPSelection {
+// opted-in servers' tools through the InteractivePolicy gate. A server the
+// conversation runs as several accounts contributes one entry per account
+// (extraAccounts), its first account first.
+func interactiveRunSelection(enabled []string, accountDefaults map[string]string, extraAccounts map[string][]string) agentcore.MCPSelection {
 	selection := make(agentcore.MCPSelection, 0, len(enabled))
 	for _, name := range enabled {
 		if n := strings.TrimSpace(name); n != "" {
@@ -1851,7 +1862,24 @@ func interactiveRunSelection(enabled []string, accountDefaults map[string]string
 			// turn is supervised, so the per-user default is the right seat —
 			// scheduled tasks pin their own {server, account} explicitly.
 			selection = append(selection, agentcore.MCPChoice{Server: n, Account: accountDefaults[n]})
+			selection = appendExtraAccountChoices(selection, n, accountDefaults[n], extraAccounts[n])
 		}
+	}
+	return selection
+}
+
+// appendExtraAccountChoices adds one selection entry per additional account of
+// server, skipping any that names the first account again (the binder would
+// refuse nothing, but the entry would be noise in the scope and the prompt).
+func appendExtraAccountChoices(selection agentcore.MCPSelection, server, first string, extra []string) agentcore.MCPSelection {
+	seen := map[string]bool{creds.CanonicalAccount(first): true}
+	for _, account := range extra {
+		key := creds.CanonicalAccount(account)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		selection = append(selection, agentcore.MCPChoice{Server: server, Account: account})
 	}
 	return selection
 }
@@ -1993,7 +2021,7 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 	// Two reads could disagree, which would show up as a tool the loop
 	// advertises and the broker then refuses.
 	turnAllowlist, turnOptional := m.mcpGates()
-	turnSelection := m.scopeSelection(in.OptionalMCPServersEnabled, in.MCPAccountDefaults)
+	turnSelection := m.scopeSelection(in.OptionalMCPServersEnabled, in.MCPAccountDefaults, in.MCPExtraAccounts)
 	turnBroker, turnCatalog, releaseMCPScope, err := m.openTurnMCPScope(ctx, turnSelection,
 		MCPScopePolicy{ToolAllowlist: agentcore.MCPAllowlist(turnAllowlist)}, workspace, in.MCPUser)
 	if err != nil {
@@ -2093,7 +2121,7 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 		maxTokens = 16384
 	}
 
-	selection := interactiveRunSelection(in.OptionalMCPServersEnabled, in.MCPAccountDefaults)
+	selection := interactiveRunSelection(in.OptionalMCPServersEnabled, in.MCPAccountDefaults, in.MCPExtraAccounts)
 
 	tc := TurnConfig{
 		SystemPrompt: systemPrompt,

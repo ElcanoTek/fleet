@@ -870,17 +870,24 @@ func (m *Manager) availableOptionalForPrompt(persona string, enabledOptIns []str
 		if safeName == "" || enabled[safeName] || seen[safeName] || len(safeOwners[safeName]) > 1 {
 			continue
 		}
+		// The most tools any one of the conversation's accounts would offer:
+		// a persona policy is written against registered tool names, so it
+		// can permit one account of a connector and not another.
 		visibleTools := 0
-		regServer := agentcore.RegisteredMCPName(srv.Name, srv.SelectedAccount)
-		for _, t := range srv.Tools {
-			full := agentcore.MCPToolName(regServer, t)
-			if agentcore.InteractiveHiddenIn(hidden, full) {
-				continue
+		for _, seat := range srv.ToolSeats() {
+			regServer := agentcore.RegisteredMCPName(srv.Name, seat)
+			visible := 0
+			for _, t := range srv.Tools {
+				full := agentcore.MCPToolName(regServer, t)
+				if agentcore.InteractiveHiddenIn(hidden, full) {
+					continue
+				}
+				if !agentcore.PersonaPermitsTool(policy, full) {
+					continue
+				}
+				visible++
 			}
-			if !agentcore.PersonaPermitsTool(policy, full) {
-				continue
-			}
-			visibleTools++
+			visibleTools = max(visibleTools, visible)
 		}
 		if visibleTools == 0 {
 			continue

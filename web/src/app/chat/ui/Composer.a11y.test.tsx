@@ -213,7 +213,9 @@ describe("Composer — tools popover seat menu", () => {
     expect(toggleMcpServer).not.toHaveBeenCalled();
     fireEvent.mouseDown(screen.getByRole("option", { name: /personal/ }));
     fireEvent.click(screen.getByRole("option", { name: /personal/ }));
-    expect(setMcpServerAccount).toHaveBeenCalledWith(null, "gamma", "personal");
+    // A hosted connection runs as one account per chat: picking replaces.
+    expect(setMcpServerAccount).toHaveBeenCalledWith(null, "gamma", ["personal"]);
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
     expect(toggleMcpServer).not.toHaveBeenCalled();
     // The popover is still open.
     expect(screen.getByTestId("chat-tools-popover")).toBeInTheDocument();
@@ -232,6 +234,90 @@ describe("Composer — tools popover seat menu", () => {
     expect(
       Array.from(screen.getByRole("listbox").querySelectorAll('[role="option"]')).map((o) => o.textContent),
     ).toEqual(["ElcanoDefault", "OMG_USD", "OMG_GBP"]);
+  });
+
+  // A bundled connector can run as several accounts in one chat
+  // (docs/MULTI-ACCOUNT-CHATS.md): its menu is a checklist that stays open.
+  it("a bundled connector's menu ticks accounts and stays open", async () => {
+    const setMcpServerAccount = vi.fn();
+    const toggleMcpServer = vi.fn();
+    render(<Host overrides={{ mcpServers: SEATED, toggleMcpServer, setMcpServerAccount }} />);
+    fireEvent.click(screen.getByRole("button", { name: "Tools" }));
+    fireEvent.click(await screen.findByTestId("mcp-seat-ix"));
+    const list = screen.getByRole("listbox", { name: "Accounts for Index Exchange" });
+    expect(list).toHaveAttribute("aria-multiselectable", "true");
+
+    // The only ticked account cannot be unticked: the switch turns it off.
+    const house = screen.getByRole("option", { name: /Elcano/ });
+    expect(house).toHaveAttribute("aria-selected", "true");
+    expect(house).toHaveAttribute("aria-disabled", "true");
+    fireEvent.click(house);
+    expect(setMcpServerAccount).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("option", { name: /OMG_GBP/ }));
+    expect(setMcpServerAccount).toHaveBeenCalledWith(null, "ix", ["", "OMG_GBP"]);
+    expect(screen.getByRole("listbox")).toBeInTheDocument();
+    expect(toggleMcpServer).not.toHaveBeenCalled();
+  });
+
+  it("the pill reads the first account and how many more, and unticking removes one", async () => {
+    const setMcpServerAccount = vi.fn();
+    const rows = SEATED.map((row) =>
+      row.name === "ix" ? { ...row, account: "", selected_accounts: ["", "OMG_USD", "OMG_GBP"] } : row,
+    );
+    render(<Host overrides={{ mcpServers: rows, setMcpServerAccount }} />);
+    fireEvent.click(screen.getByRole("button", { name: "Tools" }));
+    const trigger = await screen.findByTestId("mcp-seat-ix");
+    expect(trigger).toHaveTextContent("Elcano +2");
+    expect(trigger).toHaveAccessibleName("Accounts for Index Exchange: Elcano, OMG_USD, OMG_GBP");
+    fireEvent.click(trigger);
+    expect(
+      screen.getAllByRole("option").filter((o) => o.getAttribute("aria-selected") === "true"),
+    ).toHaveLength(3);
+    fireEvent.click(screen.getByRole("option", { name: /Elcano/ }));
+    expect(setMcpServerAccount).toHaveBeenCalledWith(null, "ix", ["OMG_USD", "OMG_GBP"]);
+  });
+
+  // The server stores the user's default by name when a list holds it. The
+  // menu lists that account once, as its default row, which must read as
+  // ticked and untick the name.
+  it("a default account chosen by name is the default row", async () => {
+    const setMcpServerAccount = vi.fn();
+    const rows = SEATED.map((row) =>
+      row.name === "ix"
+        ? { ...row, default_account: "OMG_USD", account: "OMG_USD", selected_accounts: ["OMG_USD", "OMG_GBP"] }
+        : row,
+    );
+    render(<Host overrides={{ mcpServers: rows, setMcpServerAccount }} />);
+    fireEvent.click(screen.getByRole("button", { name: "Tools" }));
+    const trigger = await screen.findByTestId("mcp-seat-ix");
+    expect(trigger).toHaveTextContent("OMG_USD +1");
+    fireEvent.click(trigger);
+    const options = screen.getAllByRole("option");
+    expect(options.map((o) => [o.textContent, o.getAttribute("aria-selected")])).toEqual([
+      ["OMG_USDDefault", "true"],
+      ["OMG_GBP", "true"],
+    ]);
+    fireEvent.click(options[0]);
+    expect(setMcpServerAccount).toHaveBeenCalledWith(null, "ix", ["OMG_GBP"]);
+  });
+
+  it("stops offering accounts at the cap", async () => {
+    const setMcpServerAccount = vi.fn();
+    const accounts = ["a", "b", "c", "d", "e", "f", "g"];
+    const rows = SEATED.map((row) =>
+      row.name === "ix"
+        ? { ...row, accounts, account: "a", selected_accounts: accounts.slice(0, 6) }
+        : row,
+    );
+    render(<Host overrides={{ mcpServers: rows, setMcpServerAccount }} />);
+    fireEvent.click(screen.getByRole("button", { name: "Tools" }));
+    fireEvent.click(await screen.findByTestId("mcp-seat-ix"));
+    const seventh = screen.getByRole("option", { name: "g" });
+    expect(seventh).toHaveAttribute("aria-disabled", "true");
+    fireEvent.click(seventh);
+    expect(setMcpServerAccount).not.toHaveBeenCalled();
+    expect(screen.getByRole("listbox")).toHaveTextContent("Up to 6 accounts at once.");
   });
 
   it("Escape in the seat menu closes only the menu", async () => {

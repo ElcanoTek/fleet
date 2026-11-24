@@ -1043,9 +1043,20 @@ tool is reserved. A third-party connector you signed into yourself is listed
 either way, because its tools are only known once a conversation opens it. The
 assistant cannot call a reserved tool in a conversation, whatever you turn on; a scheduled task still can, so the task form on the Background tasks page may show
 tools and connectors that Chat does not. When a connector has more than one
-account, an **Account** menu on its row and in the library picks the one this
+account, an account menu on its row and in the library picks the one this
 conversation uses; the default reads as your deployment's name, or as the
-account you chose in **Settings → Connections**. A connector that **Needs
+account you chose in **Settings → Connections**. For a **Bundled** connector
+the menu is a checklist, **Accounts**: tick two or more and this conversation
+uses the connector as each of them at once, up to six. The menu's button then
+reads the first account and how many more, as in `Elcano +2`. At least one
+account stays ticked; the connector's switch is what turns it off. With more
+than one account on, the assistant names the account in its answers and
+before each action, asks which one you mean when a request does not say, and
+every action that needs approval gets its own card showing the one account it
+runs as. A task you schedule from that conversation keeps all of its
+accounts. A third-party connection you signed into yourself still uses one
+account per conversation. The default you set in **Settings → Connections**
+is always a single account. A connector that **Needs
 setup** has credentials your administrator adds on the server; an
 administrator's **Set up in Settings** link opens its card there. Fleet mounts at most eight third-party connections in one
 turn — the ones you signed into yourself and any shared with you together

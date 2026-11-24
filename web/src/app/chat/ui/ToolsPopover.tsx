@@ -32,7 +32,7 @@ export type ToolsPopoverProps = {
   loading: boolean;
   onToggle: (name: string) => void;
   onSetEnabled: (names: string[], enabled: boolean) => void;
-  onSetAccount: (name: string, account: string) => void;
+  onSetAccount: (name: string, accounts: string[]) => void;
   /** Escape with an empty search: close and return focus to the wrench. */
   onClose: () => void;
   /** Open the library, optionally on one connection. */
@@ -315,7 +315,7 @@ export function ToolsPopover({
                     onActivate={() => activate(c)}
                     onToggle={() => onToggle(c.name)}
                     onOpenLibrary={() => onOpenLibrary(c.name)}
-                    onSetAccount={(account) => onSetAccount(c.name, account)}
+                    onSetAccount={(accounts) => onSetAccount(c.name, accounts)}
                   />
                 );
               })}
@@ -395,7 +395,7 @@ function PopoverRow({
   onActivate: () => void;
   onToggle: () => void;
   onOpenLibrary: () => void;
-  onSetAccount: (account: string) => void;
+  onSetAccount: (accounts: string[]) => void;
 }) {
   const status = connectorStatus(c);
   const name = connectorLabel(c);
