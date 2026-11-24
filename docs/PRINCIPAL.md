@@ -59,7 +59,9 @@ spells `X-User-Email`, `X-User-Session-Epoch`, `X-User-Session-Source`,
   to it: the key records the account's id (`apikeys.APIKey.AccountID`), so
   the account must exist first — for an address with none the command says
   to create it (`fleet chat user add <email> --password -`) and mints
-  nothing. The chat listener accepts the key as `X-API-Key` or
+  nothing. The account is checked again once the key is saved, under the key
+  store's lock: one deleted (or replaced) meanwhile gets no key, and the
+  command says nothing was minted. The chat listener accepts the key as `X-API-Key` or
   `Authorization: Bearer`; the account is resolved on every request (an
   unknown or disabled account is `not_a_member`). A key acts only as the
   account it is bound to (`Principal.KeyAccountID`): an account created

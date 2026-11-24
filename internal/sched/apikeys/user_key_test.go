@@ -474,3 +474,42 @@ func TestRotatedTokenRetirementIsSaved(t *testing.T) {
 		t.Fatalf("the file still records the rotated-out token: %+v", k)
 	}
 }
+
+// A bound user key whose account no longer holds the email once the key is
+// saved — deleted, or replaced by a new account — is taken out again in the
+// same locked section: nothing is minted, in this Manager or on disk. An
+// account that still holds the email keeps its key.
+func TestCreateBoundUserKeyCheckedTakesOutAKeyForAGoneAccount(t *testing.T) {
+	ctx := context.Background()
+	for name, lookup := range map[string]AccountLookup{
+		"deleted":  func(context.Context, string) (string, bool, error) { return "", false, nil },
+		"replaced": func(context.Context, string) (string, bool, error) { return "new-id", true, nil },
+	} {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "keys.json")
+		m, err := NewManager(path, filepath.Join(dir, "audit.jsonl"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _, err = m.CreateBoundUserKeyChecked(ctx, "cli", "u@x.com", "old-id", lookup, 0, nil, "")
+		if !errors.Is(err, ErrAccountGoneWhileMinting) {
+			t.Fatalf("%s: err %v, want ErrAccountGoneWhileMinting", name, err)
+		}
+		reread, err := NewManager(path, filepath.Join(dir, "audit.jsonl"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(m.ListKeys()) != 0 || len(reread.ListKeys()) != 0 {
+			t.Fatalf("%s: keys in memory %d, on disk %d; want none", name, len(m.ListKeys()), len(reread.ListKeys()))
+		}
+	}
+	dir := t.TempDir()
+	m, err := NewManager(filepath.Join(dir, "keys.json"), filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	same := func(context.Context, string) (string, bool, error) { return "old-id", true, nil }
+	if key, _, err := m.CreateBoundUserKeyChecked(ctx, "cli", "u@x.com", "old-id", same, 0, nil, ""); err != nil || m.GetKey(key.KeyID) == nil {
+		t.Fatalf("an account that still holds the email: key %v, err %v", key, err)
+	}
+}

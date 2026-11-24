@@ -648,7 +648,7 @@ func (m *Manager) CreateTypedKey(ctx context.Context, name string, kt KeyType, a
 	if kt == KeyTypeUser {
 		return nil, "", errors.New("a user key names its user: use CreateUserKey")
 	}
-	return m.createTypedKey(ctx, name, kt, allowedTriggerSlugs, "", "", rateLimit, expiresInDays, description)
+	return m.createTypedKey(ctx, name, kt, allowedTriggerSlugs, "", "", rateLimit, expiresInDays, description, nil)
 }
 
 // CreateUserKey mints a user-type key (KeyTypeUser) that acts as email on the
@@ -667,7 +667,7 @@ func (m *Manager) CreateUserKey(ctx context.Context, name, email string, rateLim
 	if err != nil {
 		return nil, "", err
 	}
-	return m.createTypedKey(ctx, name, KeyTypeUser, nil, email, "", rateLimit, expiresInDays, description)
+	return m.createTypedKey(ctx, name, KeyTypeUser, nil, email, "", rateLimit, expiresInDays, description, nil)
 }
 
 // checkUserKey applies a user key's rules and returns its email as keys store
@@ -690,7 +690,10 @@ func checkUserKey(email string, rateLimit int) (string, error) {
 	return email, nil
 }
 
-func (m *Manager) createTypedKey(ctx context.Context, name string, kt KeyType, allowedTriggerSlugs []string, userEmail, accountID string, rateLimit int, expiresInDays *int, description string) (*APIKey, string, error) {
+// createTypedKey mints and saves a key. confirm, when not nil, runs once the
+// key is saved and while the key store is still locked; an error from it
+// takes the key out again (saved) and is returned.
+func (m *Manager) createTypedKey(ctx context.Context, name string, kt KeyType, allowedTriggerSlugs []string, userEmail, accountID string, rateLimit int, expiresInDays *int, description string, confirm func() error) (*APIKey, string, error) {
 	if !kt.Valid() {
 		return nil, "", fmt.Errorf("invalid key type: %q", kt)
 	}
@@ -745,6 +748,19 @@ func (m *Manager) createTypedKey(ctx context.Context, name string, kt KeyType, a
 		delete(m.keys, keyID)
 		delete(m.keyHashIndex, keyHash)
 		return nil, "", err
+	}
+	if confirm != nil {
+		if err := confirm(); err != nil {
+			delete(m.keys, keyID)
+			delete(m.keyHashIndex, keyHash)
+			if serr := m.save(); serr != nil {
+				// The file still holds the key; memory has to say so too.
+				m.keys[keyID] = key
+				m.keyHashIndex[keyHash] = keyID
+				return nil, "", fmt.Errorf("%w; removing the key %s again failed: %w", err, keyID, serr)
+			}
+			return nil, "", err
+		}
 	}
 
 	permStrings := make([]string, len(perms))
@@ -878,6 +894,23 @@ var ErrNoAccount = errors.New("a user key acts as an existing account: create th
 // up. Every fleet command that mints a user key uses it. The key is written
 // once, with its account.
 func (m *Manager) CreateBoundUserKey(ctx context.Context, name, email, accountID string, rateLimit int, expiresInDays *int, description string) (*APIKey, string, error) {
+	return m.CreateBoundUserKeyChecked(ctx, name, email, accountID, nil, rateLimit, expiresInDays, description)
+}
+
+// ErrAccountGoneWhileMinting refuses a user key whose account was deleted (or
+// replaced by a new account under the email) between its lookup and the key
+// being saved: the key is taken out again, so nothing is minted.
+var ErrAccountGoneWhileMinting = errors.New("the account was deleted while the key was being created; nothing was minted")
+
+// CreateBoundUserKeyChecked is CreateBoundUserKey that makes sure accountID
+// still holds email once the key is in the store: with the key saved and the
+// store still locked it asks lookup again, and takes the key out again
+// (ErrAccountGoneWhileMinting) when email has no account or another one. The
+// key cleanup of an account deletion takes the same lock after its database
+// commit, so either it runs after this — and finds the key, bound to the
+// deleted id, and deletes it — or this sees the account gone. A nil lookup
+// checks nothing.
+func (m *Manager) CreateBoundUserKeyChecked(ctx context.Context, name, email, accountID string, lookup AccountLookup, rateLimit int, expiresInDays *int, description string) (*APIKey, string, error) {
 	accountID = strings.TrimSpace(accountID)
 	if accountID == "" {
 		return nil, "", ErrNoAccount
@@ -886,7 +919,20 @@ func (m *Manager) CreateBoundUserKey(ctx context.Context, name, email, accountID
 	if err != nil {
 		return nil, "", err
 	}
-	return m.createTypedKey(ctx, name, KeyTypeUser, nil, email, accountID, rateLimit, expiresInDays, description)
+	var confirm func() error
+	if lookup != nil {
+		confirm = func() error {
+			id, found, err := lookup(ctx, email)
+			if err != nil {
+				return fmt.Errorf("checking the account again after the key was saved: %w; nothing was minted", err)
+			}
+			if !found || id != accountID {
+				return ErrAccountGoneWhileMinting
+			}
+			return nil
+		}
+	}
+	return m.createTypedKey(ctx, name, KeyTypeUser, nil, email, accountID, rateLimit, expiresInDays, description, confirm)
 }
 
 // RecordUserKeyAccount binds a user key that names no account yet to

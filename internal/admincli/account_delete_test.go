@@ -260,3 +260,56 @@ func TestAPIKeyListShowsTheKeysAccount(t *testing.T) {
 		}
 	}
 }
+
+// An account deleted after `fleet sched apikey create --type user` looked it
+// up, but before its key is saved — the deletion's key cleanup finds no key
+// yet — gets no key: the mint checks the account again with the key saved
+// and the key store still locked, takes the key out, and says so.
+func TestUserKeyForAnAccountDeletedWhileMintingIsNotMinted(t *testing.T) {
+	d := fleetEnv(t)
+	data := t.TempDir()
+	t.Setenv("FLEET_DATA_DIR", data)
+	t.Setenv("FLEET_SERVICE_NAME", "fleet-account-delete-test-none")
+	ctx := context.Background()
+	chat := d.Chat(t)
+	if _, err := chat.CreateUser(ctx, "racing@acctdel.test", "delete-password-1"); err != nil {
+		t.Fatal(err)
+	}
+	ks := resolveKeyStore()
+	mgr, err := apikeys.NewManager(ks.Path(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lookups := 0
+	lookup := func(ctx context.Context, email string) (string, bool, error) {
+		id, found, err := chatAccountLookup(ctx, email)
+		if lookups++; lookups == 1 && found {
+			// Between the lookup and the key's write: the account is
+			// deleted, keys and all (there are none yet).
+			if _, derr := deleteAccount(ctx, chat, email); derr != nil {
+				t.Errorf("delete the account: %v", derr)
+			}
+		}
+		return id, found, err
+	}
+	var code int
+	stderr := captureStderr(t, func() {
+		captureStdout(t, func() { code = createUserKey(mgr, ks, "racing-key", "racing@acctdel.test", 0, lookup) })
+	})
+	if code == 0 {
+		t.Fatal("a key was minted for an account deleted while it was being created")
+	}
+	if !strings.Contains(stderr, "nothing was minted") {
+		t.Errorf("stderr %q, want it to say nothing was minted", stderr)
+	}
+	if lookups != 2 {
+		t.Errorf("the account was looked up %d times; want a second look with the key saved", lookups)
+	}
+	reread, err := apikeys.NewManager(ks.Path(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if keys := reread.ListKeys(); len(keys) != 0 {
+		t.Fatalf("the key store holds %+v, want no key", keys)
+	}
+}

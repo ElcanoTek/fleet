@@ -521,7 +521,12 @@ func createUserKey(mgr *apikeys.Manager, ks keyStore, name, email string, rateLi
 	if !found {
 		return errf(1, "%s has no account: create the account first (fleet chat user add %s --password -), then mint its key", email, email)
 	}
-	key, raw, err := mgr.CreateBoundUserKey(ctx, name, email, accountID, rateLimit, nil, "created via the fleet CLI")
+	// Checked again once the key is saved, under the key store's lock: an
+	// account deleted after the lookup above gets no key.
+	key, raw, err := mgr.CreateBoundUserKeyChecked(ctx, name, email, accountID, lookup, rateLimit, nil, "created via the fleet CLI")
+	if errors.Is(err, apikeys.ErrAccountGoneWhileMinting) {
+		return errf(1, "%s: %v", email, err)
+	}
 	if err != nil {
 		return errf(5, "%v", err)
 	}
