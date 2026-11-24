@@ -34,6 +34,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/mcp"
+	"github.com/ElcanoTek/fleet/internal/reclaim"
 	"github.com/ElcanoTek/fleet/internal/sandbox"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/structuredoutput"
@@ -685,21 +686,40 @@ func (r *Runner) workspaceRoot() string {
 // per-run MCP dirs (mcp-runs/) stay where they are. FLEET_SCHEDULED_SHARED_
 // WORKSPACE=1 restores the shared root. A directory that cannot be created
 // falls back to the root with a log line rather than failing the run.
+//
+// The directory is made under its reclaim.TaskDirs lock, which the workspace
+// sweep holds while it decides a job directory is an orphan and removes it
+// (storage.SweepTaskWorkspaces). This task's row is live before its run gets
+// here, so the sweep either sees it and keeps the directory, or removed the
+// directory before this makes a fresh one — never while the run works in it.
 func (r *Runner) taskWorkspaceDir(ctx context.Context, task *models.Task) string {
 	root := r.workspaceRoot()
 	if task == nil || (r.cfg != nil && r.cfg.ScheduledSharedWorkspace) {
 		return root
 	}
-	dir := tools.TaskWorkspaceDir(root, task.WorkspaceLineage().String())
+	lineage := task.WorkspaceLineage().String()
+	dir := tools.TaskWorkspaceDir(root, lineage)
 	if dir == root {
 		return root
 	}
-	if err := os.MkdirAll(dir, 0o750); err != nil {
+	key := reclaim.TaskWorkspaceKey(lineage)
+	unlock := reclaim.TaskDirs.Lock(key)
+	err := os.MkdirAll(dir, 0o750)
+	if err == nil && taskDirMade != nil {
+		taskDirMade(key)
+	}
+	unlock()
+	if err != nil {
 		logging.From(ctx).Warn("scheduled task: could not create per-job workspace (falling back to the shared root)", "task_id", task.ID, "dir", dir, "err", err)
 		return root
 	}
 	return dir
 }
+
+// taskDirMade is a test seam run while taskWorkspaceDir or openTaskMCPRunDir
+// holds a directory's reclaim.TaskDirs lock, right after making it; nil in
+// production.
+var taskDirMade func(key string)
 
 // runSandboxScope decides what of the workspace root a scheduled run's
 // sandbox mounts (#1897). #1543 gave each job its own working directory, but
@@ -742,7 +762,7 @@ func (r *Runner) runSandboxScope(ctx context.Context, task *models.Task, wtPath 
 	runsBase := agentcore.PerRunMCPWorkspaceBase(root)
 	scope := &sandbox.WorkspaceScope{Dir: dir, Withhold: []string{runsBase}}
 	if !taskCredentialAllowlist(task).DeniesAll() && r.selectionUsesMCPRunDir(r.taskMCPSelection(task)) {
-		runDir, run, err := agentcore.OpenStableMCPWorkspace(ctx, taskMCPRunKey(task))
+		runDir, run, err := openTaskMCPRunDir(ctx, task)
 		if err != nil {
 			return nil, fmt.Errorf("prepare MCP run dir for the scoped sandbox: %w", err)
 		}
@@ -1655,6 +1675,22 @@ func taskMCPRunKey(task *models.Task) string {
 	return "task-" + task.ID.String()
 }
 
+// openTaskMCPRunDir opens the occurrence's MCP run dir
+// (agentcore.OpenStableMCPWorkspace), making it under its reclaim.TaskDirs
+// lock, the one the workspace sweep removes it under: as for the job
+// directory (taskWorkspaceDir), a sweep that found no live task for it is
+// done before the directory is made, or sees the task.
+func openTaskMCPRunDir(ctx context.Context, task *models.Task) (string, *os.Root, error) {
+	name := taskMCPRunKey(task)
+	key := reclaim.MCPRunKey(name)
+	defer reclaim.TaskDirs.Lock(key)()
+	dir, run, err := agentcore.OpenStableMCPWorkspace(ctx, name)
+	if err == nil && taskDirMade != nil {
+		taskDirMade(key)
+	}
+	return dir, run, err
+}
+
 // stableTaskWorkdir resolves the ${FLEET_WORKSPACE} directory for a task's
 // dedicated MCP client and stages its inputs into it. The directory is keyed by
 // the task row id, which is the occurrence identity: a max_retries retry, an
@@ -1673,7 +1709,7 @@ func taskMCPRunKey(task *models.Task) string {
 // through the os.Root agentcore hands back (no write can leave the run dir)
 // and rebuilds inputs/ from scratch every attempt (see stageTaskInputs).
 func (r *Runner) stableTaskWorkdir(ctx context.Context, task *models.Task) (string, error) {
-	workdir, run, err := agentcore.OpenStableMCPWorkspace(ctx, taskMCPRunKey(task))
+	workdir, run, err := openTaskMCPRunDir(ctx, task)
 	if err != nil {
 		return "", err
 	}

@@ -214,8 +214,9 @@ advises on each demoted split admin, unknown role and duplicate username in it.
     sweep removes and the hourly cleanup of old uploads skips. Each tree is
     tried under three such names; one that still cannot be held is put back
     where it was, as a last resort, and named in the error and the log
-    (only a tree that may go is ever left under a `.removing-` name, which
-    the sweeps remove whatever the account). The web route
+    (once the deletion has finished, only a tree that may go is left under
+    a `.removing-` name, which the sweeps remove whatever the account once
+    it is an hour old). The web route
     then answers 500 `the deletion did not complete and the account could
     not be read back; its files are held until that is confirmed, and the
     next maintenance pass puts them back or removes them` (the server logs
@@ -241,7 +242,10 @@ advises on each demoted split admin, unknown role and duplicate username in it.
     reason and that nothing was deleted. After the commit the address's
     paths are checked once more (below); if
     the server stops between the move and the commit, the maintenance pass
-    removes the trees left aside (the account was being deleted);
+    removes the trees left aside (the account was being deleted) once they
+    are an hour old. A pass that runs while a deletion is under way leaves
+    the trees it moved aside alone, so a deletion that is refused (the
+    account changed meanwhile, say) moves them all back;
   - its in-memory approve/deny-all decisions, which are kept by address,
     are forgotten while its work is stopped and again after the commit,
     whatever holds the address by then (forgetting one only means approving
@@ -388,8 +392,8 @@ advises on each demoted split admin, unknown role and duplicate username in it.
   checked once more, for its own digest, right before it goes, and moved
   aside before it is removed, so an account created under the address in
   the meantime keeps the files it wrote; a tree left set aside by an
-  interrupted removal goes on the next pass), and the in-memory
-  approve/deny-all decisions of such addresses. It also resolves the trees
+  interrupted removal goes on the first pass once it is an hour old), and
+  the in-memory approve/deny-all decisions of such addresses. It also resolves the trees
   a deletion held because its outcome could not be confirmed (above). That
   covers
   accounts deleted before deletion reached these, a deletion from the CLI

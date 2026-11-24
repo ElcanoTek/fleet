@@ -15,6 +15,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/accountdelete"
 	"github.com/ElcanoTek/fleet/internal/identity"
 	"github.com/ElcanoTek/fleet/internal/logging"
+	"github.com/ElcanoTek/fleet/internal/reclaim"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
@@ -430,7 +431,8 @@ func (s *Server) digestLive(ctx context.Context) func(digest string) (bool, erro
 
 // participantStash is one participants/<digest> tree in a conversation's
 // private workspace stash; aside marks a tree an interrupted removal left set
-// aside (accountdelete.RemoveAside), which is removed whatever its digest.
+// aside (accountdelete.RemoveAside), which is removed whatever its digest
+// once it is settled.
 type participantStash struct {
 	convID, name string
 	aside        bool
@@ -483,7 +485,13 @@ func (s *Server) removeOrphanParticipantStashes(ctx context.Context, stashes []p
 	for _, c := range stashes {
 		dir := filepath.Join(root, c.convID, "participants")
 		if c.aside {
-			if err := os.RemoveAll(filepath.Join(dir, c.name)); err != nil {
+			// A tree an account deletion still running set aside may yet be
+			// moved back (accountdelete.SetAside): only a settled one goes.
+			path := filepath.Join(dir, c.name)
+			if info, err := os.Lstat(path); err != nil || !reclaim.Settled(info, time.Now()) {
+				continue
+			}
+			if err := os.RemoveAll(path); err != nil {
 				logging.From(ctx).Error("maintenance: removing a set-aside private workspace tree failed", "err", err)
 			}
 			continue

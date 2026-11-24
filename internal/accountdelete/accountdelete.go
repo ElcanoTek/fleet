@@ -35,12 +35,16 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/identity"
+	"github.com/ElcanoTek/fleet/internal/logging"
+	"github.com/ElcanoTek/fleet/internal/reclaim"
+	"github.com/ElcanoTek/fleet/internal/safe"
 )
 
 // Store is the database half: *store.Store.
@@ -228,6 +232,12 @@ func Delete(ctx context.Context, st Store, email string, opt Options) (Result, e
 		// A tree left under the address could be found by an account created
 		// under it after the commit: nothing is deleted.
 		return res, rollBackSetAside(&FilesNotSetAsideError{Err: err}, aside, undo)
+	}
+	for _, t := range aside {
+		if t.StampErr != nil {
+			logging.From(ctx).Warn("account deletion: could not set the time of a tree it moved aside; the maintenance pass counts its hour from the tree's last change",
+				"path", safe.LogSafe(t.To), "err", safe.LogSafe(t.StampErr.Error()))
+		}
 	}
 	accountID, err := st.DeleteAccount(ctx, email, id)
 	if err != nil {
@@ -461,14 +471,26 @@ type AsideTree struct {
 	From, To string
 	// Uploads says it is the upload tree (else a private workspace tree).
 	Uploads bool
+	// StampErr is why SetAside could not set the tree's time (this process
+	// may not change it): the tree was moved all the same, and a sweep counts
+	// its hour from its last change instead. Delete logs it.
+	StampErr error
 }
 
 // SetAside moves path, a tree of the account whose Digest is digest, to an
 // aside name beside it (asidePrefix, which nothing reads and every sweep
-// removes) and reports whether there was one to move. Account deletion moves
-// the account's trees aside before its database deletion commits, while no
-// other account can hold the address, and removes them after; a crash in
+// removes once it is settled) and reports whether there was one to move.
+// Account deletion moves the account's trees aside before its database
+// deletion commits, while no other account can hold the address, and removes
+// them after, or moves them back if the deletion does not commit; a crash in
 // between leaves aside trees, which the maintenance pass removes.
+//
+// The tree's modification time is set to now first (a rename keeps it;
+// stampAside): a sweep leaves an aside tree changed within reclaim.Grace
+// alone (RemoveAside), so a tree a deletion still running may move back is
+// not removed under it. A deletion takes minutes at most. A tree whose time
+// this process may not set is still moved, with the reason in StampErr: its
+// hour then counts from its last change.
 func SetAside(path, digest string) (AsideTree, bool, error) {
 	if _, err := os.Lstat(path); os.IsNotExist(err) {
 		return AsideTree{}, false, nil
@@ -479,6 +501,17 @@ func SetAside(path, digest string) (AsideTree, bool, error) {
 	if _, err := rand.Read(suffix[:]); err != nil {
 		return AsideTree{}, false, err
 	}
+	var stampErr error
+	if err := stampAside(path); err != nil {
+		switch {
+		case os.IsNotExist(err):
+			return AsideTree{}, false, nil
+		case errors.Is(err, fs.ErrPermission):
+			stampErr = err
+		default:
+			return AsideTree{}, false, err
+		}
+	}
 	to := filepath.Join(filepath.Dir(path), asidePrefix+digest+"-"+hex.EncodeToString(suffix[:]))
 	if err := os.Rename(path, to); err != nil {
 		if os.IsNotExist(err) {
@@ -486,7 +519,33 @@ func SetAside(path, digest string) (AsideTree, bool, error) {
 		}
 		return AsideTree{}, false, err
 	}
-	return AsideTree{From: path, To: to}, true, nil
+	return AsideTree{From: path, To: to, StampErr: stampErr}, true, nil
+}
+
+// stampAside sets the modification time of the directory at path to now,
+// through an os.Root opened at its parent and only after an Lstat there shows
+// a directory: a symbolic link or a file at path is neither followed nor
+// stamped.
+func stampAside(path string) error {
+	parent, err := os.OpenRoot(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	defer parent.Close()
+	name := filepath.Base(path)
+	info, err := parent.Lstat(name)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return nil
+	}
+	return asideChtimes(parent, name, time.Now())
+}
+
+// asideChtimes is the time change stampAside makes; a test makes it fail.
+var asideChtimes = func(parent *os.Root, name string, t time.Time) error {
+	return parent.Chtimes(name, t, t)
 }
 
 // restoreAside moves the trees back where they were, after a deletion that
@@ -665,9 +724,10 @@ func RemoveUploads(attachmentDir string, digests []string, live func(digest stri
 	return removed, firstErr
 }
 
-// asidePrefix names a tree RemoveOrphanTree moved aside to remove it. Nothing
-// reads such a name (it is not a Digest), so one left by an interrupted
-// removal is removed by the next sweep (RemoveAside).
+// asidePrefix names a tree RemoveOrphanTree moved aside to remove it, or
+// SetAside moved aside for a deletion. Nothing reads such a name (it is not a
+// Digest), so one left by an interrupted removal is removed by a later sweep
+// (RemoveAside).
 const asidePrefix = ".removing-"
 
 // RemoveOrphanTree removes path, the tree of the address whose Digest is
@@ -705,8 +765,11 @@ func IsAside(name string) bool {
 }
 
 // RemoveAside removes the trees under dir that a RemoveOrphanTree moved aside
-// and did not finish removing, and returns the first failure (a missing dir
-// has none). What it leaves is tried again on the next pass.
+// and did not finish removing, or that a deletion moved aside (SetAside) and
+// was interrupted before it removed or moved back, and returns the first
+// failure (a missing dir has none). A tree changed within reclaim.Grace is
+// left alone (AsideSettled): a deletion still running may move it back. What
+// it leaves is tried again on the next pass.
 func RemoveAside(dir string) error {
 	entries, err := os.ReadDir(dir)
 	if os.IsNotExist(err) {
@@ -717,13 +780,22 @@ func RemoveAside(dir string) error {
 	}
 	var firstErr error
 	for _, e := range entries {
-		if IsAside(e.Name()) {
+		if IsAside(e.Name()) && AsideSettled(e) {
 			if err := os.RemoveAll(filepath.Join(dir, e.Name())); err != nil && firstErr == nil {
 				firstErr = err
 			}
 		}
 	}
 	return firstErr
+}
+
+// AsideSettled reports whether the aside tree e (a directory entry, so not
+// followed if it is a link) is settled (reclaim.Settled: not changed within
+// reclaim.Grace), so no deletion still running can move it back. An entry
+// that cannot be read is not settled.
+func AsideSettled(e fs.DirEntry) bool {
+	info, err := e.Info()
+	return err == nil && reclaim.Settled(info, time.Now())
 }
 
 // RemoveSetAsideUploads removes the upload trees under attachmentDir that an

@@ -365,3 +365,107 @@ func TestMultiplayerPrivateWorkspaceIsolation(t *testing.T) {
 		t.Fatalf("expected stashDir %s to be removed on conversation delete, got err=%v", stashDir, err)
 	}
 }
+
+// TestStashSweepLeavesAParticipantTurnStartingAlone: the maintenance pass's
+// stash recovery puts back what an interrupted swap left behind. A
+// participant's turn that starts after the pass saw the conversation idle
+// must not have its swap undone: that would put the owner's attachments and
+// skills in the participant's workspace and then, when the turn ends, delete
+// the owner's skills and move the owner's attachments into the participant's
+// stash.
+func TestStashSweepLeavesAParticipantTurnStartingAlone(t *testing.T) {
+	t.Setenv("FLEET_WORKSPACE_ROOT", t.TempDir())
+	fakeStore := newFakeChatStore()
+	fakeStore.users["alice@reklaim.com"] = &store.User{Email: "alice@reklaim.com", Role: "member", TeamID: "reklaim"}
+	fakeStore.users["bob@reklaim.com"] = &store.User{Email: "bob@reklaim.com", Role: "member", TeamID: "reklaim"}
+	srv := newDefaultChatServer(t, &fakeEngine{}, fakeStore)
+	srv.cfg.EmailAttachmentDir = t.TempDir()
+	ctx := context.Background()
+
+	conv, err := fakeStore.CreateConversation(ctx, "alice@reklaim.com", "Shared Deal Thread", "victoria", "", false)
+	if err != nil {
+		t.Fatalf("CreateConversation: %v", err)
+	}
+	if _, err := fakeStore.SetConversationMultiplayer(ctx, "alice@reklaim.com", conv.ID, true, nil, nil); err != nil {
+		t.Fatalf("SetConversationMultiplayer: %v", err)
+	}
+	conv, _ = fakeStore.Get(ctx, "alice@reklaim.com", conv.ID)
+	wsDir, err := tools.EnsureWorkspaceDir(conv.ID)
+	if err != nil {
+		t.Fatalf("EnsureWorkspaceDir: %v", err)
+	}
+	write := func(path, body string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	read := func(path string) string {
+		t.Helper()
+		got, err := os.ReadFile(path)
+		if err != nil {
+			return ""
+		}
+		return string(got)
+	}
+	ownerAtt := filepath.Join(wsDir, uploadsDir, "slug1", "alice-secret.csv")
+	ownerSkill := filepath.Join(wsDir, userSkillsRoot, "alice-playbook", "SKILL.md")
+	bobAtt := filepath.Join(wsDir, uploadsDir, "slug2", "bob-upload.csv")
+	write(ownerAtt, "alice_private_attachment")
+	write(ownerSkill, "alice_private_skill")
+
+	// Bob's first turn stages an attachment, which goes to his stash when it
+	// ends; the conversation now has a private stash for the pass to visit.
+	if err := srv.activateTurnPrivateWorkspace(conv, "bob@reklaim.com"); err != nil {
+		t.Fatalf("activateTurnPrivateWorkspace: %v", err)
+	}
+	write(bobAtt, "bob_private_attachment")
+	srv.restoreTurnPrivateWorkspace(conv, "bob@reklaim.com")
+
+	// Bob's next turn starts right after the pass found the conversation idle.
+	started := false
+	srv.beforeStashRecovery = func(convID string) {
+		if convID != conv.ID || started {
+			return
+		}
+		started = true
+		if err := srv.activateTurnPrivateWorkspace(conv, "bob@reklaim.com"); err != nil {
+			t.Errorf("activateTurnPrivateWorkspace (2): %v", err)
+		}
+	}
+	srv.sweepOrphanPrivateWorkspaceStashes(ctx)
+	if !started {
+		t.Fatal("the pass did not reach the conversation")
+	}
+	if read(bobAtt) != "bob_private_attachment" {
+		t.Errorf("Bob's attachment is not in the workspace during his turn")
+	}
+	if read(ownerAtt) != "" || read(ownerSkill) != "" {
+		t.Errorf("the owner's private files were put back into the workspace during a participant's turn")
+	}
+
+	srv.restoreTurnPrivateWorkspace(conv, "bob@reklaim.com")
+	if got := read(ownerAtt); got != "alice_private_attachment" {
+		t.Errorf("owner attachment after the turn = %q, want it restored", got)
+	}
+	if got := read(ownerSkill); got != "alice_private_skill" {
+		t.Errorf("owner skill after the turn = %q, want it restored", got)
+	}
+	if read(bobAtt) != "" {
+		t.Errorf("Bob's attachment is still in the workspace after his turn")
+	}
+	stashRoot, err := srv.privateWorkspaceStashDir(conv.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inBobStash := filepath.Join(stashRoot, "participants", participantDigest("bob@reklaim.com"), uploadsDir)
+	if got := read(filepath.Join(inBobStash, "slug2", "bob-upload.csv")); got != "bob_private_attachment" {
+		t.Errorf("Bob's stashed attachment = %q", got)
+	}
+	if got := read(filepath.Join(inBobStash, "slug1", "alice-secret.csv")); got != "" {
+		t.Errorf("the owner's attachment ended up in Bob's stash")
+	}
+}

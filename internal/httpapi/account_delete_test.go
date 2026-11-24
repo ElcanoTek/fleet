@@ -511,6 +511,7 @@ func TestMaintenanceRemovesSetAsideUploadsOnEveryPass(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	setAsideLongAgo(t, filepath.Dir(aside)) // one set aside just now may still go back
 	s.sweepDeletedAccounts(context.Background())
 	if _, err := os.Stat(filepath.Dir(aside)); !os.IsNotExist(err) {
 		t.Errorf("the set-aside tree survived a pass with no orphan (err %v)", err)
@@ -762,9 +763,46 @@ func TestMaintenanceRemovesTreesADeletionLeftAside(t *testing.T) {
 	s := memberFixture(t, "u@x.com")
 	att := t.TempDir()
 	s.cfg.EmailAttachmentDir = att
-	digest := accountdelete.Digest("u@x.com")
+	aside := setAsideAccountTrees(t, att, "u@x.com")
+	for _, a := range aside {
+		setAsideLongAgo(t, a) // the server stopped long ago
+	}
+	s.sweepDeletedAccounts(context.Background())
+	for _, a := range aside {
+		if _, err := os.Stat(a); !os.IsNotExist(err) {
+			t.Errorf("%s survived the maintenance pass (err %v)", a, err)
+		}
+	}
+}
+
+// Trees a deletion still running moved aside are left by a maintenance pass:
+// the deletion moves them back if it does not commit (a refused deletion,
+// ErrAccountChanged), so the account keeps its uploads and private
+// workspace files.
+func TestMaintenanceLeavesTreesADeletionStillRunningSetAside(t *testing.T) {
+	t.Parallel()
+	s := memberFixture(t, "u@x.com")
+	att := t.TempDir()
+	s.cfg.EmailAttachmentDir = att
+	aside := setAsideAccountTrees(t, att, "u@x.com")
+	s.sweepDeletedAccounts(context.Background())
+	for _, a := range aside {
+		if _, err := os.Stat(a); err != nil {
+			t.Errorf("%s, set aside by a deletion still running, was removed: %v", a, err)
+		}
+	}
+}
+
+// setAsideAccountTrees makes email's upload tree and a private workspace tree
+// under att, both changed long ago, moves them aside as a deletion does
+// (accountdelete.SetAside), and returns where they are now. SetAside stamps
+// each tree with the current time as it moves it, so the aside trees are new
+// whatever their age before.
+func setAsideAccountTrees(t *testing.T, att, email string) []string {
+	t.Helper()
+	digest := accountdelete.Digest(email)
 	trees := []string{
-		filepath.Join(accountdelete.UploadsDir(att, "u@x.com"), "tok"),
+		filepath.Join(accountdelete.UploadsDir(att, email), "tok"),
 		filepath.Join(accountdelete.PrivateWorkspaceRoot(att), "conv-1", "participants", digest, "f"),
 	}
 	aside := make([]string, 0, len(trees))
@@ -772,17 +810,23 @@ func TestMaintenanceRemovesTreesADeletionLeftAside(t *testing.T) {
 		if err := os.MkdirAll(d, 0o700); err != nil {
 			t.Fatal(err)
 		}
+		setAsideLongAgo(t, filepath.Dir(d))
 		tr, moved, err := accountdelete.SetAside(filepath.Dir(d), digest)
 		if err != nil || !moved {
 			t.Fatalf("SetAside(%s) = %v, %v", filepath.Dir(d), moved, err)
 		}
 		aside = append(aside, tr.To)
 	}
-	s.sweepDeletedAccounts(context.Background())
-	for _, a := range aside {
-		if _, err := os.Stat(a); !os.IsNotExist(err) {
-			t.Errorf("%s survived the maintenance pass (err %v)", a, err)
-		}
+	return aside
+}
+
+// setAsideLongAgo backdates path's modification time well past
+// reclaim.Grace.
+func setAsideLongAgo(t *testing.T, path string) {
+	t.Helper()
+	old := time.Now().Add(-48 * time.Hour)
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatal(err)
 	}
 }
 

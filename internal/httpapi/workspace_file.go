@@ -497,8 +497,31 @@ func (s *Server) sweepOrphanPrivateWorkspaceStashes(ctx context.Context) {
 		if s.isParticipantWorkspaceActiveInMemory(convID, "") {
 			continue
 		}
-		_ = recoverInterruptedParticipantWorkspace(convID, filepath.Join(root, convID), s.stashOwner)
+		if s.beforeStashRecovery != nil {
+			s.beforeStashRecovery(convID)
+		}
+		s.recoverIdleParticipantWorkspace(convID, filepath.Join(root, convID))
 	}
+}
+
+// recoverIdleParticipantWorkspace finishes a swap an interrupted process left
+// in convID's private stash, unless a participant's turn holds the workspace.
+// The decision is made again under the conversation's swap lock: a turn
+// swaps the owner's files out under that lock and is marked active before it
+// lets go of it, until its restore under the same lock is done. So under the
+// lock either a turn is active, and its swap is its own to undo, or no swap
+// is under way and the markers on disk are an interrupted process's.
+// Deciding from the unlocked check alone would undo the swap of a turn that
+// started in between: the owner's attachments and skills would be put back
+// into the participant's workspace, and the end of that turn would then
+// delete the owner's skills and move the owner's attachments into the
+// participant's stash.
+func (s *Server) recoverIdleParticipantWorkspace(convID, stashRoot string) {
+	defer s.workspaceSwapLocks.lock(convID)()
+	if s.isParticipantWorkspaceActiveInMemory(convID, "") {
+		return
+	}
+	_ = recoverInterruptedParticipantWorkspace(convID, stashRoot, s.stashOwner)
 }
 
 func (s *Server) isParticipantWorkspaceActive(convID, ownerEmail string) bool {

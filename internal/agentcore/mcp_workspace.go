@@ -377,12 +377,14 @@ func SharedMCPWorkspaceDir(ctx context.Context) string {
 // would hang the ledger read) is removed before a connector is spawned on it. Writes through the returned root cannot leave the run dir.
 //
 // The directory is deliberately NOT cleaned up here: it holds the run ledger,
-// which is post-run evidence of the critical actions the run recorded, and
-// nothing in Fleet prunes mcp-runs/ today (run-history retention only deletes
-// DB rows). There is NO fallback to the shared per-deployment dir on failure:
-// that dir has no task scoping, so using it would silently mix this task's
-// ledger with every other task's. The error is returned and the run's MCP
-// setup fails loudly instead.
+// which is post-run evidence of the critical actions the run recorded. The
+// maintenance pass removes it once its task is no longer live or awaiting
+// replay (storage.SweepTaskWorkspaces), and the scheduled runner calls this
+// holding the lock that sweep removes it under (reclaim.TaskDirs). There is
+// NO fallback to the shared per-deployment dir on failure: that dir has no
+// task scoping, so using it would silently mix this task's ledger with every
+// other task's. The error is returned and the run's MCP setup fails loudly
+// instead.
 //
 // ctx is the run's: a planted entry removed is logged with its correlation
 // (run_id, task_id).
