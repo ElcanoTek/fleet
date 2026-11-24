@@ -87,10 +87,11 @@ func parseHistoryWindow(q url.Values) (req historyWindowRequest, windowed bool, 
 	if err != nil {
 		return req, false, err
 	}
-	if n > maxHistoryWindowLimit {
-		n = maxHistoryWindowLimit
+	if n > 0 && n <= maxHistoryWindowLimit {
+		req.limit = int(n)
+	} else {
+		req.limit = maxHistoryWindowLimit
 	}
-	req.limit = int(n)
 	if before != "" {
 		if req.before, err = positive("before", before); err != nil {
 			return req, false, err

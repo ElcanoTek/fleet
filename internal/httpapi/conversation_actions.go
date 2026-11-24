@@ -116,36 +116,12 @@ func (s *Server) loadConversationHistoryForGet(ctx context.Context, id, user, ow
 	return historyForParticipant(history, user, owner), nil, nil
 }
 
-func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, user, id string, conv *store.Conversation) {
-	isAutonomousConv := s.isAcceptedAutonomousConversation(r.Context(), conv)
-	if approvalID := r.URL.Query().Get("approval_id"); approvalID != "" {
-		s.handleConversationApprovalGetWithMode(w, r, user, id, approvalID, isAutonomousConv)
-		return
-	}
-	omitHistory := r.URL.Query().Get("omit_history") == "1"
-	// A windowed read (?limit / ?before / ?from, history_window.go) returns a
-	// suffix of the history; without those parameters the whole history is
-	// read, as every caller before the window existed expects.
-	window, windowed, werr := parseHistoryWindow(r.URL.Query())
-	if werr != nil {
-		http.Error(w, werr.Error(), http.StatusBadRequest)
-		return
-	}
-	historyPayload, page, err := s.loadConversationHistoryForGet(r.Context(), id, user, conv.UserEmail, omitHistory, windowed, window)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	pending, err := s.store.ListPendingApprovals(r.Context(), user, id)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
+func (s *Server) formatPendingApprovalCards(pending []store.Approval, id string, approvalIndex, isAutonomousConv bool) []map[string]any {
 	// Shape pending approvals the same way tool.approval_required
 	// events do, so the frontend reuses its render path.
 	approvals := make([]map[string]any, 0, len(pending))
 	for _, a := range pending {
-		if r.URL.Query().Get("approval_index") == "1" {
+		if approvalIndex {
 			approvals = append(approvals, map[string]any{"approval_id": a.ID})
 			continue
 		}
@@ -174,6 +150,35 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, u
 		withApprovalNarrowable(card, &a)
 		approvals = append(approvals, card)
 	}
+	return approvals
+}
+
+func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, user, id string, conv *store.Conversation) {
+	isAutonomousConv := s.isAcceptedAutonomousConversation(r.Context(), conv)
+	if approvalID := r.URL.Query().Get("approval_id"); approvalID != "" {
+		s.handleConversationApprovalGetWithMode(w, r, user, id, approvalID, isAutonomousConv)
+		return
+	}
+	omitHistory := r.URL.Query().Get("omit_history") == "1"
+	// A windowed read (?limit / ?before / ?from, history_window.go) returns a
+	// suffix of the history; without those parameters the whole history is
+	// read, as every caller before the window existed expects.
+	window, windowed, werr := parseHistoryWindow(r.URL.Query())
+	if werr != nil {
+		http.Error(w, werr.Error(), http.StatusBadRequest)
+		return
+	}
+	historyPayload, page, err := s.loadConversationHistoryForGet(r.Context(), id, user, conv.UserEmail, omitHistory, windowed, window)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	pending, err := s.store.ListPendingApprovals(r.Context(), user, id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	approvals := s.formatPendingApprovalCards(pending, id, r.URL.Query().Get("approval_index") == "1", isAutonomousConv)
 	// Resolved approvals re-hydrate too, so the transcript keeps the shape
 	// it had live: the "Email sent ✓" outcome card, a timed-out card, and —
 	// load-bearing for notify mode (#1153) — the "ran without asking" record
