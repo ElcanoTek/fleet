@@ -97,6 +97,9 @@ to the host-read rules ([ADR-0119](adr/0119-account-groups-source-is-a-host-read
   while that first call is still running, gets the last answer (none yet, at
   first) while a refresh runs. A failed refresh keeps the last good answer and
   retries after a minute. Each call has fifteen seconds.
+- A refresh is tracked server background work: shutdown waits for one that is
+  in flight (at most its fifteen seconds) before the MCP runtime closes, and
+  none is started once shutdown has begun.
 - The answer is display data. It never reaches a model.
 
 Load-time checks: `server` is an `mcp_servers` entry, `tool` is a tool name

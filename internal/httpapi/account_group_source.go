@@ -71,12 +71,19 @@ func (s *Server) sourcedAccountGroups(ctx context.Context, src *clientconfig.Acc
 		done := c.refreshing
 		source := *src
 		// Detached from the request: the answer is for every later read too,
-		// and the reader that started it may be gone before it lands.
+		// and the reader that started it may be gone before it lands. Tracked
+		// as server background work, so shutdown waits for a refresh that is
+		// using an MCP scope before the MCP runtime closes, and one asked for
+		// after shutdown began is not started at all.
 		refreshCtx := context.WithoutCancel(ctx)
-		safe.Go("httpapi.account-groups.refresh", func() {
+		started := s.background.Go("httpapi.account-groups.refresh", func() {
 			defer close(done)
 			s.refreshAccountGroups(refreshCtx, source)
 		})
+		if !started {
+			close(done)
+			c.refreshing = nil
+		}
 	}
 	if !c.waited {
 		c.waited = true

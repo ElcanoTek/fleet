@@ -34,12 +34,14 @@ type backgroundTracker struct {
 // Go runs fn as tracked detached work. It is a no-op once StopAndWait has run —
 // during shutdown the right move for background work is to skip it, not to extend
 // the drain. fn is panic-guarded so a background fault cannot take the process
-// down, matching the treatment of the detached turn goroutine.
-func (b *backgroundTracker) Go(name string, fn func()) {
+// down, matching the treatment of the detached turn goroutine. It reports
+// whether fn was started, for a caller that holds state on fn's behalf (a
+// "refresh running" marker) and must clear it when fn will never run.
+func (b *backgroundTracker) Go(name string, fn func()) bool {
 	b.mu.Lock()
 	if b.stopped {
 		b.mu.Unlock()
-		return
+		return false
 	}
 	b.wg.Add(1)
 	b.mu.Unlock()
@@ -49,6 +51,7 @@ func (b *backgroundTracker) Go(name string, fn func()) {
 		defer safe.Recover(name, nil)
 		fn()
 	}()
+	return true
 }
 
 // After schedules fn to run once after d, tracked and cancellable. Unlike a bare

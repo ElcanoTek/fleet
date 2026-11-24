@@ -281,6 +281,60 @@ func TestSourcedAccountGroupsDoesNotBlockOnASlowSource(t *testing.T) {
 	}
 }
 
+// A refresh is server background work: shutdown waits for one that is using
+// an MCP scope, and a read after shutdown began starts none.
+func TestSourcedAccountGroupsRefreshIsTrackedBackgroundWork(t *testing.T) {
+	sourcePolicy(t, "mcp_deals_list_account_groups")
+	src := &clientconfig.AccountGroupsSource{Server: "deals", Tool: "list_account_groups", RefreshSeconds: 300}
+
+	broker := &sourceBroker{answer: twoGroups, gate: make(chan struct{})}
+	s := &Server{store: newFakeChatStore(), agent: &sourceEngine{fakeTurnEngine: &fakeTurnEngine{}, broker: broker}}
+	gone, cancel := context.WithCancel(context.Background())
+	cancel()
+	s.sourcedAccountGroups(gone, src)
+	stopped := make(chan struct{})
+	go func() {
+		s.StopBackground()
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+		t.Fatal("StopBackground returned while a refresh was still calling the source")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(broker.gate)
+	select {
+	case <-stopped:
+	case <-time.After(5 * time.Second):
+		t.Fatal("StopBackground did not return after the refresh finished")
+	}
+	if broker.callCount() != 1 {
+		t.Fatalf("calls = %d, want the one refresh", broker.callCount())
+	}
+
+	// After shutdown began: no call, no refresh left marked as running, and
+	// the read does not wait for one.
+	late := &sourceBroker{answer: twoGroups}
+	s2 := &Server{store: newFakeChatStore(), agent: &sourceEngine{fakeTurnEngine: &fakeTurnEngine{}, broker: late}}
+	s2.StopBackground()
+	start := time.Now()
+	if got := s2.sourcedAccountGroups(context.Background(), src); len(got) != 0 {
+		t.Fatalf("groups after shutdown: %v", got)
+	}
+	if waited := time.Since(start); waited > accountGroupSourceFirstWait/2 {
+		t.Fatalf("a read after shutdown waited %v", waited)
+	}
+	if late.callCount() != 0 {
+		t.Fatalf("the source was called %d times after shutdown", late.callCount())
+	}
+	s2.accountGroupSource.mu.Lock()
+	running := s2.accountGroupSource.refreshing
+	s2.accountGroupSource.mu.Unlock()
+	if running != nil {
+		t.Fatal("a refresh that never started is still marked as running")
+	}
+}
+
 // The catalog response lists the manifest's groups and the source's, each
 // member checked against this box.
 func TestCatalogMergesSourcedAccountGroups(t *testing.T) {
