@@ -338,12 +338,10 @@ describe("Composer — tools popover seat menu", () => {
     fireEvent.click(several());
     fireEvent.click(screen.getByRole("option", { name: /OMG_GBP/ }));
     expect(screen.getByTestId("mcp-seat-ix")).toHaveTextContent("Elcano +1");
-    expect(several()).toHaveAttribute("aria-disabled", "true");
     fireEvent.click(screen.getByRole("option", { name: /Elcano/ }));
     expect(screen.getByTestId("mcp-seat-ix")).toHaveTextContent("OMG_GBP");
     expect(screen.getByRole("listbox", { name: "Accounts for Index Exchange" })).toBeInTheDocument();
     expect(several()).toBeChecked();
-    expect(several()).not.toHaveAttribute("aria-disabled");
     // …and the plain list on the next opening.
     fireEvent.keyDown(screen.getByRole("listbox"), { key: "Escape" });
     fireEvent.click(screen.getByTestId("mcp-seat-ix"));
@@ -381,18 +379,19 @@ describe("Composer — tools popover seat menu", () => {
     expect(trigger).toHaveTextContent("Elcano +2");
     expect(trigger).toHaveAccessibleName("Accounts for Index Exchange: Elcano, OMG_USD, OMG_GBP");
     fireEvent.click(trigger);
-    // A chat that already runs several accounts opens as the checklist, and
-    // the mode cannot be turned off while it does.
+    // A chat that already runs several accounts opens as the checklist.
     const several = screen.getByRole("switch", { name: "Use several accounts" });
     expect(several).toBeChecked();
-    expect(several).toHaveAttribute("aria-disabled", "true");
-    fireEvent.click(several);
-    expect(several).toBeChecked();
+    expect(several).not.toHaveAttribute("aria-disabled");
     expect(
       screen.getAllByRole("option").filter((o) => o.getAttribute("aria-selected") === "true"),
     ).toHaveLength(3);
     fireEvent.click(screen.getByRole("option", { name: /Elcano/ }));
     expect(setMcpServerAccount).toHaveBeenCalledWith(null, "ix", ["OMG_USD", "OMG_GBP"]);
+    // The switch is never locked: turning it off goes back to one account,
+    // the first, which is the one the pill names.
+    fireEvent.click(several);
+    expect(setMcpServerAccount).toHaveBeenLastCalledWith(null, "ix", [""]);
   });
 
   // The server stores the user's default by name when a list holds it. The

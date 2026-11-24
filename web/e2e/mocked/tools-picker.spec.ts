@@ -66,13 +66,16 @@ const ACCOUNT_GROUPS = {
   ],
 };
 
-async function boot(page: Page, { admin, accountGroups = false }: { admin: boolean; accountGroups?: boolean }) {
+async function boot(
+  page: Page,
+  { admin, accountGroups = false, servers = SERVERS }: { admin: boolean; accountGroups?: boolean; servers?: unknown[] },
+) {
   await page.route("**/api/**", (route) => route.fulfill({ json: {} }));
   await mockChatBoot(page);
   await page.route("**/api/mcp-servers", (r: Route) =>
     r.fulfill({
       json: {
-        servers: SERVERS,
+        servers,
         categories: CATEGORIES,
         ...(accountGroups ? { account_groups: ACCOUNT_GROUPS } : {}),
       },
@@ -239,6 +242,93 @@ test("a bundle with no account groups shows no chip row", async ({ page, context
   await page.getByRole("button", { name: "Tools", exact: true }).click();
   await expect(page.getByTestId("chat-tools-popover")).toBeVisible();
   await expect(page.getByTestId("chat-tools-account-groups")).toHaveCount(0);
+});
+
+// A connector with many accounts: the menu is never taller than the room it
+// opens into. Its list scrolls inside, and the "Use several accounts" switch
+// at its foot stays on screen and clickable, at any window height.
+for (const height of [860, 620, 480]) {
+  test(`account menu with many accounts fits a ${height}px window`, async ({ page, context }) => {
+    await page.setViewportSize({ width: 1280, height });
+    await loginViaCookie(context);
+    const many = SERVERS.map((s) =>
+      s.name === "indexexchange"
+        ? { ...s, accounts: Array.from({ length: 24 }, (_, i) => `client_account_${i + 1}`) }
+        : s,
+    );
+    await boot(page, { admin: true, servers: many });
+    await page.getByRole("button", { name: "Tools", exact: true }).click();
+    await expect(page.getByTestId("chat-tools-popover")).toBeVisible();
+    const pill = page.getByTestId("mcp-seat-indexexchange");
+    await expect(pill).toHaveText(/Elcano/);
+    // Put the row fully in view first and let that scroll pass: a scroll
+    // outside the menu closes it, as it should.
+    await pill.evaluate((el) => el.scrollIntoView({ block: "center" }));
+    await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+    await pill.click();
+
+    const menu = page.locator("[data-seat-menu]");
+    await expect(menu).toBeVisible();
+    await expect(menu).toHaveCSS("opacity", "1");
+    const box = (await menu.boundingBox())!;
+    expect(box.y).toBeGreaterThanOrEqual(0);
+    expect(box.y + box.height).toBeLessThanOrEqual(height);
+
+    const several = page.getByRole("switch", { name: "Use several accounts" });
+    const switchBox = (await several.boundingBox())!;
+    expect(switchBox.y).toBeGreaterThanOrEqual(box.y);
+    expect(switchBox.y + switchBox.height).toBeLessThanOrEqual(box.y + box.height);
+    await page.screenshot({ path: `test-results/tools-seat-menu-many-${height}.png` });
+    // Clickable where it is, and the last account is reachable by scrolling
+    // the list, not the page.
+    await several.click({ trial: false });
+    await expect(several).toBeChecked();
+    const last = page.getByRole("option", { name: "client_account_24" });
+    await last.scrollIntoViewIfNeeded();
+    await last.click();
+    await expect(page.getByTestId("mcp-seat-indexexchange")).toHaveText(/Elcano \+1/);
+    const after = (await menu.boundingBox())!;
+    expect(after.y + after.height).toBeLessThanOrEqual(height);
+    // The switch is never locked: off goes back to the first account.
+    await several.click();
+    await expect(several).not.toBeChecked();
+    await expect(page.getByTestId("mcp-seat-indexexchange")).toHaveText(/^Elcano$/);
+  });
+}
+
+// The library's detail pane has the same menu, in a dialog: it fits the
+// window there too and its switch works.
+test("account menu in the library fits the window and its switch works", async ({ page, context }) => {
+  await page.setViewportSize({ width: 1280, height: 640 });
+  await loginViaCookie(context);
+  const many = SERVERS.map((s) =>
+    s.name === "indexexchange"
+      ? { ...s, accounts: Array.from({ length: 24 }, (_, i) => `client_account_${i + 1}`) }
+      : s,
+  );
+  await boot(page, { admin: true, servers: many });
+  await page.getByRole("button", { name: "Tools", exact: true }).click();
+  await page.getByRole("button", { name: "Open tool library" }).click();
+  const library = page.getByTestId("chat-tools-library");
+  await expect(library).toBeVisible();
+  await library.getByTestId("chat-tools-library-row-indexexchange").getByRole("button").first().click();
+  const field = page.getByTestId("chat-tools-library-detail").getByTestId("mcp-seat-indexexchange");
+  await field.click();
+  const menu = page.locator("[data-seat-menu]");
+  await expect(menu).toBeVisible();
+  const box = (await menu.boundingBox())!;
+  expect(box.y).toBeGreaterThanOrEqual(0);
+  expect(box.y + box.height).toBeLessThanOrEqual(640);
+  const several = page.getByRole("switch", { name: "Use several accounts" });
+  await several.click();
+  await expect(several).toBeChecked();
+  await page.getByRole("option", { name: "client_account_2", exact: true }).click();
+  await expect(field).toHaveText(/Elcano \+1/);
+  await several.click();
+  await expect(several).not.toBeChecked();
+  await expect(field).toHaveText(/Elcano/);
+  await expect(field).not.toHaveText(/\+1/);
+  await page.screenshot({ path: "test-results/tools-library-seat-menu.png" });
 });
 
 test("tools picker renders in the dark theme", async ({ page, context }) => {

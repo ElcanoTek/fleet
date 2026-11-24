@@ -129,6 +129,14 @@ export function StatusIcon({ status }: { status: ConnectorStatus }) {
   return null;
 }
 
+// The account menu's box: at most this tall, never closer than EDGE to the
+// window, GAP from its trigger, and never squeezed below MIN (then it is
+// better clipped than unusable; a window that short has no room for a menu).
+const SEAT_MENU_MAX_HEIGHT = 288;
+const SEAT_MENU_MIN_HEIGHT = 120;
+const SEAT_MENU_GAP = 4;
+const SEAT_MENU_EDGE = 8;
+
 /**
  * Which accounts (credential seats) a connection uses in this chat. A styled
  * menu rather than a native select: the default seat reads as the deployment
@@ -144,10 +152,10 @@ export function StatusIcon({ status }: { status: ConnectorStatus }) {
  *    a "Use several accounts" switch at its foot. On, the list is a checklist:
  *    each row ticks or unticks one account and the menu stays open. The last
  *    ticked account cannot be unticked (the connector's switch turns it off),
- *    and no more than MAX_ACCOUNTS_PER_CONNECTOR can be ticked. It is on, and
- *    cannot be turned off, while more than one account is ticked: turning it
- *    off would have to drop accounts nobody asked to drop. The mode lasts for
- *    one opening of the menu; the next one starts from the chat's own state.
+ *    and no more than MAX_ACCOUNTS_PER_CONNECTOR can be ticked. Turning the
+ *    switch off with several accounts ticked goes back to one, the first (the
+ *    account the trigger names). The mode lasts for one opening of the menu;
+ *    the next one starts from the chat's own state.
  *
  * The trigger reads the account, or the first one and how many more
  * ("Raptive +3"). A hosted connection mounts one account per chat and has no
@@ -188,11 +196,16 @@ export function SeatMenu({
   // under the pointer (unticking down to one account keeps the checklist
   // until then); the next opening starts from the chat's own state again.
   const [severalAsked, setSeveralAsked] = useState(false);
-  const severalLocked = chosen.length > 1;
-  const several = canUseSeveral && (severalAsked || severalLocked);
+  const several = canUseSeveral && (severalAsked || chosen.length > 1);
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
-  const [pos, setPos] = useState<{ left: number; top?: number; bottom?: number; width: number } | null>(null);
+  const [pos, setPos] = useState<{
+    left: number;
+    top?: number;
+    bottom?: number;
+    width: number;
+    maxHeight: number;
+  } | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -205,13 +218,20 @@ export function SeatMenu({
     if (!el) return;
     const r = el.getBoundingClientRect();
     const width = Math.max(r.width, 176);
-    const left = Math.min(r.left, window.innerWidth - width - 8);
-    // Open upward when there is no room below (the composer sits at the bottom).
-    const below = window.innerHeight - r.bottom;
+    const left = Math.max(SEAT_MENU_EDGE, Math.min(r.left, window.innerWidth - width - SEAT_MENU_EDGE));
+    // The menu is never taller than the room it opens into: its account list
+    // scrolls inside, so its heading and the "Use several accounts" switch at
+    // its foot stay on screen however many accounts there are. It opens
+    // downward when the whole menu fits there, and otherwise toward whichever
+    // side has more room (the composer sits at the bottom, so often upward).
+    const below = window.innerHeight - r.bottom - SEAT_MENU_GAP - SEAT_MENU_EDGE;
+    const above = r.top - SEAT_MENU_GAP - SEAT_MENU_EDGE;
+    const up = below < SEAT_MENU_MAX_HEIGHT && above > below;
+    const maxHeight = Math.max(SEAT_MENU_MIN_HEIGHT, Math.min(SEAT_MENU_MAX_HEIGHT, up ? above : below));
     setPos(
-      below < 220
-        ? { left, bottom: window.innerHeight - r.top + 4, width }
-        : { left, top: r.bottom + 4, width },
+      up
+        ? { left, bottom: window.innerHeight - r.top + SEAT_MENU_GAP, width, maxHeight }
+        : { left, top: r.bottom + SEAT_MENU_GAP, width, maxHeight },
     );
   };
 
@@ -363,10 +383,10 @@ export function SeatMenu({
               data-seat-menu=""
               onKeyDown={onMenuKey}
               onClick={(event) => event.stopPropagation()}
-              style={{ left: pos.left, top: pos.top, bottom: pos.bottom, minWidth: pos.width }}
-              className="fixed z-[1300] flex max-h-72 max-w-[18rem] flex-col rounded-[var(--radius-md)] border border-[var(--color-selected-border)] bg-[var(--color-surface-2)] p-[0.3rem] shadow-[var(--shadow-popover)] motion-safe:animate-pop-up"
+              style={{ left: pos.left, top: pos.top, bottom: pos.bottom, minWidth: pos.width, maxHeight: pos.maxHeight }}
+              className="fixed z-[1300] flex max-w-[18rem] flex-col rounded-[var(--radius-md)] border border-[var(--color-selected-border)] bg-[var(--color-surface-2)] p-[0.3rem] shadow-[var(--shadow-popover)] motion-safe:animate-pop-up"
             >
-              <div className="px-[0.55rem] pb-[0.2rem] pt-[0.15rem] font-[family-name:var(--font-code)] text-[0.62rem] uppercase tracking-[0.12em] text-[var(--color-text-subtle)]">
+              <div className="shrink-0 px-[0.55rem] pb-[0.2rem] pt-[0.15rem] font-[family-name:var(--font-code)] text-[0.62rem] uppercase tracking-[0.12em] text-[var(--color-text-subtle)]">
                 {several ? tr("Accounts") : tr("Account")}
               </div>
               <div
@@ -433,27 +453,31 @@ export function SeatMenu({
                 })}
               </div>
               {several && atCap ? (
-                <div className="px-[0.55rem] pb-[0.15rem] pt-[0.3rem] text-[0.66rem] text-[var(--color-text-subtle)]">
+                <div className="shrink-0 px-[0.55rem] pb-[0.15rem] pt-[0.3rem] text-[0.66rem] text-[var(--color-text-subtle)]">
                   {tr("Up to {0} accounts at once.", [MAX_ACCOUNTS_PER_CONNECTOR])}
                 </div>
               ) : null}
               {canUseSeveral ? (
-                <div
-                  className="mt-[0.3rem] flex items-center gap-2 border-t border-[var(--color-divider)] px-[0.55rem] pb-[0.2rem] pt-[0.45rem] text-[0.72rem] text-[var(--color-text-secondary)] any-pointer-coarse:min-h-11"
-                  title={severalLocked ? tr("On while this chat uses more than one account. Untick accounts down to one to turn it off.") : undefined}
-                >
+                <div className="mt-[0.3rem] flex shrink-0 items-center gap-2 border-t border-[var(--color-divider)] px-[0.55rem] pb-[0.2rem] pt-[0.45rem] text-[0.72rem] text-[var(--color-text-secondary)] any-pointer-coarse:min-h-11">
                   <span className="min-w-0 flex-1">{tr("Use several accounts")}</span>
                   <Switch
                     ref={severalRef}
                     checked={several}
                     aria-label={tr("Use several accounts")}
-                    aria-disabled={severalLocked || undefined}
+                    title={
+                      chosen.length > 1
+                        ? tr("Turn off to use only {0} in this chat.", [selected.label])
+                        : undefined
+                    }
                     data-testid={`mcp-seat-several-${connector.name}`}
                     onKeyDown={onSeveralKey}
                     onCheckedChange={(next) => {
-                      if (!severalLocked) setSeveralAsked(next);
+                      setSeveralAsked(next);
+                      // Off with several accounts ticked: back to one, the
+                      // first, which is the account the trigger names.
+                      if (!next && chosen.length > 1) onChange([stored(selected.value)]);
                     }}
-                    className={`hit-area-touch ${severalLocked ? "cursor-not-allowed opacity-60" : ""}`}
+                    className="hit-area-touch"
                   />
                 </div>
               ) : null}

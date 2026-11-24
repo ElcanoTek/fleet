@@ -267,7 +267,7 @@
   "Not set up here: {0}.": "Sin configurar aquí: {0}.",
   "This would put {0} past {1} accounts, the most one chat can use.": "Esto haría que {0} superara las {1} cuentas, el máximo que admite un chat.",
   "Use several accounts": "Usar varias cuentas",
-  "On while this chat uses more than one account. Untick accounts down to one to turn it off.": "Activado mientras este chat use más de una cuenta. Desmarca cuentas hasta dejar una para desactivarlo.",
+  "Turn off to use only {0} in this chat.": "Desactívalo para usar solo {0} en este chat.",
   "(default account)": "(cuenta predeterminada)",
   "Accounts for this chat": "Cuentas para este chat",
   "Accounts for {0}": "Cuentas para {0}",
