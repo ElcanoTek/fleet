@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  accountGroupState,
+  groupChangeBlock,
   isGroupOn,
   matchingGroups,
   toggleAccountGroup,
+  toggleAccountGroupIn,
   unusableMembers,
+  unusableMembersIn,
   usableMembers,
   type AccountGroup,
   type GroupRow,
@@ -160,6 +164,65 @@ describe("toggleAccountGroup", () => {
     const none: AccountGroup = { id: "n", name: "N", accounts: [{ server: "gone", account: "x" }] };
     expect(toggleAccountGroup(rows(), [none], none)).toEqual({ ok: false, reason: "unusable" });
     expect(isGroupOn(none, rows())).toBe(false);
+  });
+});
+
+// The chip row asks about every group on every render, from one state worked
+// out once. A bundle may list hundreds of groups, so that state must answer
+// exactly what a fresh look at each group would.
+describe("accountGroupState", () => {
+  const many: AccountGroup[] = Array.from({ length: 500 }, (_, i) => ({
+    id: `g${i}`,
+    name: `Group ${i}`,
+    accounts: [
+      { server: "ix", account: ["arena", "twc", "usd", "gbp"][i % 4] },
+      ...(i % 3 === 0 ? [{ server: "ox", account: "twc" }] : []),
+      ...(i % 7 === 0 ? [{ server: "gone", account: "x", status: "connector_missing" as const }] : []),
+    ],
+  }));
+  const chat: GroupRow[] = [
+    { name: "ix", enabled: true, accounts: ["arena", "twc", "usd", "gbp"], account: "arena", selected_accounts: ["arena", "twc"] },
+    { name: "ox", enabled: true, accounts: ["twc"], account: "twc" },
+    { name: "pm", enabled: true, accounts: ["arena"] },
+  ];
+
+  it("agrees with a fresh look at each group", () => {
+    const state = accountGroupState(chat, many);
+    for (const group of many) {
+      expect(state.on.has(group.id), group.id).toBe(isGroupOn(group, chat));
+      expect(state.usable.get(group.id), group.id).toEqual(usableMembers(group, chat));
+      expect(unusableMembersIn(state, group), group.id).toEqual(unusableMembers(group, chat));
+      const change = toggleAccountGroupIn(state, group);
+      expect(change, group.id).toEqual(toggleAccountGroup(chat, many, group));
+      expect(groupChangeBlock(state, group) === null, group.id).toBe(change.ok);
+    }
+    // ix on arena + twc, ox on twc: the arena groups without ox and every twc group.
+    expect(state.on.size).toBeGreaterThan(0);
+    expect(state.on.has("g1")).toBe(true); // ix/twc only
+    expect(state.on.has("g2")).toBe(false); // ix/usd
+  });
+
+  it("answers every chip of a large bundle from one pass over the groups", () => {
+    let reads = 0;
+    const counted = many.map(
+      (group) =>
+        new Proxy(group, {
+          get(target, prop, receiver) {
+            if (prop === "accounts") reads++;
+            return Reflect.get(target, prop, receiver);
+          },
+        }),
+    );
+    const state = accountGroupState(chat, counted);
+    const afterState = reads;
+    for (const group of counted) {
+      groupChangeBlock(state, group);
+      unusableMembersIn(state, group);
+    }
+    // Building the state reads each group once; each chip then reads only its
+    // own group, never the other 499.
+    expect(afterState).toBe(counted.length);
+    expect(reads - afterState).toBeLessThanOrEqual(counted.length * 2);
   });
 });
 

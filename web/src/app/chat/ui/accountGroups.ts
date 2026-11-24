@@ -45,6 +45,73 @@ function switchable(row: GroupRow | undefined): row is GroupRow {
   return !!row && !row.remote && !row.always_on && (!row.status || row.status === "available");
 }
 
+const key = (server: string, account: string) => `${server}\u0000${account}`;
+
+/**
+ * Everything the chips need to know about the groups against the picker's
+ * rows, worked out once: which members can be used, which groups are on, and
+ * how many on-groups set each connector and each account. A bundle may list
+ * hundreds of groups and the chip row asks about each on every render, so
+ * each question below is answered from this in time proportional to one
+ * group's members, never by walking the other groups again.
+ */
+export type AccountGroupState<T extends GroupRow = GroupRow> = {
+  rows: readonly T[];
+  rowsByName: ReadonlyMap<string, T>;
+  /** Per group id: the members that can be used here. */
+  usable: ReadonlyMap<string, readonly AccountGroupMember[]>;
+  /** Ids of the groups that are on. */
+  on: ReadonlySet<string>;
+  /** Per connector: how many on-groups set it. */
+  onByServer: ReadonlyMap<string, number>;
+  /** Per connector account (key): how many on-groups name it. */
+  onByMember: ReadonlyMap<string, number>;
+};
+
+function usableIn(group: AccountGroup, rowsByName: ReadonlyMap<string, GroupRow>): AccountGroupMember[] {
+  return group.accounts.filter((m) => {
+    if (m.status && m.status !== "ok") return false;
+    const row = rowsByName.get(m.server);
+    if (!switchable(row)) return false;
+    return m.account === "" || (row.accounts ?? []).includes(m.account);
+  });
+}
+
+export function accountGroupState<T extends GroupRow>(
+  rows: readonly T[],
+  groups: readonly AccountGroup[],
+): AccountGroupState<T> {
+  const rowsByName = new Map(rows.map((row) => [row.name, row]));
+  const chosen = new Map<string, Set<string>>();
+  const runsAs = (server: string, account: string) => {
+    const row = rowsByName.get(server);
+    if (!row || !row.enabled) return false;
+    let set = chosen.get(server);
+    if (!set) {
+      set = new Set(selectedAccounts(row));
+      chosen.set(server, set);
+    }
+    return set.has(account);
+  };
+  const usable = new Map<string, AccountGroupMember[]>();
+  const on = new Set<string>();
+  const onByServer = new Map<string, number>();
+  const onByMember = new Map<string, number>();
+  for (const group of groups) {
+    const members = usableIn(group, rowsByName);
+    usable.set(group.id, members);
+    if (members.length === 0 || !members.every((m) => runsAs(m.server, m.account))) continue;
+    on.add(group.id);
+    for (const server of new Set(members.map((m) => m.server))) {
+      onByServer.set(server, (onByServer.get(server) ?? 0) + 1);
+    }
+    for (const k of new Set(members.map((m) => key(m.server, m.account)))) {
+      onByMember.set(k, (onByMember.get(k) ?? 0) + 1);
+    }
+  }
+  return { rows, rowsByName, usable, on, onByServer, onByMember };
+}
+
 /**
  * The members of a group that can be used here: the connector is in the
  * picker with a switch and has the account. The server's status and the rows
@@ -52,18 +119,18 @@ function switchable(row: GroupRow | undefined): row is GroupRow {
  * it.
  */
 export function usableMembers(group: AccountGroup, rows: readonly GroupRow[]): AccountGroupMember[] {
-  const byName = new Map(rows.map((row) => [row.name, row]));
-  return group.accounts.filter((m) => {
-    if (m.status && m.status !== "ok") return false;
-    const row = byName.get(m.server);
-    if (!switchable(row)) return false;
-    return m.account === "" || (row.accounts ?? []).includes(m.account);
-  });
+  return usableIn(group, new Map(rows.map((row) => [row.name, row])));
 }
 
 /** The members that cannot be used here, for the chip's warning. */
 export function unusableMembers(group: AccountGroup, rows: readonly GroupRow[]): AccountGroupMember[] {
   const usable = new Set(usableMembers(group, rows));
+  return group.accounts.filter((m) => !usable.has(m));
+}
+
+/** unusableMembers, from a state already worked out. */
+export function unusableMembersIn(state: AccountGroupState, group: AccountGroup): AccountGroupMember[] {
+  const usable = new Set(state.usable.get(group.id) ?? []);
   return group.accounts.filter((m) => !usable.has(m));
 }
 
@@ -73,16 +140,8 @@ export function unusableMembers(group: AccountGroup, rows: readonly GroupRow[]):
  * never on.
  */
 export function isGroupOn(group: AccountGroup, rows: readonly GroupRow[]): boolean {
-  const usable = usableMembers(group, rows);
-  if (usable.length === 0) return false;
-  const byName = new Map(rows.map((row) => [row.name, row]));
-  return usable.every((m) => {
-    const row = byName.get(m.server);
-    return !!row && row.enabled && selectedAccounts(row).includes(m.account);
-  });
+  return accountGroupState(rows, [group]).on.has(group.id);
 }
-
-const key = (server: string, account: string) => `${server}\u0000${account}`;
 
 export type GroupChange<T> =
   | { ok: true; rows: T[] }
@@ -90,6 +149,60 @@ export type GroupChange<T> =
   | { ok: false; reason: "cap"; server: string }
   /** No member of the group can be used here. */
   | { ok: false; reason: "unusable" };
+
+/** What a click on a group would set, per connector, or why it cannot. */
+type GroupPlan =
+  | { ok: true; turnOff: boolean; accounts: Map<string, string[]> }
+  | { ok: false; reason: "cap"; server: string }
+  | { ok: false; reason: "unusable" };
+
+function planGroupChange(state: AccountGroupState, group: AccountGroup): GroupPlan {
+  const usable = state.usable.get(group.id) ?? [];
+  if (usable.length === 0) return { ok: false, reason: "unusable" };
+  const wanted = new Map<string, string[]>();
+  for (const m of usable) wanted.set(m.server, [...(wanted.get(m.server) ?? []), m.account]);
+  const accounts = new Map<string, string[]>();
+
+  if (state.on.has(group.id)) {
+    for (const [server, mine] of wanted) {
+      const row = state.rowsByName.get(server);
+      if (!row) continue;
+      // An account another on-group also names stays: this group's own count
+      // is one of those recorded, so "another" is more than one.
+      accounts.set(
+        server,
+        selectedAccounts(row).filter((a) => !mine.includes(a) || (state.onByMember.get(key(server, a)) ?? 0) > 1),
+      );
+    }
+    return { ok: true, turnOff: true, accounts };
+  }
+
+  for (const [server, mine] of wanted) {
+    const row = state.rowsByName.get(server);
+    if (!row) continue;
+    // A connector no on-group set holds no group's account (the default one,
+    // or one picked by hand), and the group replaces it. The group itself is
+    // off, so every on-group counted here is another one.
+    const replace = !row.enabled || (state.onByServer.get(server) ?? 0) === 0;
+    const merged = replace ? mine : [...new Set([...selectedAccounts(row), ...mine])];
+    if (merged.length > MAX_ACCOUNTS_PER_CONNECTOR) return { ok: false, reason: "cap", server };
+    accounts.set(server, merged);
+  }
+  return { ok: true, turnOff: false, accounts };
+}
+
+/**
+ * Why a click on a group's chip would do nothing, or null when it would act.
+ * Cheap: it builds no rows, so the chip row can ask it of every chip.
+ */
+export function groupChangeBlock(
+  state: AccountGroupState,
+  group: AccountGroup,
+): { reason: "cap"; server: string } | { reason: "unusable" } | null {
+  const plan = planGroupChange(state, group);
+  if (plan.ok) return null;
+  return plan.reason === "cap" ? { reason: "cap", server: plan.server } : { reason: "unusable" };
+}
 
 /**
  * The rows after a click on a group's chip.
@@ -107,51 +220,34 @@ export type GroupChange<T> =
  *
  * Connectors the group does not name are not touched either way.
  */
+export function toggleAccountGroupIn<T extends GroupRow>(
+  state: AccountGroupState<T>,
+  group: AccountGroup,
+): GroupChange<T> {
+  const plan = planGroupChange(state, group);
+  if (!plan.ok) return plan;
+  return {
+    ok: true,
+    rows: state.rows.map((row) => {
+      const accounts = plan.accounts.get(row.name);
+      if (!accounts) return row;
+      if (plan.turnOff) {
+        return accounts.length > 0
+          ? withSelectedAccounts(row, accounts)
+          : withSelectedAccounts({ ...row, enabled: false }, [""]);
+      }
+      return withSelectedAccounts({ ...row, enabled: true }, accounts);
+    }),
+  };
+}
+
+/** toggleAccountGroupIn for a caller with no state at hand. */
 export function toggleAccountGroup<T extends GroupRow>(
   rows: readonly T[],
   groups: readonly AccountGroup[],
   group: AccountGroup,
 ): GroupChange<T> {
-  const usable = usableMembers(group, rows);
-  if (usable.length === 0) return { ok: false, reason: "unusable" };
-  const wanted = new Map<string, string[]>();
-  for (const m of usable) wanted.set(m.server, [...(wanted.get(m.server) ?? []), m.account]);
-  const others = groups.filter((g) => g.id !== group.id && isGroupOn(g, rows));
-
-  if (isGroupOn(group, rows)) {
-    const kept = new Set(others.flatMap((g) => usableMembers(g, rows).map((m) => key(m.server, m.account))));
-    return {
-      ok: true,
-      rows: rows.map((row) => {
-        const accounts = wanted.get(row.name);
-        if (!accounts) return row;
-        const left = selectedAccounts(row).filter(
-          (a) => !accounts.includes(a) || kept.has(key(row.name, a)),
-        );
-        return left.length > 0
-          ? withSelectedAccounts(row, left)
-          : withSelectedAccounts({ ...row, enabled: false }, [""]);
-      }),
-    };
-  }
-
-  // Connectors another group that is on already set: there the new accounts
-  // are added. Anywhere else the connector holds no group's account (the
-  // default one, or one picked by hand), and the group replaces it.
-  const othersOn = new Set(others.flatMap((g) => usableMembers(g, rows).map((m) => m.server)));
-  const next: T[] = [];
-  for (const row of rows) {
-    const accounts = wanted.get(row.name);
-    if (!accounts) {
-      next.push(row);
-      continue;
-    }
-    const replace = !row.enabled || !othersOn.has(row.name);
-    const merged = replace ? accounts : [...new Set([...selectedAccounts(row), ...accounts])];
-    if (merged.length > MAX_ACCOUNTS_PER_CONNECTOR) return { ok: false, reason: "cap", server: row.name };
-    next.push(withSelectedAccounts({ ...row, enabled: true }, merged));
-  }
-  return { ok: true, rows: next };
+  return toggleAccountGroupIn(accountGroupState(rows, groups), group);
 }
 
 /** Groups whose name matches a picker search; all of them without one. */

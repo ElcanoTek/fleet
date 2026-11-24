@@ -83,7 +83,9 @@ Each member is checked against the rows the same response lists
 
 The rules are pure functions over the picker's rows
 (`web/src/app/chat/ui/accountGroups.ts`); a click is one optimistic update and
-one save, like **All on**.
+one save, like **All on**. The chip row works out which groups are on once per
+change of the rows (`accountGroupState`) and answers each chip from that, so a
+bundle with hundreds of groups costs one pass, not one pass per chip.
 
 - **A group is on** when every member that can be used here is: its connector
   is on in this chat and runs as that account.
