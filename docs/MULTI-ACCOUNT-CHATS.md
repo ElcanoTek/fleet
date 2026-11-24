@@ -130,11 +130,21 @@ same `SeatMenu`. It has one behaviour at a time:
   switch turns it off), and at the cap the unticked rows are disabled with
   "Up to 6 accounts at once."
 
-The switch is on and locked while more than one account is ticked (turning it
-off would have to drop accounts nobody asked to drop); unticking down to one
-unlocks it. The mode lasts for one opening of the menu, however it closes, and
-the list never changes kind while it is open: the next opening is the
-checklist only if the chat then runs the connector as more than one account. The pill reads the account, or the first one and how many
+Turning the switch off while several accounts are ticked goes back to one
+account, the first (the one the pill names). It was first shipped locked on in
+that state, which read as a broken control: nothing on screen said why it would
+not move. The mode lasts for one opening of the menu, however it closes, and
+unticking never changes the list's kind while it is open: the next opening is
+the checklist only if the chat then runs the connector as more than one
+account.
+
+The menu is sized to the room it opens into (`place` in `SeatMenu`): at most
+288px, never past the window's edge, downward when it fits there and otherwise
+toward the side with more room. The account list scrolls inside it, so the
+heading and the switch stay visible however many accounts a connector has. The
+first version had a fixed maximum height and opened downward whenever 220px
+were free, so a connector with many accounts ran off the bottom of the window
+and took the switch with it. The pill reads the account, or the first one and how many
 more: `Elcano +2`. From the keyboard, the arrow keys move through the accounts
 and past the last one onto the switch; Enter or Space acts on the focused
 row; Escape closes the menu.

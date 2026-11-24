@@ -1059,8 +1059,10 @@ checklist: tick two or more and this conversation uses the connector as each
 of them at once, up to six. The menu's button then reads the first account and
 how many more, as in `Elcano +2`. At least one account stays ticked; the
 connector's switch is what turns it off. A conversation that uses more than
-one account opens the menu as the checklist; untick down to one and the next
-time you open it, it is the plain list again. With more
+one account opens the menu as the checklist. Turn **Use several accounts** off
+to go back to one account, the first one (the one the button names), or
+untick down to one. The menu never runs past the edge of the window: a long
+account list scrolls inside it, and the switch stays at its foot. With more
 than one account on, the assistant names the account in its answers and
 before each action, asks which one you mean when a request does not say, and
 every action that needs approval gets its own card showing the one account it
