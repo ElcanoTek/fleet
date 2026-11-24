@@ -271,6 +271,10 @@ U+0000 being removed (an email is trimmed and lowercased, `pgtext.EmailKey`).
 A key holding U+0000 therefore fails its query: a lookup (an account by
 email, a share token, a trigger slug, an OAuth state) matches no row, and a
 write naming such a key fails.
+One key is refused where it enters instead: an inbound email's `Message-ID`
+(an email trigger's dedup key) that holds U+0000 or is longer than 998 bytes
+is answered 400 `invalid message_id` before any lookup, so that email never
+runs.
 
 **Identity values are refused where they enter**, so they get a clear
 refusal instead of a failed query. Every email from outside goes through

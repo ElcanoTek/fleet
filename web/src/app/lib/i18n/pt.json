@@ -4663,6 +4663,7 @@
   "invalid filename: path traversal not allowed": "Nome de ficheiro inválido: não é permitido percorrer diretórios superiores",
   "invalid focus": "Foco inválido",
   "invalid logical file name": "Nome lógico de ficheiro inválido",
+  "invalid message_id": "message_id inválido",
   "invalid ops_role (want none|readonly|client|admin, or none|view|run)": "ops_role inválido (é esperado none|readonly|client|admin, ou none|view|run)",
   "invalid ops_scope (want none|view|run)": "ops_scope inválido (é esperado none|view|run)",
   "invalid path": "Caminho inválido",

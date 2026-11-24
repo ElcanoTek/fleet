@@ -33,16 +33,10 @@ func TestNoSuccessSideEffectsWhenTerminalWriteFails(t *testing.T) {
 	if err := store.CreateTrigger(ctx, &models.TaskTrigger{ID: trigID, TaskID: template.ID, Slug: "r1", Secret: "s", Kind: models.TriggerKindEmail, EmailPolicy: &models.EmailTriggerPolicy{}}); err != nil {
 		t.Fatalf("CreateTrigger: %v", err)
 	}
-	runID, err := store.SpawnEmailRun(ctx, &models.TaskTrigger{TaskID: template.ID, Kind: models.TriggerKindEmail}, "do the work", false)
+	ev := &models.TriggerEvent{IdempotencyKey: "<orig@mail>", Sender: "asker@corp.com", Subject: "Please help", MessageID: "<orig@mail>"}
+	runID, _, err := store.SpawnEmailRun(ctx, &models.TaskTrigger{ID: trigID, TaskID: template.ID, Kind: models.TriggerKindEmail}, ev, "do the work", false)
 	if err != nil {
 		t.Fatalf("SpawnEmailRun: %v", err)
-	}
-	ev := &models.TriggerEvent{TriggerID: trigID, IdempotencyKey: "<orig@mail>", Sender: "asker@corp.com", Subject: "Please help", MessageID: "<orig@mail>"}
-	if _, err := store.RecordTriggerEvent(ctx, ev); err != nil {
-		t.Fatalf("RecordTriggerEvent: %v", err)
-	}
-	if err := store.SetTriggerEventRunID(ctx, ev.ID, runID); err != nil {
-		t.Fatalf("SetTriggerEventRunID: %v", err)
 	}
 
 	started := make(chan struct{})

@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -44,21 +45,15 @@ func (s *Storage) RotateTriggerSecret(ctx context.Context, id uuid.UUID, secret 
 	return s.db.RotateTriggerSecret(ctx, id, secret)
 }
 
-// RecordTriggerEvent records one accepted inbound event, enforcing idempotency
-// (a duplicate (trigger_id, idempotency_key) returns inserted=false). See
-// db.RecordTriggerEvent.
-func (s *Storage) RecordTriggerEvent(ctx context.Context, ev *models.TriggerEvent) (bool, error) {
-	return s.db.RecordTriggerEvent(ctx, ev)
-}
-
-// SetTriggerEventRunID links an accepted event to the run it spawned.
-func (s *Storage) SetTriggerEventRunID(ctx context.Context, eventID, runID uuid.UUID) error {
-	return s.db.SetTriggerEventRunID(ctx, eventID, runID)
-}
-
 // GetTriggerEventByRunID returns the inbound event a run answers (for reply-back).
 func (s *Storage) GetTriggerEventByRunID(ctx context.Context, runID uuid.UUID) (*models.TriggerEvent, error) {
 	return s.db.GetTriggerEventByRunID(ctx, runID)
+}
+
+// GetTriggerEventByKey returns the recorded event with this idempotency key on
+// this trigger, or sql.ErrNoRows. See db.GetTriggerEventByKey.
+func (s *Storage) GetTriggerEventByKey(ctx context.Context, triggerID uuid.UUID, idempotencyKey string) (*models.TriggerEvent, error) {
+	return s.db.GetTriggerEventByKey(ctx, triggerID, idempotencyKey)
 }
 
 // connectorInheritance selects which of the template's write-capable connector
@@ -177,21 +172,23 @@ func triggerRunCreate(template *models.Task, prompt string, inherit connectorInh
 // decide whether the run carries the template's write-capable connectors —
 // the one place the event-trigger security default is enforced.
 //
+// It returns the run unsaved: each Spawn*Run writes it.
+//
 // kind is the trigger kind whose connector rule `inherit` implements. A
 // trigger of any other kind is refused before anything is written, so a
 // caller that resolved the trigger some other way (by ID, or by a lookup that
 // forgot the kind) still cannot run an email trigger under the webhook rule,
 // or the reverse.
-func (s *Storage) buildTriggerRun(ctx context.Context, trigger *models.TaskTrigger, kind models.TriggerKind, prompt string, inherit connectorInheritance) (uuid.UUID, error) {
+func (s *Storage) buildTriggerRun(ctx context.Context, trigger *models.TaskTrigger, kind models.TriggerKind, prompt string, inherit connectorInheritance) (*models.Task, error) {
 	if trigger == nil {
-		return uuid.Nil, fmt.Errorf("spawn %s trigger run: no trigger", kind)
+		return nil, fmt.Errorf("spawn %s trigger run: no trigger", kind)
 	}
 	if got := trigger.KindOrWebhook(); got != kind {
-		return uuid.Nil, fmt.Errorf("spawn %s trigger run: trigger %s is of kind %q", kind, trigger.ID, got)
+		return nil, fmt.Errorf("spawn %s trigger run: trigger %s is of kind %q", kind, trigger.ID, got)
 	}
 	template, err := s.db.GetTask(ctx, trigger.TaskID)
 	if err != nil {
-		return uuid.Nil, fmt.Errorf("load template task: %w", err)
+		return nil, fmt.Errorf("load template task: %w", err)
 	}
 
 	run := models.NewTask(triggerRunCreate(template, prompt, inherit))
@@ -199,7 +196,18 @@ func (s *Storage) buildTriggerRun(ctx context.Context, trigger *models.TaskTrigg
 	// Carry the originating API key forward so spawned-run cost keeps counting
 	// against the template owner's usage bucket (and any scope=key budget).
 	run.CreatedByKeyID = template.CreatedByKeyID
+	return run, nil
+}
 
+// SpawnWebhookRun creates one fresh run cloned from a webhook trigger's
+// template task, with the rendered prompt substituted (#177). Behavior is
+// unchanged: the spawned run inherits the template's MCP selection (its
+// historical connector subset). A trigger of another kind is refused.
+func (s *Storage) SpawnWebhookRun(ctx context.Context, trigger *models.TaskTrigger, prompt string) (uuid.UUID, error) {
+	run, err := s.buildTriggerRun(ctx, trigger, models.TriggerKindWebhook, prompt, connectorsMCPOnly)
+	if err != nil {
+		return uuid.Nil, err
+	}
 	// Route every spawned run through the same schema/contract gate as public
 	// enqueue paths. Event triggers must not create a task the API would reject.
 	if _, err := s.AddTaskWithContext(ctx, run); err != nil {
@@ -208,25 +216,68 @@ func (s *Storage) buildTriggerRun(ctx context.Context, trigger *models.TaskTrigg
 	return run.ID, nil
 }
 
-// SpawnWebhookRun creates one fresh run cloned from a webhook trigger's
-// template task, with the rendered prompt substituted (#177). Behavior is
-// unchanged: the spawned run inherits the template's MCP selection (its
-// historical connector subset). A trigger of another kind is refused.
-func (s *Storage) SpawnWebhookRun(ctx context.Context, trigger *models.TaskTrigger, prompt string) (uuid.UUID, error) {
-	return s.buildTriggerRun(ctx, trigger, models.TriggerKindWebhook, prompt, connectorsMCPOnly)
-}
-
-// SpawnEmailRun creates one fresh run from an email trigger's template (#511).
+// SpawnEmailRun creates one fresh run from an email trigger's template (#511)
+// and records the delivery ev that started it, in one transaction: ev's
+// trigger_events row (the Message-ID dedup ledger, written already linked to
+// the run) and the run's task row commit together or not at all. A delivery
+// whose run is not created — a failed insert, a dropped connection, a crash —
+// therefore leaves no record, and the sender's retry of it starts the run. A
+// delivery that is already recorded returns duplicate=true and creates nothing.
+// Two deliveries of the same key at once create one run: the second waits for
+// the first's transaction, and is a duplicate if it committed or starts the run
+// itself if it did not. ev is recorded against trigger (its TriggerID and RunID
+// are set here) and, on success, carries the stored ID and CreatedAt.
+//
 // inheritConnectors reflects the template's allow_event_triggers opt-in: false
 // (the secure default) spawns a native-tools-only run whose credential allowlist
 // is an explicit deny-all, so an untrusted inbound email can never auto-escalate
 // through a connector; true inherits both the MCP selection and its credential
 // allowlist (a connector needs both to write). A trigger of another kind is
 // refused.
-func (s *Storage) SpawnEmailRun(ctx context.Context, trigger *models.TaskTrigger, prompt string, inheritConnectors bool) (uuid.UUID, error) {
+func (s *Storage) SpawnEmailRun(ctx context.Context, trigger *models.TaskTrigger, ev *models.TriggerEvent, prompt string, inheritConnectors bool) (runID uuid.UUID, duplicate bool, err error) {
+	if ev == nil {
+		return uuid.Nil, false, errors.New("spawn email trigger run: no event to record")
+	}
 	inherit := connectorsDenied
 	if inheritConnectors {
 		inherit = connectorsInherited
 	}
-	return s.buildTriggerRun(ctx, trigger, models.TriggerKindEmail, prompt, inherit)
+	run, err := s.buildTriggerRun(ctx, trigger, models.TriggerKindEmail, prompt, inherit)
+	if err != nil {
+		return uuid.Nil, false, err
+	}
+	// Checked before the transaction too, as AddTaskWithContext does, so a bad
+	// contract is refused without a database round trip; addTaskInTx checks it
+	// again.
+	if err := validateStoredOutputContract(run); err != nil {
+		return uuid.Nil, false, fmt.Errorf("create trigger run: %w", err)
+	}
+	tx, err := s.db.BeginTx(ctx)
+	if err != nil {
+		return uuid.Nil, false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// The event goes first: its unique key is where concurrent deliveries of
+	// one email meet, so a duplicate is turned away before a task row is written.
+	rec := *ev
+	rec.TriggerID, rec.RunID = trigger.ID, &run.ID
+	recorded, err := s.db.RecordTriggerEventTx(ctx, tx, &rec)
+	if err != nil {
+		return uuid.Nil, false, fmt.Errorf("record trigger event: %w", err)
+	}
+	if !recorded {
+		return uuid.Nil, true, nil
+	}
+	// Route the run through the same schema/contract gate and insert as
+	// AddTaskWithContext (addTaskInTx), inside the transaction that recorded
+	// the event. Event triggers must not create a task the API would reject.
+	if err := s.addTaskInTx(ctx, tx, run); err != nil {
+		return uuid.Nil, false, fmt.Errorf("create trigger run: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return uuid.Nil, false, fmt.Errorf("create trigger run: %w", err)
+	}
+	*ev = rec
+	return run.ID, false, nil
 }

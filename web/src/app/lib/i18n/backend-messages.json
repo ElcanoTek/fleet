@@ -243,6 +243,7 @@
     "invalid focus",
     "invalid json body",
     "invalid logical file name",
+    "invalid message_id",
     "invalid ops_role (want none|readonly|client|admin, or none|view|run)",
     "invalid ops_scope (want none|view|run)",
     "invalid path",

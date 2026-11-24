@@ -242,6 +242,8 @@ func (s *Storage) AddTask(task *models.Task) (*models.Task, error) {
 // db.UpdateTask / db.AddTask stay unadorned so test seeds can still land
 // an unclaimed terminal row.
 func (s *Storage) AddTaskWithContext(ctx context.Context, task *models.Task) (*models.Task, error) {
+	// Checked before the transaction too, so a bad contract is refused
+	// without a database round trip; addTaskInTx checks it again.
 	if err := validateStoredOutputContract(task); err != nil {
 		return nil, err
 	}
@@ -250,13 +252,24 @@ func (s *Storage) AddTaskWithContext(ctx context.Context, task *models.Task) (*m
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err := s.db.AddTaskTx(ctx, tx, task); err != nil {
+	if err := s.addTaskInTx(ctx, tx, task); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
 	return task, nil
+}
+
+// addTaskInTx is the one task write AddTaskWithContext and the email-trigger
+// spawn (SpawnEmailRun, which commits the run together with its trigger event)
+// share: the stored-output contract check, then db.AddTaskTx inside the
+// caller's transaction. A check added here applies to both.
+func (s *Storage) addTaskInTx(ctx context.Context, tx *sql.Tx, task *models.Task) error {
+	if err := validateStoredOutputContract(task); err != nil {
+		return err
+	}
+	return s.db.AddTaskTx(ctx, tx, task)
 }
 
 // AddTaskBatch inserts a slice of validated tasks for the batch submission

@@ -5,13 +5,17 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -27,12 +31,21 @@ import (
 // shared test Postgres. Skips when the DB is unavailable.
 func setupEmailTest(t *testing.T) (*chi.Mux, *storage.Storage, func()) {
 	t.Helper()
+	r, store, _, cleanup := setupEmailTestDSN(t)
+	return r, store, cleanup
+}
+
+// setupEmailTestDSN is setupEmailTest that also returns the scheduler DSN, so a
+// test can hold locks on a connection of its own, outside the store's pool.
+func setupEmailTestDSN(t *testing.T) (*chi.Mux, *storage.Storage, string, func()) {
+	t.Helper()
 	tmpDir, err := os.MkdirTemp("", "email-trig-*")
 	if err != nil {
 		t.Fatalf("temp dir: %v", err)
 	}
+	dsn := fleetdb.New(t).SchedDSN()
 	store := storage.New()
-	if err := store.Initialize(fleetdb.New(t).SchedDSN(), fleetdb.SchedPool()); err != nil {
+	if err := store.Initialize(dsn, fleetdb.SchedPool()); err != nil {
 		os.RemoveAll(tmpDir)
 		t.Fatalf("init storage: %v", err)
 	}
@@ -53,7 +66,7 @@ func setupEmailTest(t *testing.T) (*chi.Mux, *storage.Storage, func()) {
 		store.Close()
 		os.RemoveAll(tmpDir)
 	}
-	return r, store, cleanup
+	return r, store, dsn, cleanup
 }
 
 func signBody(secret string, body []byte) string {
@@ -95,8 +108,14 @@ func seedEmailTrigger(t *testing.T, store *storage.Storage, slug string, policy 
 }
 
 func postEmail(r *chi.Mux, slug, secret string, email InboundEmail) *httptest.ResponseRecorder {
+	return postEmailCtx(context.Background(), r, slug, secret, email)
+}
+
+// postEmailCtx is postEmail with the request bound to ctx, so a test can drop
+// the request part-way, as a sender that stops waiting does.
+func postEmailCtx(ctx context.Context, r *chi.Mux, slug, secret string, email InboundEmail) *httptest.ResponseRecorder {
 	body, _ := json.Marshal(email)
-	req := httptest.NewRequest("POST", "/triggers/email/"+slug, bytes.NewReader(body))
+	req := httptest.NewRequestWithContext(ctx, "POST", "/triggers/email/"+slug, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Hub-Signature-256", signBody(secret, body))
 	w := httptest.NewRecorder()
@@ -276,6 +295,349 @@ func TestHandleEmailTrigger_Dedup(t *testing.T) {
 	}
 	if spawned != 1 {
 		t.Errorf("expected exactly 1 spawned run after a duplicate, got %d", spawned)
+	}
+}
+
+// TestHandleEmailTrigger_RefusesUnstorableKeys: a Message-ID the database
+// cannot hold as given (U+0000, or longer than an RFC 5322 line) is refused
+// with 400 before any lookup, on the first delivery and every retry alike,
+// rather than failing that lookup with a 500 each time; a From holding U+0000
+// is refused as an unapproved sender. The sender and attachment checks still
+// answer first. Nothing is recorded and no run starts.
+func TestHandleEmailTrigger_RefusesUnstorableKeys(t *testing.T) {
+	t.Parallel()
+
+	r, store, cleanup := setupEmailTest(t)
+	defer cleanup()
+	secret := seedEmailTrigger(t, store, "badkeys", validPolicy(), false, nil)
+	conn := store.DB().Conn()
+
+	for _, tc := range []struct {
+		name   string
+		mutate func(*InboundEmail)
+		want   int
+	}{
+		{"Message-ID with U+0000", func(e *InboundEmail) { e.MessageID = "<msg\x00-1@corp.com>" }, http.StatusBadRequest},
+		{"Message-ID longer than a line", func(e *InboundEmail) {
+			e.MessageID = "<" + strings.Repeat("m", maxMessageIDBytes) + "@corp.com>"
+		}, http.StatusBadRequest},
+		{"From with U+0000", func(e *InboundEmail) { e.From = "alerts@corp.com\x00" }, http.StatusForbidden},
+		{"From display name with U+0000", func(e *InboundEmail) { e.From = "Al\x00erts <alerts@corp.com>" }, http.StatusForbidden},
+		// The sender and attachment checks answer first, as for any email.
+		{"unapproved sender, Message-ID with U+0000", func(e *InboundEmail) {
+			e.From, e.MessageID = "someone@elsewhere.com", "<msg\x00-2@corp.com>"
+		}, http.StatusForbidden},
+		{"oversize attachment, Message-ID with U+0000", func(e *InboundEmail) {
+			e.MessageID = "<msg\x00-3@corp.com>"
+			e.Attachments = []InboundAttachment{{Filename: "a.pdf", Size: 10}}
+		}, http.StatusRequestEntityTooLarge},
+	} {
+		e := goodEmail()
+		tc.mutate(&e)
+		for attempt := 1; attempt <= 2; attempt++ {
+			if w := postEmail(r, "badkeys", secret, e); w.Code != tc.want {
+				t.Errorf("%s, delivery %d: status = %d, want %d (%s)", tc.name, attempt, w.Code, tc.want, w.Body.String())
+			}
+		}
+	}
+	if n := emailEventCount(t, conn); n != 0 {
+		t.Errorf("refused deliveries left %d trigger_events row(s), want 0", n)
+	}
+	var runs int
+	if err := conn.QueryRowContext(context.Background(),
+		`SELECT count(*) FROM sched.tasks WHERE COALESCE(trigger_type, '') <> 'webhook'`).Scan(&runs); err != nil {
+		t.Fatalf("count runs: %v", err)
+	}
+	if runs != 0 {
+		t.Errorf("refused deliveries started %d run(s), want 0", runs)
+	}
+
+	// A Message-ID at the limit is still accepted.
+	ok := goodEmail()
+	ok.MessageID = strings.Repeat("m", maxMessageIDBytes)
+	if w := postEmail(r, "badkeys", secret, ok); w.Code != http.StatusAccepted {
+		t.Fatalf("Message-ID of exactly %d bytes: status = %d, want 202 (%s)", maxMessageIDBytes, w.Code, w.Body.String())
+	}
+}
+
+// TestHandleEmailTrigger_DuplicateAfterTemplateBreaks: a delivery that already
+// ran stays a duplicate when its trigger's template is changed afterwards to
+// one that no longer renders. The redelivery is answered 200 duplicate, not
+// the 400 a new email now gets, and starts no run.
+func TestHandleEmailTrigger_DuplicateAfterTemplateBreaks(t *testing.T) {
+	t.Parallel()
+
+	r, store, cleanup := setupEmailTest(t)
+	defer cleanup()
+	secret := seedEmailTrigger(t, store, "tmplbreak", validPolicy(), false, nil)
+	conn := store.DB().Conn()
+
+	first := postEmail(r, "tmplbreak", secret, goodEmail())
+	if first.Code != http.StatusAccepted {
+		t.Fatalf("first delivery: status = %d, want 202 (%s)", first.Code, first.Body.String())
+	}
+	if _, err := conn.ExecContext(context.Background(),
+		`UPDATE sched.task_triggers SET prompt_template = '{{.Subject' WHERE slug = 'tmplbreak'`); err != nil {
+		t.Fatalf("break the template: %v", err)
+	}
+
+	w := postEmail(r, "tmplbreak", secret, goodEmail())
+	if w.Code != http.StatusOK || !bytes.Contains(w.Body.Bytes(), []byte(`"duplicate"`)) {
+		t.Fatalf("redelivery after the template broke: status = %d body %s, want 200 duplicate", w.Code, w.Body.String())
+	}
+	// The template really is broken: a new email is refused with 400.
+	fresh := goodEmail()
+	fresh.MessageID = "<msg-2@corp.com>"
+	if w := postEmail(r, "tmplbreak", secret, fresh); w.Code != http.StatusBadRequest {
+		t.Fatalf("new email with the broken template: status = %d, want 400 (%s)", w.Code, w.Body.String())
+	}
+	assertOneLinkedEmailRun(t, store, conn, first)
+}
+
+// TestHandleEmailTrigger_FailedSpawnIsNotRecorded: a delivery whose run cannot
+// be created is not recorded, so the sender's retry of the same Message-ID
+// starts the run instead of being answered as a duplicate.
+func TestHandleEmailTrigger_FailedSpawnIsNotRecorded(t *testing.T) {
+	t.Parallel()
+
+	r, store, cleanup := setupEmailTest(t)
+	defer cleanup()
+	secret := seedEmailTrigger(t, store, "failspawn", validPolicy(), false, nil)
+	conn := store.DB().Conn()
+	ctx := context.Background()
+
+	// Refuse any new task whose prompt carries the email body, so the run
+	// insert fails the way a database error would. NOT VALID leaves the
+	// template row unchecked.
+	if _, err := conn.ExecContext(ctx, `ALTER TABLE sched.tasks ADD CONSTRAINT refuse_email_runs CHECK (prompt NOT LIKE '%please deploy%') NOT VALID`); err != nil {
+		t.Fatalf("add constraint: %v", err)
+	}
+	if w := postEmail(r, "failspawn", secret, goodEmail()); w.Code != http.StatusInternalServerError {
+		t.Fatalf("delivery whose run insert fails: status = %d, want 500 (%s)", w.Code, w.Body.String())
+	}
+	if n := emailEventCount(t, conn); n != 0 {
+		t.Fatalf("a delivery that started no run left %d trigger_events row(s), want 0", n)
+	}
+
+	if _, err := conn.ExecContext(ctx, `ALTER TABLE sched.tasks DROP CONSTRAINT refuse_email_runs`); err != nil {
+		t.Fatalf("drop constraint: %v", err)
+	}
+	w := postEmail(r, "failspawn", secret, goodEmail())
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("retry of the same Message-ID: status = %d, want 202 (%s)", w.Code, w.Body.String())
+	}
+	assertOneLinkedEmailRun(t, store, conn, w)
+}
+
+// TestHandleEmailTrigger_DroppedDeliveryIsNotRecorded: the request ends while
+// the run is being created — the sender stopped waiting, or fleet stopped —
+// after the delivery's record was written but before its run was. Nothing of
+// it is kept, so the retry starts the run.
+func TestHandleEmailTrigger_DroppedDeliveryIsNotRecorded(t *testing.T) {
+	t.Parallel()
+
+	r, store, dsn, cleanup := setupEmailTestDSN(t)
+	defer cleanup()
+	secret := seedEmailTrigger(t, store, "dropped", validPolicy(), false, nil)
+	side := openSideDB(t, dsn)
+
+	release := holdTaskInserts(t, side)
+	reqCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	dropped := make(chan *httptest.ResponseRecorder, 1)
+	go func() { dropped <- postEmailCtx(reqCtx, r, "dropped", secret, goodEmail()) }()
+	waitUntil(t, "the delivery waits inside its run insert", func() bool { return lockWaits(t, side) >= 1 })
+	cancel()
+	release()
+	if w := <-dropped; w.Code != http.StatusInternalServerError {
+		t.Fatalf("dropped delivery: status = %d, want 500 (%s)", w.Code, w.Body.String())
+	}
+	if n := emailEventCount(t, side); n != 0 {
+		t.Fatalf("a dropped delivery left %d trigger_events row(s), want 0", n)
+	}
+
+	w := postEmail(r, "dropped", secret, goodEmail())
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("retry of the same Message-ID: status = %d, want 202 (%s)", w.Code, w.Body.String())
+	}
+	assertOneLinkedEmailRun(t, store, side, w)
+}
+
+// TestHandleEmailTrigger_ConcurrentDuplicatesRunOnce: two deliveries of the
+// same Message-ID in flight together start exactly one run. The second is held
+// until the first is decided, then answered as a duplicate.
+func TestHandleEmailTrigger_ConcurrentDuplicatesRunOnce(t *testing.T) {
+	t.Parallel()
+
+	r, store, dsn, cleanup := setupEmailTestDSN(t)
+	defer cleanup()
+	secret := seedEmailTrigger(t, store, "concurrent", validPolicy(), false, nil)
+	side := openSideDB(t, dsn)
+
+	release := holdTaskInserts(t, side)
+	first := make(chan *httptest.ResponseRecorder, 1)
+	go func() { first <- postEmail(r, "concurrent", secret, goodEmail()) }()
+	waitUntil(t, "the first delivery waits inside its run insert", func() bool { return lockWaits(t, side) >= 1 })
+	second := make(chan *httptest.ResponseRecorder, 1)
+	go func() { second <- postEmail(r, "concurrent", secret, goodEmail()) }()
+	secondResp := waitForSecondDelivery(t, side, second)
+	release()
+
+	w1 := <-first
+	if secondResp == nil {
+		secondResp = <-second
+	}
+	if w1.Code != http.StatusAccepted {
+		t.Fatalf("first delivery: status = %d, want 202 (%s)", w1.Code, w1.Body.String())
+	}
+	if secondResp.Code != http.StatusOK || !bytes.Contains(secondResp.Body.Bytes(), []byte(`"duplicate"`)) {
+		t.Fatalf("concurrent duplicate: status = %d body %s, want 200 duplicate", secondResp.Code, secondResp.Body.String())
+	}
+	assertOneLinkedEmailRun(t, store, side, w1)
+}
+
+// TestHandleEmailTrigger_ConcurrentRetryRunsWhenFirstFails: while one delivery
+// is creating its run, a second delivery of the same Message-ID waits for it.
+// When the first ends without a run, the second starts the run rather than
+// being answered as a duplicate of a delivery that never ran.
+func TestHandleEmailTrigger_ConcurrentRetryRunsWhenFirstFails(t *testing.T) {
+	t.Parallel()
+
+	r, store, dsn, cleanup := setupEmailTestDSN(t)
+	defer cleanup()
+	secret := seedEmailTrigger(t, store, "firstfails", validPolicy(), false, nil)
+	side := openSideDB(t, dsn)
+
+	release := holdTaskInserts(t, side)
+	firstCtx, cancelFirst := context.WithCancel(context.Background())
+	defer cancelFirst()
+	first := make(chan *httptest.ResponseRecorder, 1)
+	go func() { first <- postEmailCtx(firstCtx, r, "firstfails", secret, goodEmail()) }()
+	waitUntil(t, "the first delivery waits inside its run insert", func() bool { return lockWaits(t, side) >= 1 })
+	second := make(chan *httptest.ResponseRecorder, 1)
+	go func() { second <- postEmail(r, "firstfails", secret, goodEmail()) }()
+	secondResp := waitForSecondDelivery(t, side, second)
+	cancelFirst()
+	release()
+
+	if w1 := <-first; w1.Code != http.StatusInternalServerError {
+		t.Fatalf("dropped first delivery: status = %d, want 500 (%s)", w1.Code, w1.Body.String())
+	}
+	if secondResp == nil {
+		secondResp = <-second
+	}
+	if secondResp.Code != http.StatusAccepted {
+		t.Fatalf("second delivery after the first ended without a run: status = %d, want 202 (%s)", secondResp.Code, secondResp.Body.String())
+	}
+	assertOneLinkedEmailRun(t, store, side, secondResp)
+}
+
+// openSideDB opens a connection pool of the test's own on the scheduler
+// database, outside the store's small pool, for holding locks and watching.
+func openSideDB(t *testing.T, dsn string) *sql.DB {
+	t.Helper()
+	side, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatalf("open side connection: %v", err)
+	}
+	// One connection holds the lock, one watches; the test server's
+	// connections are shared with every other parallel suite.
+	side.SetMaxOpenConns(2)
+	t.Cleanup(func() { _ = side.Close() })
+	return side
+}
+
+// holdTaskInserts takes a lock on sched.tasks that plain reads pass but a new
+// task row waits on, so a delivery stops inside its run insert until release.
+func holdTaskInserts(t *testing.T, side *sql.DB) (release func()) {
+	t.Helper()
+	ctx := context.Background()
+	tx, err := side.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	if _, err := tx.ExecContext(ctx, `LOCK TABLE sched.tasks IN EXCLUSIVE MODE`); err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("lock sched.tasks: %v", err)
+	}
+	var once sync.Once
+	release = func() { once.Do(func() { _ = tx.Rollback() }) }
+	t.Cleanup(release)
+	return release
+}
+
+// lockWaits counts the sessions on this test database waiting for a lock.
+func lockWaits(t *testing.T, side *sql.DB) int {
+	t.Helper()
+	var n int
+	if err := side.QueryRowContext(context.Background(),
+		`SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'`).Scan(&n); err != nil {
+		t.Fatalf("count lock waits: %v", err)
+	}
+	return n
+}
+
+// waitForSecondDelivery waits until the second delivery is either waiting on
+// a lock behind the first, or already answered (returned, else nil).
+func waitForSecondDelivery(t *testing.T, side *sql.DB, second <-chan *httptest.ResponseRecorder) *httptest.ResponseRecorder {
+	t.Helper()
+	var resp *httptest.ResponseRecorder
+	waitUntil(t, "the second delivery waits behind the first or is answered", func() bool {
+		select {
+		case resp = <-second:
+			return true
+		default:
+		}
+		return lockWaits(t, side) >= 2
+	})
+	return resp
+}
+
+// waitUntil polls cond until it holds, failing the test after a while.
+func waitUntil(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(20 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting until %s", what)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// emailEventCount counts the recorded deliveries (trigger_events rows).
+func emailEventCount(t *testing.T, conn *sql.DB) int {
+	t.Helper()
+	var n int
+	if err := conn.QueryRowContext(context.Background(), `SELECT count(*) FROM sched.trigger_events`).Scan(&n); err != nil {
+		t.Fatalf("count trigger_events: %v", err)
+	}
+	return n
+}
+
+// assertOneLinkedEmailRun checks that exactly one run and one recorded
+// delivery exist, that w answered with that run, and that the delivery is
+// linked to it.
+func assertOneLinkedEmailRun(t *testing.T, store *storage.Storage, conn *sql.DB, w *httptest.ResponseRecorder) {
+	t.Helper()
+	run := runFromResp(t, store, w)
+	var runs int
+	if err := conn.QueryRowContext(context.Background(),
+		`SELECT count(*) FROM sched.tasks WHERE COALESCE(trigger_type, '') <> 'webhook'`).Scan(&runs); err != nil {
+		t.Fatalf("count runs: %v", err)
+	}
+	if runs != 1 {
+		t.Errorf("runs = %d, want exactly 1", runs)
+	}
+	if n := emailEventCount(t, conn); n != 1 {
+		t.Errorf("trigger_events rows = %d, want exactly 1", n)
+	}
+	ev, err := store.GetTriggerEventByRunID(context.Background(), run.ID)
+	if err != nil {
+		t.Fatalf("the delivery is not linked to run %s: %v", run.ID, err)
+	}
+	if ev.MessageID != goodEmail().MessageID {
+		t.Errorf("linked delivery message id = %q, want %q", ev.MessageID, goodEmail().MessageID)
 	}
 }
 
