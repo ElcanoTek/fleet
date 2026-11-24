@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
@@ -344,5 +345,37 @@ func TestConversationMCPServersSeveralAccounts(t *testing.T) {
 	code, body = post(`{"enabled_optional":["gamma"],"accounts":{"gamma":["","twc"]}}`)
 	if code != 200 || !strings.Contains(body, `"gamma":"twc"`) {
 		t.Fatalf("POST default beside its own name: %d %s, want the one account", code, body)
+	}
+}
+
+// A connector that is off keeps its account choice, and a persona policy is
+// written against registered tool names: it can permit one account of a
+// connector and not another. Whether the persona may use the connector is
+// asked of every account, not only the first.
+func TestConnectorPermittedInChatChecksEveryAccount(t *testing.T) {
+	t.Parallel()
+	policy := &agentcore.PersonaToolPermissions{Allow: []string{"mcp:ix_arena/get_deal"}}
+	info := agent.OptionalServerInfo{Name: "ix", Tools: []string{"get_deal"}, SelectedAccount: "twc"}
+	if connectorPermittedInChat(info, nil, policy) {
+		t.Fatal("one account the persona cannot use was permitted")
+	}
+	info.SelectedAccounts = []string{"twc", "arena"}
+	if !connectorPermittedInChat(info, nil, policy) {
+		t.Fatal("a connector with a second account the persona can use was not permitted")
+	}
+
+	// The resolver that feeds it carries every account of a stored list.
+	s, _ := multiAccountServer(t)
+	engine := s.agent.(*alwaysOnFakeEngine)
+	engine.optional = []agent.OptionalServerInfo{
+		{Name: "ix_mcp", Accounts: []string{"arena", "raptive", "twc"}, Tools: []string{"get_deal"}, ToolCount: 1},
+	}
+	got := s.availableOptionalConnectorsForUser(context.Background(), "u@x.com", map[string]string{"ix_mcp": "twc,arena"})
+	if len(got) != 1 || !reflect.DeepEqual(got[0].ToolSeats(), []string{"twc", "arena"}) || got[0].SelectedAccount != "twc" {
+		t.Fatalf("available = %+v", got)
+	}
+	one := s.availableOptionalConnectorsForUser(context.Background(), "u@x.com", map[string]string{"ix_mcp": "twc"})
+	if len(one) != 1 || one[0].SelectedAccounts != nil || !reflect.DeepEqual(one[0].ToolSeats(), []string{"twc"}) {
+		t.Fatalf("one account = %+v", one)
 	}
 }

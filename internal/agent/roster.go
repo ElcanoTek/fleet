@@ -54,6 +54,22 @@ type OptionalServerInfo struct {
 	// SelectedAccount is the resolved credential seat for this conversation/user
 	// when evaluating account-qualified runtime tool names.
 	SelectedAccount string `json:"-"`
+	// SelectedAccounts is every account the conversation runs this server as
+	// when it has more than one (docs/MULTI-ACCOUNT-CHATS.md), SelectedAccount
+	// first. Empty for one account. Read through ToolSeats.
+	SelectedAccounts []string `json:"-"`
+}
+
+// ToolSeats returns the accounts whose registered tool names describe this
+// server for the conversation: SelectedAccounts when it runs as several,
+// otherwise the one SelectedAccount. A check that asks "can this persona use
+// the connector at all" must try each: a persona policy can permit one
+// account's tool names and not another's.
+func (i OptionalServerInfo) ToolSeats() []string {
+	if len(i.SelectedAccounts) > 0 {
+		return i.SelectedAccounts
+	}
+	return []string{i.SelectedAccount}
 }
 
 // AlwaysOnServerInfo is the public status row for an enabled non-optional MCP
