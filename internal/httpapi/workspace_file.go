@@ -309,14 +309,11 @@ func (s *Server) purgeParticipantPrivateStashes(userEmail string, live func(dige
 		if theirs && s.isActiveParticipantUser(convID, userEmail) {
 			s.markParticipantWorkspacePurged(convID, userEmail)
 		}
-		// RemoveOrphanTree asks live again right before the removal: a tree
-		// whose address holds a new account by then is that account's (not a
-		// failure); any other error leaves the tree and is reported.
-		if _, err := os.Lstat(path); err == nil {
-			if _, err := accountdelete.RemoveOrphanTree(path, digest, live); err != nil && firstErr == nil {
-				firstErr = err
-			}
-		} else if !os.IsNotExist(err) && firstErr == nil {
+		// RemoveIfNoAccount asks live again right before the removal: a tree
+		// whose address holds a new account by then is left to it, and
+		// reported (accountdelete.ErrHeldByNewAccount); any other error
+		// leaves the tree and is reported.
+		if err := accountdelete.RemoveIfNoAccount(path, digest, live); err != nil && firstErr == nil {
 			firstErr = err
 		}
 		unlock()

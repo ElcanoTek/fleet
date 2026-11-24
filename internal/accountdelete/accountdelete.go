@@ -33,6 +33,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -125,7 +126,17 @@ const (
 	// PrivateWorkspacesFailed: removing the private workspace trees failed
 	// (Err).
 	PrivateWorkspacesFailed ProblemKind = "private_workspaces_failed"
+	// FilesHeldByNewAccount: files were under the address's paths after the
+	// deletion committed (written after the trees were moved aside — by the
+	// new account itself, or by something racing the deletion), and an
+	// account created under the address since holds them, so they were left
+	// in place (ErrHeldByNewAccount).
+	FilesHeldByNewAccount ProblemKind = "files_held_by_new_account"
 )
+
+// ErrHeldByNewAccount is RemoveIfNoAccount's answer for a tree an account
+// holds now: it was left in place.
+var ErrHeldByNewAccount = errors.New("an account created under the address since holds them, so they were left in place")
 
 // Problem is one step a deletion left: what, for which account, and the error
 // or directory involved.
@@ -154,6 +165,8 @@ func (p Problem) String() string {
 		return "removing the account's uploads failed: " + p.Err + "; the server's hourly maintenance pass tries again"
 	case PrivateWorkspacesFailed:
 		return "removing the account's private workspace files failed: " + p.Err + "; the server's hourly maintenance pass tries again"
+	case FilesHeldByNewAccount:
+		return "files under " + p.Email + " were left in place after the deletion: an account created under the address since holds them"
 	}
 	return string(p.Kind) + ": " + p.Err
 }
@@ -200,7 +213,7 @@ func Delete(ctx context.Context, st Store, email string, opt Options) (Result, e
 	// The files are moved aside while the account still exists — nobody can
 	// create an account under the address until the commit — so a later
 	// account under it never finds them under its digest.
-	aside, failed := setAsideAccountFiles(email, opt)
+	aside, dirProblem := setAsideAccountFiles(email, opt)
 	accountID, err := st.DeleteAccount(ctx, email, id)
 	if err != nil {
 		if rerr := restoreAside(aside); rerr != nil {
@@ -219,7 +232,7 @@ func Delete(ctx context.Context, st Store, email string, opt Options) (Result, e
 	} else {
 		res.KeysDeleted = n
 	}
-	res.Problems = append(res.Problems, failed.dirProblem...)
+	res.Problems = append(res.Problems, dirProblem...)
 	var uploadsErr, stashErr error
 	for _, t := range aside {
 		if err := os.RemoveAll(t.To); err != nil {
@@ -230,28 +243,38 @@ func Delete(ctx context.Context, st Store, email string, opt Options) (Result, e
 			}
 		}
 	}
-	// What could not be moved aside is removed now, each tree only while no
-	// account has its digest (RemoveOrphanTree): the last resort, reported
-	// if it fails, and tried again by the maintenance pass.
-	if failed.uploads != nil {
+	// Whatever is under the address's paths now — a tree that could not be
+	// moved, or one written there after the move — is removed while no
+	// account has its digest (RemoveIfNoAccount), and reported if it fails
+	// or a new account holds it; the maintenance pass tries a failed one
+	// again.
+	if opt.AttachmentDir != "" && dirProblem == nil {
 		uploadsErr = firstError(uploadsErr, removeUploadTree(UploadsDir(opt.AttachmentDir, email), Digest(email), live))
 	}
 	switch {
 	case opt.ServerCleanup != nil:
 		// The server forgets the address's in-memory state and removes any
-		// private workspace tree still there: one it could not move, or one
-		// written after the move.
+		// private workspace tree still there.
 		stashErr = firstError(stashErr, opt.ServerCleanup(email, live))
-	case failed.stashes != nil:
+	case opt.AttachmentDir != "" && dirProblem == nil:
 		stashErr = firstError(stashErr, removePrivateWorkspaces(PrivateWorkspaceRoot(opt.AttachmentDir), email, live))
 	}
-	if uploadsErr != nil {
-		res.Problems = append(res.Problems, Problem{Kind: UploadsFailed, Email: email, Err: uploadsErr.Error()})
-	}
-	if stashErr != nil {
-		res.Problems = append(res.Problems, Problem{Kind: PrivateWorkspacesFailed, Email: email, Err: stashErr.Error()})
-	}
+	res.Problems = append(res.Problems, treeProblem(UploadsFailed, email, uploadsErr)...)
+	res.Problems = append(res.Problems, treeProblem(PrivateWorkspacesFailed, email, stashErr)...)
 	return res, nil
+}
+
+// treeProblem is the problem a tree step's error makes: kind, or
+// FilesHeldByNewAccount when a new account under the address holds the tree
+// (ErrHeldByNewAccount); none for nil.
+func treeProblem(kind ProblemKind, email string, err error) []Problem {
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, ErrHeldByNewAccount):
+		return []Problem{{Kind: FilesHeldByNewAccount, Email: email, Err: err.Error()}}
+	}
+	return []Problem{{Kind: kind, Email: email, Err: err.Error()}}
 }
 
 // firstError is a when it is set, else b.
@@ -262,20 +285,16 @@ func firstError(a, b error) error {
 	return b
 }
 
-// setAsideFailures is what setAsideAccountFiles could not move aside.
-type setAsideFailures struct {
-	uploads, stashes error
-	dirProblem       []Problem // the attachment directory could not be read
-}
-
 // setAsideAccountFiles moves the account's upload tree and its private
 // workspace trees aside (SetAside): the server's own step for the latter
 // when there is one (Options.ServerSetAside, under the locks a turn takes),
-// otherwise under AttachmentDir. It returns what it moved and what it could
-// not.
-func setAsideAccountFiles(email string, opt Options) ([]AsideTree, setAsideFailures) {
+// otherwise under AttachmentDir. It returns what it moved, and the problem
+// of an attachment directory it could not read. A tree it could not move is
+// left where it is: the check of the address's paths after the commit
+// removes it, or reports it.
+func setAsideAccountFiles(email string, opt Options) ([]AsideTree, []Problem) {
 	var aside []AsideTree
-	var failed setAsideFailures
+	var dirProblem []Problem
 	digest := Digest(email)
 	dirOK := false
 	if opt.AttachmentDir != "" {
@@ -284,12 +303,10 @@ func setAsideAccountFiles(email string, opt Options) ([]AsideTree, setAsideFailu
 		// server's maintenance pass removes the files of deleted accounts
 		// from the directory it really uses.
 		if _, err := os.Stat(opt.AttachmentDir); err != nil {
-			failed.dirProblem = append(failed.dirProblem, Problem{Kind: AttachmentDirUnreadable, Email: email, Path: opt.AttachmentDir, Err: err.Error()})
+			dirProblem = append(dirProblem, Problem{Kind: AttachmentDirUnreadable, Email: email, Path: opt.AttachmentDir, Err: err.Error()})
 		} else {
 			dirOK = true
-			if t, moved, err := SetAside(UploadsDir(opt.AttachmentDir, email), digest); err != nil {
-				failed.uploads = err
-			} else if moved {
+			if t, moved, err := SetAside(UploadsDir(opt.AttachmentDir, email), digest); err == nil && moved {
 				t.Uploads = true
 				aside = append(aside, t)
 			}
@@ -297,15 +314,13 @@ func setAsideAccountFiles(email string, opt Options) ([]AsideTree, setAsideFailu
 	}
 	switch {
 	case opt.ServerSetAside != nil:
-		ts, err := opt.ServerSetAside(email)
+		ts, _ := opt.ServerSetAside(email)
 		aside = append(aside, ts...)
-		failed.stashes = err
 	case dirOK:
-		ts, err := setAsidePrivateWorkspaces(PrivateWorkspaceRoot(opt.AttachmentDir), email)
+		ts, _ := setAsidePrivateWorkspaces(PrivateWorkspaceRoot(opt.AttachmentDir), email)
 		aside = append(aside, ts...)
-		failed.stashes = err
 	}
-	return aside, failed
+	return aside, dirProblem
 }
 
 // AsideTree is an account tree moved aside before its account's deletion
@@ -422,17 +437,31 @@ func PrivateWorkspaceRoot(attachmentDir string) string {
 // RemoveOrphanTree (live); a tree that is not there is nothing to remove, and
 // asks nothing.
 func removeUploadTree(path, digest string, live func(digest string) (bool, error)) error {
+	return RemoveIfNoAccount(path, digest, live)
+}
+
+// RemoveIfNoAccount removes path, the tree of the address whose Digest is
+// digest, unless an account has that digest now (RemoveOrphanTree), and
+// reports ErrHeldByNewAccount when one does and the tree is there. A tree
+// that is not there is nothing to remove, and asks nothing.
+func RemoveIfNoAccount(path, digest string, live func(digest string) (bool, error)) error {
 	if _, err := os.Lstat(path); os.IsNotExist(err) {
 		return nil
 	} else if err != nil {
 		return err
 	}
-	_, err := RemoveOrphanTree(path, digest, live)
-	return err
+	gone, err := RemoveOrphanTree(path, digest, live)
+	if err != nil || gone {
+		return err
+	}
+	if _, err := os.Lstat(path); err == nil {
+		return ErrHeldByNewAccount
+	}
+	return nil
 }
 
 // removePrivateWorkspaces removes participants/<Digest(email)> from every
-// conversation directory under root, each through RemoveOrphanTree (live).
+// conversation directory under root, each through RemoveIfNoAccount (live).
 // A missing root is nothing to remove.
 func removePrivateWorkspaces(root, email string, live func(digest string) (bool, error)) error {
 	entries, err := os.ReadDir(root)
@@ -448,16 +477,7 @@ func removePrivateWorkspaces(root, email string, live func(digest string) (bool,
 		if !d.IsDir() || !filepath.IsLocal(d.Name()) {
 			continue
 		}
-		path := filepath.Join(root, d.Name(), "participants", digest)
-		if _, err := os.Lstat(path); os.IsNotExist(err) {
-			continue // nothing to remove here, and no account lookup for it
-		} else if err != nil {
-			if firstErr == nil {
-				firstErr = err
-			}
-			continue
-		}
-		if _, err := RemoveOrphanTree(path, digest, live); err != nil && firstErr == nil {
+		if err := RemoveIfNoAccount(filepath.Join(root, d.Name(), "participants", digest), digest, live); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}

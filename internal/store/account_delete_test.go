@@ -1250,3 +1250,36 @@ func TestDeleteAccountRefusesAnotherAccountUnderTheEmail(t *testing.T) {
 		t.Fatalf("after the deletion: err %v, want ErrUserNotFound", err)
 	}
 }
+
+// A running server holds the presence lock shared, and an account deletion
+// from the CLI cannot take it exclusive meanwhile; once the server lets go
+// it can, and a server starting while the CLI holds it waits for it.
+func TestServerPresenceExcludesCLIDeletion(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	ctx := context.Background()
+	release := s.HoldServerPresence(5 * time.Second)
+	if _, err := s.ExcludeServers(ctx); !errors.Is(err, ErrServerRunning) {
+		t.Fatalf("with a server running: err %v, want ErrServerRunning", err)
+	}
+	release()
+	unlock, err := s.ExcludeServers(ctx)
+	if err != nil {
+		t.Fatalf("with no server: %v", err)
+	}
+	started := make(chan func(), 1)
+	go func() { started <- s.HoldServerPresence(10 * time.Second) }()
+	select {
+	case r := <-started:
+		r()
+		t.Fatal("a server took the presence lock while a CLI deletion held it")
+	case <-time.After(300 * time.Millisecond):
+	}
+	unlock()
+	select {
+	case r := <-started:
+		r()
+	case <-time.After(10 * time.Second):
+		t.Fatal("the server did not take the presence lock after the CLI deletion ended")
+	}
+}

@@ -733,8 +733,10 @@ func TestAdminDeleteGivesALaterAccountNothingOfTheDeletedOne(t *testing.T) {
 			t.Error(err)
 		}
 	}}
-	if w := do(t, s.Routes(), http.MethodDelete, "/admin/users/u@x.com", nil, "boss@x.com"); w.Code != http.StatusNoContent {
-		t.Fatalf("delete: status %d (body %s)", w.Code, w.Body.String())
+	// The new account's own upload, found under the address after the
+	// commit, is left in place and named in a warning.
+	if w := do(t, s.Routes(), http.MethodDelete, "/admin/users/u@x.com", nil, "boss@x.com"); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "were left in place") {
+		t.Fatalf("delete: status %d (body %s), want 200 naming the files left in place", w.Code, w.Body.String())
 	}
 	if _, ok := s.sessionApprovals.MatchForUser("conv-1", "u@x.com", "run_python", "{}"); ok {
 		t.Error("the account created after the commit inherited the deleted account's approve-all decision")

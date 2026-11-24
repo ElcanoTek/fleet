@@ -203,20 +203,30 @@ advises on each demoted split admin, unknown role and duplicate username in it.
   - its upload tree and its private workspace trees are moved aside (a
     `.removing-<digest>-…` name beside them) while the account still exists
     and its work is stopped, then removed after the commit — or moved back
-    if the deletion does not commit. A new account's trees start empty. A
-    tree that could not be moved is removed after the commit only while no
-    account has its digest, and reported otherwise; if the server stops
-    between the move and the commit, the maintenance pass removes the trees
-    left aside (the account was being deleted);
+    if the deletion does not commit. A new account's trees start empty.
+    After the commit the address's paths are checked once more (below); if
+    the server stops between the move and the commit, the maintenance pass
+    removes the trees left aside (the account was being deleted);
   - its in-memory approve/deny-all decisions, which are kept by address,
     are forgotten while its work is stopped and again after the commit,
     whatever holds the address by then (forgetting one only means approving
-    again). A deletion run with the CLI cannot reach a running server's
-    memory: the server drops that address's decisions at its next hourly
-    maintenance pass, so an account re-created under the address before that
-    pass can still be offered them in a conversation it is allowed into.
-    Delete accounts from Settings → Admin → Users while the server runs, or
-    restart the server after a CLI deletion.
+    again).
+
+  **The CLI deletes only while no server runs.** `fleet admin rm` and
+  `fleet chat user del` refuse, with nothing deleted, while a fleet server
+  runs against the same database: every `fleet serve` holds a Postgres
+  advisory lock shared for as long as it runs, and the CLI takes it
+  exclusive (`store.ExcludeServers`) — so the check does not depend on a
+  unit name, a port or a host, and a server starting while a CLI deletion
+  runs waits for it. The message says to delete the account from Settings →
+  Admin → Users while the server runs (that deletion stops the account's
+  requests and turns, forgets its in-memory decisions and moves its files
+  aside under the server's request gate, which a CLI cannot do for a server
+  it is not), or to stop the server first. After the commit, both paths look
+  at the address's upload and private workspace paths once more, whatever
+  was moved aside: a tree found there is removed while no account has its
+  digest, and named in a warning (left in place) when an account created
+  under the address since holds it.
 
   **Work in flight.** The web route first refuses what the deletion would
   refuse (no such account: 404; a team-shared project still owned: 409),
@@ -288,8 +298,9 @@ advises on each demoted split admin, unknown role and duplicate username in it.
   404), and Settings → Admin → Users shows the warnings above the table; the
   CLI verbs print them and exit 6. The CLI verbs use the key store and
   attachment directory of the `fleet.service` unit (as `fleet sched apikey`
-  does), stop with nothing deleted when the key store cannot be read, and
-  report an attachment directory that does not exist.
+  does), stop with nothing deleted when the key store cannot be read or a
+  server runs against the database (below), and report an attachment
+  directory that does not exist.
 
   **The hourly maintenance pass** (`RunMaintenance`, not the post-turn pass)
   removes what names

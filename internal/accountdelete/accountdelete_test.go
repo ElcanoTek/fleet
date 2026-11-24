@@ -230,6 +230,39 @@ func TestDeleteThatDoesNotCommitPutsTheFilesBack(t *testing.T) {
 	}
 }
 
+// A tree written under the address after the account's trees were moved
+// aside — by something racing the deletion — is found after the commit and
+// removed while no account holds the address. Not parallel: it uses
+// afterDatabaseDeletion.
+func TestDeleteRemovesATreeWrittenAfterTheMove(t *testing.T) {
+	att := t.TempDir()
+	seedFiles(t, att, "gone@x.com")
+	late := []string{
+		filepath.Join(UploadsDir(att, "gone@x.com"), "late-tok", "late.txt"),
+		filepath.Join(PrivateWorkspaceRoot(att), "conv-1", "participants", Digest("gone@x.com"), "late.txt"),
+	}
+	afterDatabaseDeletion = func() {
+		for _, f := range late {
+			if err := os.MkdirAll(filepath.Dir(f), 0o700); err != nil {
+				t.Error(err)
+			}
+			if err := os.WriteFile(f, []byte("late"), 0o600); err != nil {
+				t.Error(err)
+			}
+		}
+	}
+	defer func() { afterDatabaseDeletion = nil }()
+	res, err := Delete(context.Background(), &fakeStore{}, "gone@x.com", Options{Keys: &fakeKeys{}, AttachmentDir: att})
+	if err != nil || len(res.Problems) != 0 {
+		t.Fatalf("Delete = %+v, %v", res, err)
+	}
+	for _, f := range late {
+		if _, err := os.Stat(f); !os.IsNotExist(err) {
+			t.Errorf("%s, written after the move, survived (err %v)", f, err)
+		}
+	}
+}
+
 // A deletion binds the address's keys that name no account to the account
 // before it deletes anything; if the key store cannot be written (another
 // process holds it), the deletion is refused with nothing deleted, rather
@@ -535,8 +568,15 @@ func TestDeleteSparesAnAccountCreatedAfterTheCommit(t *testing.T) {
 		}
 		res, err := Delete(ctx, st, "back@x.com", Options{Keys: mgr, AttachmentDir: att})
 		afterDatabaseDeletion = nil
-		if err != nil || len(res.Problems) != 0 {
-			t.Fatalf("recreated=%v: Delete = %+v, %v", recreated, res, err)
+		if err != nil {
+			t.Fatalf("recreated=%v: Delete: %v", recreated, err)
+		}
+		// The new account's own trees, found under the address after the
+		// commit, are left in place and named in a warning.
+		for _, p := range res.Problems {
+			if !recreated || p.Kind != FilesHeldByNewAccount {
+				t.Errorf("recreated=%v: problem %+v", recreated, p)
+			}
 		}
 		if mgr.GetKey(old.KeyID) != nil {
 			t.Errorf("recreated=%v: the deleted account's key survived", recreated)

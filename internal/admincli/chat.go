@@ -349,6 +349,9 @@ func chatUserDel(argv []string) int {
 		if errors.Is(err, errKeyStore) {
 			return errf(1, "%v — nothing was deleted", err)
 		}
+		if errors.Is(err, errServerRunning) {
+			return errf(1, "delete %s: %v", email, err)
+		}
 		return errf(5, "%v", err)
 	}
 	fmt.Printf("deleted chat user %s and %s\n", email, userKeysPhrase(res.KeysDeleted))

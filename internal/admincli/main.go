@@ -229,7 +229,8 @@ Operator lifecycle (bootstrap → update → status/doctor):
 Users, credentials, notes:
   fleet admin add <email>                             (ONE step: web login + chat-admin + Operations Center admin; prompts for password)
   fleet admin list                                    (every chat login + whether it's an Operations Center admin)
-  fleet admin rm <email>                              (remove from both planes)
+  fleet admin rm <email>                              (remove from both planes; refused while the server runs —
+                                                       delete from Settings → Admin → Users then, or stop the server)
   fleet account-events export                         (every chat account's membership as JSON Lines, read-only; what central
                                                        Auth's import-teams reads)
   fleet config set-openrouter-key                     (hidden prompt; or --key -; upserts OPENROUTER_API_KEY into the server env file)
@@ -252,7 +253,7 @@ Users, credentials, notes:
   fleet chat user add <email>    --password -
   fleet chat user update <email> --password -
   fleet chat user role <email>   --role member|viewer|admin [--team <id>]
-  fleet chat user del <email>
+  fleet chat user del <email>                         (refused while the server runs, as admin rm)
   fleet chat user list
   fleet chat set-model --model <slug> [--from-model <slug>] [--notify] [--dry-run] [--no-confirm]
   fleet model status [--json]                         (effective workspace model tiers + chat & task counts by model)

@@ -418,8 +418,11 @@ each piece yourself):
    >   any more: it uses the same session, ADR-0105); and a stream that is
    >   already open (a chat turn, a task run-log) finishes its turn, because the
    >   epoch is checked when a request connects, not per SSE event.
-   > - **One account, permanently** — delete it. The user-list gate then 403s
-   >   every request; the deletion also deletes the account's user API keys
+   > - **One account, permanently** — delete it, from Settings → Admin →
+   >   Users while the server runs (`fleet admin rm` / `fleet chat user del`
+   >   refuse then; they run only with the server stopped). The user-list
+   >   gate then 403s every request; the deletion also deletes the account's
+   >   user API keys
    >   and its central sign-in session generations. An account later created
    >   under the same email starts without its data, keys and sessions, but
    >   not without everything: a user budget is matched by email, so its

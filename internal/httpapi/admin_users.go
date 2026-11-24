@@ -245,6 +245,8 @@ func accountDeleteWarning(p accountdelete.Problem) error {
 		return fmt.Errorf("removing the account's uploads failed: %s; the server's hourly maintenance pass tries again", p.Err)
 	case accountdelete.PrivateWorkspacesFailed:
 		return fmt.Errorf("removing the account's private workspace files failed: %s; the server's hourly maintenance pass tries again", p.Err)
+	case accountdelete.FilesHeldByNewAccount:
+		return fmt.Errorf("files under %s were left in place after the deletion: an account created under the address since holds them", p.Email)
 	}
 	return errors.New(p.String())
 }

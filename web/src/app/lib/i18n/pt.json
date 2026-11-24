@@ -5141,6 +5141,7 @@
   "the API-key store is busy with another change, so nothing was deleted; try again in a few seconds": "o armazenamento de chaves de API está ocupado com outra alteração, por isso nada foi eliminado; tente novamente dentro de alguns segundos",
   "the account's user API keys could not be updated before the deletion ({0}); nothing was deleted": "não foi possível atualizar as chaves de API de utilizador da conta antes de a eliminar ({0}); nada foi eliminado",
   "the account changed while it was being deleted; nothing was deleted": "a conta mudou enquanto era eliminada; nada foi eliminado",
+  "files under {0} were left in place after the deletion: an account created under the address since holds them": "os ficheiros de {0} foram deixados no lugar após a eliminação: uma conta criada entretanto com esse endereço tem-nos",
   "this account no longer exists": "esta conta já não existe",
   "this action cannot be narrowed: approve or decline it whole": "Esta ação não pode ser limitada: aprove-a ou recuse-a por completo",
   "this action cannot be stopped once it runs": "Esta ação não pode ser parada depois de iniciada",

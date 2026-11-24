@@ -22,14 +22,32 @@ import (
 // opened: nothing has been deleted.
 var errKeyStore = errors.New("cannot open the API-key store")
 
+// errServerRunning is deleteAccount's refusal while a fleet server runs
+// against the database (store.ErrServerRunning): nothing has been deleted.
+// The server's own deletion stops the account's requests and turns, forgets
+// its in-memory decisions and moves its files aside under its request gate —
+// none of which a CLI process can do for a server it is not.
+var errServerRunning = errors.New("the fleet server is running against this database, so nothing was deleted")
+
 // deleteAccount is what `fleet admin rm` and `fleet chat user del` run: the
 // same accountdelete.Delete as Settings → Admin → Users, pointed at the key
 // store and attachment directory the fleet.service process uses. The key
 // store is opened before anything is deleted, so an unreadable one stops the
-// command with nothing changed (errKeyStore). What could not be removed after
-// the database deletion is printed as a warning. Any other error is the
-// database's, and nothing was deleted.
+// command with nothing changed (errKeyStore). It refuses while a fleet
+// server runs against the database (errServerRunning), and holds a lock
+// meanwhile that keeps a server from starting until it is done
+// (store.ExcludeServers). What could not be removed after the database
+// deletion is printed as a warning. Any other error is the database's, and
+// nothing was deleted.
 func deleteAccount(ctx context.Context, st *store.Store, email string) (accountdelete.Result, error) {
+	release, err := st.ExcludeServers(ctx)
+	if errors.Is(err, store.ErrServerRunning) {
+		return accountdelete.Result{}, fmt.Errorf("%w: delete the account from Settings → Admin → Users while the server runs, or stop the server (systemctl stop %s) and run this again", errServerRunning, serviceName(""))
+	}
+	if err != nil {
+		return accountdelete.Result{}, err
+	}
+	defer release()
 	ks := resolveKeyStore()
 	ks.announce()
 	mgr, err := apikeys.NewManager(ks.Path(), "")

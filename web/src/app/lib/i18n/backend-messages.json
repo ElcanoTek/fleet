@@ -1148,6 +1148,12 @@
       ]
     },
     {
+      "message": "files under {0} were left in place after the deletion: an account created under the address since holds them",
+      "fields": [
+        "%s"
+      ]
+    },
+    {
       "message": "import accepts at most {0} records (got {1})",
       "fields": [
         "%d",

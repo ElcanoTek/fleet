@@ -506,6 +506,12 @@ func run() error {
 	}
 	defer chatStore.Close()
 	slog.Info("chat DB connected + migrated")
+	// While this server runs, `fleet admin rm` / `fleet chat user del` refuse
+	// to delete an account against the same database (store.ExcludeServers):
+	// the server's own deletion stops the account's work and moves its files
+	// aside under its request gate, which a CLI cannot reach.
+	releasePresence := chatStore.HoldServerPresence(time.Minute)
+	defer releasePresence()
 
 	// Full-text search (#308): honor FLEET_SEARCH_ENABLED, then backfill the
 	// message-content index for any pre-FTS messages in the background so startup

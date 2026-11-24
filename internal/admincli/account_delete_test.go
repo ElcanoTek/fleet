@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ElcanoTek/fleet/internal/accountdelete"
 	"github.com/ElcanoTek/fleet/internal/sched/apikeys"
@@ -311,5 +312,46 @@ func TestUserKeyForAnAccountDeletedWhileMintingIsNotMinted(t *testing.T) {
 	}
 	if keys := reread.ListKeys(); len(keys) != 0 {
 		t.Fatalf("the key store holds %+v, want no key", keys)
+	}
+}
+
+// While a fleet server runs against the database (it holds the server
+// presence lock), both deletion verbs refuse, delete nothing, and say to use
+// Settings → Admin → Users or to stop the server; once it has stopped they
+// delete.
+func TestCLIAccountDeletionRefusedWhileTheServerRuns(t *testing.T) {
+	for name, verb := range map[string]func(email string) int{
+		"fleet admin rm":      func(email string) int { return adminRm([]string{email}) },
+		"fleet chat user del": func(email string) int { return chatUserDel([]string{email}) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			d := fleetEnv(t)
+			t.Setenv("FLEET_DATA_DIR", t.TempDir())
+			t.Setenv("EMAIL_ATTACHMENT_DIR", t.TempDir())
+			t.Setenv("FLEET_SERVICE_NAME", "fleet-account-delete-test-none")
+			ctx := context.Background()
+			chat := d.Chat(t)
+			if _, err := chat.CreateUser(ctx, "running@acctdel.test", "delete-password-1"); err != nil {
+				t.Fatal(err)
+			}
+			release := chat.HoldServerPresence(10 * time.Second) // as `fleet serve` does
+			var code int
+			stderr := captureStderr(t, func() { code = verb("running@acctdel.test") })
+			if code == 0 {
+				t.Fatal("deleted an account while the server runs")
+			}
+			for _, want := range []string{"nothing was deleted", "Settings → Admin → Users", "systemctl stop"} {
+				if !strings.Contains(stderr, want) {
+					t.Errorf("stderr %q does not say %q", stderr, want)
+				}
+			}
+			if _, err := chat.GetUser(ctx, "running@acctdel.test"); err != nil {
+				t.Fatalf("the account is gone: %v", err)
+			}
+			release()
+			if code := verb("running@acctdel.test"); code != 0 {
+				t.Fatalf("after the server stopped: exit %d", code)
+			}
+		})
 	}
 }

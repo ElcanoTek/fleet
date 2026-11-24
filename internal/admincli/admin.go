@@ -185,6 +185,8 @@ func adminRm(argv []string) int {
 			return errf(2, "%s is not an account", email)
 		case errors.Is(err, errKeyStore):
 			return errf(1, "remove %s: %v — nothing was removed", email, err)
+		case errors.Is(err, errServerRunning):
+			return errf(1, "remove %s: %v", email, err)
 		}
 		return errf(5, "remove %s: %v", email, err)
 	}
