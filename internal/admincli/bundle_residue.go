@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/config/envreg"
+	"github.com/ElcanoTek/fleet/internal/hostgit"
 )
 
 // The client bundle checkout is the one tree on a fleet box that nothing
@@ -75,13 +75,14 @@ func bundleResidue(dir string) (count int, bytes int64, ok bool) {
 	if _, err := os.Stat(filepath.Join(dir, ".git")); err != nil {
 		return 0, 0, false
 	}
-	if _, err := exec.LookPath("git"); err != nil {
+	if !hostgit.Available() {
 		return 0, 0, false
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	//nolint:gosec // G204: fixed "git" binary; args are literal subcommands and dir is operator config (env / bootstrap state file), never request input.
-	out, err := exec.CommandContext(ctx, "git", "-C", dir, "status", "--porcelain", "-uall", "--ignored=no").Output()
+	// --ignore-submodules=all keeps status out of submodule repositories;
+	// only untracked ("??") lines are counted, which it does not change.
+	out, err := hostgit.Output(ctx, dir, "status", "--porcelain", "-uall", "--ignored=no", "--ignore-submodules=all")
 	if err != nil {
 		return 0, 0, false
 	}

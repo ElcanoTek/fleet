@@ -303,6 +303,16 @@ func PerRunMCPWorkspaceBase(workspaceRoot string) string {
 	return filepath.Join(workspaceRoot, perRunMCPWorkspaceSubdir)
 }
 
+// SharedMCPWorkspaceBase returns <workspaceRoot>/mcp-shared, the directory
+// SharedMCPWorkspaceDir hands the process-lifetime MCP spawns as
+// ${FLEET_WORKSPACE}. Host-side connectors write their ledgers and reports
+// there by pathname, so, like PerRunMCPWorkspaceBase, the sandbox pool
+// overlays it read-only in every sandbox that mounts the whole root
+// (agent.buildSandboxPool); scoped sandboxes do not mount it at all.
+func SharedMCPWorkspaceBase(workspaceRoot string) string {
+	return filepath.Join(workspaceRoot, sharedMCPWorkspaceSubdir)
+}
+
 // teamEmailTemplatesSubdir is the one entry under mcp-runs/ that is not a run
 // dir: see TeamEmailTemplatesDir.
 const teamEmailTemplatesSubdir = "email-templates"

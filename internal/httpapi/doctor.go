@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/ElcanoTek/fleet/internal/boxdoctor"
+	"github.com/ElcanoTek/fleet/internal/worktree"
 )
 
 // handleDoctor is the admin-only, READ-ONLY box-health report behind
@@ -34,6 +35,9 @@ func (s *Server) handleDoctor(w http.ResponseWriter, r *http.Request) {
 	if s.cfg != nil {
 		opts.SandboxImage = s.cfg.SandboxImage
 		opts.TrustedProxies, opts.HaveTrustedProxies = s.cfg.TrustedProxies, true
+		// The root the server's worktree tasks use: cfg's (pinned absolute at
+		// boot), else ./workspace as the server resolves it.
+		opts.WorkspaceRoot = worktree.ResolveWorkspaceRoot(s.cfg.WorkspaceRoot)
 	}
 	if opts.SandboxImage == "" && s.clientConfig != nil {
 		opts.SandboxImage = s.clientConfig.Sandbox().ResolvedImageRef()

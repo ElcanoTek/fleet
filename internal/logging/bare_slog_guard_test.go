@@ -69,6 +69,7 @@ var bareSlogAllowed = map[string]string{
 	"internal/agent.buildSandboxPool":                   reasonBoot,
 	"internal/agent.sandboxReadOnlyMounts":              reasonBoot,
 	"internal/agent.warnPersistentMemoryBudget":         reasonBoot,
+	"internal/agent.wholeRootGitDirs":                   reasonBoot,
 	"internal/agentcore.ConfigureAgentPolicy":           reasonConfig,
 	"internal/agentcore.closeEmailLastOverEquivalents":  reasonConfig,
 	"internal/agentcore.installAutonomousSet":           reasonConfig,

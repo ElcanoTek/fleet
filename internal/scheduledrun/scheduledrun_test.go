@@ -642,6 +642,18 @@ type recordingTaker struct {
 	// tookScoped records a TakeScoped call (#1897) and its request.
 	tookScoped bool
 	gotScoped  sandbox.ScopedTake
+	// tookWorktree records a TakeWorktree call and its request.
+	tookWorktree bool
+	gotWorktree  sandbox.WorktreeTake
+}
+
+func (rt *recordingTaker) TakeWorktree(_ context.Context, req sandbox.WorktreeTake) (*sandbox.Sandbox, func(), error) {
+	rt.tookWorktree = true
+	rt.gotWorktree = req
+	if rt.containerUnavailable {
+		return nil, func() {}, sandbox.ErrContainerUnavailable
+	}
+	return nil, func() {}, nil
 }
 
 func (rt *recordingTaker) TakeContainerWithEgress(_ context.Context, ov sandbox.ResourceOverride, allowlist []string) (*sandbox.Sandbox, func(), error) {
@@ -696,7 +708,7 @@ func (rt *recordingTaker) TakeContainerWithOverrides(_ context.Context, ov sandb
 func TestTakeTaskSandbox_NetworkPosture(t *testing.T) {
 	t.Run("default seals egress", func(t *testing.T) {
 		rt := &recordingTaker{}
-		if _, _, err := takeTaskSandbox(context.Background(), rt, &models.Task{}, nil); err != nil {
+		if _, _, err := takeTaskSandbox(context.Background(), rt, &models.Task{}, nil, nil); err != nil {
 			t.Fatalf("takeTaskSandbox: %v", err)
 		}
 		if !rt.tookSealed || rt.tookWarm {
@@ -706,7 +718,7 @@ func TestTakeTaskSandbox_NetworkPosture(t *testing.T) {
 
 	t.Run("AllowNetwork opts into egress", func(t *testing.T) {
 		rt := &recordingTaker{}
-		if _, _, err := takeTaskSandbox(context.Background(), rt, &models.Task{AllowNetwork: true}, nil); err != nil {
+		if _, _, err := takeTaskSandbox(context.Background(), rt, &models.Task{AllowNetwork: true}, nil, nil); err != nil {
 			t.Fatalf("takeTaskSandbox: %v", err)
 		}
 		if !rt.tookWarm || rt.tookSealed {
@@ -720,7 +732,7 @@ func TestTakeTaskSandbox_NetworkPosture(t *testing.T) {
 		// so the default task must fall back to the host Take rather than error —
 		// this is the cutlass dev-one-shot / no-podman path.
 		rt := &recordingTaker{containerUnavailable: true}
-		if _, _, err := takeTaskSandbox(context.Background(), rt, &models.Task{}, nil); err != nil {
+		if _, _, err := takeTaskSandbox(context.Background(), rt, &models.Task{}, nil, nil); err != nil {
 			t.Fatalf("takeTaskSandbox should fall back, not error, when no container backend: %v", err)
 		}
 		if !rt.tookSealed || !rt.tookWarm {
@@ -738,7 +750,7 @@ func TestTakeTaskSandbox_EgressMode(t *testing.T) {
 
 	t.Run("allowlisted routes a networked task through egress", func(t *testing.T) {
 		rt := &recordingTaker{egressMode: sandbox.NetworkModeAllowlisted, egressAllowlist: []string{"pypi.org", "*.github.com"}}
-		if _, _, err := takeTaskSandbox(context.Background(), rt, &models.Task{AllowNetwork: true}, nil); err != nil {
+		if _, _, err := takeTaskSandbox(context.Background(), rt, &models.Task{AllowNetwork: true}, nil, nil); err != nil {
 			t.Fatalf("takeTaskSandbox: %v", err)
 		}
 		if !rt.tookEgress || rt.tookWarm || rt.tookSealed {
@@ -751,7 +763,7 @@ func TestTakeTaskSandbox_EgressMode(t *testing.T) {
 
 	t.Run("allowlisted still seals a non-network task", func(t *testing.T) {
 		rt := &recordingTaker{egressMode: sandbox.NetworkModeAllowlisted, egressAllowlist: []string{"pypi.org"}}
-		if _, _, err := takeTaskSandbox(context.Background(), rt, &models.Task{}, nil); err != nil {
+		if _, _, err := takeTaskSandbox(context.Background(), rt, &models.Task{}, nil, nil); err != nil {
 			t.Fatalf("takeTaskSandbox: %v", err)
 		}
 		if !rt.tookSealed || rt.tookEgress {
@@ -761,7 +773,7 @@ func TestTakeTaskSandbox_EgressMode(t *testing.T) {
 
 	t.Run("lockdown seals even an AllowNetwork task", func(t *testing.T) {
 		rt := &recordingTaker{egressMode: sandbox.NetworkModeLockdown}
-		if _, _, err := takeTaskSandbox(context.Background(), rt, &models.Task{AllowNetwork: true}, nil); err != nil {
+		if _, _, err := takeTaskSandbox(context.Background(), rt, &models.Task{AllowNetwork: true}, nil, nil); err != nil {
 			t.Fatalf("takeTaskSandbox: %v", err)
 		}
 		if !rt.tookSealed || rt.tookWarm || rt.tookEgress {
@@ -771,7 +783,7 @@ func TestTakeTaskSandbox_EgressMode(t *testing.T) {
 
 	t.Run("allowlisted + limits routes through egress with overrides", func(t *testing.T) {
 		rt := &recordingTaker{egressMode: sandbox.NetworkModeAllowlisted, egressAllowlist: []string{"pypi.org"}}
-		if _, _, err := takeTaskSandbox(context.Background(), rt, &models.Task{AllowNetwork: true, SandboxLimits: limits}, nil); err != nil {
+		if _, _, err := takeTaskSandbox(context.Background(), rt, &models.Task{AllowNetwork: true, SandboxLimits: limits}, nil, nil); err != nil {
 			t.Fatalf("takeTaskSandbox: %v", err)
 		}
 		if !rt.tookEgress || rt.tookOverrides {
@@ -785,7 +797,7 @@ func TestTakeTaskSandbox_EgressMode(t *testing.T) {
 
 	t.Run("lockdown + limits seals via the override path", func(t *testing.T) {
 		rt := &recordingTaker{egressMode: sandbox.NetworkModeLockdown}
-		if _, _, err := takeTaskSandbox(context.Background(), rt, &models.Task{AllowNetwork: true, SandboxLimits: limits}, nil); err != nil {
+		if _, _, err := takeTaskSandbox(context.Background(), rt, &models.Task{AllowNetwork: true, SandboxLimits: limits}, nil, nil); err != nil {
 			t.Fatalf("takeTaskSandbox: %v", err)
 		}
 		if !rt.tookOverrides || !rt.gotNoNetwork || rt.tookEgress {
@@ -795,7 +807,7 @@ func TestTakeTaskSandbox_EgressMode(t *testing.T) {
 
 	t.Run("empty mode preserves pre-211 behavior", func(t *testing.T) {
 		rt := &recordingTaker{} // egressMode == ""
-		if _, _, err := takeTaskSandbox(context.Background(), rt, &models.Task{AllowNetwork: true}, nil); err != nil {
+		if _, _, err := takeTaskSandbox(context.Background(), rt, &models.Task{AllowNetwork: true}, nil, nil); err != nil {
 			t.Fatalf("takeTaskSandbox: %v", err)
 		}
 		if !rt.tookWarm || rt.tookEgress {
@@ -813,7 +825,7 @@ func TestTakeTaskSandbox_PerTaskLimits(t *testing.T) {
 
 	t.Run("sealed task applies overrides", func(t *testing.T) {
 		rt := &recordingTaker{}
-		if _, _, err := takeTaskSandbox(context.Background(), rt, &models.Task{SandboxLimits: limits}, nil); err != nil {
+		if _, _, err := takeTaskSandbox(context.Background(), rt, &models.Task{SandboxLimits: limits}, nil, nil); err != nil {
 			t.Fatalf("takeTaskSandbox: %v", err)
 		}
 		if !rt.tookOverrides || rt.tookWarm || rt.tookSealed {
@@ -830,7 +842,7 @@ func TestTakeTaskSandbox_PerTaskLimits(t *testing.T) {
 
 	t.Run("AllowNetwork limited task keeps egress", func(t *testing.T) {
 		rt := &recordingTaker{}
-		if _, _, err := takeTaskSandbox(context.Background(), rt, &models.Task{AllowNetwork: true, SandboxLimits: limits}, nil); err != nil {
+		if _, _, err := takeTaskSandbox(context.Background(), rt, &models.Task{AllowNetwork: true, SandboxLimits: limits}, nil, nil); err != nil {
 			t.Fatalf("takeTaskSandbox: %v", err)
 		}
 		if !rt.tookOverrides || rt.gotNoNetwork {
@@ -840,7 +852,7 @@ func TestTakeTaskSandbox_PerTaskLimits(t *testing.T) {
 
 	t.Run("partial limits convert only set fields", func(t *testing.T) {
 		rt := &recordingTaker{}
-		if _, _, err := takeTaskSandbox(context.Background(), rt, &models.Task{SandboxLimits: &models.TaskSandboxLimits{CPUs: 4}}, nil); err != nil {
+		if _, _, err := takeTaskSandbox(context.Background(), rt, &models.Task{SandboxLimits: &models.TaskSandboxLimits{CPUs: 4}}, nil, nil); err != nil {
 			t.Fatalf("takeTaskSandbox: %v", err)
 		}
 		want := sandbox.ResourceOverride{CPULimit: "4.00"} // memory/pids left to the pool default
@@ -851,7 +863,7 @@ func TestTakeTaskSandbox_PerTaskLimits(t *testing.T) {
 
 	t.Run("container-less pool falls back to host take", func(t *testing.T) {
 		rt := &recordingTaker{containerUnavailable: true}
-		if _, _, err := takeTaskSandbox(context.Background(), rt, &models.Task{SandboxLimits: limits}, nil); err != nil {
+		if _, _, err := takeTaskSandbox(context.Background(), rt, &models.Task{SandboxLimits: limits}, nil, nil); err != nil {
 			t.Fatalf("takeTaskSandbox should fall back, not error: %v", err)
 		}
 		if !rt.tookOverrides || !rt.tookWarm {
@@ -861,7 +873,7 @@ func TestTakeTaskSandbox_PerTaskLimits(t *testing.T) {
 
 	t.Run("all-zero limits use the normal path", func(t *testing.T) {
 		rt := &recordingTaker{}
-		if _, _, err := takeTaskSandbox(context.Background(), rt, &models.Task{SandboxLimits: &models.TaskSandboxLimits{}}, nil); err != nil {
+		if _, _, err := takeTaskSandbox(context.Background(), rt, &models.Task{SandboxLimits: &models.TaskSandboxLimits{}}, nil, nil); err != nil {
 			t.Fatalf("takeTaskSandbox: %v", err)
 		}
 		if rt.tookOverrides || !rt.tookSealed {
@@ -895,7 +907,7 @@ func TestTakeTaskSandbox_Scoped(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			rt := &recordingTaker{egressMode: tc.mode, egressAllowlist: tc.allowlist}
-			if _, _, err := takeTaskSandbox(context.Background(), rt, tc.task, scope); err != nil {
+			if _, _, err := takeTaskSandbox(context.Background(), rt, tc.task, scope, nil); err != nil {
 				t.Fatalf("takeTaskSandbox: %v", err)
 			}
 			if !rt.tookScoped || rt.tookWarm || rt.tookSealed || rt.tookOverrides || rt.tookEgress {
@@ -915,11 +927,67 @@ func TestTakeTaskSandbox_Scoped(t *testing.T) {
 
 	t.Run("no container backend falls back to Take", func(t *testing.T) {
 		rt := &recordingTaker{containerUnavailable: true}
-		if _, _, err := takeTaskSandbox(context.Background(), rt, &models.Task{}, scope); err != nil {
+		if _, _, err := takeTaskSandbox(context.Background(), rt, &models.Task{}, scope, nil); err != nil {
 			t.Fatalf("takeTaskSandbox: %v", err)
 		}
 		if !rt.tookScoped || !rt.tookWarm {
 			t.Fatalf("host/mock pool must fall back to Take; got scoped=%v warm=%v", rt.tookScoped, rt.tookWarm)
+		}
+	})
+}
+
+// TestTakeTaskSandbox_Worktree: a worktree run takes EVERY posture through
+// TakeWorktree — never the warm pool, whose sandboxes mount the root
+// repository's .git and .fleet-worktrees read-only — with the same network
+// and limit decisions as the other paths.
+func TestTakeTaskSandbox_Worktree(t *testing.T) {
+	wtMount := sandbox.WorktreeMount{Path: "/ws/.fleet-worktrees/t-r", AdminDir: "/ws/.git/worktrees/t-r"}
+	limits := &models.TaskSandboxLimits{MemoryMB: 2048}
+	cases := []struct {
+		name            string
+		task            *models.Task
+		mode            string
+		allowlist       []string
+		wantNoNetwork   bool
+		wantAllowlisted bool
+		wantOverride    sandbox.ResourceOverride
+	}{
+		{name: "default seals", task: &models.Task{}, wantNoNetwork: true},
+		{name: "AllowNetwork is open, not warm", task: &models.Task{AllowNetwork: true}},
+		{name: "lockdown seals a networked task", task: &models.Task{AllowNetwork: true}, mode: sandbox.NetworkModeLockdown, wantNoNetwork: true},
+		{name: "allowlisted", task: &models.Task{AllowNetwork: true}, mode: sandbox.NetworkModeAllowlisted, allowlist: []string{"api.example.com"}, wantAllowlisted: true},
+		{name: "limits ride along", task: &models.Task{SandboxLimits: limits}, wantNoNetwork: true, wantOverride: sandbox.ResourceOverride{MemoryLimit: "2048m"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rt := &recordingTaker{egressMode: tc.mode, egressAllowlist: tc.allowlist}
+			if _, _, err := takeTaskSandbox(context.Background(), rt, tc.task, nil, &wtMount); err != nil {
+				t.Fatalf("takeTaskSandbox: %v", err)
+			}
+			if !rt.tookWorktree || rt.tookScoped || rt.tookWarm || rt.tookSealed || rt.tookOverrides || rt.tookEgress {
+				t.Fatalf("want only TakeWorktree; got worktree=%v scoped=%v warm=%v sealed=%v overrides=%v egress=%v",
+					rt.tookWorktree, rt.tookScoped, rt.tookWarm, rt.tookSealed, rt.tookOverrides, rt.tookEgress)
+			}
+			got := rt.gotWorktree
+			if got.Worktree != wtMount {
+				t.Fatalf("WorktreeTake.Worktree = %+v, want %+v", got.Worktree, wtMount)
+			}
+			if got.NoNetwork != tc.wantNoNetwork || got.Allowlisted != tc.wantAllowlisted || got.Override != tc.wantOverride {
+				t.Fatalf("WorktreeTake = %+v; want noNetwork=%v allowlisted=%v override=%+v", got, tc.wantNoNetwork, tc.wantAllowlisted, tc.wantOverride)
+			}
+			if tc.wantAllowlisted && strings.Join(got.Allowlist, ",") != strings.Join(tc.allowlist, ",") {
+				t.Fatalf("allowlist = %v, want %v", got.Allowlist, tc.allowlist)
+			}
+		})
+	}
+
+	t.Run("no container backend falls back to Take", func(t *testing.T) {
+		rt := &recordingTaker{containerUnavailable: true}
+		if _, _, err := takeTaskSandbox(context.Background(), rt, &models.Task{}, nil, &wtMount); err != nil {
+			t.Fatalf("takeTaskSandbox: %v", err)
+		}
+		if !rt.tookWorktree || !rt.tookWarm {
+			t.Fatalf("host/mock pool must fall back to Take; got worktree=%v warm=%v", rt.tookWorktree, rt.tookWarm)
 		}
 	})
 }

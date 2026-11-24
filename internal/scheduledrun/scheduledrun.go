@@ -429,6 +429,11 @@ type sandboxTaker interface {
 	// directory of the workspace root (#1897), with the posture and overrides
 	// the request carries.
 	TakeScoped(ctx context.Context, req sandbox.ScopedTake) (*sandbox.Sandbox, func(), error)
+	// TakeWorktree cold-starts a whole-root sandbox with the parts of the
+	// root repository a worktree run writes made writable — read-only in
+	// every other whole-root sandbox — with the posture and overrides the
+	// request carries.
+	TakeWorktree(ctx context.Context, req sandbox.WorktreeTake) (*sandbox.Sandbox, func(), error)
 	// EgressDefault reports the fleet-wide network mode (#211) and the allowlist
 	// for allowlisted mode. ("", nil) = open/current behavior.
 	EgressDefault() (mode string, allowlist []string)
@@ -455,13 +460,38 @@ type sandboxTaker interface {
 // same network and limit decisions, always a cold start. A scoped take never
 // degrades to an unscoped one on a container error — only the no-container
 // (host/mock) case falls back to Take, as above.
-func takeTaskSandbox(ctx context.Context, pool sandboxTaker, task *models.Task, scope *sandbox.WorkspaceScope) (*sandbox.Sandbox, func(), error) {
+//
+// A worktree run (non-nil worktree) routes every posture through
+// TakeWorktree the same way: the warm inventory mounts the root repository's
+// .git and .fleet-worktrees read-only, and the run's in-sandbox git needs the
+// parts of them it writes — its own checkout and record, the object store,
+// refs and reflogs — writable.
+func takeTaskSandbox(ctx context.Context, pool sandboxTaker, task *models.Task, scope *sandbox.WorkspaceScope, worktree *sandbox.WorktreeMount) (*sandbox.Sandbox, func(), error) {
 	// Fleet-wide egress mode (#211). lockdown is a kill-switch: it seals EVERY
 	// sandbox, overriding a task's AllowNetwork. allowlisted routes a networked
 	// task's egress through the host proxy (best-effort). open/"" = current.
 	mode, allowlist := pool.EgressDefault()
 	networked := task.AllowNetwork && mode != sandbox.NetworkModeLockdown
 	allowlisted := networked && mode == sandbox.NetworkModeAllowlisted
+
+	if worktree != nil && scope == nil {
+		req := sandbox.WorktreeTake{
+			Worktree:    *worktree,
+			NoNetwork:   !networked,
+			Allowlisted: allowlisted,
+		}
+		if allowlisted {
+			req.Allowlist = allowlist
+		}
+		if !task.SandboxLimits.IsZero() {
+			req.Override = sandboxOverride(task.SandboxLimits)
+		}
+		sb, cleanup, err := pool.TakeWorktree(ctx, req)
+		if errors.Is(err, sandbox.ErrContainerUnavailable) {
+			return pool.Take(ctx)
+		}
+		return sb, cleanup, err
+	}
 
 	if scope != nil {
 		req := sandbox.ScopedTake{
@@ -547,10 +577,11 @@ func (r *Runner) Run(ctx context.Context, task *models.Task) (*models.LogSession
 	// starting from a fresh empty checkout. wtPath is "" when worktree isolation
 	// is disabled (the common case), leaving the sandbox working dir untouched.
 	runID := uuid.NewString()[:8]
-	wtPath, _, wtCleanup, err := prepareWorktree(ctx, r.workspaceRoot(), task, runID)
+	wt, wtCleanup, err := prepareWorktree(ctx, r.workspaceRoot(), task, runID)
 	if err != nil {
 		return nil, fmt.Errorf("prepare worktree: %w", err)
 	}
+	wtPath := wt.dir()
 
 	// Record the effective per-run workspace path for the file browser (#287): the
 	// per-run git worktree subdir when isolation is enabled, otherwise the job's
@@ -588,7 +619,7 @@ func (r *Runner) Run(ctx context.Context, task *models.Task) (*models.LogSession
 	}
 
 	if task.LoopConfig != nil {
-		return r.runWithLoop(ctx, task, wtPath)
+		return r.runWithLoop(ctx, task, wt)
 	}
 	// A single-pass run is metered as iteration 1 of 1. task_iterations is the
 	// ONLY task-side spend ledger the usage read model and the budget enforcer
@@ -599,7 +630,7 @@ func (r *Runner) Run(ctx context.Context, task *models.Task) (*models.LogSession
 	// sandbox that never started): the attempt happened and counts as one,
 	// at zero spend.
 	startedAt := time.Now().UTC()
-	session, _, _, err := r.runWorker(ctx, task, "", nil, wtPath)
+	session, _, _, err := r.runWorker(ctx, task, "", nil, wt)
 	r.recordIteration(ctx, singlePassIteration(task, startedAt, time.Now().UTC(), session, err))
 	return session, err
 }
@@ -814,7 +845,8 @@ func verifierModelFor(ctx context.Context, slug, taskID string, runModel fantasy
 // only pass). It returns the session, whether the exit condition passed (always
 // true / unused when lc == nil), the exit-condition result label, and any run
 // error.
-func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt string, lc *models.LoopConfig, wtPath string) (*models.LogSession, bool, string, error) {
+func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt string, lc *models.LoopConfig, wt *runWorktree) (*models.LogSession, bool, string, error) {
+	wtPath := wt.dir()
 	requirements, rosterNarrowing, err := r.checkTaskRequirementsAndRoster(task)
 	if err != nil {
 		return nil, false, "", err
@@ -854,11 +886,20 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 	if err != nil {
 		return nil, false, "", err
 	}
-	sb, cleanup, err := takeTaskSandbox(ctx, r.mgr.SandboxPool(), task, scope)
+	sb, cleanup, err := takeTaskSandbox(ctx, r.mgr.SandboxPool(), task, scope, wt.mount())
 	if err != nil {
 		return nil, false, "", fmt.Errorf("take sandbox: %w", err)
 	}
 	defer cleanup()
+	// The host only registers the worktree; the first pass creates its branch
+	// and fills it here, inside the sandbox (see checkoutInSandbox). A looped
+	// task's later passes find it checked out.
+	if wt != nil && !wt.checkedOut.Load() {
+		if err := checkoutInSandbox(ctx, sb, wt.path, wt.branch, wt.base); err != nil {
+			return nil, false, "", fmt.Errorf("check out the worktree: %w", err)
+		}
+		wt.checkedOut.Store(true)
+	}
 
 	// Scope every scheduled run to a concrete directory inside the bind-mounted
 	// workspace. Worktree-enabled runs use their exact per-run worktree (#180);
@@ -1104,6 +1145,10 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 	// skipped. Surface it in the run transcript so the owner sees the task did less
 	// than expected, and tell the agent so it doesn't silently rely on missing tools.
 	prompt = withSkippedRemoteNotice(ctx, task, remoteOverlay, prompt)
+	// A worktree run's git works in a repository whose .git is mostly
+	// read-only to it: say up front what works, what does not, and which
+	// error lines are expected (ADR-0118).
+	prompt = withWorktreeNotice(prompt, wt)
 	// Loop context (#179): a prior iteration's output is fed forward so the worker
 	// can improve on it. Empty on the first / only pass.
 	if strings.TrimSpace(extraPrompt) != "" {

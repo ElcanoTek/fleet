@@ -41,7 +41,7 @@ func TestExecutionRequirementsRoster(t *testing.T) {
 // is installed here: reaching model setup would panic).
 func TestRunWorkerRejectsAnUnknownRosterBeforeModelSetup(t *testing.T) {
 	task := &models.Task{Prompt: models.ExecutionRequirementsMarker + "\n" + `{"roster":"all_tools"}`}
-	session, _, _, err := (&Runner{}).runWorker(context.Background(), task, "", nil, "")
+	session, _, _, err := (&Runner{}).runWorker(context.Background(), task, "", nil, nil)
 	if err == nil || !strings.Contains(err.Error(), `unknown roster "all_tools"`) || session != nil {
 		t.Fatalf("late/missing roster preflight: %v %v", session, err)
 	}

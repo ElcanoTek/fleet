@@ -13,9 +13,12 @@ import (
 	"slices"
 	"strings"
 	"syscall"
+	"time"
 
+	"github.com/ElcanoTek/fleet/internal/boxdoctor"
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/worktree"
 )
 
 // warnRetiredEnvAliases reports removed CHAT_/CUTLASS_ (or bare DATA_DIR)
@@ -80,11 +83,47 @@ func cmdDoctor(argv []string) int {
 	// path (script or status fallback); read-only, never a value. A bundle
 	// that still uses one fails the doctor run (exit 1 when the rest passed).
 	bundleFails := warnRetiredEnvAliases(os.Stdout)
+	warnWorktreeGit(os.Stdout)
 	rc := cmdDoctorChecks(argv)
 	if bundleFails && rc == 0 && !slices.Contains(argv, "--dry-run") {
 		rc = 1
 	}
 	return rc
+}
+
+// warnWorktreeGit checks whether worktree_config tasks could run against the
+// workspace repository as it is now (boxdoctor.CheckWorktreeGit, on this
+// process's own record), in the workspace root resolveWorkspaceRoot names,
+// and says which root it checked: a warning when they could not, one line
+// when they could — the server decides from what it recorded at its own
+// start — and nothing when the root is not a repository or cannot be read.
+func warnWorktreeGit(w io.Writer) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	root := resolveWorkspaceRoot("")
+	// This one-off process records the workspace repository as it finds it
+	// now (see worktree.Pin), then runs the check worktree tasks run.
+	worktree.PinAtStartup(root)
+	c := boxdoctor.CheckWorktreeGit(ctx, root)
+	switch c.Status {
+	case boxdoctor.StatusWarn:
+		fmt.Fprintf(w, "WARN  %s (%s): %s\n", c.Name, root, c.Detail)
+	case boxdoctor.StatusOK:
+		fmt.Fprintf(w, "ok    %s (%s): usable as found now; the server records the repository at its own start, so a .git created or replaced after it started takes a restart%s\n", c.Name, root, doctorNotes(c.Detail))
+	case boxdoctor.StatusSkip, boxdoctor.StatusFail:
+		// Skip: the root is not a repository, the case on most boxes.
+		// CheckWorktreeGit never fails.
+	}
+}
+
+// doctorNotes is the notes boxdoctor.CheckWorktreeGit added after its ok
+// detail (a shallow clone, a non-default lfs.storage), or "".
+func doctorNotes(detail string) string {
+	notes, _ := strings.CutPrefix(detail, boxdoctor.OKDetail)
+	if notes == detail {
+		return ""
+	}
+	return notes
 }
 
 // cmdDoctorChecks runs doctor.sh, or the status fallback without it.

@@ -271,8 +271,9 @@ type WorktreeConfig struct {
 	// (FLEET_WORKTREE_PRUNE_AGE, default 24h), so "keep for inspection" is a
 	// window, not forever; `fleet worktree prune` reclaims it on demand.
 	AutoCleanup bool `json:"auto_cleanup"`
-	// CleanupDelaySeconds delays the post-run `git worktree remove` by this many
-	// seconds (0 = remove immediately). Only consulted when AutoCleanup is set.
+	// CleanupDelaySeconds delays the post-run removal of the worktree and its
+	// branch by this many seconds (0 = remove immediately). Only consulted
+	// when AutoCleanup is set.
 	CleanupDelaySeconds int `json:"cleanup_delay_seconds,omitempty"`
 }
 
@@ -291,7 +292,8 @@ func (wc *WorktreeConfig) Validate() error {
 	// components (space, ~, ^, :, ?, *, [, \), the "@{" sequence, the ".." and
 	// "//" sequences, and a ".lock" substring (a ref component may not end in
 	// .lock). This catches the misconfigurations that would otherwise fail the
-	// worktree-add at run time; git still makes the authoritative check.
+	// run's branch creation (in its sandbox) at run time; git still makes the
+	// authoritative check.
 	if strings.ContainsAny(wc.BranchPrefix, " ~^:?*[\\") ||
 		strings.Contains(wc.BranchPrefix, "@{") ||
 		strings.Contains(wc.BranchPrefix, "..") ||
@@ -299,13 +301,15 @@ func (wc *WorktreeConfig) Validate() error {
 		strings.Contains(wc.BranchPrefix, ".lock") {
 		return fmt.Errorf("branch_prefix is not a valid git ref-name fragment")
 	}
-	// BaseBranch is the trailing positional of `git worktree add -b <branch>
-	// <path> <base>`, and that invocation carries no "--" end-of-options
-	// separator, so a value beginning with "-" would be parsed by git as an
-	// option rather than a commit-ish. Reject that shape here — worktree_config
-	// is settable by any task creator (unlike run_if, which is admin-only), so
-	// this is the boundary. The ref-name checks mirror BranchPrefix above; git
-	// still makes the authoritative check at run time.
+	// BaseBranch is the start point the run's sandbox passes to
+	// `git switch --create <branch> <base>`; HEAD, "@" and pseudo-refs such
+	// as FETCH_HEAD mean the repository's (main-worktree/…), not the new
+	// worktree's own (the host only registers the
+	// worktree, ADR-0118). A value beginning with "-" would be read by git as
+	// an option there, so it is rejected — worktree_config is settable by any
+	// task creator (unlike run_if, which is admin-only), so this is the
+	// boundary. The ref-name checks mirror BranchPrefix above; git still makes
+	// the authoritative check at run time.
 	if base := strings.TrimSpace(wc.BaseBranch); base != "" {
 		if strings.HasPrefix(base, "-") {
 			return fmt.Errorf("base_branch may not begin with '-'")

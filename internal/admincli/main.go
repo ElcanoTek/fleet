@@ -324,9 +324,9 @@ Users, credentials, notes:
      it. Uses ADMIN_API_KEY / FLEET_ORCHESTRATOR_ADDR by default.)
 
 Git worktree isolation hygiene (#180; tasks with worktree_config enabled):
-  fleet worktree list  [--workspace DIR]                       (git worktree list --porcelain)
+  fleet worktree list  [--workspace DIR]                       (per-run worktrees and their records)
   fleet worktree prune [--workspace DIR] [--older-than 24h] [--dry-run]
-    (git worktree prune + remove stale <workspace>/.fleet-worktrees/* dirs)
+    (remove stale <workspace>/.fleet-worktrees/* dirs and their records; runs no git)
 
 Database migrations (#256):
   fleet migrate status [--database-url <dsn>] [--json]   (read-only: applied vs pending of the one migration sequence, core.schema_versions)

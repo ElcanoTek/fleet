@@ -160,13 +160,15 @@ linters:
           - forbidigo
       # Wholesale copies of the environment, never a read of one setting:
       #   - subprocess env plumbing: `fleet backup` (pg_dump) and `fleet
-      #     update` (update.sh) hand their whole environment to the child;
+      #     update` (update.sh) hand their whole environment to the child,
+      #     and hostgit hands it to host-side git minus the variables that
+      #     would point git at another repository;
       #   - secret redactors snapshot every VALUE as a literal to scrub
       #     (agentcore, mcpbroker, the process log, the Browserbase live-view guard, `fleet
       #     diagnose`), and diagnose lists the set NAMES (never values);
       #   - the broker divests the connector env by scanning it, and creds
       #     discovers per-account suffix variants by scanning it.
-      - path: ^(internal/admincli/(backup|update|diagnose)|internal/agentcore/redact|internal/logging/redact|internal/mcpbroker/redact|internal/tools/browserbase_live_view|cmd/fleet/mcp_broker_runtime|internal/creds/creds)\.go$
+      - path: ^(internal/admincli/(backup|update|diagnose)|internal/hostgit/hostgit|internal/agentcore/redact|internal/logging/redact|internal/mcpbroker/redact|internal/tools/browserbase_live_view|cmd/fleet/mcp_broker_runtime|internal/creds/creds)\.go$
         text: os\.Environ
         linters:
           - forbidigo

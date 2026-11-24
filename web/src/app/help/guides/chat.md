@@ -381,6 +381,13 @@ line of Python, and every file the assistant reads or writes runs inside it,
 isolated from the machine the platform runs on. Credentials for connected systems never
 enter it.
 
+If your operator has made the shared workspace itself a git repository, git
+commands that write to that repository — commit, stash, switching or creating
+branches — fail in the assistant's sandbox with "Read-only file system" (with
+some deployment settings the sandbox does not show the repository at all). A
+repository the assistant creates in the conversation's own folder works as
+usual.
+
 ## 2. Reading the screen
 
 Three regions: the rail on the left holds your conversations, the transcript in

@@ -288,16 +288,33 @@ What this does **not** do:
   **floored at 4h** (`worktree.MinPruneAge`, the default ceiling) whatever
   `--older-than` / `FLEET_WORKTREE_PRUNE_AGE` says — a smaller value is raised
   with a warning, never honoured. Aged candidates are then cross-checked
-  against `git worktree list --porcelain`: a worktree git reports as
-  **locked** is kept, one git knows is removed through git, and only a
-  directory git does not list is deleted directly. A box whose wall-clock
-  ceiling is raised above 4h must raise the prune age to match; the floor
-  cannot see the override. The `git worktree prune` half of the sweep runs
-  only when the workspace root actually carries a `.git` — fleet registers
-  worktrees against the top-level repo, so a root that is not one can hold no
-  records to prune, and running git there just to report exit 128 was noise.
-  A root that *is* a repository still prunes, and a genuine git failure there
-  still warns.
+  against the repository's records in `.git/worktrees`: a worktree a record
+  marks as **locked** is kept, one a record names is removed together with
+  that record, and a directory no record names is deleted on its own. A box
+  whose wall-clock ceiling is raised above 4h must raise the prune age to
+  match; the floor cannot see the override. The sweep runs no git at all
+  (ADR-0118): it reads and deletes through no-follow `os.Root` handles on
+  `.fleet-worktrees` and `.git/worktrees` (`tools.OpenWorkspaceDir`), skips
+  entries that are symlinks, and considers only records whose `gitdir` names
+  a directory under `.fleet-worktrees`. No checkout is removed before the
+  record its `.git` file names has been read: a lock there keeps it (the
+  `initializing` lock fleet holds only while it writes a record counts for
+  nothing on a worktree this old), and a `.git` file or record that cannot
+  be read keeps it too; a checkout with no `.git` file, or whose record
+  provably does not exist, is an orphan. A record holding nothing but an
+  `initializing` lock older than the prune age (a server stopped while
+  writing it) is removed. Nothing is removed unless the root's `.git` is the
+  real directory recorded when fleet started and passes its check; a `.git`
+  that appeared or changed since is reported once per process and left alone
+  until a restart. The directories the server creates at start may still be
+  missing, so `fleet worktree prune` before an upgraded server's first start
+  still honours locks. `fleet worktree prune` and `fleet worktree list`, separate
+  processes, record the root as they find it when the command starts; `list`
+  runs no git either and prints what a run could write (a lock reason) with
+  control characters replaced. Every read of a record file Lstats it, opens it
+  without blocking and checks it is the same regular file (a link or a FIFO
+  there is skipped). A `.fleet-worktrees` that is a symlink or not a directory
+  is reported as an error on every pass until it is removed.
 - **The persistent-session cap stays soft.** See above; a busy session is never
   evicted, so the live count can exceed the limit transiently.
 - **No automatic `--deep` prune.** Named-image removal stays a human decision.

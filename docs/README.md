@@ -153,6 +153,12 @@ there) and [`../.agents/skills/steward/SKILL.md`](../.agents/skills/steward/SKIL
   + [ADR-0117](adr/0117-helping-a-chats-people.md) (who needs help, the
   read-only view of a chat as its owner sees it, and the note an
   administrator pins to a chat)
+- **Worktree tasks and the workspace repository** (the host runs no git in
+  the repository at the workspace root; the run's sandbox makes the branch
+  and the checkout; `.git`, `.fleet-worktrees/` and `mcp-shared/` are
+  read-only in whole-root sandboxes; what fails in a worktree run and why):
+  [ADR-0118](adr/0118-host-git-and-workspace-git-dirs.md)
+  + [`docs/AGENT-RUNTIME.md`](AGENT-RUNTIME.md)
 - **Sharing work inside a project** (team-shared chats and the read-only view
   teammates branch from, "team learnings" as the user-facing name for a
   project's shared memory, the vocabulary, and why a team-shared chat can only

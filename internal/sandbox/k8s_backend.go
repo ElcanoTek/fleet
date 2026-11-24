@@ -575,7 +575,9 @@ func k8sQuantityFromPodmanCPU(limit string) (string, error) {
 // buildSandboxPod is the pure pod-spec builder — the k8s counterpart of the
 // `podman run` argument list in containerImpl.start, kept side-effect-free so
 // the hardening posture is pinned by unit tests the way podman_args_test.go
-// pins the flag list.
+// pins the flag list. Its one filesystem read is gitDirMounts' existence
+// check of the root repository's directories on the control plane's view of
+// the claim; it writes nothing.
 func buildSandboxPod(cfg ContainerConfig, kcfg KubernetesConfig, name string) (*k8sPod, error) {
 	memory, err := k8sQuantityFromPodmanMemory(cfg.MemoryLimit)
 	if err != nil {
@@ -655,7 +657,7 @@ func buildSandboxPod(cfg ContainerConfig, kcfg KubernetesConfig, name string) (*
 	// NOT nested in the claim carry fileop anchors only (bundle docs the
 	// image itself provides) and get no mount, exactly as before.
 	for _, dir := range workspaceRO {
-		if dir == "" {
+		if dir == "" || cfg.isWholeRootGitDir(dir) {
 			continue
 		}
 		rel, err := filepath.Rel(cfg.WorkspaceHostDir, filepath.Clean(dir))
@@ -667,6 +669,24 @@ func buildSandboxPod(cfg ContainerConfig, kcfg KubernetesConfig, name string) (*
 			MountPath: filepath.Join(cfg.WorkspaceHostDir, rel),
 			SubPath:   filepath.ToSlash(rel),
 			ReadOnly:  true,
+		})
+	}
+	// The root repository's .git and .fleet-worktrees, read-only, plus a
+	// worktree run's writable parts nested in them (ContainerConfig.
+	// WholeRootGitDirs and Worktree), each its own subPath mount of the
+	// claim, parents first. Only the ones that exist on the control plane's
+	// view of the claim are listed, so the kubelet never creates one
+	// (root-owned) in a workspace that is not a repository.
+	for _, m := range cfg.gitDirMounts() {
+		rel, err := filepath.Rel(cfg.WorkspaceHostDir, m.path)
+		if err != nil || rel == "." || !filepath.IsLocal(rel) {
+			continue
+		}
+		mounts = append(mounts, k8sVolumeMount{
+			Name:      "workspace",
+			MountPath: m.path,
+			SubPath:   filepath.ToSlash(rel),
+			ReadOnly:  m.readOnly,
 		})
 	}
 

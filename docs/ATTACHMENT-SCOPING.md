@@ -355,4 +355,7 @@ non-worktree scheduled run cold-starts a sandbox that mounts only its own job
 directory, so a scheduled job can no longer read a conversation's directory
 or another job's. Chat sandboxes still mount the whole root, so a chat can
 still read another chat's directory and a scheduled job's — though `tasks/`
-is now read-only to them, so they can no longer change a job's files.
+is now read-only to them, so they can no longer change a job's files, and
+`mcp-shared/` and the root repository's `.git` and `.fleet-worktrees/` are
+read-only to them too
+([ADR-0118](adr/0118-host-git-and-workspace-git-dirs.md)).

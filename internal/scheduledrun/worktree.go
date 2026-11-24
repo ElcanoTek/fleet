@@ -1,17 +1,20 @@
 package scheduledrun
 
 import (
-	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/logging"
+	"github.com/ElcanoTek/fleet/internal/sandbox"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/worktree"
 )
@@ -45,110 +48,311 @@ const (
 	// in internal/worktree so the creator and the sweeper can never disagree
 	// about where these live.
 	worktreeSubdir = worktree.Subdir
-	// gitCmdTimeout bounds a single host git invocation. `git worktree add` can
-	// take a few seconds on a large repo; this is generous without being
-	// unbounded if git wedges.
+	// gitCmdTimeout bounds the in-sandbox checkout (a large repository's
+	// first checkout can take a while) and the host-side cleanup.
 	gitCmdTimeout = 2 * time.Minute
+	// defaultBase is the base a run branches from when base_branch is unset:
+	// the repository's HEAD. Inside the new worktree HEAD is the run's own
+	// (unborn) branch, so the repository's is named main-worktree/HEAD.
+	defaultBase = "main-worktree/HEAD"
+	// minSandboxGitMajor and minSandboxGitMinor are the oldest git the
+	// in-sandbox checkout works with: `git switch` arrived in 2.23
+	// (main-worktree/ refs in 2.20).
+	minSandboxGitMajor = 2
+	minSandboxGitMinor = 23
 )
 
+// minSandboxGit is minSandboxGitMajor.minSandboxGitMinor, for messages.
+var minSandboxGit = fmt.Sprintf("%d.%d", minSandboxGitMajor, minSandboxGitMinor)
+
+// runWorktree is one run's git worktree: its checkout directory under
+// .fleet-worktrees, the repository's record of it under .git/worktrees, and
+// its branch. The host writes only the record and the checkout's .git file
+// (worktree.CreateWorktree), running no git; the first worker pass creates
+// the branch from its base and fills the checkout inside the run's sandbox
+// (checkedOut); the host runs no git in the repository.
+type runWorktree struct {
+	path       string
+	adminDir   string
+	branch     string
+	base       string // what the branch starts from, resolved by the sandbox's git
+	shallow    bool   // the repository is a shallow clone (worktree.IsShallow)
+	checkedOut atomic.Bool
+}
+
+// dir is the checkout directory, or "" for a run without a worktree.
+func (w *runWorktree) dir() string {
+	if w == nil {
+		return ""
+	}
+	return w.path
+}
+
+// mount is the sandbox's view of this worktree, or nil for a run without one.
+func (w *runWorktree) mount() *sandbox.WorktreeMount {
+	if w == nil {
+		return nil
+	}
+	return &sandbox.WorktreeMount{Path: w.path, AdminDir: w.adminDir}
+}
+
 // prepareWorktree creates a per-run git worktree when the task has
-// worktree_config enabled. On the enabled path it returns the worktree path (to
-// scope the run into via Sandbox.SetDefaultWorkingDir), the branch name, and a
-// cleanup closure that removes the worktree + branch. On the disabled path it
-// returns an EMPTY wtPath — the signal to leave the sandbox's working directory
-// untouched (current shared-workspace behaviour). cleanup is always non-nil and
-// safe to call even when disabled (then it is a no-op). The caller decides
-// whether/when to invoke cleanup based on AutoCleanup / CleanupDelaySeconds.
-func prepareWorktree(ctx context.Context, workspaceRoot string, task *models.Task, runID string) (wtPath, branch string, cleanup func(), err error) {
+// worktree_config enabled, and returns it with a cleanup closure that removes
+// the worktree and its branch. On the disabled path it returns a nil worktree
+// — the signal to leave the sandbox's working directory untouched (current
+// shared-workspace behaviour). cleanup is always non-nil and safe to call even
+// when disabled (then it is a no-op). The caller decides whether/when to
+// invoke cleanup based on AutoCleanup / CleanupDelaySeconds.
+//
+// The workspace repository is written from sandboxes — a live worktree run's
+// sandbox writes its record and checkout, .git/objects, .git/refs and
+// .git/logs — so the host runs no git in it at all: it checks that the
+// repository is the one recorded at startup and points nowhere else
+// (worktree.RepoPin.Check), then writes the new worktree's record and
+// checkout .git file itself (worktree.CreateWorktree), in directories no
+// sandbox can write. Resolving the base, creating the branch and the
+// checkout happen in the run's sandbox; the branch is deleted afterwards
+// without git (worktree.DeleteBranch).
+func prepareWorktree(ctx context.Context, workspaceRoot string, task *models.Task, runID string) (wt *runWorktree, cleanup func(), err error) {
 	noop := func() {}
 	cfg := task.WorktreeConfig
 	if cfg == nil || !cfg.Enabled {
-		return "", "", noop, nil
+		return nil, noop, nil
 	}
 
-	// Guard: the workspace must be a git repository root. This fires before any
-	// worktree creation so a misconfigured task fails clearly rather than
-	// silently running in a non-isolated directory.
-	if err := verifyGitRepoRoot(ctx, workspaceRoot); err != nil {
-		return "", "", noop, err
+	// Guard: the workspace must be the git repository recorded at startup, and
+	// its root. This fires before any worktree creation so a misconfigured task
+	// fails clearly rather than silently running in a non-isolated directory.
+	if err := worktree.Pin(workspaceRoot).Check(ctx, workspaceRoot); err != nil {
+		return nil, noop, fmt.Errorf("worktree_config: %w", err)
 	}
 
 	prefix := cfg.BranchPrefix
 	if prefix == "" {
 		prefix = models.DefaultWorktreeBranchPrefix
 	}
-	branch = fmt.Sprintf("%s%s-%s", prefix, task.ID, runID)
+	branch := fmt.Sprintf("%s%s-%s", prefix, task.ID, runID)
 
 	// Worktree dir lives under the workspace root (see package doc for why).
-	parent := filepath.Join(workspaceRoot, worktreeSubdir)
 	// 0o755 so the rootless-podman container user (uid 1000) can traverse into
 	// the worktree, matching tools.EnsureWorkspaceDir's rationale.
-	if err := os.MkdirAll(parent, 0o755); err != nil { //nolint:gosec // bind-mount path must be traversable by the lockdown container user
-		return "", "", noop, fmt.Errorf("create worktree parent dir: %w", err)
+	if err := os.Mkdir(filepath.Join(workspaceRoot, worktreeSubdir), 0o755); err != nil && !errors.Is(err, fs.ErrExist) { //nolint:gosec // bind-mount path must be traversable by the lockdown container user
+		return nil, noop, fmt.Errorf("create worktree parent dir: %w", err)
 	}
-	if err := ensureWorktreeExcluded(workspaceRoot); err != nil {
+	// The worktree is created only inside a real directory: never through a
+	// symlink standing in its place (see worktree.CheckSubdir).
+	parent, err := worktree.CheckSubdir(workspaceRoot)
+	if err != nil {
+		return nil, noop, fmt.Errorf("worktree parent dir: %w", err)
+	}
+	if err := ensureWorktreeExcluded(ctx, workspaceRoot); err != nil {
 		// Non-fatal: a polluted `git status` in the main tree is cosmetic, not a
 		// correctness problem. Log and continue.
 		logging.From(ctx).Error("scheduled worktree: could not add to git exclude", "path", worktreeSubdir, "err", err)
 	}
-	wtPath = filepath.Join(parent, fmt.Sprintf("%s-%s", task.ID, runID))
+	name := fmt.Sprintf("%s-%s", task.ID, runID)
+	wtPath := filepath.Join(parent, name)
 
-	base := strings.TrimSpace(cfg.BaseBranch)
-	if base == "" {
-		base = "HEAD"
-	}
+	// The base is resolved by the run's sandbox, not here.
+	base := worktreeBase(cfg.BaseBranch)
 
-	if out, gErr := runGit(ctx, workspaceRoot, "worktree", "add", "-b", branch, wtPath, base); gErr != nil {
-		return "", "", noop, fmt.Errorf("git worktree add: %w\n%s", gErr, out)
-	}
-
+	run := &runWorktree{path: wtPath, branch: branch, base: base, shallow: worktree.IsShallow(ctx, workspaceRoot)}
 	cleanup = func() {
 		// Detached, bounded context: cleanup runs after the run's ctx is
 		// cancelled (and possibly on a delay timer), so it must not inherit that
 		// cancellation.
 		cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), gitCmdTimeout)
 		defer cancel()
-		if out, rErr := runGit(cctx, workspaceRoot, "worktree", "remove", "--force", wtPath); rErr != nil {
-			logging.From(ctx).Error("scheduled worktree: remove failed", "path", wtPath, "err", rErr, "output", out)
-			// Fall through to branch deletion anyway; a leftover dir is reclaimed
-			// later by the server's maintenance loop (or `fleet worktree prune`).
+		// The checkout and the repository's record of it are removed without
+		// git (worktree.RemoveWorktree, worktree.RemoveRecord by the id this
+		// setup gave it); a leftover is reclaimed later by the server's
+		// maintenance loop (or `fleet worktree prune`).
+		//
+		// The record and the branch go only once the checkout is gone. A
+		// worktree the run locked (`git worktree lock`) is kept whole, as
+		// `git worktree remove` and the sweep leave a locked worktree alone;
+		// so is one whose checkout could not be fully removed (a directory
+		// inside it the service user cannot search): its record and branch
+		// stay, so its commits keep a ref and a later cleanup or the sweep
+		// can finish once the checkout can go. Only when the checkout is gone
+		// and just its record could not be removed does cleanup go on.
+		if rErr := worktree.RemoveWorktree(cctx, workspaceRoot, name); rErr != nil {
+			switch {
+			case errors.Is(rErr, worktree.ErrLocked):
+				logging.From(ctx).Info("scheduled worktree: kept, the run locked it", "path", wtPath, "branch", branch)
+				return
+			case errors.Is(rErr, worktree.ErrRecordNotRemoved):
+				logging.From(ctx).Error("scheduled worktree: checkout removed, record removal failed", "path", wtPath, "err", rErr)
+			default:
+				logging.From(ctx).Warn("scheduled worktree: kept its record and branch, the checkout could not be removed", "path", wtPath, "branch", branch, "err", rErr)
+				return
+			}
+		}
+		if rErr := worktree.RemoveRecord(cctx, workspaceRoot, name); rErr != nil {
+			logging.From(ctx).Error("scheduled worktree: remove record failed", "record", name, "err", rErr)
 		}
 		// Delete the per-run branch too: an enabled+auto_cleanup task throws the
 		// run away, so leaving one branch per run would accumulate ref litter.
 		// Operators who want to keep the work set auto_cleanup:false instead.
-		if out, bErr := runGit(cctx, workspaceRoot, "branch", "-D", branch); bErr != nil {
-			logging.From(ctx).Error("scheduled worktree: delete branch failed", "branch", branch, "err", bErr, "output", out)
+		// Only a branch this run's sandbox created (checkedOut) is deleted: a
+		// branch of that name that existed before was never reset, and is not
+		// removed either.
+		if !run.checkedOut.Load() {
+			return
+		}
+		if bErr := worktree.DeleteBranch(cctx, workspaceRoot, branch); bErr != nil {
+			logging.From(ctx).Error("scheduled worktree: delete branch failed", "branch", branch, "err", bErr)
 		}
 	}
-	return wtPath, branch, cleanup, nil
-}
 
-// verifyGitRepoRoot returns nil only if dir is the top level of a git working
-// tree. A non-repo dir, or a dir that is merely a subdirectory of a repo, is
-// rejected with a clear error.
-func verifyGitRepoRoot(ctx context.Context, dir string) error {
-	out, err := runGit(ctx, dir, "rev-parse", "--show-toplevel")
+	// The record and the checkout's .git file are written without git
+	// (worktree.CreateWorktree); the sandbox creates the branch and fills the
+	// checkout on the first worker pass (checkoutInSandbox). A failed
+	// CreateWorktree has already removed what it made, and whatever existed
+	// under this name or branch before is not this run's, so cleanup is not
+	// called here.
+	adminDir, err := worktree.CreateWorktree(ctx, workspaceRoot, name, branch)
 	if err != nil {
-		return fmt.Errorf("workspace %q is not a git repository root (worktree_config requires one): %w: %s", dir, err, strings.TrimSpace(out))
+		return nil, noop, fmt.Errorf("create worktree: %w", err)
 	}
-	top := strings.TrimSpace(out)
-	// Normalize both sides (symlinks, e.g. /opt/fleet/workspace) before comparing
-	// so a symlinked workspace root still matches its resolved toplevel.
-	wantAbs, werr := normalizePath(dir)
-	gotAbs, gerr := normalizePath(top)
-	if werr == nil && gerr == nil && wantAbs != gotAbs {
-		return fmt.Errorf("workspace %q is inside git repository %q but is not its root; worktree_config requires the workspace to be the repo root", dir, top)
-	}
-	return nil
+	run.adminDir = adminDir
+	return run, cleanup, nil
 }
 
-// normalizePath resolves symlinks and returns a cleaned absolute path. If the
-// path cannot be resolved (e.g. does not exist), it falls back to filepath.Abs.
-func normalizePath(p string) (string, error) {
-	if resolved, err := filepath.EvalSymlinks(p); err == nil {
-		return resolved, nil
+// worktreeBase is the start point the run's sandbox passes to git switch for
+// base_branch. Inside the new worktree, HEAD and the other per-worktree
+// pseudo-refs (FETCH_HEAD, ORIG_HEAD, MERGE_HEAD, …) are the run's own, so a
+// base naming one of them — or "@", git's short name for HEAD — means the
+// repository's and is read through main-worktree/. An empty base is the
+// repository's HEAD (defaultBase).
+func worktreeBase(baseBranch string) string {
+	base := strings.TrimSpace(baseBranch)
+	switch {
+	case base == "", base == "@":
+		return defaultBase
+	case base == "HEAD", pseudoRef.MatchString(base):
+		return "main-worktree/" + base
+	default:
+		return base
 	}
-	return filepath.Abs(p)
+}
+
+// pseudoRef matches git's per-worktree pseudo-refs such as FETCH_HEAD.
+var pseudoRef = regexp.MustCompile(`^[A-Z][A-Z_]*_HEAD$`)
+
+// checkoutGit is how fleet's own checkout commands run git in the sandbox.
+// safe.directory covers a sandbox user whose uid differs from the files'
+// owner (a pod on the kubernetes backend). core.hooksPath=/dev/null keeps the
+// repository's hooks (a post-checkout hook such as git-lfs's) out of fleet's
+// checkout, so one that fails, or needs what the sandbox lacks, cannot fail
+// the run before it starts; the run's own git commands run them as usual.
+const checkoutGit = "git -c safe.directory='*' -c core.hooksPath=/dev/null"
+
+// Exit statuses checkoutInSandbox's command uses for what it checks before
+// git switch runs.
+const (
+	// oldGitExit: the sandbox's git is older than minSandboxGit, or its
+	// version could not be read; the command prints `git version` first.
+	oldGitExit = 98
+	// baseMissingExit: the base does not name a commit.
+	baseMissingExit = 99
+)
+
+// gitVersionCheck is the shell that exits oldGitExit, printing what
+// `git version` said, unless the sandbox's git is at least minSandboxGit.
+var gitVersionCheck = fmt.Sprintf(`v=$(git version 2>&1); set -- $v; ver=${3:-}; major=${ver%%%%.*}; rest=${ver#*.}; minor=${rest%%%%.*}; `+
+	`case "$major.$minor" in *[!0-9.]*|.*|*.) printf '%%s\n' "$v" >&2; exit %d;; esac; `+
+	`if [ "$major" -lt %d ] || { [ "$major" -eq %d ] && [ "$minor" -lt %d ]; }; then printf '%%s\n' "$v" >&2; exit %d; fi; `,
+	oldGitExit, minSandboxGitMajor, minSandboxGitMajor, minSandboxGitMinor, oldGitExit)
+
+// checkoutInSandbox creates the run's branch from its base and fills the
+// worktree, inside the run's sandbox: `git switch --create <branch> <base>`
+// from the record's unborn HEAD writes the ref, its reflog, the index and the
+// working tree there, so the base is resolved, and whatever filters the
+// repository configures run, in the sandbox — not on the host.
+//
+//   - --create, not --force-create: the branch is new for every run, and an
+//     existing branch of that name is reported, never reset.
+//   - --no-track: a remote-tracking base (origin/main) would otherwise make
+//     git record an upstream in .git/config, which the sandbox mounts
+//     read-only.
+//   - The sandbox's git version is checked first: older than minSandboxGit
+//     (or unreadable) fails the run naming the version.
+//   - A base that does not name a commit fails the run here with a message
+//     naming it; for the default base (the repository's HEAD) that means the
+//     repository has no commits yet.
+func checkoutInSandbox(ctx context.Context, sb *sandbox.Sandbox, wtPath, branch, base string) error {
+	command := gitVersionCheck + fmt.Sprintf("%s rev-parse --quiet --verify %s >/dev/null; rc=$?; "+
+		"if [ $rc -eq 1 ]; then exit %d; elif [ $rc -ne 0 ]; then exit $rc; fi; "+
+		"%s switch --quiet --no-track --create %s %s",
+		checkoutGit, shellQuote(base+"^{commit}"), baseMissingExit,
+		checkoutGit, shellQuote(branch), shellQuote(base))
+	res, err := sb.RunBash(ctx, sandbox.BashRequest{
+		Command:    command,
+		WorkingDir: wtPath,
+		Timeout:    gitCmdTimeout,
+	})
+	if err != nil {
+		return err
+	}
+	return checkoutResult(res.ExitCode, string(res.Stderr)+string(res.Stdout), branch, base)
+}
+
+// checkoutResult turns checkoutInSandbox's exit status and output into the
+// run's error.
+func checkoutResult(exit int, output, branch, base string) error {
+	output = strings.TrimSpace(output)
+	switch {
+	case exit == 0:
+		return nil
+	case exit == oldGitExit:
+		return fmt.Errorf("the sandbox image's git (%q) is older than %s, or its version could not be read; worktree runs need git %s or later in the sandbox image", output, minSandboxGit, minSandboxGit)
+	case exit == baseMissingExit && base == defaultBase:
+		return errors.New("the workspace repository has no commits: its HEAD names a branch with no commits yet, so there is nothing to branch from; commit to it, or set base_branch")
+	case exit == baseMissingExit:
+		return fmt.Errorf("base %q does not name a commit in the workspace repository", base)
+	default:
+		return fmt.Errorf("creating branch %s from base %q in the worktree exited %d: %s", branch, base, exit, output)
+	}
+}
+
+// withWorktreeNotice prefixes a worktree run's task prompt with what its git
+// can and cannot do. The sandbox mounts the repository's .git read-only
+// except the run's own checkout and record, the object store, refs, reflogs
+// and Git LFS store (sandbox.WorktreeMount), so git prints a packed-refs.lock error
+// after most ref updates while the command itself succeeds, and anything
+// that rewrites packed-refs, the config (an upstream, a submodule),
+// .git/shallow (a fetch that changes a shallow clone's depth) or another
+// worktree fails; the shallow sentence is added only for a shallow clone.
+// Appended to the task prompt, never the cached system prefix.
+func withWorktreeNotice(prompt string, wt *runWorktree) string {
+	if wt == nil {
+		return prompt
+	}
+	return fmt.Sprintf("[worktree] You are working in a git worktree of the workspace repository, at %s on branch %s. "+
+		"Commits, new branches, fetches and pushes work. After most of them git prints "+
+		"`error: Unable to create '.../packed-refs.lock': Read-only file system`; that line is expected and the command "+
+		"still succeeded — judge by its exit status. The repository's config is read-only here, so nothing can record "+
+		"an upstream: create a branch from a remote-tracking ref (origin/...) with --no-track, and push with "+
+		"`git push <remote> <branch>`, not `git push -u` / `--set-upstream`. Deleting or renaming a branch, "+
+		"`git gc` / `git pack-refs`, `git config` writes (including `branch --set-upstream-to`), initialising "+
+		"submodules and changes to other worktrees fail here.%s\n\n%s",
+		wt.path, wt.branch, shallowNotice(wt), prompt)
+}
+
+// shallowNotice is the worktree notice's sentence for a shallow repository.
+func shallowNotice(wt *runWorktree) string {
+	if !wt.shallow {
+		return ""
+	}
+	return " The repository is a shallow clone: ordinary fetches work, but fetches that change its depth " +
+		"(`--depth`, `--deepen`, `--shallow-since`, `--shallow-exclude`, `--unshallow`) fail here with " +
+		"`Unable to create '.../shallow.lock'`; full history has to be fetched on the host."
+}
+
+// shellQuote quotes s as one POSIX shell word.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // excludeMu serializes the read-then-append on .git/info/exclude so concurrent
@@ -161,41 +365,10 @@ var excludeMu sync.Mutex
 // ensureWorktreeExcluded appends the worktree subdir to the repo's
 // .git/info/exclude (idempotent) so per-run worktrees never show up as untracked
 // noise in the main working tree's `git status`. This is a LOCAL exclude — it is
-// never committed and does not touch a tracked .gitignore.
-func ensureWorktreeExcluded(workspaceRoot string) error {
+// never committed and does not touch a tracked .gitignore. The read and the
+// append follow no link and cannot block on a FIFO (worktree.EnsureExcluded).
+func ensureWorktreeExcluded(ctx context.Context, workspaceRoot string) error {
 	excludeMu.Lock()
 	defer excludeMu.Unlock()
-	excludePath := filepath.Join(workspaceRoot, ".git", "info", "exclude")
-	line := worktreeSubdir + "/"
-	if data, err := os.ReadFile(excludePath); err == nil { //nolint:gosec // path derived from the configured workspace root, not user input
-		for _, existing := range strings.Split(string(data), "\n") {
-			if strings.TrimSpace(existing) == line {
-				return nil // already excluded
-			}
-		}
-	}
-	if err := os.MkdirAll(filepath.Dir(excludePath), 0o755); err != nil { //nolint:gosec // git metadata dir
-		return err
-	}
-	f, err := os.OpenFile(excludePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644) //nolint:gosec // git metadata file
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	_, err = fmt.Fprintf(f, "\n# fleet per-run worktrees (#180)\n%s\n", line)
-	return err
-}
-
-// runGit invokes host git in dir and returns combined output. The sandbox is not
-// involved: worktree management is a host-side operation on the host's git +
-// filesystem (the same posture as the operator CLI's host commands).
-func runGit(ctx context.Context, dir string, args ...string) (string, error) {
-	full := append([]string{"-C", dir}, args...)
-	//nolint:gosec // G204: fixed "git" binary; args are fleet-controlled subcommands + validated paths/refs (branch prefix is ref-name validated at task creation), passed as separate argv with no shell interpolation.
-	cmd := exec.CommandContext(ctx, "git", full...)
-	var buf bytes.Buffer
-	cmd.Stdout = &buf
-	cmd.Stderr = &buf
-	err := cmd.Run()
-	return buf.String(), err
+	return worktree.EnsureExcluded(ctx, workspaceRoot)
 }

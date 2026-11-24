@@ -20,6 +20,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/admission"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/boxdoctor"
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/config/envreg"
@@ -29,6 +30,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/sandbox"
 	"github.com/ElcanoTek/fleet/internal/tools"
+	"github.com/ElcanoTek/fleet/internal/worktree"
 )
 
 // The concrete interactive engine. Manager owns the per-process state reused
@@ -305,6 +307,11 @@ type ManagerOptions struct {
 	// MCPAccounts contains public credential-seat names keyed by server. It lets
 	// the picker avoid scanning connector environment variables in broker mode.
 	MCPAccounts map[string][]string
+	// ReclaimOrphanSandboxes reclaims, on the podman backend, sandboxes a
+	// crashed prior server left behind before the workspace repository is
+	// recorded (they still have that server's mounts). Set by `fleet serve`
+	// only; a one-off process such as `fleet task run` leaves them to it.
+	ReclaimOrphanSandboxes bool
 }
 
 // MCPScope is one isolated per-turn MCP call/discovery lease. Close must release
@@ -578,7 +585,7 @@ func New(opts ManagerOptions) (*Manager, error) {
 		enabledServers[name] = true
 	}
 
-	pool, err := buildSandboxPool(cfg, opts.PersonasDir, opts.ProtocolsDir, opts.SystemPromptsDir, opts.SkillsDir)
+	pool, err := buildSandboxPool(cfg, opts.PersonasDir, opts.ProtocolsDir, opts.SystemPromptsDir, opts.SkillsDir, opts.ReclaimOrphanSandboxes)
 	if err != nil {
 		return nil, err
 	}
@@ -656,7 +663,7 @@ func resolveWarmSize(cfg *config.Config) int {
 	return warmPoolSize(cfg.MaxConcurrentAgents)
 }
 
-func buildSandboxPool(cfg *config.Config, personasDir, protocolsDir, systemPromptsDir, skillsDir string) (*sandbox.Pool, error) {
+func buildSandboxPool(cfg *config.Config, personasDir, protocolsDir, systemPromptsDir, skillsDir string, reclaimOrphans bool) (*sandbox.Pool, error) {
 	poolCfg := sandbox.PoolConfig{
 		Size:         resolveWarmSize(cfg),
 		Mode:         sandbox.ModeContainer,
@@ -678,6 +685,19 @@ func buildSandboxPool(cfg *config.Config, personasDir, protocolsDir, systemPromp
 			return nil, fmt.Errorf(
 				"FLEET_MOCK_MODE is set but the host executor is not compiled into this binary; " +
 					"it is gated behind -tags fleet_host_executor (tests/dev only) and must not run in production")
+		}
+		// Host-side worktree code acts only on the .git the workspace root
+		// had at startup, in every mode (see wholeRootGitDirs).
+		mockRoot := cfg.WorkspaceRoot
+		if mockRoot == "" {
+			if abs, err := filepath.Abs("workspace"); err == nil {
+				mockRoot = abs
+			}
+		}
+		if worktree.PinAtStartup(mockRoot).IsRepo() {
+			if err := worktree.PrepareRepoAtStartup(context.Background(), mockRoot); err != nil {
+				slog.Warn("sandbox: the workspace repository's .git layout is not usable for worktree tasks; they will be refused", "path", safe.LogSafe(mockRoot), "err", err)
+			}
 		}
 		poolCfg.Size = 0
 		poolCfg.Mode = sandbox.ModeHost
@@ -755,6 +775,40 @@ func buildSandboxPool(cfg *config.Config, personasDir, protocolsDir, systemPromp
 	if err != nil {
 		return nil, err
 	}
+	// The shared MCP workspace (mcp-shared/, ${FLEET_WORKSPACE} for the
+	// process-lifetime MCP spawns) holds what host-side connectors write by
+	// pathname — run ledgers, reports — exactly like mcp-runs/, so it gets
+	// the same read-only overlay in every whole-root sandbox. Scoped
+	// sandboxes never mount it. Created here for the same kubelet subPath
+	// and missing-source reasons; 0o750 matches agentcore.SharedMCPWorkspaceDir.
+	mcpSharedDir, err := ensureMountBaseDir(agentcore.SharedMCPWorkspaceBase(workspaceRoot), 0o750, "shared MCP workspace dir")
+	if err != nil {
+		return nil, err
+	}
+	// Sandboxes a crashed prior process left running still have the mounts of
+	// that process, which (on the first start after an upgrade) is a writable
+	// .git: reclaim them before the repository is recorded and prepared below.
+	// Label-scoped and best-effort (sandbox.PruneOrphanedContainers); the
+	// startup sweep in cmd/fleet runs again later. The kubernetes backend's
+	// orphan pods are reclaimed only once its client exists, after this point
+	// (docs/adr/0118). Only `fleet serve` asks for it (reclaimOrphans).
+	if reclaimOrphans && cfg.SandboxBackend != sandbox.BackendKubernetes {
+		pruneCtx, pruneCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		if n, err := sandbox.PruneOrphanedContainers(pruneCtx, "podman"); err != nil {
+			slog.Warn("sandbox: could not reclaim sandboxes left by a prior process before recording the workspace repository", "err", err)
+		} else if n > 0 {
+			slog.Info("sandbox: reclaimed sandboxes left by a prior process before recording the workspace repository", "pruned", n)
+		}
+		pruneCancel()
+	}
+	// The root repository's .git and the per-run worktree directory, which
+	// host-side code and the worktree sweep act on (ADR-0118):
+	// mounted as their own bind mounts in every whole-root sandbox,
+	// read-only except in a worktree run's.
+	gitDirs, err := wholeRootGitDirs(workspaceRoot)
+	if err != nil {
+		return nil, err
+	}
 
 	// Normalize the OCI runtime name to what podman understands ("libkrun" →
 	// "krun") so the --runtime flag, the preflight, and the probe binary mapping
@@ -776,8 +830,9 @@ func buildSandboxPool(cfg *config.Config, personasDir, protocolsDir, systemPromp
 		BridgeDir:      filepath.Join(filepath.Dir(workspaceRoot), "data", "sandbox-bridge"),
 		ReadOnlyMounts: append(sandboxReadOnlyMounts(cfg, personasDir, protocolsDir, systemPromptsDir, skillsDir, sharedFilesDir), mcpRunsDir),
 		// Read-only only where the whole root is mounted; scoped and
-		// persistent sandboxes never see it (sandbox.ContainerConfig).
-		WholeRootReadOnly: []string{tasksDir},
+		// persistent sandboxes never see them (sandbox.ContainerConfig).
+		WholeRootReadOnly: []string{tasksDir, mcpSharedDir},
+		WholeRootGitDirs:  gitDirs,
 	}
 	// Kubernetes backend (#989): sandboxes are ephemeral pods in a cluster
 	// instead of co-located podman containers. All podman-specific boot work
@@ -1197,6 +1252,51 @@ func ensureMountBaseDir(dir string, mode fs.FileMode, what string) (string, erro
 		return "", fmt.Errorf("%s %s exists and is not a directory (%s); remove it so it can be recreated and mounted read-only in sandboxes", what, dir, info.Mode().Type())
 	}
 	return dir, nil
+}
+
+// wholeRootGitDirs records what the workspace root's .git is at boot
+// (worktree.PinAtStartup: host-side worktree code acts only on that .git for
+// the life of the process) and returns the directories every whole-root
+// sandbox mounts read-only, for sandbox.ContainerConfig.WholeRootGitDirs: the
+// root repository's .git and the per-run worktree directory (worktree.Subdir)
+// that fleet registers worktrees in and the worktree sweep reclaims. It runs before
+// any sandbox exists, which is what lets every whole-root sandbox mount them
+// as directories none can swap. Only a .git that is a real directory counts:
+// .fleet-worktrees is created then, so it is mounted from the first sandbox
+// on. A .git that is a gitfile (a root that is itself a linked worktree) or a
+// symlink names a repository elsewhere; worktree tasks are refused for such a
+// root (worktree.RepoPin.Check), and it is reported here. A root that becomes
+// a repository later is picked up at the next restart; until then worktree
+// tasks are refused there too.
+func wholeRootGitDirs(workspaceRoot string) ([]string, error) {
+	gitDir := filepath.Join(workspaceRoot, ".git")
+	pin := worktree.PinAtStartup(workspaceRoot)
+	if !pin.IsRepo() {
+		if _, err := os.Lstat(gitDir); err == nil {
+			slog.Warn("sandbox: the workspace root's .git is not a real directory (a gitfile or a symlink); worktree tasks are refused for this root", "path", safe.LogSafe(gitDir), "reason", pin.Check(context.Background(), workspaceRoot).Error())
+		}
+		return nil, nil
+	}
+	// 0o755: traversable by the rootless container user, like the root and
+	// like scheduledrun.prepareWorktree creates it.
+	wt, err := ensureMountBaseDir(filepath.Join(workspaceRoot, worktree.Subdir), 0o755, "per-run worktree dir")
+	if err != nil {
+		return nil, err
+	}
+	// The directories inside .git that the host's worktree code writes into
+	// or a worktree run's sandbox mounts (.git/worktrees, .git/logs, .git/objects/info, …)
+	// must be real directories before any sandbox exists; create the missing
+	// ones now. A layout that cannot be made right is reported, and worktree
+	// tasks are then refused (worktree.RepoPin.Check, sandbox.Pool.TakeWorktree).
+	if err := worktree.PrepareRepoAtStartup(context.Background(), workspaceRoot); err != nil {
+		slog.Warn("sandbox: the workspace repository's .git layout is not usable for worktree tasks; they will be refused", "path", safe.LogSafe(gitDir), "err", err)
+	}
+	// Say now, not when the first worktree task fails, if this box cannot run
+	// worktree tasks against the repository (boxdoctor reports the same).
+	if c := boxdoctor.CheckWorktreeGit(context.Background(), workspaceRoot); c.Status == boxdoctor.StatusWarn {
+		slog.Warn("sandbox: worktree tasks cannot run against the workspace repository", "reason", c.Detail)
+	}
+	return []string{gitDir, wt}, nil
 }
 
 // pathIsWithin reports whether path is root or sits underneath it. Lexical on
