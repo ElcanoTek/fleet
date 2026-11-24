@@ -261,6 +261,8 @@
   "Account for this chat": "Conta para este chat",
   "Account for {0}": "Conta para {0}",
   "Account for {0}: {1}": "Conta para {0}: {1}",
+  "Use several accounts": "Usar várias contas",
+  "On while this chat uses more than one account. Untick accounts down to one to turn it off.": "Ativo enquanto este chat usar mais de uma conta. Desmarque contas até ficar uma para o desativar.",
   "(default account)": "(conta predefinida)",
   "Accounts for this chat": "Contas para este chat",
   "Accounts for {0}": "Contas para {0}",
