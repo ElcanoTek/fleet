@@ -6473,5 +6473,10 @@
   "Private emails": "Correos privados",
   "Emails this task sends are not saved to the team Outbox.": "Los correos que envía esta tarea no se guardan en la Bandeja de salida del equipo.",
   "Emails:": "Correos:",
-  "private, not saved to the Outbox": "privados, no se guardan en la Bandeja de salida"
+  "private, not saved to the Outbox": "privados, no se guardan en la Bandeja de salida",
+  "private applies only to an outbound email card that offers the Private box": "private solo se aplica a una tarjeta de correo saliente que ofrece la casilla Privado",
+  "private cannot be combined with a narrowed approval": "private no se puede combinar con una aprobación acotada",
+  "private goes with an approval; to decline, send approved false without it": "private va con una aprobación; para rechazar, envía approved false sin él",
+  "private values must be true or false": "los valores de private deben ser true o false",
+  "private names approval {0}, which is not approved": "private nombra la aprobación {0}, que no está aprobada"
 }

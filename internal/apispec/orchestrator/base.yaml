@@ -493,6 +493,7 @@ components:
         mcp_selection: { $ref: "#/components/schemas/MCPSelection" }
         priority: { type: integer }
         allow_network: { type: boolean, description: "Whether this task's execution sandbox is allowed outbound network egress (default false = sealed)." }
+        private_emails: { type: boolean, description: "Whether every email this task's runs send stays out of the team Outbox (default false = copied to the Outbox)." }
         status: { type: string, enum: [pending, scheduled, leased, running, paused_awaiting_input, paused_awaiting_wake, success, error, cancelled, dead_lettered], description: "models.AllTaskStatuses, in lifecycle order." }
         created_at: { type: string, format: date-time }
         scheduled_for: { type: string, format: date-time }

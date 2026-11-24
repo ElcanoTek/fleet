@@ -57,7 +57,13 @@ func (s *Server) claimApprovedPrivate(ctx context.Context, user, convID string, 
 	claimed, err := s.store.ClaimApprovalPrivate(ctx, user, a.ID, approvalExecutingSentinel, private)
 	if err == nil && claimed {
 		a.PrivateChoice = &private
-		logging.From(ctx).Info("audit: approval private choice", "user", safe.LogSafe(user), "private", private, "approval_id", safe.LogSafe(a.ID), "tool", safe.LogSafe(a.ToolName), "conv_id", safe.LogSafe(convID))
+		// The choice is logged as one of two fixed words, never the request's
+		// own value.
+		choice := "outbox"
+		if private {
+			choice = "private"
+		}
+		logging.From(ctx).Info("audit: approval private choice", "user", safe.LogSafe(user), "choice", choice, "approval_id", safe.LogSafe(a.ID), "tool", safe.LogSafe(a.ToolName), "conv_id", safe.LogSafe(convID))
 	}
 	return claimed, err
 }

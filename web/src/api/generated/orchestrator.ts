@@ -3635,6 +3635,8 @@ export interface components {
             priority?: number;
             /** @description Whether this task's execution sandbox is allowed outbound network egress (default false = sealed). */
             allow_network?: boolean;
+            /** @description Whether every email this task's runs send stays out of the team Outbox (default false = copied to the Outbox). */
+            private_emails?: boolean;
             /**
              * @description models.AllTaskStatuses, in lifecycle order.
              * @enum {string}
