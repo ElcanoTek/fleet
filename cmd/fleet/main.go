@@ -407,6 +407,13 @@ func run() error {
 	// agentcore stays on its base generic critical suffixes. Must run before any
 	// turn starts.
 	agentcore.ConfigureAgentPolicy(bundle.AgentcorePolicy())
+	// An account-groups source that is not a declared read is never called
+	// (ADR-0119); say so once at boot rather than only when a picker opens.
+	if src := bundle.AccountGroups().Source; src != nil {
+		if why := agentcore.HostReadRefusal(agentcore.MCPToolName(src.Server, src.Tool)); why != "" {
+			slog.Warn("account_groups.source will not be called: "+why+" (docs/ACCOUNT-GROUPS.md)", "server", src.Server, "tool", src.Tool)
+		}
+	}
 
 	// Connector credentials cross exactly one process boundary at boot: the child
 	// inherits the current environment, proves liveness + public discovery, then

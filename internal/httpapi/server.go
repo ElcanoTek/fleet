@@ -235,6 +235,9 @@ type Server struct {
 	connectorLocks keyedLocks
 	// uiSecrets holds host-side vaulted secrets from show_ui password inputs.
 	uiSecrets uiSecretStash
+	// accountGroupSource caches what the bundle's account-groups source last
+	// listed (account_group_source.go).
+	accountGroupSource accountGroupSource
 
 	// clientConfig is the loaded client bundle that backs GET /client-config
 	// (branding + empty-state). nil in tests / mock mode that don't supply one;

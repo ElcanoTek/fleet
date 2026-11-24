@@ -63,6 +63,7 @@
     "Invalid upload",
     "Log history entry not found",
     "Logs not found for this task",
+    "MCP broker not initialized",
     "MCP broker not initialized (mock mode?)",
     "Membership check failed",
     "No log found for this task",
@@ -120,6 +121,8 @@
     "an account choice must be an account name or a list of account names",
     "an administrator has turned off writing shared files from chats on this server (Settings → Admin → Features)",
     "an archived or Lockdown chat can't be transferred",
+    "answer carries a secret-like value; refused",
+    "answer has no \"groups\" list",
     "answering a task is limited to its creator or an admin credential",
     "approval group id required",
     "approval handler: no sandbox pool wired (chat-server boot misconfigured?)",
@@ -544,6 +547,13 @@
       ]
     },
     {
+      "message": "{0} is not called: {1}",
+      "fields": [
+        "%s",
+        "%s"
+      ]
+    },
+    {
       "message": "{0} is required",
       "fields": [
         "%s"
@@ -583,6 +593,12 @@
     },
     {
       "message": "{0} repeats a key",
+      "fields": [
+        "%s"
+      ]
+    },
+    {
+      "message": "{0} reported an error",
       "fields": [
         "%s"
       ]
@@ -801,6 +817,19 @@
       ]
     },
     {
+      "message": "answer is {0} bytes; at most {1} are read",
+      "fields": [
+        "%d",
+        "%d"
+      ]
+    },
+    {
+      "message": "answer is not the expected JSON object: {0}",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
       "message": "approval {0} is named more than once",
       "fields": [
         "%s"
@@ -913,6 +942,13 @@
     {
       "message": "build request: {0}",
       "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "call {0}: {1}",
+      "fields": [
+        "%s",
         "%w"
       ]
     },
@@ -1350,6 +1386,12 @@
       ]
     },
     {
+      "message": "none of the {0} listed groups is valid",
+      "fields": [
+        "%d"
+      ]
+    },
+    {
       "message": "not an MCP tool name: {0}",
       "fields": [
         "%s"
@@ -1364,6 +1406,13 @@
     {
       "message": "not the result card schema: {0}",
       "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "open MCP scope for {0}: {1}",
+      "fields": [
+        "%s",
         "%w"
       ]
     },

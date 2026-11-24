@@ -153,6 +153,11 @@ there) and [`../.agents/skills/steward/SKILL.md`](../.agents/skills/steward/SKIL
   + [ADR-0117](adr/0117-helping-a-chats-people.md) (who needs help, the
   read-only view of a chat as its owner sees it, and the note an
   administrator pins to a chat)
+- **Account groups in the Tools picker** (bundle-supplied sets of connector
+  accounts as chips; the manifest block, a live source, what a click does):
+  [`docs/ACCOUNT-GROUPS.md`](ACCOUNT-GROUPS.md)
+  + [ADR-0119](adr/0119-account-groups-source-is-a-host-read.md) (the source
+  is a declared read fleet runs with no turn behind it)
 - **Worktree tasks and the workspace repository** (the host runs no git in
   the repository at the workspace root; the run's sandbox makes the branch
   and the checkout; `.git`, `.fleet-worktrees/` and `mcp-shared/` are

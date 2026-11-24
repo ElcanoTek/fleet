@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"slices"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
@@ -118,13 +119,17 @@ func pickableBundledAccounts(rows []map[string]any, catalog []agent.OptionalServ
 }
 
 // withAccountGroups adds the bundle's account groups to a catalog response
-// body. A bundle with none leaves the body as it was, key and all. turnedOff
-// is pickableBundledAccounts'; nil when the response lists no such row.
-func (s *Server) withAccountGroups(body map[string]any, rows []map[string]any, turnedOff map[string]bool) map[string]any {
+// body: the manifest's fixed groups, then whatever its source last listed
+// (account_group_source.go). A bundle with none leaves the body as it was,
+// key and all. turnedOff is pickableBundledAccounts'; nil when the response
+// lists no such row.
+func (s *Server) withAccountGroups(ctx context.Context, body map[string]any, rows []map[string]any, turnedOff map[string]bool) map[string]any {
 	if s.clientConfig == nil || s.agent == nil {
 		return body
 	}
-	if view := resolveAccountGroups(s.clientConfig.AccountGroups(), pickableBundledAccounts(rows, s.agent.MCPServerCatalog(), turnedOff)); view != nil {
+	cfg := s.clientConfig.AccountGroups()
+	cfg.Groups = mergedAccountGroups(cfg.Groups, s.sourcedAccountGroups(ctx, cfg.Source))
+	if view := resolveAccountGroups(cfg, pickableBundledAccounts(rows, s.agent.MCPServerCatalog(), turnedOff)); view != nil {
 		body["account_groups"] = view
 	}
 	return body

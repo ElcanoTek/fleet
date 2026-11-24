@@ -3,6 +3,7 @@ package clientconfig
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"unicode/utf8"
 )
@@ -28,7 +29,41 @@ type AccountGroupsConfig struct {
 	Label string `yaml:"label"`
 	// Groups are the bundle's fixed groups, in display order.
 	Groups []AccountGroup `yaml:"groups"`
+	// Source names a tool of the bundle that lists more groups at run time,
+	// for a deployment whose groups change without a bundle release (clients
+	// kept in another system). nil = the fixed groups only.
+	Source *AccountGroupsSource `yaml:"source"`
 }
+
+// AccountGroupsSource is a bundle tool fleet calls, outside any chat turn, to
+// read account groups (ADR-0119). The tool takes no arguments and answers
+// {"groups": [{"id", "name", "accounts": [{"server", "account"}]}]}.
+type AccountGroupsSource struct {
+	// Server is the mcp_servers entry that exports the tool. It is called on
+	// its default account.
+	Server string `yaml:"server"`
+	// Tool is the tool's own name on that server (not the mcp_<server>_ form).
+	// It must be a declared read: listed in agent_policy.parallel_safe_tools
+	// and not critical.
+	Tool string `yaml:"tool"`
+	// RefreshSeconds is how long an answer is used before the tool is asked
+	// again. 0 means DefaultAccountGroupsRefreshSeconds.
+	RefreshSeconds int `yaml:"refresh_seconds"`
+}
+
+const (
+	// DefaultAccountGroupsRefreshSeconds is how long a source's answer is
+	// served when the manifest does not say.
+	DefaultAccountGroupsRefreshSeconds = 300
+	// MinAccountGroupsRefreshSeconds keeps a typo from turning every picker
+	// open into a call to the source.
+	MinAccountGroupsRefreshSeconds = 60
+	// MaxAccountGroupsRefreshSeconds is a day: longer than that is a fixed
+	// list, which belongs in groups.
+	MaxAccountGroupsRefreshSeconds = 86400
+)
+
+var accountGroupToolRE = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,128}$`)
 
 // AccountGroup is one named set of connector accounts.
 type AccountGroup struct {
@@ -189,18 +224,68 @@ func (b *Bundle) validateAccountGroups() error {
 	if err != nil {
 		return err
 	}
-	b.accountGroups = AccountGroupsConfig{Label: label, Groups: groups}
+	source, err := b.validateAccountGroupsSource(cfg.Source)
+	if err != nil {
+		return err
+	}
+	b.accountGroups = AccountGroupsConfig{Label: label, Groups: groups, Source: source}
 	return nil
 }
 
-// AccountGroups returns the bundle's account groups: the heading and the
-// fixed groups, validated at load. The zero value when the bundle declares
+// validateAccountGroupsSource checks the source's shape against the manifest:
+// the server exists and, when it lists its tools, lists this one. Whether the
+// tool is a declared read is agent_policy's to say, so that is checked where
+// the policy is (agentcore.AccountGroupsSourceProblems: boot, validate-config
+// and every call).
+func (b *Bundle) validateAccountGroupsSource(src *AccountGroupsSource) (*AccountGroupsSource, error) {
+	if src == nil {
+		return nil, nil
+	}
+	out := AccountGroupsSource{
+		Server:         strings.TrimSpace(src.Server),
+		Tool:           strings.TrimSpace(src.Tool),
+		RefreshSeconds: src.RefreshSeconds,
+	}
+	if out.Server == "" || out.Tool == "" {
+		return nil, fmt.Errorf("account_groups.source: server and tool are both required")
+	}
+	if !accountGroupToolRE.MatchString(out.Tool) {
+		return nil, fmt.Errorf("account_groups.source: tool %q is not a tool name (give the tool's own name, without the mcp_<server>_ prefix)", out.Tool)
+	}
+	var server *ServerDef
+	for i := range b.MCPCatalog {
+		if b.MCPCatalog[i].Name == out.Server {
+			server = &b.MCPCatalog[i]
+			break
+		}
+	}
+	if server == nil {
+		return nil, fmt.Errorf("account_groups.source: server %q is not an entry in mcp_servers", out.Server)
+	}
+	if len(server.Tools) > 0 && !slices.Contains(server.Tools, out.Tool) {
+		return nil, fmt.Errorf("account_groups.source: tool %q is not in server %q's tools allowlist", out.Tool, out.Server)
+	}
+	switch {
+	case out.RefreshSeconds == 0:
+		out.RefreshSeconds = DefaultAccountGroupsRefreshSeconds
+	case out.RefreshSeconds < MinAccountGroupsRefreshSeconds || out.RefreshSeconds > MaxAccountGroupsRefreshSeconds:
+		return nil, fmt.Errorf("account_groups.source: refresh_seconds %d is out of range (%d to %d)", out.RefreshSeconds, MinAccountGroupsRefreshSeconds, MaxAccountGroupsRefreshSeconds)
+	}
+	return &out, nil
+}
+
+// AccountGroups returns the bundle's account groups: the heading, the fixed
+// groups and the source, validated at load. The zero value when the bundle declares
 // none. Names only; nothing here is a credential.
 func (b *Bundle) AccountGroups() AccountGroupsConfig {
 	if b == nil {
 		return AccountGroupsConfig{}
 	}
 	out := AccountGroupsConfig{Label: b.accountGroups.Label}
+	if src := b.accountGroups.Source; src != nil {
+		cp := *src
+		out.Source = &cp
+	}
 	out.Groups = make([]AccountGroup, len(b.accountGroups.Groups))
 	for i, g := range b.accountGroups.Groups {
 		g.Accounts = append([]AccountGroupMember(nil), g.Accounts...)

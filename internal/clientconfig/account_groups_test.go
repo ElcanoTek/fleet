@@ -169,3 +169,65 @@ account_groups:
 		})
 	}
 }
+
+func TestLoadAccountGroupsSource(t *testing.T) {
+	t.Parallel()
+	b, err := Load(writeAccountGroupsBundle(t, `
+account_groups:
+  source:
+    server: mail
+    tool: list_account_groups
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := b.AccountGroups().Source
+	if src == nil || *src != (AccountGroupsSource{Server: "mail", Tool: "list_account_groups", RefreshSeconds: DefaultAccountGroupsRefreshSeconds}) {
+		t.Fatalf("source = %+v", src)
+	}
+	// The accessor hands out a copy.
+	src.Tool = "changed"
+	if b.AccountGroups().Source.Tool != "list_account_groups" {
+		t.Fatal("AccountGroups() exposed the bundle's own source")
+	}
+
+	refused := map[string]struct{ block, want string }{
+		"no tool":              {"source: {server: mail}", "server and tool are both required"},
+		"an unknown server":    {"source: {server: nope, tool: list}", `server "nope" is not an entry in mcp_servers`},
+		"a prefixed tool name": {"source: {server: mail, tool: 'mcp mail list'}", "is not a tool name"},
+		"too frequent":         {"source: {server: mail, tool: list, refresh_seconds: 5}", "refresh_seconds 5 is out of range"},
+		"an unknown key":       {"source: {server: mail, tool: list, args: {}}", "args"},
+	}
+	for name, tc := range refused {
+		t.Run(name, func(t *testing.T) {
+			_, err := Load(writeAccountGroupsBundle(t, "\naccount_groups:\n  "+tc.block+"\n"))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want it to contain %q", err, tc.want)
+			}
+		})
+	}
+}
+
+// A server that lists its tools must list the source tool: fleet's broker
+// would refuse the call otherwise, every time.
+func TestLoadAccountGroupsSourceToolAllowlist(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	manifest := `
+mcp_servers:
+  - name: deals
+    display_name: Deals
+    description: Reads clients.
+    command: /bin/true
+    always: true
+    tools: [get_deal]
+account_groups:
+  source: {server: deals, tool: list_account_groups}
+`
+	if err := os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(dir); err == nil || !strings.Contains(err.Error(), "tools allowlist") {
+		t.Fatalf("err = %v, want the tools allowlist refusal", err)
+	}
+}
