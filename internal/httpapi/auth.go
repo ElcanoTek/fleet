@@ -269,14 +269,20 @@ func (s *Server) membershipMiddleware(next http.Handler) http.Handler {
 			p.KeyID != "" && p.KeyAccountID == "" && (err == nil || errors.Is(err, principal.ErrNotMember)) {
 			// A user key minted before keys named their account, on its first
 			// use: bind it to the account its email has now, or record that it
-			// has none, in which case it acts as no one from now on. The key
-			// is admitted only once that is written: while another process
-			// keeps the key store locked the request is answered 503 with
-			// Retry-After (a later one binds it); any other failure is the
-			// server's.
+			// has none, in which case it acts as no one from now on. A key
+			// minted before an account under its email was deleted was that
+			// account's: it is recorded as acting as no one too, and refused
+			// (apikeys.ErrKeyFromDeletedAccount). The key is admitted
+			// only once that is written: while another process keeps the key
+			// store locked the request is answered 503 with Retry-After (a
+			// later one binds it); any other failure is the server's.
 			if bindErr := s.bindUserKey(ctx, p.KeyID, account); bindErr != nil {
-				if errors.Is(bindErr, apikeys.ErrStoreLocked) {
+				switch {
+				case errors.Is(bindErr, apikeys.ErrStoreLocked):
 					writeKeyStoreBusy(w)
+					return
+				case errors.Is(bindErr, apikeys.ErrKeyFromDeletedAccount):
+					writeKeyPredatesAccount(w)
 					return
 				}
 				http.Error(w, "membership check failed", http.StatusInternalServerError)
@@ -315,11 +321,11 @@ func (s *Server) bindUserKey(ctx context.Context, keyID string, account *identit
 	if account != nil {
 		id = account.ID.String()
 	}
-	if err := s.apiKeys.RecordUserKeyAccount(ctx, keyID, id); err != nil {
+	err := s.apiKeys.RecordUserKeyAccount(ctx, keyID, id)
+	if err != nil && !errors.Is(err, apikeys.ErrKeyFromDeletedAccount) {
 		logging.From(ctx).Error("user key: binding to its account failed", "key_id", keyID, "err", err)
-		return err
 	}
-	return nil
+	return err
 }
 
 // errKeyStoreBusy is the answer to a not-yet-bound user key whose binding

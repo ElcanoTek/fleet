@@ -19,7 +19,8 @@ import (
 // (internal/accountdelete).
 type keyValidator interface {
 	ValidateKeyOn(ctx context.Context, s apikeys.Surface, rawKey string, requiredPermission *models.Permission, ipAddress, userAgent *string) (bool, *apikeys.APIKey, string)
-	DeleteUserKeys(ctx context.Context, email, accountID string, emailLive func(context.Context) (bool, error)) (int, error)
+	BindUnboundUserKeys(ctx context.Context, email, accountID string) (int, error)
+	DeleteUserKeys(ctx context.Context, email, accountID string) (int, error)
 	RecordUserKeyAccount(ctx context.Context, keyID, accountID string) error
 }
 

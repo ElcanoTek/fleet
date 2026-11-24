@@ -956,24 +956,44 @@ var deleteUserAfterGuard func()
 // the decrypted refresh token) and is NOT attempted here — the rows, and
 // with them the only ciphertext copies, are gone after this commit.
 func (s *Store) DeleteUser(ctx context.Context, email string) error {
-	return s.deleteUser(ctx, email, nil)
+	return s.deleteUser(ctx, email, "", nil)
 }
 
-// DeleteAccount is DeleteUser that also reports the id (core.users.id) of the
-// account it deleted, read in the deletion's own transaction. What
-// accountdelete does after the commit is limited to that account: a later
-// account created under the same address in the meantime has another id, and
-// keeps its user API keys (apikeys.Manager.DeleteUserKeys).
-func (s *Store) DeleteAccount(ctx context.Context, email string) (accountID string, err error) {
-	if err := s.deleteUser(ctx, email, &accountID); err != nil {
+// ErrAccountChanged refuses DeleteAccount when the account under the email is
+// no longer the one the caller read (expectedID): it was deleted and another
+// created under the email in between. Nothing is deleted; the caller may try
+// again.
+var ErrAccountChanged = errors.New("the account changed while it was being deleted; nothing was deleted")
+
+// AccountForDeletion reads the id of the account under email, whatever its
+// state. accountdelete reads it before the deletion, to bind the address's
+// unbound user API keys to this account first, then names it to
+// DeleteAccount. ErrUserNotFound when there is none.
+func (s *Store) AccountForDeletion(ctx context.Context, email string) (id string, err error) {
+	err = s.db.QueryRowContext(ctx, `SELECT id::text FROM core.users WHERE email = $1`, normalizeEmail(email)).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", ErrUserNotFound
+	}
+	return id, err
+}
+
+// DeleteAccount is DeleteUser for the account expectedID (core.users.id):
+// read in the deletion's own transaction, under the account row's lock, the
+// account under email must still be that one, or nothing is deleted
+// (ErrAccountChanged). It reports the id it deleted. What accountdelete does
+// after the commit is limited to that account: a later account created under
+// the same address in the meantime has another id, and keeps its user API
+// keys (apikeys.Manager.DeleteUserKeys). An empty expectedID checks nothing.
+func (s *Store) DeleteAccount(ctx context.Context, email, expectedID string) (accountID string, err error) {
+	if err := s.deleteUser(ctx, email, expectedID, &accountID); err != nil {
 		return "", err
 	}
 	return accountID, nil
 }
 
-// deleteUser is DeleteUser's body; accountID, when not nil, receives the
-// deleted account's id.
-func (s *Store) deleteUser(ctx context.Context, email string, accountID *string) error {
+// deleteUser is DeleteUser's body: expectedID, when set, is the account the
+// caller means; accountID, when not nil, receives the deleted account's id.
+func (s *Store) deleteUser(ctx context.Context, email, expectedID string, accountID *string) error {
 	email = normalizeEmail(email)
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -1008,6 +1028,9 @@ func (s *Store) deleteUser(ctx context.Context, email string, accountID *string)
 		return ErrUserNotFound
 	case err != nil:
 		return fmt.Errorf("lock account: %w", err)
+	}
+	if expectedID != "" && id != expectedID {
+		return ErrAccountChanged
 	}
 	if accountID != nil {
 		*accountID = id

@@ -177,8 +177,11 @@ advises on each demoted split admin, unknown role and duplicate username in it.
     admin-mode turn already running, finish as usual
     ([CHAT-ADMINISTRATION.md](CHAT-ADMINISTRATION.md));
   - in the API-key store (`api_keys.json`): the user API keys bound to its
-    id (see [PRINCIPAL.md](PRINCIPAL.md)), and the keys for its address that
-    name no account while no account holds the address;
+    id (see [PRINCIPAL.md](PRINCIPAL.md)) — the keys for its address that
+    named no account yet are bound to it before anything is deleted, and if
+    the key store is busy then the deletion is refused with nothing deleted
+    (503 with `Retry-After`; the CLI exits non-zero) — and its address's
+    keys marked as acting as no one;
   - on disk, under `EMAIL_ATTACHMENT_DIR`: its uploads and its private
     workspace files in multiplayer chats. Its chats' workspace directories are
     reaped by the orphan-workspace sweep. Its uploads go even where a kept
@@ -193,9 +196,11 @@ advises on each demoted split admin, unknown role and duplicate username in it.
   after the database deletion has committed, and the address may hold a new
   account by then (the CLI deleting while someone signs up, say). Those steps
   are limited to the deleted account: they remove only the keys bound to its
-  id (`store.DeleteAccount` reads it in the deletion's transaction), the
-  unbound keys only while no account holds the address (asked under the key
-  store's lock), and each file tree only while no account's address has its
+  id (read before the deletion, and checked again by `store.DeleteAccount`
+  under the account row's lock, which refuses — `the account changed while
+  it was being deleted` — when the address holds another account by then),
+  so the new account keeps its keys and no unbound key is left for it to
+  adopt; and each file tree only while no account's address has its
   digest (asked right before the tree is moved aside). A tree the new
   account holds stays whole: the deleted account's files left in it are
   referred to by none of the new account's chats, and the hourly attachment

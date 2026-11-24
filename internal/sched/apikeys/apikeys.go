@@ -189,6 +189,12 @@ type Manager struct {
 	lockWait time.Duration
 	// degraded logs, once, that writes go on without the file lock.
 	degraded sync.Once
+	// deletedEmails records, per email (pgtext.EmailKey), when an account
+	// under it was last deleted (unix seconds): a user key minted before then
+	// that still names no account was that account's, and is never bound to
+	// another one (boundAcrossDeletion). Kept in the key file
+	// ("deleted_emails"), so every process sees it.
+	deletedEmails map[string]int64
 }
 
 // NewManager creates a new API key manager.
@@ -276,22 +282,25 @@ func (m *Manager) load() error {
 	if err != nil {
 		return err
 	}
-	keys, err := parseKeyFile(data)
+	keys, deleted, err := parseKeyFile(data)
 	if err != nil {
 		return err
 	}
 	m.adoptLocked(keys)
+	m.deletedEmails = deleted
 	m.stampLocked(data)
 	return nil
 }
 
-// parseKeyFile decodes api_keys.json; a malformed record is skipped.
-func parseKeyFile(data []byte) ([]APIKey, error) {
+// parseKeyFile decodes api_keys.json — its keys (a malformed record is
+// skipped) and its deletion markers (Manager.deletedEmails).
+func parseKeyFile(data []byte) ([]APIKey, map[string]int64, error) {
 	var fileData struct {
-		Keys []json.RawMessage `json:"keys"`
+		Keys          []json.RawMessage `json:"keys"`
+		DeletedEmails map[string]int64  `json:"deleted_emails"`
 	}
 	if err := json.Unmarshal(data, &fileData); err != nil {
-		return nil, fmt.Errorf("failed to parse API keys file: %w", err)
+		return nil, nil, fmt.Errorf("failed to parse API keys file: %w", err)
 	}
 	keys := make([]APIKey, 0, len(fileData.Keys))
 	for _, keyData := range fileData.Keys {
@@ -301,7 +310,7 @@ func parseKeyFile(data []byte) ([]APIKey, error) {
 		}
 		keys = append(keys, key)
 	}
-	return keys, nil
+	return keys, fileData.DeletedEmails, nil
 }
 
 // adoptLocked makes the file's records the whole in-memory state. An
@@ -377,11 +386,12 @@ func (m *Manager) syncLocked() {
 		m.stamp.mod, m.stamp.size = st.ModTime(), st.Size()
 		return
 	}
-	records, err := parseKeyFile(data)
+	records, deleted, err := parseKeyFile(data)
 	if err != nil {
 		return
 	}
 	m.adoptLocked(records)
+	m.deletedEmails = deleted
 	m.stampLocked(data)
 }
 
@@ -395,11 +405,15 @@ func (m *Manager) save() error {
 	for _, key := range m.keys {
 		keys = append(keys, key)
 	}
-	data, err := json.MarshalIndent(map[string]interface{}{
+	file := map[string]interface{}{
 		"version":    1,
 		"updated_at": time.Now().UTC().Format(time.RFC3339),
 		"keys":       keys,
-	}, "", "  ")
+	}
+	if len(m.deletedEmails) > 0 {
+		file["deleted_emails"] = m.deletedEmails
+	}
+	data, err := json.MarshalIndent(file, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -935,10 +949,26 @@ func (m *Manager) CreateBoundUserKeyChecked(ctx context.Context, name, email, ac
 	return m.createTypedKey(ctx, name, KeyTypeUser, nil, email, accountID, rateLimit, expiresInDays, description, confirm)
 }
 
+// ErrKeyFromDeletedAccount is RecordUserKeyAccount's answer for a key minted
+// before an account under its email was deleted: it was that account's, so it
+// is recorded as acting as no one instead of being bound to a later account.
+var ErrKeyFromDeletedAccount = errors.New("the key was minted for an account deleted since")
+
+// boundAcrossDeletion reports whether binding key to an account would carry
+// it across a deletion: an account under its email was deleted after the key
+// was minted (deletedEmails). m.mu is held.
+func (m *Manager) boundAcrossDeletion(key *APIKey) bool {
+	at, ok := m.deletedEmails[pgtext.EmailKey(key.UserEmail)]
+	return ok && key.CreatedAt.Unix() <= at
+}
+
 // RecordUserKeyAccount binds a user key that names no account yet to
 // accountID, or, with accountID "", records that its email had no account
-// (AccountMissing): from then on the key acts as no one. A key is bound once;
-// recording the same account again is a no-op, any other change an error.
+// (AccountMissing): from then on the key acts as no one. A key minted before
+// an account under its email was deleted is recorded as acting as no one too,
+// and ErrKeyFromDeletedAccount is returned (boundAcrossDeletion). A key is
+// bound once; recording the same account again is a no-op, any other change
+// an error.
 func (m *Manager) RecordUserKeyAccount(ctx context.Context, keyID, accountID string) error {
 	accountID = strings.TrimSpace(accountID)
 	unlock, err := m.lockForWrite()
@@ -962,6 +992,10 @@ func (m *Manager) RecordUserKeyAccount(ctx context.Context, keyID, accountID str
 	case key.AccountID != "" || key.AccountMissing:
 		return fmt.Errorf("key %s is already bound", keyID)
 	}
+	refused := accountID != "" && m.boundAcrossDeletion(key)
+	if refused {
+		accountID = ""
+	}
 	key.AccountID, key.AccountMissing = accountID, accountID == ""
 	if err := m.save(); err != nil {
 		key.AccountID, key.AccountMissing = "", false
@@ -969,6 +1003,9 @@ func (m *Manager) RecordUserKeyAccount(ctx context.Context, keyID, accountID str
 	}
 	m.logAudit(ctx, AuditLogEntry{KeyID: keyID, Action: "bind_key", ResourceType: "api_key", ResourceID: &keyID,
 		Details: map[string]interface{}{"account_id": accountID, "account_missing": accountID == ""}, Success: true})
+	if refused {
+		return ErrKeyFromDeletedAccount
+	}
 	return nil
 }
 
@@ -978,7 +1015,8 @@ type AccountLookup func(ctx context.Context, email string) (id string, found boo
 
 // BindUserKeys binds every user key minted before keys named their account
 // (no AccountID, not AccountMissing) to the account its email has now, or
-// marks it AccountMissing when there is none. fleet serve runs it at boot, so
+// marks it AccountMissing when there is none — or when an account under its
+// email was deleted after the key was minted (boundAcrossDeletion). fleet serve runs it at boot, so
 // the binding reflects the accounts of the moment keys started naming theirs.
 // A key whose lookup fails is left for the next boot or its first use. The
 // lookups run without the key store's lock; the results are written in one
@@ -1020,6 +1058,9 @@ func (m *Manager) BindUserKeys(ctx context.Context, lookup AccountLookup) (bound
 		if !decided || !ok || key.AccountID != "" || key.AccountMissing || key.UserEmail != p.email {
 			continue
 		}
+		if m.boundAcrossDeletion(key) {
+			id = ""
+		}
 		key.AccountID, key.AccountMissing = id, id == ""
 		changed = append(changed, key)
 		if id == "" {
@@ -1045,22 +1086,78 @@ func (m *Manager) BindUserKeys(ctx context.Context, lookup AccountLookup) (bound
 	return bound, missing, nil
 }
 
+// BindUnboundUserKeys binds the user keys for email that name no account yet
+// (minted before keys named their account) to accountID, the account about to
+// be deleted, and records that an account under email is being deleted
+// (deletedEmails), in one save under the key store's lock. It reports how
+// many keys it bound. accountdelete calls it before the database deletion:
+// after the deletion no unbound key for the email is left for a later account
+// under it to adopt on first use or at boot, the keys bound here are deleted
+// with the account's (DeleteUserKeys), and a key still unbound — written by a
+// process that did not see this — is never bound across the deletion. If the
+// deletion is then refused, the keys stay bound to the account, which still
+// exists. An error (ErrStoreLocked among them) means nothing was bound or
+// recorded, and the deletion does not go ahead.
+func (m *Manager) BindUnboundUserKeys(ctx context.Context, email, accountID string) (int, error) {
+	email = pgtext.EmailKey(email)
+	accountID = strings.TrimSpace(accountID)
+	if email == "" || accountID == "" {
+		return 0, nil
+	}
+	unlock, err := m.lockForWrite()
+	if err != nil {
+		return 0, err
+	}
+	defer unlock()
+	var bound, missing []*APIKey
+	for _, key := range m.keys {
+		if key.Type != KeyTypeUser || key.AccountID != "" || key.AccountMissing || pgtext.EmailKey(key.UserEmail) != email {
+			continue
+		}
+		if m.boundAcrossDeletion(key) {
+			key.AccountMissing = true // an earlier deleted account's
+			missing = append(missing, key)
+		} else {
+			key.AccountID = accountID
+			bound = append(bound, key)
+		}
+	}
+	prevAt, hadPrev := m.deletedEmails[email]
+	if m.deletedEmails == nil {
+		m.deletedEmails = map[string]int64{}
+	}
+	m.deletedEmails[email] = time.Now().Unix()
+	if err := m.save(); err != nil {
+		for _, key := range append(bound, missing...) {
+			key.AccountID, key.AccountMissing = "", false
+		}
+		if hadPrev {
+			m.deletedEmails[email] = prevAt
+		} else {
+			delete(m.deletedEmails, email)
+		}
+		return 0, err
+	}
+	for _, key := range append(bound, missing...) {
+		keyID := key.KeyID
+		m.logAudit(ctx, AuditLogEntry{KeyID: keyID, Action: "bind_key", ResourceType: "api_key", ResourceID: &keyID,
+			Details: map[string]interface{}{"account_id": key.AccountID, "account_missing": key.AccountMissing, "reason": "account being deleted"}, Success: true})
+	}
+	return len(bound), nil
+}
+
 // DeleteUserKeys permanently deletes the user-type keys (KeyTypeUser) of the
 // account accountID, which was email's, and reports how many it deleted.
 // Deleting an account calls it once the account's rows are gone
 // (internal/accountdelete): a user key acts only as its account, so it has
-// nothing left to do. It deletes
-//
-//   - every user key bound to accountID (APIKey.AccountID), and
-//   - the user keys for email that name no account (minted before keys named
-//     their account, or marked as having none) — but only while no account
-//     holds email: emailLive is asked under the key store's lock, which a
-//     key's first-use binding (RecordUserKeyAccount) also takes.
-//
-// A key bound to any other account — one created under email after this
-// one was deleted — is never touched; nor are keys of every other type,
-// which name no account. The audit log keeps a delete_key entry per key.
-func (m *Manager) DeleteUserKeys(ctx context.Context, email, accountID string, emailLive func(context.Context) (bool, error)) (int, error) {
+// nothing left to do. It deletes every user key bound to accountID
+// (APIKey.AccountID) — the deletion bound the email's unbound keys to it
+// first (BindUnboundUserKeys) — and the email's keys recorded as acting as no
+// one (AccountMissing). A key bound to any other account — one created under
+// email after this one was deleted — is never touched; nor are keys of every
+// other type, which name no account. The audit log keeps a delete_key entry
+// per key.
+func (m *Manager) DeleteUserKeys(ctx context.Context, email, accountID string) (int, error) {
 	// Both sides through the one email key (pgtext.EmailKey).
 	email = pgtext.EmailKey(email)
 	if email == "" {
@@ -1074,29 +1171,12 @@ func (m *Manager) DeleteUserKeys(ctx context.Context, email, accountID string, e
 	ofEmail := func(key *APIKey) bool {
 		return key.Type == KeyTypeUser && pgtext.EmailKey(key.UserEmail) == email
 	}
-	unboundLeft := false
-	for _, key := range m.keys {
-		if ofEmail(key) && key.AccountID == "" {
-			unboundLeft = true
-			break
-		}
-	}
-	takeUnbound := false
-	if unboundLeft {
-		live := true // with no way to ask, an unbound key is left alone
-		if emailLive != nil {
-			if live, err = emailLive(ctx); err != nil {
-				return 0, err
-			}
-		}
-		takeUnbound = !live
-	}
 	var gone []*APIKey
 	for _, key := range m.keys {
 		if !ofEmail(key) {
 			continue
 		}
-		if (accountID != "" && key.AccountID == accountID) || (key.AccountID == "" && takeUnbound) {
+		if (accountID != "" && key.AccountID == accountID) || (key.AccountID == "" && key.AccountMissing) {
 			gone = append(gone, key)
 		}
 	}

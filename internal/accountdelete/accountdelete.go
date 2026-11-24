@@ -43,9 +43,13 @@ import (
 
 // Store is the database half: *store.Store.
 type Store interface {
-	// DeleteAccount deletes the account's rows and reports the deleted
+	// AccountForDeletion reads the id of the account under email
+	// (store.Store.AccountForDeletion; ErrUserNotFound when none).
+	AccountForDeletion(ctx context.Context, email string) (id string, err error)
+	// DeleteAccount deletes the rows of the account expectedID, refusing when
+	// the email names another account by then, and reports the deleted
 	// account's id (store.Store.DeleteAccount).
-	DeleteAccount(ctx context.Context, email string) (accountID string, err error)
+	DeleteAccount(ctx context.Context, email, expectedID string) (accountID string, err error)
 	// AccountDigestLive reports whether an account's email has the given
 	// Digest now (store.Store.AccountDigestLive).
 	AccountDigestLive(ctx context.Context, digest string) (bool, error)
@@ -53,8 +57,22 @@ type Store interface {
 
 // Keys is the API-key store: *apikeys.Manager.
 type Keys interface {
-	DeleteUserKeys(ctx context.Context, email, accountID string, emailLive func(context.Context) (bool, error)) (int, error)
+	BindUnboundUserKeys(ctx context.Context, email, accountID string) (int, error)
+	DeleteUserKeys(ctx context.Context, email, accountID string) (int, error)
 }
+
+// KeysNotBoundError refuses a deletion before anything is deleted: the
+// address's user API keys that name no account yet could not be bound to the
+// account first (the key store busy — apikeys.ErrStoreLocked — or not
+// writable). Deleting without that would leave them for a later account
+// under the address to adopt; the caller tries again.
+type KeysNotBoundError struct{ Err error }
+
+func (e *KeysNotBoundError) Error() string {
+	return "binding the account's unbound user API keys to it before the deletion failed (" + e.Err.Error() + "); nothing was deleted, try again"
+}
+
+func (e *KeysNotBoundError) Unwrap() error { return e.Err }
 
 // Options says where the account's keys and files are.
 type Options struct {
@@ -140,14 +158,23 @@ func (p Problem) String() string {
 var afterDatabaseDeletion func()
 
 // Delete deletes the account email: the database rows, then its user API
-// keys, then its files. An error is the database's (store.ErrUserNotFound,
-// *store.OwnsSharedProjectsError, …) and means nothing was deleted.
+// keys, then its files. An error means nothing was deleted: the database's
+// (store.ErrUserNotFound, *store.OwnsSharedProjectsError,
+// store.ErrAccountChanged, …) or a *KeysNotBoundError.
+//
+// Before the rows go, the address's user API keys that name no account yet
+// (minted before keys named their account) are bound to this account, read
+// first and named to the database deletion, which refuses when the address
+// holds another account by then. After the commit no unbound key for the
+// address is left for a later account to adopt, and the key step deletes the
+// keys bound to the deleted account's id. If the database step refuses, the
+// keys stay bound to the account, which still exists: they would have bound
+// to it anyway.
 //
 // The steps after the commit are limited to the account the database step
 // deleted, because the address may hold a new account by then (created the
 // moment the old one was gone, before these steps ran): only the keys bound
-// to the deleted account's id go, with the unbound ones only while no account
-// holds the address (Keys.DeleteUserKeys); and each file tree is checked
+// to the deleted account's id go (Keys.DeleteUserKeys); and each file tree is checked
 // right before it is removed (RemoveOrphanTree) — one whose address has an
 // account again belongs to that account now and stays. The deleted account's
 // files left in it are referenced by no chat of the new account, and the
@@ -157,7 +184,16 @@ func Delete(ctx context.Context, st Store, email string, opt Options) (Result, e
 	// Each step normalizes the address the way its own store keys it.
 	email = strings.TrimSpace(email)
 	var res Result
-	accountID, err := st.DeleteAccount(ctx, email)
+	id, err := st.AccountForDeletion(ctx, email)
+	if err != nil {
+		return res, err
+	}
+	if opt.Keys != nil {
+		if _, err := opt.Keys.BindUnboundUserKeys(ctx, email, id); err != nil {
+			return res, &KeysNotBoundError{Err: err}
+		}
+	}
+	accountID, err := st.DeleteAccount(ctx, email, id)
 	if err != nil {
 		return res, err
 	}
@@ -165,10 +201,9 @@ func Delete(ctx context.Context, st Store, email string, opt Options) (Result, e
 		afterDatabaseDeletion()
 	}
 	live := func(digest string) (bool, error) { return st.AccountDigestLive(ctx, digest) }
-	emailLive := func(ctx context.Context) (bool, error) { return st.AccountDigestLive(ctx, Digest(email)) }
 	if opt.Keys == nil {
 		res.Problems = append(res.Problems, Problem{Kind: KeysUnavailable, Email: email})
-	} else if n, err := opt.Keys.DeleteUserKeys(ctx, email, accountID, emailLive); err != nil {
+	} else if n, err := opt.Keys.DeleteUserKeys(ctx, email, accountID); err != nil {
 		res.Problems = append(res.Problems, Problem{Kind: KeysFailed, Email: email, Err: err.Error()})
 	} else {
 		res.KeysDeleted = n

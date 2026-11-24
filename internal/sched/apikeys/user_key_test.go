@@ -93,8 +93,12 @@ func TestDeleteUserKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	noAccount := func(context.Context) (bool, error) { return false, nil }
-	n, err := m.DeleteUserKeys(ctx, " Gone@X.com ", "gone-id", noAccount)
+	// As a deletion does: the keys that name no account are bound to it
+	// first, then deleted with it.
+	if b, err := m.BindUnboundUserKeys(ctx, "gone@x.com", "gone-id"); err != nil || b != 2 {
+		t.Fatalf("BindUnboundUserKeys = %d, %v; want 2 keys", b, err)
+	}
+	n, err := m.DeleteUserKeys(ctx, " Gone@X.com ", "gone-id")
 	if err != nil || n != 2 {
 		t.Fatalf("DeleteUserKeys = %d, %v; want 2 keys", n, err)
 	}
@@ -110,14 +114,15 @@ func TestDeleteUserKeys(t *testing.T) {
 			}
 		}
 	}
-	if n, err := m.DeleteUserKeys(ctx, "gone@x.com", "gone-id", noAccount); err != nil || n != 0 {
+	if n, err := m.DeleteUserKeys(ctx, "gone@x.com", "gone-id"); err != nil || n != 0 {
 		t.Errorf("second DeleteUserKeys = %d, %v; want 0, nil", n, err)
 	}
 }
 
-// DeleteUserKeys is limited to the deleted account: a key bound to it goes; a
-// key bound to a later account under the same address stays; and a key that
-// names no account goes only while no account holds the address.
+// DeleteUserKeys is limited to the deleted account: a key bound to it goes,
+// and the address's keys recorded as acting as no one; a key bound to a later
+// account under the same address stays, and so does a key that still names
+// no account (the deletion binds those first: BindUnboundUserKeys).
 func TestDeleteUserKeysSparesALaterAccount(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -137,24 +142,77 @@ func TestDeleteUserKeysSparesALaterAccount(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	asked := 0
-	held := func(context.Context) (bool, error) { asked++; return true, nil }
-	if n, err := m.DeleteUserKeys(ctx, "back@x.com", "old-id", held); err != nil || n != 1 {
-		t.Fatalf("DeleteUserKeys with the address held = %d, %v; want the old account's key only", n, err)
+	none, _, err := m.CreateUserKey(ctx, "none", "back@x.com", 0, nil, "")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if asked != 1 {
-		t.Errorf("the address was asked about %d times; want once", asked)
+	if err := m.RecordUserKeyAccount(ctx, none.KeyID, ""); err != nil {
+		t.Fatal(err)
 	}
-	if m.GetKey(old.KeyID) != nil || m.GetKey(later.KeyID) == nil || m.GetKey(unbound.KeyID) == nil {
-		t.Fatalf("old %v, later %v, unbound %v; want only the old account's key gone",
-			m.GetKey(old.KeyID) != nil, m.GetKey(later.KeyID) != nil, m.GetKey(unbound.KeyID) != nil)
+	if n, err := m.DeleteUserKeys(ctx, "back@x.com", "old-id"); err != nil || n != 2 {
+		t.Fatalf("DeleteUserKeys = %d, %v; want the old account's key and the one acting as no one", n, err)
 	}
-	free := func(context.Context) (bool, error) { return false, nil }
-	if n, err := m.DeleteUserKeys(ctx, "back@x.com", "old-id", free); err != nil || n != 1 || m.GetKey(unbound.KeyID) != nil {
-		t.Fatalf("DeleteUserKeys with the address free = %d, %v; want the unbound key gone", n, err)
+	if m.GetKey(old.KeyID) != nil || m.GetKey(none.KeyID) != nil {
+		t.Fatal("the deleted account's key, or the key acting as no one, survived")
 	}
-	if m.GetKey(later.KeyID) == nil {
-		t.Fatal("a key bound to a later account was deleted")
+	if m.GetKey(later.KeyID) == nil || m.GetKey(unbound.KeyID) == nil {
+		t.Fatalf("later %v, unbound %v; want both kept", m.GetKey(later.KeyID) != nil, m.GetKey(unbound.KeyID) != nil)
+	}
+}
+
+// A deletion binds the email's unbound keys to the account being deleted
+// and records the deletion, in the key file: a key still unbound — written by
+// a process that missed that, or minted before it — is never bound to a
+// later account under the email, at first use (RecordUserKeyAccount) or at
+// boot (BindUserKeys), in this Manager or in one reading the same file. A key
+// of another email binds as before.
+func TestNoKeyIsBoundAcrossADeletion(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "keys.json")
+	m, err := NewManager(path, filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy, _, _ := m.CreateUserKey(ctx, "legacy", "back@x.com", 0, nil, "")
+	if b, err := m.BindUnboundUserKeys(ctx, "back@x.com", "old-id"); err != nil || b != 1 {
+		t.Fatalf("BindUnboundUserKeys = %d, %v; want 1", b, err)
+	}
+	if k := m.GetKey(legacy.KeyID); k.AccountID != "old-id" {
+		t.Fatalf("the unbound key = %+v, want bound to the account being deleted", k)
+	}
+	// Keys another process wrote before the deletion and this one never saw
+	// bound: they predate the deletion marker.
+	missedFirst, _, _ := m.CreateUserKey(ctx, "missed-first", "back@x.com", 0, nil, "")
+	missedBoot, _, _ := m.CreateUserKey(ctx, "missed-boot", "back@x.com", 0, nil, "")
+	other, _, _ := m.CreateUserKey(ctx, "other", "other@x.com", 0, nil, "")
+	m.mu.Lock()
+	for _, k := range []*APIKey{missedFirst, missedBoot} {
+		k.CreatedAt = time.Now().Add(-time.Hour)
+	}
+	if err := m.save(); err != nil {
+		m.mu.Unlock()
+		t.Fatal(err)
+	}
+	m.mu.Unlock()
+	reread, err := NewManager(path, filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reread.RecordUserKeyAccount(ctx, missedFirst.KeyID, "new-id"); !errors.Is(err, ErrKeyFromDeletedAccount) {
+		t.Fatalf("first use as the later account: err %v, want ErrKeyFromDeletedAccount", err)
+	}
+	lookup := func(context.Context, string) (string, bool, error) { return "new-id", true, nil }
+	if b, missing, err := reread.BindUserKeys(ctx, lookup); err != nil || b != 1 || missing != 1 {
+		t.Fatalf("BindUserKeys = %d bound, %d missing, %v; want the other email's key bound and one refused", b, missing, err)
+	}
+	for _, id := range []string{missedFirst.KeyID, missedBoot.KeyID} {
+		if k := reread.GetKey(id); k.AccountID != "" || !k.AccountMissing {
+			t.Fatalf("key %s = %+v, want acting as no one", id, k)
+		}
+	}
+	if k := reread.GetKey(other.KeyID); k.AccountID != "new-id" {
+		t.Fatalf("another email's key = %+v, want bound", k)
 	}
 }
 

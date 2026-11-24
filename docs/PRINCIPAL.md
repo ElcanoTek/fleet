@@ -81,14 +81,22 @@ spells `X-User-Email`, `X-User-Session-Epoch`, `X-User-Session-Source`,
   and the server logs that once — a revocation lost to such a race is
   harmless for user keys, since a key acts only as the account it is bound
   to. `fleet sched apikey list` shows each user key's
-  account: its id, `missing` or `unbound` (`account` in `--json`). The one
-  case binding cannot tell apart: a key minted
-  before this release for an account that was deleted and re-created
-  before it binds to the re-created account. Deleting an account deletes
-  the user keys bound to its id, and its address's unbound keys while no
-  account holds the address (`apikeys.Manager.DeleteUserKeys`, through
-  `accountdelete.Delete`; see [IDENTITY.md](IDENTITY.md)); a key bound to an
-  account created under the address since is never touched. A user key
+  account: its id, `missing` or `unbound` (`account` in `--json`). Deleting
+  an account first binds its address's unbound keys to it
+  (`apikeys.Manager.BindUnboundUserKeys`; while the key store is busy the
+  deletion is refused, with nothing deleted, as 503 or a non-zero CLI exit),
+  then, after the database deletion, deletes the keys bound to its id and
+  its address's keys marked `account_missing`
+  (`apikeys.Manager.DeleteUserKeys`, through `accountdelete.Delete`; see
+  [IDENTITY.md](IDENTITY.md)). A key bound to an account created under the
+  address since is never touched. The deletion is also recorded in the key
+  file (`deleted_emails`): a key minted before it that is still unbound —
+  written by a process that missed the deletion — is never bound to a later
+  account under the address, at boot or on first use (it is marked
+  `account_missing` and answered `key_predates_account`). The one case
+  binding cannot tell apart: a key minted before this release for an
+  account that was deleted and re-created before it binds to the
+  re-created account. A user key
   carries no Operations Center permission and
   reaches no scoped-key route; any other key type is refused on the chat API
   with 403 `not_a_user_key`. Rotation and revocation are the ordinary key

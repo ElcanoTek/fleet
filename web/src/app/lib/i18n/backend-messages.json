@@ -379,8 +379,10 @@
     "tenant_id must be a valid Microsoft Entra Directory (tenant) ID, domain, or 'organizations'/'common'",
     "that person can't take this chat: they need an active Fleet account that can chat",
     "that team already exists — ask an admin to add you to it",
+    "the API-key store is busy with another change, so nothing was deleted; try again in a few seconds",
     "the API-key store is busy with another change; try again in a few seconds",
     "the Stop was sent, but the turn has not confirmed it yet",
+    "the account changed while it was being deleted; nothing was deleted",
     "the assistant could not draft this patrol; try again or edit the draft yourself",
     "the chat made with this client_request_id was deleted; retry with a new one",
     "the deletion was interrupted before it started; nothing was deleted",
@@ -1755,6 +1757,12 @@
     },
     {
       "message": "the API-key store was not available, so the user API keys acting as {0} were not deleted; list them with `fleet sched apikey list` and delete them with `fleet sched apikey delete \u003ckey_id\u003e`",
+      "fields": [
+        "%s"
+      ]
+    },
+    {
+      "message": "the account's user API keys could not be updated before the deletion ({0}); nothing was deleted",
       "fields": [
         "%s"
       ]

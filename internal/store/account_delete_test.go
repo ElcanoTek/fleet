@@ -1223,3 +1223,30 @@ func TestChatFirstWriterRacingDeletionLeavesNoQueuedMessage(t *testing.T) {
 		t.Fatalf("%d queued messages outlived the participant's account", n)
 	}
 }
+
+// DeleteAccount deletes only the account the caller read: when the email
+// names another account by then (deleted and created again in between), it
+// deletes nothing.
+func TestDeleteAccountRefusesAnotherAccountUnderTheEmail(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedAccount(t, s, "same@x.com")
+	id, err := s.AccountForDeletion(ctx, "Same@X.com")
+	if err != nil || id == "" {
+		t.Fatalf("AccountForDeletion = %q, %v", id, err)
+	}
+	if _, err := s.DeleteAccount(ctx, "same@x.com", "00000000-0000-0000-0000-000000000000"); !errors.Is(err, ErrAccountChanged) {
+		t.Fatalf("another account's id: err %v, want ErrAccountChanged", err)
+	}
+	if _, err := s.GetUser(ctx, "same@x.com"); err != nil {
+		t.Fatalf("the account was deleted: %v", err)
+	}
+	got, err := s.DeleteAccount(ctx, "same@x.com", id)
+	if err != nil || got != id {
+		t.Fatalf("DeleteAccount = %q, %v; want %q", got, err, id)
+	}
+	if _, err := s.AccountForDeletion(ctx, "same@x.com"); !errors.Is(err, ErrUserNotFound) {
+		t.Fatalf("after the deletion: err %v, want ErrUserNotFound", err)
+	}
+}

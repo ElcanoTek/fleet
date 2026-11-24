@@ -197,6 +197,69 @@ func TestUnboundUserKeyWaitsForItsBinding(t *testing.T) {
 	}
 }
 
+// A deletion binds the account's keys that name no account to it before it
+// deletes anything; while another process holds the key store, the deletion
+// is refused with 503 and Retry-After, and the account stays.
+func TestAdminDeleteRefusedWhileTheKeyStoreIsBusy(t *testing.T) {
+	t.Parallel()
+	s := memberFixture(t, "boss@x.com", "u@x.com")
+	setRole(t, s, "boss@x.com", "admin", "")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "api_keys.json")
+	mgr, err := apikeys.NewManager(path, filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := mgr.CreateUserKey(context.Background(), "legacy", "u@x.com", 0, nil, ""); err != nil {
+		t.Fatal(err)
+	}
+	mgr.SetFileLockWait(50 * time.Millisecond)
+	s.apiKeys = mgr
+	holder, err := os.Open(path + ".lock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Close()
+	if err := unix.Flock(int(holder.Fd()), unix.LOCK_EX); err != nil {
+		t.Fatal(err)
+	}
+	w := do(t, s.Routes(), http.MethodDelete, "/admin/users/u@x.com", nil, "boss@x.com")
+	if w.Code != http.StatusServiceUnavailable || w.Header().Get("Retry-After") == "" || !strings.Contains(w.Body.String(), "nothing was deleted") {
+		t.Fatalf("status %d Retry-After %q body %q, want 503 saying nothing was deleted", w.Code, w.Header().Get("Retry-After"), w.Body.String())
+	}
+	if _, err := s.concreteStore(t).GetUser(context.Background(), "u@x.com"); err != nil {
+		t.Fatalf("the account was deleted: %v", err)
+	}
+}
+
+// A key minted before keys named their account is bound to the account
+// before the account is deleted, and goes with its keys: a later account
+// under the email never gets it.
+func TestDeletionLeavesNoUnboundKeyForALaterAccount(t *testing.T) {
+	t.Parallel()
+	s := memberFixture(t, "boss@x.com", "u@x.com")
+	setRole(t, s, "boss@x.com", "admin", "")
+	mgr := newTestKeyStore(t)
+	s.apiKeys = mgr
+	srv := httptest.NewServer(s.Routes())
+	defer srv.Close()
+	ctx := context.Background()
+	legacy, raw, err := mgr.CreateUserKey(ctx, "legacy", "u@x.com", 0, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w := do(t, s.Routes(), http.MethodDelete, "/admin/users/u@x.com", nil, "boss@x.com"); w.Code != http.StatusNoContent {
+		t.Fatalf("delete: status %d (body %s)", w.Code, w.Body.String())
+	}
+	if mgr.GetKey(legacy.KeyID) != nil {
+		t.Fatal("the key minted before keys named their account survived the deletion")
+	}
+	seedUser(t, s.concreteStore(t), "u@x.com")
+	if err := chattui.NewClient(chattui.Config{ServerURL: srv.URL, APIKey: raw}).CheckIdentity(ctx); err == nil {
+		t.Fatal("the deleted account's unbound key authenticates the account created after it")
+	}
+}
+
 // Account deletion removes the upload and private workspace trees by the
 // paths accountdelete computes; they must be the paths this package writes.
 func TestAccountDeletionPathsMatchTheServers(t *testing.T) {
@@ -805,7 +868,7 @@ func TestAdminDeleteWarnsOfWorkStillRunning(t *testing.T) {
 // on its own: it returns only when its context ends.
 type blockingDeleteStore struct{ *store.Store }
 
-func (blockingDeleteStore) DeleteAccount(ctx context.Context, _ string) (string, error) {
+func (blockingDeleteStore) DeleteAccount(ctx context.Context, _, _ string) (string, error) {
 	<-ctx.Done()
 	return "", ctx.Err()
 }

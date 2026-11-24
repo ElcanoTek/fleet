@@ -29,7 +29,11 @@ type fakeStore struct {
 	liveErr error
 }
 
-func (s *fakeStore) DeleteAccount(_ context.Context, email string) (string, error) {
+func (s *fakeStore) AccountForDeletion(context.Context, string) (string, error) {
+	return "deleted-account-id", nil
+}
+
+func (s *fakeStore) DeleteAccount(_ context.Context, email, _ string) (string, error) {
 	if s.err != nil {
 		return "", s.err
 	}
@@ -45,13 +49,18 @@ func (s *fakeStore) AccountDigestLive(_ context.Context, digest string) (bool, e
 }
 
 type fakeKeys struct {
-	n     int
-	err   error
-	calls []string
-	ids   []string
+	n       int
+	err     error
+	bindErr error
+	calls   []string
+	ids     []string
 }
 
-func (k *fakeKeys) DeleteUserKeys(_ context.Context, email, accountID string, _ func(context.Context) (bool, error)) (int, error) {
+func (k *fakeKeys) BindUnboundUserKeys(context.Context, string, string) (int, error) {
+	return 0, k.bindErr
+}
+
+func (k *fakeKeys) DeleteUserKeys(_ context.Context, email, accountID string) (int, error) {
 	k.calls = append(k.calls, email)
 	k.ids = append(k.ids, accountID)
 	return k.n, k.err
@@ -187,6 +196,30 @@ func TestDeleteReportsFailedRemovals(t *testing.T) {
 		ServerCleanup: func(string, func(string) (bool, error)) error { return errors.New("read-only file system") }})
 	if err != nil || len(res.Problems) != 1 || res.Problems[0].Kind != PrivateWorkspacesFailed {
 		t.Fatalf("server cleanup failure: %+v, %v", res, err)
+	}
+}
+
+// A deletion binds the address's keys that name no account to the account
+// before it deletes anything; if the key store cannot be written (another
+// process holds it), the deletion is refused with nothing deleted, rather
+// than leave those keys for a later account under the address.
+func TestDeleteRefusesWhenTheKeysCannotBeBound(t *testing.T) {
+	t.Parallel()
+	att := t.TempDir()
+	files := seedFiles(t, att, "gone@x.com")
+	st, keys := &fakeStore{}, &fakeKeys{bindErr: apikeys.ErrStoreLocked}
+	_, err := Delete(context.Background(), st, "gone@x.com", Options{Keys: keys, AttachmentDir: att})
+	var notBound *KeysNotBoundError
+	if !errors.As(err, &notBound) || !errors.Is(err, apikeys.ErrStoreLocked) {
+		t.Fatalf("err = %v, want a KeysNotBoundError wrapping the busy key store", err)
+	}
+	if len(st.deleted) != 0 || len(keys.calls) != 0 {
+		t.Fatalf("store deletions %v, key deletions %v; want none", st.deleted, keys.calls)
+	}
+	for _, f := range files {
+		if _, err := os.Stat(f); err != nil {
+			t.Errorf("%s was removed although the deletion was refused: %v", f, err)
+		}
 	}
 }
 
@@ -412,11 +445,11 @@ func TestRemoveOrphanTree(t *testing.T) {
 
 // After the database deletion commits, the address may hold a new account
 // before the keys and files are reached. That account keeps what is its own:
-// the user keys bound to its id, an unbound key minted before keys named
-// their account (it may still bind to it), and the upload and private
-// workspace trees under its digest. With no new account the deleted
-// account's unbound key and trees go too. Not parallel: it uses
-// afterDatabaseDeletion.
+// the user keys bound to its id, and the upload and private workspace trees
+// under its digest. A key minted before keys named their account is bound to
+// the deleted account before the deletion, so it goes with that account's
+// keys either way and is never the new account's. With no new account the
+// trees go too. Not parallel: it uses afterDatabaseDeletion.
 func TestDeleteSparesAnAccountCreatedAfterTheCommit(t *testing.T) {
 	ctx := context.Background()
 	for _, recreated := range []bool{true, false} {
@@ -438,6 +471,10 @@ func TestDeleteSparesAnAccountCreatedAfterTheCommit(t *testing.T) {
 		}
 		var fresh *apikeys.APIKey
 		afterDatabaseDeletion = func() {
+			// Bound to the account being deleted before its rows went.
+			if k := mgr.GetKey(legacy.KeyID); k == nil || k.AccountID != "deleted-account-id" {
+				t.Errorf("recreated=%v: at the commit the unbound key is %+v, want bound to the deleted account", recreated, k)
+			}
 			if !recreated {
 				return
 			}
@@ -454,8 +491,8 @@ func TestDeleteSparesAnAccountCreatedAfterTheCommit(t *testing.T) {
 		if mgr.GetKey(old.KeyID) != nil {
 			t.Errorf("recreated=%v: the deleted account's key survived", recreated)
 		}
-		if got := mgr.GetKey(legacy.KeyID) != nil; got != recreated {
-			t.Errorf("recreated=%v: the unbound key kept = %v, want %v", recreated, got, recreated)
+		if mgr.GetKey(legacy.KeyID) != nil {
+			t.Errorf("recreated=%v: the key minted before keys named their account survived", recreated)
 		}
 		if recreated && (fresh == nil || mgr.GetKey(fresh.KeyID) == nil) {
 			t.Error("the new account's key was deleted")

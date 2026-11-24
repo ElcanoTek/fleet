@@ -22,6 +22,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/identity"
 	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/safe"
+	"github.com/ElcanoTek/fleet/internal/sched/apikeys"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
@@ -276,8 +277,30 @@ func writeAccountDeleteRefusal(w http.ResponseWriter, r *http.Request, err error
 		})
 		return
 	}
+	// The account's unbound user API keys could not be bound to it first, so
+	// nothing was deleted (accountdelete.KeysNotBoundError): 503 with
+	// Retry-After while the key store is busy, 500 otherwise.
+	var notBound *accountdelete.KeysNotBoundError
+	if errors.As(err, &notBound) {
+		if errors.Is(err, apikeys.ErrStoreLocked) {
+			w.Header().Set("Retry-After", "5")
+			http.Error(w, errAccountDeleteKeysBusy, http.StatusServiceUnavailable)
+			return
+		}
+		http.Error(w, fmt.Sprintf("the account's user API keys could not be updated before the deletion (%s); nothing was deleted", notBound.Err), http.StatusInternalServerError)
+		return
+	}
+	// Another account took the address between the read and the deletion.
+	if errors.Is(err, store.ErrAccountChanged) {
+		http.Error(w, "the account changed while it was being deleted; nothing was deleted", http.StatusConflict)
+		return
+	}
 	http.Error(w, err.Error(), http.StatusInternalServerError)
 }
+
+// errAccountDeleteKeysBusy answers a deletion refused because the API-key
+// store was busy when its keys had to be bound first.
+const errAccountDeleteKeysBusy = "the API-key store is busy with another change, so nothing was deleted; try again in a few seconds"
 
 // handleAdminUserPassword serves PUT /admin/users/{email}/password — reset an
 // account's password. Body: {"password": ...}. The new password is never
