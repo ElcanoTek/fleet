@@ -2598,9 +2598,12 @@ type TurnMetric struct {
 	Cancelled           bool
 }
 
-// RecordTurn writes a turn_metrics row. Called once per completed turn
-// (success or cancelled). Failures are logged but not propagated — a
-// missing metric row shouldn't kill a conversation.
+// RecordTurn writes a turn_metrics row. Called once per turn by httpapi's
+// recordTurnSpend: for every completed or cancelled turn (a turn stopped
+// before its first completion writes a zero-usage row), and for a turn that
+// ended in an error after billed steps; a turn that failed before any billed
+// completion writes none. Failures are logged but not propagated — a missing
+// metric row shouldn't kill a conversation.
 func (s *Store) RecordTurn(ctx context.Context, m TurnMetric) error {
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO turn_metrics

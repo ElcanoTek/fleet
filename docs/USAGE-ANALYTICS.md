@@ -29,8 +29,23 @@ Aggregation happens strictly over rows the governed core already writes:
 - `internal/store/usage.go` — `Store.UsageSummary(ctx, from, to, groupBy)`.
 - Both key their SQL grouping expressions off a fixed map validated against a
   closed `group_by` set, so caller input never reaches SQL.
-- Failed/cancelled iterations and cancelled chat turns **count** — the cost was
-  still spent.
+- **What counts: every completion the provider billed, once, whichever way
+  the turn or run ended.** The cost was spent either way. In detail (see
+  "What a turn or run records" below):
+  - A chat turn writes exactly one `turn_metrics` row when it completes, when
+    it is cancelled (Stop, the turn time limit, a per-turn cost/token ceiling;
+    `cancelled = true`), and when it ends in an error after the provider
+    billed it — a provider failure after paid steps, a guardrail block, a
+    contained internal error, or a terminal history save that failed
+    (`cancelled = false`). A turn stopped before its first completion
+    still writes its (zero-usage) cancelled row, as before; a turn that
+    failed before any billed completion (preflight, or a provider that
+    refused the first call) writes no row.
+  - A scheduled run's iteration row carries its session-log spend whether it
+    passed, failed, was stopped or was aborted.
+  - A completion whose step fantasy abandons is still metered: a Stop or
+    timeout that lands while a step's tools run counts that step's
+    completion (usually the largest prompt of the turn).
 - **Every scheduled run writes an iteration row**, not just looped tasks: a
   plain single-pass task is recorded as iteration 1 of 1 (`singlePassIteration`
   in `internal/scheduledrun`). Before that, only `loop_config` tasks wrote to
@@ -84,6 +99,83 @@ from. The chat store reaches the orchestrator handler through a
 `SetChatUsageProvider` seam wired in `cmd/fleet/main.go` (the two backends run
 in one process); when the seam is nil the report covers tasks only and its
 `sources` field says so.
+
+### What a turn or run records
+
+Both ledgers are fed from the run's one accounting state
+(`agentcore.orchestrationState`): `Result.Usage` for a chat turn, the session
+log's counters for a scheduled run.
+
+- **Metering point.** The main loop (`roundState.stream`,
+  `internal/agentcore/engine.go`) records each completion's usage from its
+  finish part (`OnStreamFinish`) and meters it when the step closes
+  (`OnStepFinish`), as before: the completion's own tool calls are checked
+  against the cost/token ceilings as they stood before it, and the next
+  step's budget guard sees it. What changed is the step fantasy abandons:
+  when the run's context is cancelled while the step's tools run, fantasy
+  returns `ctx.Err()` and discards the step without `OnStepFinish`. That
+  completion used to be dropped from the cancelled turn's summary, cost chip
+  and `turn_metrics` row, and from a stopped scheduled run's iteration; it is
+  now metered when the round's stream returns. (In fantasy v0.45.5 the finish
+  part is the stream's last part, so a step that fails after it fails only by
+  cancellation and is never retried.) The forced final-summary recovery call
+  (`internal/agent/interactive.go`), which runs no tools, meters at the
+  finish part directly. Each finish part is metered exactly once.
+- **Every `agentcore.Run` exit carries the usage and the serving model.**
+  `Run` stamps `Result.Usage` on every return — completed, cancelled,
+  failed, round-cap, and a panic its backstop contains (`stampRunUsage`,
+  deferred so it runs after the backstop clears the result). Error returns
+  used to come back as an empty `Result` when no tool had run. It stamps
+  `Result.ModelSlug` from the model the engine was last driving, so a run
+  that failed after a fallback swap inside the failing round names the
+  fallback that served it, not the configured model.
+- **Chat: one row per turn.** `Manager.RunTurn`
+  (`internal/agent/manager.go`) returns a usage-only `TurnResult`
+  (`spentTurnResult`) alongside the error on every failure after the run
+  started: a stream failure (`turn.model_required`), a guardrail block, and a
+  completed or cancelled turn whose terminal history commit failed.
+  `runTurnAsync` (`internal/httpapi/chat.go`) then records the turn
+  exactly once (`recordTurnSpend`, behind a recorded flag): every completed
+  or cancelled turn — a turn stopped before its first completion writes a
+  zero-usage row, as it always did — and a failed turn with any billed
+  usage. A failed turn with none writes no row. A finished (completed or
+  cancelled) turn records inline where `RecordTurn` always ran, before the
+  post-turn work (auto-title, memory indexing, escalation), so a crash
+  there cannot lose the row and budget checks see it at once. A failed turn
+  records from a defer registered right after `RunTurn` returns: after its
+  terminal frame is emitted (a slow store never holds the error back) and
+  before the buffer is sealed; the defer also covers a later panic. Before
+  this, a failed turn returned
+  `(nil, err)` and `runTurnAsync` returned before `RecordTurn` and
+  `metrics.RecordTurnUsage`: a provider error at step 30 dropped the 29 paid
+  steps from budgets and analytics, while the partial `turn_summary` in the
+  transcript showed them. Webhook, patrol and approval-resume turns run
+  through the same `runTurnAsync`.
+- **No double counting.** One `recordTurnSpend` per turn; a retried turn is a
+  new turn with its own run and its own accounting state, so it records only
+  its own completions.
+- **Not in these ledgers** (unchanged, documented in
+  [AUX-MODEL-CALL-METERING.md](AUX-MODEL-CALL-METERING.md)): host-side calls
+  around a turn or run — title suggestion, memory extraction, the escalation
+  classifier, summarize-and-continue (its cost is stored on the summary
+  entry), the end-of-run verifier, the phone-a-friend review and the loop
+  exit verifier (those three in the run's `aux_usage` ledger), and the
+  log-line-only aux calls.
+- **Known gaps.** A turn or run cut off by a process crash or restart records
+  nothing for its in-flight work (the usage lived in memory). A panic in the
+  chat or scheduled driver code outside `agentcore.Run`'s backstop skips the
+  row. A provider that bills a stream that fails before its finish part is
+  not metered: no usage was reported.
+- **Tests.** `internal/agentcore/spend_metering_test.go` (Stop mid-tool, in
+  both modes, keeps the step's usage; a provider error after a paid round and
+  a contained panic return the usage; a completed run meters each completion
+  once; the completion that crosses a token ceiling still runs its tool call
+  and the next step stops the run; a run that failed after a fallback swap
+  names the fallback) and `internal/httpapi/turn_spend_test.go` (the real
+  agent loop on the fake LLM: a failed turn, a turn whose history save failed
+  and a Stop mid-tool each record one row with the billed usage; a completed
+  turn records once, before its post-turn work finishes; a failed turn and
+  its retry each record their own).
 
 ### The endpoint
 

@@ -1858,6 +1858,12 @@ func (r *roundState) estimatePromptTokens(messages []fantasy.Message) int {
 	return promptTokens
 }
 
+// reportedUsage is one completion's usage as its finish part reported it.
+type reportedUsage struct {
+	usage    fantasy.Usage
+	metadata fantasy.ProviderMetadata
+}
+
 // stream drives one fantasy stream call for the round, wiring the resilience
 // retry budget, usage accounting, the prompt-cache prepare step, AND the full
 // streaming bridge: text / reasoning / tool-call / tool-result callbacks forward
@@ -1876,6 +1882,25 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 	// reserved by modelContextBudgetStep below — one value for both.
 	maxOutputTokens := completionTokensForModel(modelSlug, r.maxTokens)
 	sink := r.sink
+	// Usage the provider reported (a completion's finish part) that is not
+	// metered yet. A completion is metered when its step closes
+	// (OnStepFinish), after its own tool calls ran: those calls are checked
+	// against the cost/token ceilings as they stood before the completion,
+	// and the next step's budget guard sees it. A step fantasy discards
+	// without closing it — the run's context was cancelled (Stop, the turn
+	// time limit) while its tools ran — is metered when this round's stream
+	// returns, so the cancelled or failed run still accounts for the
+	// completion it was billed for. Only fantasy's stream goroutine touches
+	// the list (both callbacks run on it, and Stream has returned before the
+	// deferred flush).
+	var pendingUsage []reportedUsage
+	meterPending := func() {
+		for _, u := range pendingUsage {
+			r.orch.updateUsage(modelSlug, u.usage, u.metadata)
+		}
+		pendingUsage = pendingUsage[:0]
+	}
+	defer meterPending()
 	// A provider that accepts the request but never produces a semantic event
 	// must not monopolize the run deadline. Once the first event arrives the timer
 	// is disarmed and the original context remains authoritative.
@@ -2004,9 +2029,19 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 			}
 			return nil
 		},
+		// The provider reports a completion's usage in its finish part. It is
+		// recorded here and metered when the step closes (OnStepFinish), or —
+		// for a step fantasy abandons with ctx.Err() because a Stop or the
+		// turn time limit landed while its tools ran, so OnStepFinish never
+		// fires — when the stream returns (pendingUsage above). Each finish
+		// part is metered exactly once either way.
+		OnStreamFinish: func(usage fantasy.Usage, _ fantasy.FinishReason, metadata fantasy.ProviderMetadata) error {
+			pendingUsage = append(pendingUsage, reportedUsage{usage: usage, metadata: metadata})
+			return nil
+		},
 		OnStepFinish: func(step fantasy.StepResult) error {
 			sink.onStepFinish()
-			r.orch.updateUsage(modelSlug, step.Usage, step.ProviderMetadata)
+			meterPending()
 			r.engine.noteResendFloor(step.Usage)
 			return nil
 		},

@@ -396,10 +396,13 @@ func streamForceFinalSummary(ctx context.Context, tc TurnConfig, in agentcore.Fi
 			return nil
 		},
 		// Meter this recovery call into the run's accounting so its tokens/cost
-		// are not invisible to the cost chip (#83). Nil-safe.
-		OnStepFinish: func(step fantasy.StepResult) error {
+		// are not invisible to the cost chip (#83). Nil-safe. Metered at the
+		// finish part, where the provider reports the usage — the call runs no
+		// tools, so no ceiling check sits between the two — so a Stop after
+		// the completion arrived still counts it.
+		OnStreamFinish: func(usage fantasy.Usage, _ fantasy.FinishReason, metadata fantasy.ProviderMetadata) error {
 			if in.RecordUsage != nil {
-				in.RecordUsage(step.Usage, step.ProviderMetadata)
+				in.RecordUsage(usage, metadata)
 			}
 			return nil
 		},

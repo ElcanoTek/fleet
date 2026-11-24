@@ -1,8 +1,9 @@
 package store
 
 // Usage-analytics read model (#601 part 1), chat side: aggregation over the
-// turn_metrics rows RecordTurn already persists (one per completed turn,
-// success or cancelled — the cost was spent either way). Strictly a read
+// turn_metrics rows RecordTurn already persists (one per completed or
+// cancelled turn, and one per turn that failed after billed steps; the cost
+// was spent either way). Strictly a read
 // model: no new table, no parallel accounting path. Dimensions come from the
 // conversation the turn belongs to (model override, project) — turn_metrics
 // itself carries only the principal email and the meters.
@@ -31,8 +32,9 @@ type UsageRow struct {
 // UserDayUsage is one per-user-per-day aggregation row for the adoption
 // report's chat side: the same meters as UsageRow, but on both the user and
 // UTC-day dimensions at once (per-user daily series can't be expressed by the
-// one-dimensional UsageSummary grouping). Turns counts completed turns that
-// day, cancelled included.
+// one-dimensional UsageSummary grouping). Turns counts that day's
+// turn_metrics rows: completed and cancelled turns, and failed turns that
+// were billed.
 type UserDayUsage struct {
 	User             string
 	Day              string // YYYY-MM-DD, UTC

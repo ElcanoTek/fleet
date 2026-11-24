@@ -46,6 +46,36 @@ func TestSummarizeDroppedMiddle_MetersUsage(t *testing.T) {
 	}
 }
 
+// TestStreamForceFinalSummary_MetersAStoppedCompletion: the forced-summary
+// recovery call is metered when the provider reports its usage (the finish
+// part), so a Stop that lands after that — when fantasy discards the step
+// without closing it — still counts the billed completion, once.
+func TestStreamForceFinalSummary_MetersAStoppedCompletion(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	model := &itMockModel{streamFunc: func(context.Context, fantasy.Call) (fantasy.StreamResponse, error) {
+		return func(yield func(fantasy.StreamPart) bool) {
+			yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonStop,
+				Usage: fantasy.Usage{InputTokens: 30, OutputTokens: 7}})
+			cancel() // the Stop lands after the provider reported the usage
+		}, nil
+	}}
+	var got fantasy.Usage
+	calls := 0
+	_, err := streamForceFinalSummary(ctx, TurnConfig{Model: model, MaxTokens: 4096}, agentcore.FinalizeInput{
+		RecordUsage: func(u fantasy.Usage, _ fantasy.ProviderMetadata) {
+			calls++
+			got = u
+		},
+	})
+	if err == nil {
+		t.Fatal("streamForceFinalSummary succeeded, want the Stop's context error")
+	}
+	if calls != 1 || got.InputTokens != 30 || got.OutputTokens != 7 {
+		t.Fatalf("RecordUsage calls = %d with %d/%d, want 1 with 30/7", calls, got.InputTokens, got.OutputTokens)
+	}
+}
+
 // TestSummarizeDroppedMiddle_OverCeilingDegradesToTruncation pins the ceiling
 // pre-check: when the run's cost/token ceiling is already met, the summarizer
 // must NOT buy another model call — it degrades to the deterministic

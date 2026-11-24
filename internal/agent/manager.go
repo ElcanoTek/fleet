@@ -207,6 +207,11 @@ type TurnInput struct {
 }
 
 // TurnResult is returned after a turn completes.
+//
+// RunTurn also returns one alongside an error once the turn's run has started
+// (spentTurnResult): then only the usage fields, Model and Cancelled are set,
+// so the caller can record what the turn was billed for. Nothing else in it
+// was committed or shown.
 type TurnResult struct {
 	FinalText           string
 	NewHistory          []HistoryEntry // the user msg + any assistant/tool events this turn
@@ -220,6 +225,29 @@ type TurnResult struct {
 	// Cancelled is true when the turn ended because the caller's ctx was
 	// cancelled. Partial history and cost are still returned.
 	Cancelled bool
+}
+
+// Billed reports whether the turn incurred any model usage.
+func (r *TurnResult) Billed() bool {
+	return r != nil && (r.CostUSD != 0 || r.PromptTokens != 0 || r.CompletionTokens != 0 ||
+		r.CachedTokens != 0 || r.CacheCreationTokens != 0)
+}
+
+// spentTurnResult is the result RunTurn returns with an error once the turn's
+// run has started: the usage the run was billed for and the model, nothing
+// else. The provider charged for those completions whether or not the turn
+// then failed or its history could be saved, so the caller records them like
+// a completed turn's (turn_metrics, which budgets and usage analytics read).
+func spentTurnResult(usage agentcore.RunUsage, modelSlug string, cancelled bool) *TurnResult {
+	return &TurnResult{
+		PromptTokens:        usage.PromptTokens,
+		CompletionTokens:    usage.CompletionTokens,
+		CachedTokens:        usage.CachedTokens,
+		CacheCreationTokens: usage.CacheCreationTokens,
+		CostUSD:             usage.CostUSD,
+		Model:               modelSlug,
+		Cancelled:           cancelled,
+	}
 }
 
 // SummarizeInput carries the inputs the summarize endpoint needs.
@@ -1972,7 +2000,9 @@ func (m *Manager) bindTurnOverlayMCPScope(
 // RunTurn executes one interactive turn: it builds the per-turn system prompt +
 // sandbox + tools, resolves the model, drives RunInteractiveTurn (which streams
 // through the sink), then maps the accumulated transcript to history + usage.
-// Mirrors chat's session.go::RunTurn over the unified loop.
+// Mirrors chat's session.go::RunTurn over the unified loop. An error after the
+// run started comes with a spentTurnResult carrying the turn's usage; an error
+// before it (no provider call yet) comes with nil.
 func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*TurnResult, error) {
 	startedAt := time.Now()
 	persona := defaultIfEmpty(strings.TrimSpace(in.Persona), m.config.PersonaDefault)
@@ -2257,9 +2287,10 @@ func (m *Manager) cancelledTurnResult(res agentcore.Result, userEntry HistoryEnt
 	newHistory = append(newHistory, mustEntry("assistant", "turn_summary", summary))
 	// Same terminal gate as the completed path (#798): partial work commits
 	// before turn.cancelled is advertised, so a Stop never loses transcript.
+	// A failed commit still returns the turn's usage: it was billed.
 	if commitTerminal != nil {
 		if err := commitTerminal(newHistory[1:], true); err != nil {
-			return nil, fmt.Errorf("%w: %w", ErrHistoryCommitFailed, err)
+			return spentTurnResult(usage, modelSlug, true), fmt.Errorf("%w: %w", ErrHistoryCommitFailed, err)
 		}
 	}
 	reason := "cancelled"
@@ -2303,13 +2334,15 @@ func (m *Manager) cancelledTurnResult(res agentcore.Result, userEntry HistoryEnt
 // the user can fix by choosing another model: committed side effects persist
 // first (ADR-0035), then ErrModelSelectionRequired wraps the cause so the HTTP
 // layer suppresses its generic turn.error in favor of turn.model_required.
+// Every error return carries the run's usage (spentTurnResult): a provider
+// error at step 30 still leaves 29 billed steps to record.
 func (m *Manager) failedTurnResult(ctx context.Context, runErr error, res agentcore.Result, userEntry HistoryEntry, senderEmail, modelSlug string, startedAt time.Time, sink EventSink, commitTerminal func([]HistoryEntry, bool) error) (*TurnResult, error) {
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return m.cancelledTurnResult(res, userEntry, senderEmail, modelSlug, startedAt, ctxErr, sink, commitTerminal)
 	}
 	if errors.Is(runErr, agentcore.ErrGuardrailBlocked) {
 		sink.Emit("turn.policy_blocked", map[string]any{"policy": "prompt-injection"})
-		return nil, runErr
+		return spentTurnResult(res.Usage, modelSlug, false), runErr
 	}
 	reason, status, _ := agentcore.ClassifyStreamErrorReason(runErr)
 	failure := turnFailureFor(reason, modelSlug, status, runErr)
@@ -2335,7 +2368,7 @@ func (m *Manager) failedTurnResult(ctx context.Context, runErr error, res agentc
 	// same guard to keep the whole line provably clean.
 	logging.From(ctx).Error("RunTurn stream failed", "reason", safe.LogSafe(string(reason)), "model", safe.LogSafe(modelSlug), "status", status, "err", safe.LogSafe(runErr.Error()))
 	emitModelSelectionRequired(sink, reason, modelSlug, status, runErr)
-	return nil, fmt.Errorf("%w: %w", ErrModelSelectionRequired, runErr)
+	return spentTurnResult(usage, modelSlug, false), fmt.Errorf("%w: %w", ErrModelSelectionRequired, runErr)
 }
 
 // completedTurnResult finalizes a turn that ran to completion: it maps the
@@ -2367,10 +2400,11 @@ func (m *Manager) completedTurnResult(res agentcore.Result, userEntry HistoryEnt
 	// advertised. The user entry (newHistory[0]) was committed up-front and is
 	// excluded. On failure the turn errors visibly — the SSE ledger and the
 	// journal keep the evidence, and startup recovery does not re-project a
-	// turn that ended alive (the driver records a terminal error state).
+	// turn that ended alive (the driver records a terminal error state). The
+	// turn's usage still returns with the error: it was billed.
 	if commitTerminal != nil {
 		if err := commitTerminal(newHistory[1:], false); err != nil {
-			return nil, fmt.Errorf("%w: %w", ErrHistoryCommitFailed, err)
+			return spentTurnResult(usage, modelSlug, false), fmt.Errorf("%w: %w", ErrHistoryCommitFailed, err)
 		}
 	}
 

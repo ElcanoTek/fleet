@@ -210,6 +210,8 @@ how often, against the previous period) and **Server & Live Agents** (agents
 running now and the host's resources).
 
 **Spend & Budgets** reports usage from chats and background tasks together.
+A chat turn or task run that is stopped, reaches a limit or ends in an error
+partway still counts what it spent up to that point.
 Pick a **Range** (last 7, 30 or 90 days), **Group by** (user, API key,
 project, model, day or week) and **Measure** (what the chart shows: cost,
 tokens or cache hit %). The tiles show total cost split between tasks and

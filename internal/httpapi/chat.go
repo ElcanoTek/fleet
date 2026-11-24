@@ -1241,6 +1241,33 @@ func turnContext(turnCtx, parent context.Context, convID, turnID, user string) c
 	return telemetry.ContextWithRemoteParent(turnCtx, parent)
 }
 
+// recordTurnSpend writes the turn's turn_metrics row — what per-principal
+// budgets, the admin dashboard and usage analytics read — and the per-model
+// cost/token counters (#176). runTurnAsync calls it once per turn: for a
+// completed turn, a cancelled one (flagged as such; a Stop before the first
+// completion records a zero-usage row), and a turn that ended in an error
+// after the provider billed it (a provider failure after paid steps, a
+// history save that failed). Its own context: turnCtx may already be
+// cancelled by a Stop, and the row must still land.
+func (s *Server) recordTurnSpend(turnCtx context.Context, convID, user string, res *TurnResult) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(turnCtx), 10*time.Second)
+	defer cancel()
+	if err := s.store.RecordTurn(ctx, store.TurnMetric{
+		ConversationID:      convID,
+		UserEmail:           user,
+		CompletedAt:         time.Now().Unix(),
+		CostUSD:             res.CostUSD,
+		PromptTokens:        res.PromptTokens,
+		CompletionTokens:    res.CompletionTokens,
+		CachedTokens:        res.CachedTokens,
+		CacheCreationTokens: res.CacheCreationTokens,
+		Cancelled:           res.Cancelled,
+	}); err != nil {
+		logging.From(turnCtx).Error("RecordTurn failed", "err", err)
+	}
+	metrics.RecordTurnUsage(res.Model, res.CostUSD, res.PromptTokens, res.CompletionTokens, res.CachedTokens)
+}
+
 func (s *Server) runTurnAsync(
 	turnCtx context.Context,
 	turnCancel context.CancelFunc,
@@ -1390,8 +1417,28 @@ func (s *Server) runTurnAsync(
 		MCPUser:        mcpUser,
 	}, buf)
 	s.cancelAutoSubmitsIfTurnStopped(turnCtx, conv.ID)
+	// The turn's spend is recorded exactly once, whichever way it ended: a
+	// completed or cancelled turn always, and a turn that ended in an error
+	// whenever its run was billed (RunTurn returns that usage with the error).
+	// A finished turn records it inline below, as soon as its persistence
+	// starts, so the row does not wait behind the post-turn work (title,
+	// memory indexing, escalation) that follows. A failed turn records it
+	// from this defer, after its terminal frame below is emitted (a slow
+	// store never holds that back) and before finishTurn seals the buffer;
+	// the defer also covers a panic anywhere after this point.
+	spendRecorded := false
+	recordSpend := func() {
+		if spendRecorded {
+			return
+		}
+		spendRecorded = true
+		s.recordTurnSpend(turnCtx, conv.ID, user, res)
+	}
+	if err == nil || res.Billed() {
+		defer recordSpend()
+	}
 	if err != nil {
-		// No result, so no card; the deferred drain above counts the
+		// No card for a failed turn; the deferred drain above counts the
 		// classifier request already sent.
 		// The resilience layer inside RunTurn emits `turn.model_required`
 		// itself on any non-cancellation failure (see agent/resilience.go).
@@ -1452,26 +1499,11 @@ func (s *Server) runTurnAsync(
 		}
 	}
 
-	// Record metrics so the admin dashboard can aggregate cost per user.
-	// A failed/errored turn doesn't reach this code path (we returned early
-	// above); cancelled turns DO, and are flagged for separate accounting.
-	if err := s.store.RecordTurn(persistCtx, store.TurnMetric{
-		ConversationID:      conv.ID,
-		UserEmail:           user,
-		CompletedAt:         time.Now().Unix(),
-		CostUSD:             res.CostUSD,
-		PromptTokens:        res.PromptTokens,
-		CompletionTokens:    res.CompletionTokens,
-		CachedTokens:        res.CachedTokens,
-		CacheCreationTokens: res.CacheCreationTokens,
-		Cancelled:           res.Cancelled,
-	}); err != nil {
-		logging.From(turnCtx).Error("RecordTurn failed", "err", err)
-	}
-	// Operational metrics (#176): cost + tokens by model, and a turn-timeout
-	// counter when the turn ended because its wall-clock deadline fired (as
-	// opposed to a user Stop, which cancels turnCtx without a deadline error).
-	metrics.RecordTurnUsage(res.Model, res.CostUSD, res.PromptTokens, res.CompletionTokens, res.CachedTokens)
+	// The finished turn's spend, now (see recordSpend above), plus a
+	// turn-timeout counter (#176) when the turn ended because its wall-clock
+	// deadline fired (as opposed to a user Stop, which cancels turnCtx without
+	// a deadline error).
+	recordSpend()
 	if errors.Is(turnCtx.Err(), context.DeadlineExceeded) {
 		metrics.RecordTurnTimeout("interactive")
 	}

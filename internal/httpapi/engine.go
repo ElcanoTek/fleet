@@ -36,6 +36,8 @@ import (
 type turnEngine interface {
 	// RunTurn executes one interactive turn: it streams events through the
 	// sink and returns the tail of history to persist plus per-turn usage.
+	// With an error, a non-nil result carries only the usage the turn was
+	// billed for (agent.TurnResult), which the caller still records.
 	RunTurn(ctx context.Context, in TurnInput, sink agent.EventSink) (*TurnResult, error)
 	// Summarize runs the summarize-and-continue compaction call.
 	Summarize(ctx context.Context, in SummarizeInput) (*SummarizeResult, error)
