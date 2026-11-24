@@ -236,14 +236,42 @@ describe("Composer — tools popover seat menu", () => {
     ).toEqual(["ElcanoDefault", "OMG_USD", "OMG_GBP"]);
   });
 
-  // A bundled connector can run as several accounts in one chat
-  // (docs/MULTI-ACCOUNT-CHATS.md): its menu is a checklist that stays open.
-  it("a bundled connector's menu ticks accounts and stays open", async () => {
+  // The menu opens as a plain switch list: one click on an account switches
+  // to it and closes the menu, for a bundled connector as for a hosted one.
+  it("a bundled connector's menu switches account with one click", async () => {
     const setMcpServerAccount = vi.fn();
     const toggleMcpServer = vi.fn();
     render(<Host overrides={{ mcpServers: SEATED, toggleMcpServer, setMcpServerAccount }} />);
     fireEvent.click(screen.getByRole("button", { name: "Tools" }));
     fireEvent.click(await screen.findByTestId("mcp-seat-ix"));
+    const list = screen.getByRole("listbox", { name: "Account for Index Exchange" });
+    expect(list).not.toHaveAttribute("aria-multiselectable");
+    fireEvent.click(screen.getByRole("option", { name: /OMG_GBP/ }));
+    expect(setMcpServerAccount).toHaveBeenCalledWith(null, "ix", ["OMG_GBP"]);
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+    expect(toggleMcpServer).not.toHaveBeenCalled();
+    // Clicking the account already in use changes nothing.
+    fireEvent.click(screen.getByTestId("mcp-seat-ix"));
+    fireEvent.click(screen.getByRole("option", { name: /Elcano/ }));
+    expect(setMcpServerAccount).toHaveBeenCalledTimes(1);
+  });
+
+  // "Use several accounts" turns the list into a checklist that stays open
+  // (docs/MULTI-ACCOUNT-CHATS.md). A hosted connection has no such switch.
+  it("Use several accounts turns the list into a checklist", async () => {
+    const setMcpServerAccount = vi.fn();
+    const toggleMcpServer = vi.fn();
+    render(<Host overrides={{ mcpServers: SEATED, toggleMcpServer, setMcpServerAccount }} />);
+    fireEvent.click(screen.getByRole("button", { name: "Tools" }));
+    fireEvent.click(await screen.findByTestId("mcp-seat-gamma"));
+    expect(screen.queryByRole("switch", { name: "Use several accounts" })).not.toBeInTheDocument();
+    fireEvent.keyDown(screen.getByRole("listbox"), { key: "Escape" });
+
+    fireEvent.click(screen.getByTestId("mcp-seat-ix"));
+    const several = screen.getByRole("switch", { name: "Use several accounts" });
+    expect(several).not.toBeChecked();
+    fireEvent.click(several);
+    expect(several).toBeChecked();
     const list = screen.getByRole("listbox", { name: "Accounts for Index Exchange" });
     expect(list).toHaveAttribute("aria-multiselectable", "true");
 
@@ -258,6 +286,88 @@ describe("Composer — tools popover seat menu", () => {
     expect(setMcpServerAccount).toHaveBeenCalledWith(null, "ix", ["", "OMG_GBP"]);
     expect(screen.getByRole("listbox")).toBeInTheDocument();
     expect(toggleMcpServer).not.toHaveBeenCalled();
+
+    // Closing without ticking a second account forgets the mode: the next
+    // opening is a switch list again.
+    fireEvent.keyDown(screen.getByRole("listbox"), { key: "Escape" });
+    fireEvent.click(screen.getByTestId("mcp-seat-ix"));
+    expect(screen.getByRole("switch", { name: "Use several accounts" })).not.toBeChecked();
+    expect(screen.getByRole("listbox", { name: "Account for Index Exchange" })).toBeInTheDocument();
+  });
+
+  // The mode belongs to one opening of the menu, however that opening ends,
+  // and the list does not change kind while it is open.
+  it("the several-accounts mode lasts for one opening of the menu", async () => {
+    const Stateful = () => {
+      const [rows, setRows] = useState(SEATED);
+      return (
+        <Host
+          overrides={{
+            mcpServers: rows,
+            setMcpServerAccount: (_conv: string | null, name: string, accounts: string[]) =>
+              setRows((prev) =>
+                prev.map((row) =>
+                  row.name === name
+                    ? {
+                        ...row,
+                        account: accounts[0] ?? "",
+                        selected_accounts: accounts.length > 1 ? accounts : undefined,
+                      }
+                    : row,
+                ),
+              ),
+          }}
+        />
+      );
+    };
+    render(<Stateful />);
+    fireEvent.click(screen.getByRole("button", { name: "Tools" }));
+    const several = () => screen.getByRole("switch", { name: "Use several accounts" });
+
+    // Dismissed by a click outside: the next opening is the plain list.
+    fireEvent.click(await screen.findByTestId("mcp-seat-ix"));
+    fireEvent.click(several());
+    expect(several()).toBeChecked();
+    fireEvent.mouseDown(screen.getByRole("textbox", { name: "Search tools" }));
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("mcp-seat-ix"));
+    expect(several()).not.toBeChecked();
+
+    // Two accounts, then back to one: still the checklist while the menu is
+    // open (and the switch can be turned off again)…
+    fireEvent.click(several());
+    fireEvent.click(screen.getByRole("option", { name: /OMG_GBP/ }));
+    expect(screen.getByTestId("mcp-seat-ix")).toHaveTextContent("Elcano +1");
+    expect(several()).toHaveAttribute("aria-disabled", "true");
+    fireEvent.click(screen.getByRole("option", { name: /Elcano/ }));
+    expect(screen.getByTestId("mcp-seat-ix")).toHaveTextContent("OMG_GBP");
+    expect(screen.getByRole("listbox", { name: "Accounts for Index Exchange" })).toBeInTheDocument();
+    expect(several()).toBeChecked();
+    expect(several()).not.toHaveAttribute("aria-disabled");
+    // …and the plain list on the next opening.
+    fireEvent.keyDown(screen.getByRole("listbox"), { key: "Escape" });
+    fireEvent.click(screen.getByTestId("mcp-seat-ix"));
+    expect(several()).not.toBeChecked();
+    expect(screen.getByRole("listbox", { name: "Account for Index Exchange" })).toBeInTheDocument();
+  });
+
+  it("the keyboard reaches the several-accounts switch from the list and back", async () => {
+    render(<Host overrides={{ mcpServers: SEATED }} />);
+    fireEvent.click(screen.getByRole("button", { name: "Tools" }));
+    fireEvent.click(await screen.findByTestId("mcp-seat-ix"));
+    const list = screen.getByRole("listbox");
+    fireEvent.keyDown(list, { key: "End" });
+    fireEvent.keyDown(list, { key: "ArrowDown" });
+    const several = screen.getByRole("switch", { name: "Use several accounts" });
+    expect(several).toHaveFocus();
+    fireEvent.keyDown(several, { key: "ArrowUp" });
+    expect(list).toHaveFocus();
+    // Escape on the switch closes the menu and nothing else.
+    fireEvent.keyDown(list, { key: "End" });
+    fireEvent.keyDown(list, { key: "ArrowDown" });
+    fireEvent.keyDown(screen.getByRole("switch", { name: "Use several accounts" }), { key: "Escape" });
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+    expect(screen.getByTestId("chat-tools-popover")).toBeInTheDocument();
   });
 
   it("the pill reads the first account and how many more, and unticking removes one", async () => {
@@ -271,6 +381,13 @@ describe("Composer — tools popover seat menu", () => {
     expect(trigger).toHaveTextContent("Elcano +2");
     expect(trigger).toHaveAccessibleName("Accounts for Index Exchange: Elcano, OMG_USD, OMG_GBP");
     fireEvent.click(trigger);
+    // A chat that already runs several accounts opens as the checklist, and
+    // the mode cannot be turned off while it does.
+    const several = screen.getByRole("switch", { name: "Use several accounts" });
+    expect(several).toBeChecked();
+    expect(several).toHaveAttribute("aria-disabled", "true");
+    fireEvent.click(several);
+    expect(several).toBeChecked();
     expect(
       screen.getAllByRole("option").filter((o) => o.getAttribute("aria-selected") === "true"),
     ).toHaveLength(3);
@@ -317,7 +434,7 @@ describe("Composer — tools popover seat menu", () => {
     expect(seventh).toHaveAttribute("aria-disabled", "true");
     fireEvent.click(seventh);
     expect(setMcpServerAccount).not.toHaveBeenCalled();
-    expect(screen.getByRole("listbox")).toHaveTextContent("Up to 6 accounts at once.");
+    expect(screen.getByText("Up to 6 accounts at once.")).toBeInTheDocument();
   });
 
   it("Escape in the seat menu closes only the menu", async () => {

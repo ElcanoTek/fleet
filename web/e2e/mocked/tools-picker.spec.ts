@@ -107,20 +107,29 @@ test("tools popover: badge, On section, headings, search and account menu", asyn
   await page.screenshot({ path: "test-results/tools-popover.png" });
 
   await page.getByTestId("mcp-seat-indexexchange").click();
-  // A bundled connector's account menu is a checklist: ticking a second
-  // account keeps the first, and the menu stays open
-  // (docs/MULTI-ACCOUNT-CHATS.md).
-  const seatList = page.getByRole("listbox", { name: "Accounts for Index Exchange" });
+  // The account menu opens as a switch list: one click on an account switches
+  // to it and closes the menu.
+  const seatList = page.getByRole("listbox", { name: "Account for Index Exchange" });
   await expect(seatList).toBeVisible();
   await expect(seatList).toHaveCSS("opacity", "1");
-  await page.getByRole("option", { name: /OMG_GBP/ }).click();
-  await expect(page.getByTestId("mcp-seat-indexexchange")).toHaveText(/Elcano \+1/);
-  await expect(seatList).toBeVisible();
   await page.screenshot({ path: "test-results/tools-seat-menu.png" });
+  await page.getByRole("option", { name: /OMG_GBP/ }).click();
+  await expect(page.getByTestId("mcp-seat-indexexchange")).toHaveText(/^OMG_GBP$/);
+  await expect(seatList).toHaveCount(0);
+
+  // "Use several accounts" turns it into a checklist that stays open
+  // (docs/MULTI-ACCOUNT-CHATS.md).
+  await page.getByTestId("mcp-seat-indexexchange").click();
+  await page.getByRole("switch", { name: "Use several accounts" }).click();
+  const checklist = page.getByRole("listbox", { name: "Accounts for Index Exchange" });
+  await page.getByRole("option", { name: /Elcano/ }).click();
+  await expect(page.getByTestId("mcp-seat-indexexchange")).toHaveText(/Elcano \+1/);
+  await expect(checklist).toBeVisible();
+  await page.screenshot({ path: "test-results/tools-seat-menu-several.png" });
   await page.getByRole("option", { name: /Elcano/ }).click();
   await expect(page.getByTestId("mcp-seat-indexexchange")).toHaveText(/^OMG_GBP$/);
   await page.keyboard.press("Escape");
-  await expect(seatList).toHaveCount(0);
+  await expect(checklist).toHaveCount(0);
   await expect(popover).toBeVisible();
 
   const search = page.getByRole("textbox", { name: "Search tools" });
@@ -350,7 +359,7 @@ test.describe("on a touch phone", () => {
     await seat.scrollIntoViewIfNeeded();
     await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
     await seat.tap();
-    const list = page.getByRole("listbox", { name: "Accounts for Index Exchange" });
+    const list = page.getByRole("listbox", { name: "Account for Index Exchange" });
     await expect(list).toBeVisible();
     const heights = await list.getByRole("option").evaluateAll((o) => o.map((n) => n.getBoundingClientRect().height));
     expect(heights.length).toBeGreaterThan(1);
