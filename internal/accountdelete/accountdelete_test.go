@@ -198,7 +198,7 @@ func TestDeleteReportsFailedRemovals(t *testing.T) {
 	}
 	// The server's own steps failing are reported the same way.
 	res, err = Delete(ctx, &fakeStore{}, "gone@x.com", Options{Keys: &fakeKeys{},
-		ServerSetAside: func(string) ([]AsideTree, error) { return nil, errors.New("read-only file system") },
+		ServerSetAside: func(string) ([]AsideTree, func(), error) { return nil, nil, errors.New("read-only file system") },
 		ServerCleanup:  func(string, func(string) (bool, error)) error { return errors.New("read-only file system") }})
 	if err != nil || len(res.Problems) != 1 || res.Problems[0].Kind != PrivateWorkspacesFailed {
 		t.Fatalf("server step failure: %+v, %v", res, err)

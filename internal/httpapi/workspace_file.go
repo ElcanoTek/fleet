@@ -324,25 +324,47 @@ func (s *Server) purgeParticipantPrivateStashes(userEmail string, live func(dige
 // setAsideParticipantStashes moves userEmail's participant trees aside in
 // every conversation's private workspace stash (accountdelete.SetAside), each
 // under the conversation's swap lock, for an account deletion that has not
-// committed yet: the account still holds the address. A participant turn of
-// the account still running is marked so it does not move its tree back as
-// it ends; moving a tree back (a deletion that did not commit) clears that
-// mark. It returns what it moved and the first failure.
-func (s *Server) setAsideParticipantStashes(userEmail string) ([]accountdelete.AsideTree, error) {
+// committed yet: the account still holds the address. Every participant turn
+// of the account still running is marked so it does not move its tree back
+// as it ends — whether or not a stash tree was there to move (a running
+// turn's files are in the conversation's workspace). It returns what it
+// moved, the undo that clears every mark it set (called when the deletion
+// does not commit), and the first failure.
+func (s *Server) setAsideParticipantStashes(userEmail string) ([]accountdelete.AsideTree, func(), error) {
 	userEmail = strings.ToLower(strings.TrimSpace(userEmail))
 	if userEmail == "" {
-		return nil, nil
+		return nil, nil, nil
+	}
+	var marked []string
+	s.inflightMu.Lock()
+	for convID, activeUser := range s.activeParticipantWorkspaces {
+		if strings.EqualFold(activeUser, userEmail) {
+			marked = append(marked, convID)
+		}
+	}
+	s.inflightMu.Unlock()
+	for _, convID := range marked {
+		unlock := s.workspaceSwapLocks.lock(convID)
+		s.markParticipantWorkspacePurged(convID, userEmail)
+		unlock()
+	}
+	undo := func() {
+		for _, convID := range marked {
+			unlock := s.workspaceSwapLocks.lock(convID)
+			s.takeParticipantWorkspacePurged(convID, userEmail)
+			unlock()
+		}
 	}
 	root, err := s.privateWorkspaceStashRoot()
 	if err != nil || root == "" {
-		return nil, err
+		return nil, undo, err
 	}
 	entries, err := os.ReadDir(root)
 	if os.IsNotExist(err) {
-		return nil, nil
+		return nil, undo, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, undo, err
 	}
 	digest := participantDigest(userEmail)
 	var aside []accountdelete.AsideTree
@@ -353,9 +375,6 @@ func (s *Server) setAsideParticipantStashes(userEmail string) ([]accountdelete.A
 			continue
 		}
 		unlock := s.workspaceSwapLocks.lock(convID)
-		if s.isActiveParticipantUser(convID, userEmail) {
-			s.markParticipantWorkspacePurged(convID, userEmail)
-		}
 		t, moved, err := accountdelete.SetAside(filepath.Join(root, convID, "participants", digest), digest)
 		unlock()
 		if err != nil {
@@ -363,11 +382,10 @@ func (s *Server) setAsideParticipantStashes(userEmail string) ([]accountdelete.A
 			continue
 		}
 		if moved {
-			t.OnRestore = func() { s.takeParticipantWorkspacePurged(convID, userEmail) }
 			aside = append(aside, t)
 		}
 	}
-	return aside, firstErr
+	return aside, undo, firstErr
 }
 
 // firstErrOf is a when it is set, else b.

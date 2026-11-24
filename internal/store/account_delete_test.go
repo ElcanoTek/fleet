@@ -1253,33 +1253,96 @@ func TestDeleteAccountRefusesAnotherAccountUnderTheEmail(t *testing.T) {
 
 // A running server holds the presence lock shared, and an account deletion
 // from the CLI cannot take it exclusive meanwhile; once the server lets go
-// it can, and a server starting while the CLI holds it waits for it.
+// it can. A server starting while the CLI holds it waits for it — without a
+// deadline, until it is released — and a server told to stop while it waits
+// gives up holding nothing.
 func TestServerPresenceExcludesCLIDeletion(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
 	ctx := context.Background()
-	release := s.HoldServerPresence(5 * time.Second)
+	release, err := s.HoldServerPresence(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := s.ExcludeServers(ctx); !errors.Is(err, ErrServerRunning) {
 		t.Fatalf("with a server running: err %v, want ErrServerRunning", err)
 	}
 	release()
+	var n int
+	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM core.server_presence`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("heartbeat rows after the server stopped = %d, %v; want none", n, err)
+	}
 	unlock, err := s.ExcludeServers(ctx)
 	if err != nil {
 		t.Fatalf("with no server: %v", err)
 	}
-	started := make(chan func(), 1)
-	go func() { started <- s.HoldServerPresence(10 * time.Second) }()
+	type held struct {
+		release func()
+		err     error
+	}
+	started := make(chan held, 1)
+	go func() {
+		r, err := s.HoldServerPresence(ctx)
+		started <- held{r, err}
+	}()
 	select {
-	case r := <-started:
-		r()
-		t.Fatal("a server took the presence lock while a CLI deletion held it")
-	case <-time.After(300 * time.Millisecond):
+	case h := <-started:
+		if h.release != nil {
+			h.release()
+		}
+		t.Fatalf("a server started (err %v) while a CLI deletion held the lock", h.err)
+	case <-time.After(1500 * time.Millisecond):
+	}
+	// Told to stop while it waits: it gives up.
+	stopCtx, stop := context.WithCancel(ctx)
+	gaveUp := make(chan error, 1)
+	go func() {
+		r, err := s.HoldServerPresence(stopCtx)
+		if r != nil {
+			r()
+		}
+		gaveUp <- err
+	}()
+	stop()
+	select {
+	case err := <-gaveUp:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("a server stopped while waiting: err %v, want context.Canceled", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("a server told to stop kept waiting")
 	}
 	unlock()
 	select {
-	case r := <-started:
-		r()
+	case h := <-started:
+		if h.err != nil {
+			t.Fatal(h.err)
+		}
+		h.release()
 	case <-time.After(10 * time.Second):
-		t.Fatal("the server did not take the presence lock after the CLI deletion ended")
+		t.Fatal("the server did not start after the CLI deletion ended")
 	}
+}
+
+// A server whose lock connection dropped still has its heartbeat: a CLI
+// deletion refuses while a row is fresh, even with the lock free, and goes
+// ahead once the row is stale (a crashed server's).
+func TestCLIDeletionRefusedOnAFreshHeartbeat(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	ctx := context.Background()
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO core.server_presence (instance_id, last_seen) VALUES ('reconnecting', now())`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ExcludeServers(ctx); !errors.Is(err, ErrServerRunning) {
+		t.Fatalf("with a fresh heartbeat: err %v, want ErrServerRunning", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE core.server_presence SET last_seen = now() - interval '1 minute'`); err != nil {
+		t.Fatal(err)
+	}
+	unlock, err := s.ExcludeServers(ctx)
+	if err != nil {
+		t.Fatalf("with a stale heartbeat: %v", err)
+	}
+	unlock()
 }

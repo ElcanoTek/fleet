@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/ElcanoTek/fleet/internal/accountdelete"
 	"github.com/ElcanoTek/fleet/internal/sched/apikeys"
@@ -334,7 +333,10 @@ func TestCLIAccountDeletionRefusedWhileTheServerRuns(t *testing.T) {
 			if _, err := chat.CreateUser(ctx, "running@acctdel.test", "delete-password-1"); err != nil {
 				t.Fatal(err)
 			}
-			release := chat.HoldServerPresence(10 * time.Second) // as `fleet serve` does
+			release, err := chat.HoldServerPresence(ctx) // as `fleet serve` does
+			if err != nil {
+				t.Fatal(err)
+			}
 			var code int
 			stderr := captureStderr(t, func() { code = verb("running@acctdel.test") })
 			if code == 0 {

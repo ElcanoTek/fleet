@@ -214,11 +214,17 @@ advises on each demoted split admin, unknown role and duplicate username in it.
 
   **The CLI deletes only while no server runs.** `fleet admin rm` and
   `fleet chat user del` refuse, with nothing deleted, while a fleet server
-  runs against the same database: every `fleet serve` holds a Postgres
-  advisory lock shared for as long as it runs, and the CLI takes it
-  exclusive (`store.ExcludeServers`) — so the check does not depend on a
-  unit name, a port or a host, and a server starting while a CLI deletion
-  runs waits for it. The message says to delete the account from Settings →
+  runs against the same database. Every `fleet serve` holds a Postgres
+  advisory lock shared for as long as it runs and writes a heartbeat row
+  (`core.server_presence`) every 15 seconds; the CLI takes the lock
+  exclusive (`store.ExcludeServers`) and also refuses while any heartbeat is
+  younger than 45 seconds — which covers a server whose lock connection
+  dropped and is being replaced, while a crashed server's row stops counting
+  after those 45 seconds. Both are per database, so the check does not depend
+  on a unit name, a port or a host. A server starting while a CLI deletion
+  runs waits for it, without a deadline, before it opens its listeners
+  (logging every 30 seconds that it is waiting; a stop signal meanwhile exits
+  cleanly). The message says to delete the account from Settings →
   Admin → Users while the server runs (that deletion stops the account's
   requests and turns, forgets its in-memory decisions and moves its files
   aside under the server's request gate, which a CLI cannot do for a server

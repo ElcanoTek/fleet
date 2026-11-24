@@ -21,6 +21,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/identity"
 	"github.com/ElcanoTek/fleet/internal/sched/apikeys"
 	"github.com/ElcanoTek/fleet/internal/store"
+	"github.com/ElcanoTek/fleet/internal/tools"
 )
 
 // Deleting an account from Settings → Admin → Users deletes the user API keys
@@ -779,6 +780,53 @@ func TestMaintenanceRemovesTreesADeletionLeftAside(t *testing.T) {
 		if _, err := os.Stat(a); !os.IsNotExist(err) {
 			t.Errorf("%s survived the maintenance pass (err %v)", a, err)
 		}
+	}
+}
+
+// refusingDeleteStore is the real store whose database deletion fails (a
+// timeout, say), after everything before it ran.
+type refusingDeleteStore struct{ *store.Store }
+
+func (refusingDeleteStore) DeleteAccount(context.Context, string, string) (string, error) {
+	return "", errors.New("statement timeout")
+}
+
+// A deletion that goes ahead with a participant turn of the account still
+// running (it did not stop in time), and then fails at the database, leaves
+// no mark on that turn: the account is still there, and when the turn ends
+// its files are stashed as usual — not discarded as a deleted account's.
+// Not parallel: it sets the workspace root.
+func TestFailedDeletionLeavesARunningParticipantTurnUnmarked(t *testing.T) {
+	t.Setenv("FLEET_WORKSPACE_ROOT", t.TempDir())
+	s := memberFixture(t, "boss@x.com", "u@x.com")
+	setRole(t, s, "boss@x.com", "admin", "")
+	s.cfg.EmailAttachmentDir = t.TempDir()
+	conv := &store.Conversation{ID: "conv-running", UserEmail: "owner@x.com"}
+	s.setParticipantWorkspaceActive(conv.ID, "u@x.com", nil)
+	st := s.concreteStore(t)
+	s.store = refusingDeleteStore{st}
+	if w := do(t, s.Routes(), http.MethodDelete, "/admin/users/u@x.com", nil, "boss@x.com"); w.Code != http.StatusInternalServerError {
+		t.Fatalf("delete: status %d (body %s), want the database's 500", w.Code, w.Body.String())
+	}
+	// The running turn's files, in the conversation's workspace.
+	ws, err := tools.EnsureConversationDir(context.Background(), conv.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ws.MkdirAll(uploadsDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := ws.WriteFile(filepath.Join(uploadsDir, "notes.txt"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_ = ws.Close()
+	s.restoreTurnPrivateWorkspace(conv, "u@x.com")
+	stash, err := s.privateWorkspaceStashDir(conv.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(stash, "participants", participantDigest("u@x.com"), uploadsDir, "notes.txt")); err != nil {
+		t.Fatalf("the participant's files were not stashed when its turn ended: %v", err)
 	}
 }
 

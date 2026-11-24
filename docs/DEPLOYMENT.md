@@ -420,7 +420,8 @@ each piece yourself):
    >   epoch is checked when a request connects, not per SSE event.
    > - **One account, permanently** — delete it, from Settings → Admin →
    >   Users while the server runs (`fleet admin rm` / `fleet chat user del`
-   >   refuse then; they run only with the server stopped). The user-list
+   >   refuse then; they run only with the server stopped, and a server
+   >   started meanwhile waits for them before it serves). The user-list
    >   gate then 403s every request; the deletion also deletes the account's
    >   user API keys
    >   and its central sign-in session generations. An account later created

@@ -85,9 +85,12 @@ type Options struct {
 	AttachmentDir string
 	// ServerSetAside is the running server's own step before the database
 	// deletion: it moves the account's private workspace trees aside
-	// (SetAside) under the locks a turn takes, and returns them. nil (a CLI)
+	// (SetAside) under the locks a turn takes, and returns them with undo,
+	// which takes back whatever else it marked for the deletion (a
+	// participant turn of the account still running, told not to put its
+	// tree back) and is called if the deletion does not commit. nil (a CLI)
 	// moves them aside under AttachmentDir.
-	ServerSetAside func(email string) ([]AsideTree, error)
+	ServerSetAside func(email string) (aside []AsideTree, undo func(), err error)
 	// ServerCleanup is the running server's own step, run after the database
 	// deletion: it forgets the account's in-memory state and removes its
 	// private workspace trees under the locks a turn in flight takes, each
@@ -213,10 +216,14 @@ func Delete(ctx context.Context, st Store, email string, opt Options) (Result, e
 	// The files are moved aside while the account still exists — nobody can
 	// create an account under the address until the commit — so a later
 	// account under it never finds them under its digest.
-	aside, dirProblem := setAsideAccountFiles(email, opt)
+	aside, undo, dirProblem := setAsideAccountFiles(email, opt)
 	accountID, err := st.DeleteAccount(ctx, email, id)
 	if err != nil {
-		if rerr := restoreAside(aside); rerr != nil {
+		rerr := restoreAside(aside)
+		if undo != nil {
+			undo()
+		}
+		if rerr != nil {
 			return res, fmt.Errorf("%w; moving the account's files back failed: %w", err, rerr)
 		}
 		return res, err
@@ -292,8 +299,9 @@ func firstError(a, b error) error {
 // of an attachment directory it could not read. A tree it could not move is
 // left where it is: the check of the address's paths after the commit
 // removes it, or reports it.
-func setAsideAccountFiles(email string, opt Options) ([]AsideTree, []Problem) {
+func setAsideAccountFiles(email string, opt Options) ([]AsideTree, func(), []Problem) {
 	var aside []AsideTree
+	var undo func()
 	var dirProblem []Problem
 	digest := Digest(email)
 	dirOK := false
@@ -314,13 +322,13 @@ func setAsideAccountFiles(email string, opt Options) ([]AsideTree, []Problem) {
 	}
 	switch {
 	case opt.ServerSetAside != nil:
-		ts, _ := opt.ServerSetAside(email)
-		aside = append(aside, ts...)
+		ts, u, _ := opt.ServerSetAside(email)
+		aside, undo = append(aside, ts...), u
 	case dirOK:
 		ts, _ := setAsidePrivateWorkspaces(PrivateWorkspaceRoot(opt.AttachmentDir), email)
 		aside = append(aside, ts...)
 	}
-	return aside, dirProblem
+	return aside, undo, dirProblem
 }
 
 // AsideTree is an account tree moved aside before its account's deletion
@@ -330,9 +338,6 @@ type AsideTree struct {
 	From, To string
 	// Uploads says it is the upload tree (else a private workspace tree).
 	Uploads bool
-	// OnRestore, when set, runs after the tree is moved back (the server
-	// undoes what it marked when it moved it).
-	OnRestore func()
 }
 
 // SetAside moves path, a tree of the account whose Digest is digest, to an
@@ -366,14 +371,8 @@ func SetAside(path, digest string) (AsideTree, bool, error) {
 func restoreAside(aside []AsideTree) error {
 	var firstErr error
 	for _, t := range aside {
-		if err := os.Rename(t.To, t.From); err != nil {
-			if firstErr == nil {
-				firstErr = err
-			}
-			continue
-		}
-		if t.OnRestore != nil {
-			t.OnRestore()
+		if err := os.Rename(t.To, t.From); err != nil && firstErr == nil {
+			firstErr = err
 		}
 	}
 	return firstErr
