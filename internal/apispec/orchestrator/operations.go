@@ -632,6 +632,7 @@ var Operations = map[string]apispec.Operation{
 					},
 				}),
 				apispec.Prop("carry_context", apispec.Typed("boolean")),
+				apispec.Prop("private_emails", apispec.Typed("boolean")),
 				apispec.Prop("instruction_self_improve", apispec.Typed("boolean")),
 				apispec.Prop("new_lineage", &apispec.Schema{
 					Type: "boolean",

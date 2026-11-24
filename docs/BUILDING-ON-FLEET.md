@@ -78,6 +78,7 @@ Useful create-time fields (see `TaskCreate` in openapi.yaml for all of them):
 | `allow_network` | unseal the sandbox's egress for this task (default sealed) |
 | `files` | uploads (`POST /upload`) the run gets as inputs; a non-admin key names only uploads it staged itself or that are on a task it created |
 | `carry_context` | recurring runs start with the prior run's final answer |
+| `private_emails` | every email the task's runs send stays out of the team Outbox (`_meta["fleet/private_emails"]` on each MCP call) |
 | `expected_duration_minutes` | SLA warn/fail tracking |
 | `allow_task_creation` | let the run enqueue follow-up tasks (agents scheduling agents) |
 | `max_retries` / `retry_policy` | class-selective whole-task retries with backoff |

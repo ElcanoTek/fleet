@@ -33,6 +33,7 @@ type ScheduleTaskParams struct {
 	Model                string   `json:"model,omitempty" description:"Optional model slug override for the scheduled task. Omit it unless the user asked for a specific model: the task then runs on the workspace's task model (the advanced model by default), because a scheduled task is a long unattended run. It does NOT inherit this conversation's model."`
 	MaxIterations        int      `json:"max_iterations,omitempty" description:"Optional cap on agent steps per run. Omit for the orchestrator default."`
 	AllowNetwork         bool     `json:"allow_network,omitempty" description:"Whether the scheduled task's sandbox keeps outbound network egress. Default false (sealed). Set true only when the task genuinely needs to reach the network."`
+	PrivateEmails        bool     `json:"private_emails,omitempty" description:"Keep every email the task sends out of the team Outbox, which the whole organization can read. Default false. Set true ONLY when the user asked for the task's emails to be private or kept out of the Outbox; never on your own initiative."`
 	ThinkingBudgetTokens *int     `json:"thinking_budget_tokens,omitempty" description:"Optional per-task extended-thinking budget in tokens (Claude models). Omit to inherit the deployment default; 0 disables thinking for this task; a positive value sets its budget."`
 	Tags                 []string `json:"tags,omitempty" description:"Optional tags for organizing/filtering the task in the scheduler (lowercase alphanumeric, '-', and '.', e.g. 'pages', 'daily-refresh')."`
 }

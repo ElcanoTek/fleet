@@ -260,6 +260,8 @@ type toolBuildConfig struct {
 	readWorkspaceFile   tools.WorkspaceFileReadFunc
 	// prepareEmail is Deps.PrepareEmailAttachments, carried onto every mcpTool.
 	prepareEmail func(args map[string]any) (func(), error)
+	// requestMeta is Deps.MCPRequestMeta, carried onto every mcpTool.
+	requestMeta map[string]any
 	// loaderTools are extra always-registered tools (scheduled mcp_list/load).
 	loaderTools []fantasy.AgentTool
 	// personaName/personaPolicy/observer carry Gate-4 (#294) into the tool build
@@ -455,6 +457,7 @@ func buildFantasyTools(
 			journal:           cfg.journal,
 			readWorkspaceFile: cfg.readWorkspaceFile,
 			prepareEmail:      cfg.prepareEmail,
+			requestMeta:       cfg.requestMeta,
 			hiddenSuffixes:    cfg.hiddenSuffixes,
 		}
 		// Gate 4 (persona tool allowlist, #294): applied HERE — to the logical
@@ -720,7 +723,10 @@ type mcpTool struct {
 	readWorkspaceFile tools.WorkspaceFileReadFunc
 	// prepareEmail is Deps.PrepareEmailAttachments (nil = none); call applies
 	// it to email-tool arguments before the dispatch.
-	prepareEmail    func(args map[string]any) (func(), error)
+	prepareEmail func(args map[string]any) (func(), error)
+	// requestMeta is Deps.MCPRequestMeta (nil = none): `_meta` entries every
+	// call of this tool carries.
+	requestMeta     map[string]any
 	serverName      string
 	tool            mcp.Tool
 	broker          MCPBroker
@@ -842,6 +848,9 @@ func (m *mcpTool) call(ctx context.Context, toolName string, params fantasy.Tool
 	timeout := toolCallTimeoutFor(m.serverName, params.Input)
 	callCtx, cancel := context.WithTimeout(mcp.WithCallTimeout(ctx, timeout), timeout+toolCallTimeout)
 	defer cancel()
+	if len(m.requestMeta) > 0 {
+		callCtx = mcp.WithRequestMeta(callCtx, m.requestMeta)
+	}
 	// Email attachment paths are checked and replaced with private copies
 	// before the dispatch, whether or not the call went through a card.
 	releaseAttachments, err := m.prepareEmailArguments(toolName, args)

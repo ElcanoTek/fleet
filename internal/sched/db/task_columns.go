@@ -120,6 +120,7 @@ type taskScanBuf struct {
 	pendingQuestion        sql.NullString
 	pendingAnswer          sql.NullString
 	carryContext           bool
+	privateEmails          bool
 	allowEventTriggers     bool
 	errorAnalysis          sql.NullString
 	artifacts              sql.NullString
@@ -901,6 +902,13 @@ var taskColumnRegistry = []taskColumn{
 		value:  func(t *models.Task) any { return t.CarryContext },
 		dest:   func(b *taskScanBuf) any { return &b.carryContext },
 		assign: func(b *taskScanBuf, t *models.Task) { t.CarryContext = b.carryContext },
+	},
+	{
+		name: "private_emails",
+		read: true, insert: true, upsert: true, txUpdate: true, export: true,
+		value:  func(t *models.Task) any { return t.PrivateEmails },
+		dest:   func(b *taskScanBuf) any { return &b.privateEmails },
+		assign: func(b *taskScanBuf, t *models.Task) { t.PrivateEmails = b.privateEmails },
 	},
 	{
 		name: "allow_event_triggers",

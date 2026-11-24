@@ -381,6 +381,8 @@ export type Approval = {
     attachments?: unknown;
     /** Inline cid attachments (`{path, cid}`); listed on the card tagged "inline". */
     inline_attachments?: unknown;
+    /** true when the model asked to keep the email out of the team Outbox. */
+    private?: boolean;
 
     // bash
     command?: string;
@@ -415,6 +417,8 @@ export type Approval = {
     model?: string;
     /** Whether the task's sandbox keeps outbound network egress. */
     allow_network?: boolean;
+    /** schedule_task: the task keeps its sent email out of the team Outbox. */
+    private_emails?: boolean;
     /** Task tags. */
     tags?: string[];
     /**
@@ -530,6 +534,14 @@ export type Approval = {
   /** What the person approved, on a card they approved narrowed. */
   narrowed?: ApprovalNarrowed;
   /**
+   * True on an outbound email card: it offers a Private box that keeps the
+   * email out of the team Outbox. Ticked to start when the model passed
+   * `private` (`summary.private`).
+   */
+  privateOption?: boolean;
+  /** The Private box as the person approved it, on a settled email card. */
+  privateChoice?: boolean;
+  /**
    * True for a tool the bundle lists in agent_policy.critical_tool_stop: once
    * approved and running, the card offers Stop (docs/APPROVAL-STOP.md).
    */
@@ -571,6 +583,11 @@ export function parseApprovalNarrowable(value: unknown): ApprovalNarrowable | un
   const values = stringList(v.values);
   if (typeof v.arg !== "string" || v.arg === "" || !values || values.length < 2) return undefined;
   return { arg: v.arg, values };
+}
+
+/** An email card's recorded Private choice: a boolean, or undefined. */
+export function parsePrivateChoice(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
 }
 
 /** Re-checks a settled card's `narrowed`: approved is a strict, non-empty subset of staged. */
@@ -640,6 +657,8 @@ export type ApprovalOutcomePayload = {
   result_card?: unknown;
   /** What a narrowed approval approved (docs/APPROVAL-NARROWING.md). */
   narrowed?: unknown;
+  /** An email card's Private box as the person approved it. */
+  private_choice?: unknown;
   /** Stop fields (docs/APPROVAL-STOP.md). */
   stoppable?: boolean;
   stopping?: boolean;
@@ -704,6 +723,7 @@ export function hydrateResolvedApproval(p: {
   progress_updates?: boolean;
   progress?: unknown;
   narrowed?: unknown;
+  private_choice?: unknown;
   stoppable?: boolean;
   stopping?: boolean;
   stopped?: boolean;
@@ -711,6 +731,7 @@ export function hydrateResolvedApproval(p: {
   const executing = p.executing === true;
   return {
     narrowed: parseApprovalNarrowed(p.narrowed),
+    privateChoice: parsePrivateChoice(p.private_choice),
     stoppable: p.stoppable === true || undefined,
     stopping: (executing && p.stopping === true) || undefined,
     stopped: (!executing && p.stopped === true) || undefined,

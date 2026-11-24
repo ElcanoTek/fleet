@@ -335,14 +335,16 @@ func (r *Runner) maybeAppendCreateTaskTool(ctx context.Context, base []fantasy.A
 	counter := &atomic.Int32{}
 	out := append(append([]fantasy.AgentTool{}, base...),
 		tools.NewCreateTaskTool(tools.CreateTaskConfig{
-			Enqueuer:         r.taskEnqueuer,
-			CreatingTaskID:   task.ID,
-			ParentModel:      task.Model,
-			ParentA2ADepth:   task.A2ADelegationDepth,
-			ParentBudgetUSD:  r.cfg.LiveMaxCostUSD(),
-			RecurringAllowed: task.AllowRecurringTaskCreation,
-			MaxCreations:     tools.DefaultMaxTaskCreations,
-			Counter:          counter,
+			Enqueuer:        r.taskEnqueuer,
+			CreatingTaskID:  task.ID,
+			ParentModel:     task.Model,
+			ParentA2ADepth:  task.A2ADelegationDepth,
+			ParentBudgetUSD: r.cfg.LiveMaxCostUSD(),
+			// A private task's follow-ups stay private.
+			ParentPrivateEmails: task.PrivateEmails,
+			RecurringAllowed:    task.AllowRecurringTaskCreation,
+			MaxCreations:        tools.DefaultMaxTaskCreations,
+			Counter:             counter,
 		}))
 	logging.From(ctx).Info("scheduled task: create_task tool enabled", "task_id", task.ID, "recurring", task.AllowRecurringTaskCreation)
 	return out
@@ -832,6 +834,15 @@ func configureRunWorkspace(ctx context.Context, sb *sandbox.Sandbox, wtPath, sha
 	return artifactCtx, release, effectiveRoot, nil
 }
 
+// privateEmailsRequestMeta is the MCP request `_meta` of a run of a task set
+// to send privately (models.Task.PrivateEmails), or nil.
+func privateEmailsRequestMeta(private bool) map[string]any {
+	if !private {
+		return nil
+	}
+	return map[string]any{mcp.PrivateEmailsMetaKey: true}
+}
+
 // resolveVerifierModel resolves the dedicated end-of-run verifier
 // (FLEET_VERIFIER_MODEL). Unset returns nil, and the verifier judges with the
 // run's own model; the fallback model only retries a verifier call that
@@ -1131,12 +1142,15 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 		// private copies of its attachments from the run's own working
 		// directory or the shared library, as a chat turn does.
 		PrepareEmailAttachments: scheduledEmailAttachmentSnapshotter(r.workspaceRoot(), toolRoot, r.cfg.EmailAttachmentDir),
-		MCPRosterNarrowing:      rosterNarrowing,
-		ThinkingBudget:          task.ThinkingBudgetTokens,
-		PersonaPolicy:           r.personaPolicy(taskPersona),
-		OutputSchema:            task.OutputSchema,
-		Overlay:                 remoteOverlay,
-		VerifierModel:           verifier,
+		// A task set to send privately: every MCP call of the run says so, and
+		// the bundle's email sender keeps the email out of the team Outbox.
+		MCPRequestMeta:     privateEmailsRequestMeta(task.PrivateEmails),
+		MCPRosterNarrowing: rosterNarrowing,
+		ThinkingBudget:     task.ThinkingBudgetTokens,
+		PersonaPolicy:      r.personaPolicy(taskPersona),
+		OutputSchema:       task.OutputSchema,
+		Overlay:            remoteOverlay,
+		VerifierModel:      verifier,
 		// Deterministic completion predicate (#1602): the producer-declared
 		// EXECUTION REQUIREMENTS completion.any_succeeded, resolved against this
 		// run's roster at dispatch. nil = none declared, verifier as before.

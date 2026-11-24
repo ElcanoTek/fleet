@@ -2888,6 +2888,7 @@ export interface paths {
                                 timeout_seconds?: number;
                             } | null;
                             carry_context?: boolean;
+                            private_emails?: boolean;
                             instruction_self_improve?: boolean;
                             /** @description true gives the copy a lineage of its own (its own per-job workspace directory and owner-digest entry) — use it when the copy is a different job. Omitted / false joins the source's lineage, which Resubmit with changes relies on. */
                             new_lineage?: boolean;
@@ -3580,6 +3581,11 @@ export interface components {
              * @default false
              */
             carry_context?: boolean;
+            /**
+             * @description Keep every email this task's runs send out of the team Outbox: each MCP call of a run carries the request _meta fleet/private_emails=true, which the bundle's email sender honors. Default false = sent email is copied to the Outbox.
+             * @default false
+             */
+            private_emails?: boolean;
             /** @description Queue priority in [1, 100] (lower = more urgent; 10=critical, 25=high, 50=normal, 75=low, 90=bulk). 0 is the unset sentinel normalized to 50. On create, omit or pass 0 for normal (50); on PUT /tasks/{task_id}, omit to preserve the task's stored priority or pass 0 to reset it to normal (50). */
             priority?: number;
             /**

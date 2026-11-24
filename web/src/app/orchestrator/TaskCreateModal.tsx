@@ -261,6 +261,7 @@ function taskToFormValues(task: Task | null) {
     maxCostUSD: typeof task?.max_cost_usd === "number" ? String(task.max_cost_usd) : "",
     allowNetwork: Boolean(task?.allow_network),
     carryContext: Boolean(task?.carry_context),
+    privateEmails: Boolean(task?.private_emails),
     mcpSelection: task?.mcp_selection ?? [],
     runIfCommand: task?.run_if?.command ?? "",
     runIfOnError: (task?.run_if?.on_error ?? "run") as "run" | "skip",
@@ -457,6 +458,8 @@ export function TaskCreateModal({
   const [maxCostUSD, setMaxCostUSD] = useState(init.maxCostUSD);
   const [allowNetwork, setAllowNetwork] = useState(init.allowNetwork);
   const [carryContext, setCarryContext] = useState(init.carryContext);
+  // Keep every email this task's runs send out of the team Outbox.
+  const [privateEmails, setPrivateEmails] = useState(init.privateEmails);
   // Pre-run shell gate (#269): empty = no gate (unconditional promotion).
   const [runIfCommand, setRunIfCommand] = useState(init.runIfCommand);
   const [runIfOnError, setRunIfOnError] = useState<"run" | "skip">(init.runIfOnError);
@@ -587,6 +590,7 @@ export function TaskCreateModal({
     sandboxPids.trim() !== "" ||
     allowNetwork ||
     carryContext ||
+    privateEmails ||
     runIfCommand.trim() !== "";
 
   // Edit mode compares the live form against the prefilled values (the
@@ -619,6 +623,7 @@ export function TaskCreateModal({
     maxCostUSD,
     allowNetwork,
     carryContext,
+    privateEmails,
     runIfCommand,
     runIfOnError,
     runIfTimeout,
@@ -651,6 +656,7 @@ export function TaskCreateModal({
     init.maxCostUSD,
     init.allowNetwork,
     init.carryContext,
+    init.privateEmails,
     init.runIfCommand,
     init.runIfOnError,
     init.runIfTimeout,
@@ -699,6 +705,7 @@ export function TaskCreateModal({
     setMaxCostUSD("");
     setAllowNetwork(false);
     setCarryContext(false);
+    setPrivateEmails(false);
     setRunIfCommand("");
     setRunIfOnError("run");
     setRunIfTimeout(String(RUN_IF_TIMEOUT_DEFAULT));
@@ -796,6 +803,7 @@ export function TaskCreateModal({
     fallbackTouched.current = !!t.fallback_model;
     setAllowNetwork(Boolean(t.allow_network));
     setCarryContext(Boolean(t.carry_context));
+    setPrivateEmails(Boolean(t.private_emails));
     setExpectedDuration(
       typeof t.expected_duration_minutes === "number" && t.expected_duration_minutes > 0
         ? String(t.expected_duration_minutes)
@@ -826,6 +834,7 @@ export function TaskCreateModal({
       t.persona ||
       t.allow_network ||
       t.carry_context ||
+      t.private_emails ||
       t.sandbox_limits
     ) {
       setAdvancedOpen(true);
@@ -950,6 +959,7 @@ export function TaskCreateModal({
     sandboxPids.trim() !== "",
     allowNetwork,
     carryContext,
+    privateEmails,
     runIfCommand.trim() !== "",
   ].filter(Boolean).length;
 
@@ -1052,6 +1062,7 @@ export function TaskCreateModal({
     if (maxCostUSD.trim()) taskData.max_cost_usd = Number.parseFloat(maxCostUSD);
     if (allowNetwork) taskData.allow_network = true;
     if (carryContext) taskData.carry_context = true;
+    if (privateEmails) taskData.private_emails = true;
     if (mcpSelection.length > 0) taskData.mcp_selection = mcpSelection;
     if (scheduleMode === "once" && scheduledFor) {
       taskData.scheduled_for = new Date(scheduledFor).toISOString();
@@ -1273,6 +1284,7 @@ export function TaskCreateModal({
             sandbox_limits: taskData.sandbox_limits ?? null,
             run_if: taskData.run_if ?? null,
             carry_context: Boolean(taskData.carry_context),
+            private_emails: Boolean(taskData.private_emails),
           });
           showToast(
             tr("Resubmitted as task {0}… — running now", [created.id.slice(0, 8)]),
@@ -2325,6 +2337,24 @@ export function TaskCreateModal({
                           </span>
                           <span className="switch-row-desc" id="taskCarryContext-desc">
                             {tr("Each run starts with a bounded summary of the previous run's output. Recurring tasks only.")}
+                          </span>
+                        </Label>
+                      </div>
+                      <div className="switch-row">
+                        <Checkbox
+                          id="taskPrivateEmails"
+                          className="mt-0.5"
+                          aria-labelledby="taskPrivateEmails-title"
+                          aria-describedby="taskPrivateEmails-desc"
+                          checked={privateEmails}
+                          onCheckedChange={(v) => setPrivateEmails(v === true)}
+                        />
+                        <Label htmlFor="taskPrivateEmails" className="switch-row-text cursor-pointer font-normal">
+                          <span className="switch-row-title" id="taskPrivateEmails-title">
+                            {tr("Private emails")}
+                          </span>
+                          <span className="switch-row-desc" id="taskPrivateEmails-desc">
+                            {tr("Emails this task sends are not saved to the team Outbox.")}
                           </span>
                         </Label>
                       </div>

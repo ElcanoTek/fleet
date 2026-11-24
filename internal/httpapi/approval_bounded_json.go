@@ -111,6 +111,44 @@ func (m *approvalGroupNarrowArgs) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+// approvalGroupPrivate is a group decision's private map (approval id to the
+// email card's Private box), bounded like narrow_args.
+type approvalGroupPrivate map[string]bool
+
+// UnmarshalJSON reads the map with its size bounded as it goes.
+func (m *approvalGroupPrivate) UnmarshalJSON(b []byte) error {
+	dec := json.NewDecoder(bytes.NewReader(b))
+	isNull, err := openBounded(dec, '{')
+	if err != nil || isNull {
+		*m = nil
+		return err
+	}
+	out := approvalGroupPrivate{}
+	for dec.More() {
+		if len(out) >= maxApprovalGroupDecisions {
+			return errTooManyGroupDecisions
+		}
+		key, err := objectKey(dec)
+		if err != nil {
+			return err
+		}
+		tok, err := dec.Token()
+		if err != nil {
+			return err
+		}
+		value, ok := tok.(bool)
+		if !ok {
+			return errors.New("private values must be true or false")
+		}
+		out[key] = value
+	}
+	if err := closeBounded(dec, '}'); err != nil {
+		return err
+	}
+	*m = out
+	return nil
+}
+
 var (
 	errTooManyGroupDecisions      = fmt.Errorf("too many approvals in one group decision (max %d)", maxApprovalGroupDecisions)
 	errTooManyGroupNarrowedValues = fmt.Errorf("too many narrowed values in one group decision (max %d); decide the cards one at a time", maxApprovalGroupNarrowedValues)

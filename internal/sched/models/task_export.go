@@ -41,6 +41,7 @@ type TaskExportRecord struct {
 	InstructionSelfImprove     bool                `json:"instruction_self_improve,omitempty"  yaml:"instruction_self_improve,omitempty"`
 	AllowNetwork               bool                `json:"allow_network,omitempty"              yaml:"allow_network,omitempty"`
 	CarryContext               bool                `json:"carry_context,omitempty"              yaml:"carry_context,omitempty"`
+	PrivateEmails              bool                `json:"private_emails,omitempty"             yaml:"private_emails,omitempty"`
 	AllowEventTriggers         bool                `json:"allow_event_triggers,omitempty"       yaml:"allow_event_triggers,omitempty"`
 	ThinkingBudgetTokens       *int                `json:"thinking_budget_tokens,omitempty"     yaml:"thinking_budget_tokens,omitempty"`
 	Persona                    string              `json:"persona,omitempty"                    yaml:"persona,omitempty"`
@@ -169,6 +170,7 @@ func ExportRecordToTaskCreate(rec TaskExportRecord) TaskCreate {
 		InstructionSelfImprove:     rec.InstructionSelfImprove,
 		AllowNetwork:               rec.AllowNetwork,
 		CarryContext:               rec.CarryContext,
+		PrivateEmails:              rec.PrivateEmails,
 		AllowEventTriggers:         rec.AllowEventTriggers,
 		ThinkingBudgetTokens:       rec.ThinkingBudgetTokens,
 		Persona:                    rec.Persona,
@@ -235,6 +237,7 @@ func TaskToExportRecord(t *Task) TaskExportRecord {
 		InstructionSelfImprove:     t.InstructionSelfImprove,
 		AllowNetwork:               t.AllowNetwork,
 		CarryContext:               t.CarryContext,
+		PrivateEmails:              t.PrivateEmails,
 		AllowEventTriggers:         t.AllowEventTriggers,
 		ThinkingBudgetTokens:       t.ThinkingBudgetTokens,
 		Persona:                    t.Persona,
@@ -320,6 +323,7 @@ func OverlayTaskDefinition(task *Task, tc TaskCreate) error {
 	task.InstructionSelfImprove = tc.InstructionSelfImprove
 	task.AllowNetwork = tc.AllowNetwork
 	task.CarryContext = tc.CarryContext
+	task.PrivateEmails = tc.PrivateEmails
 	task.AllowEventTriggers = tc.AllowEventTriggers
 	task.ThinkingBudgetTokens = tc.ThinkingBudgetTokens
 	task.Persona = tc.Persona

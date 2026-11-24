@@ -258,6 +258,12 @@ func (s *Server) runStagedTool(ctx context.Context, approval *store.Approval) (t
 		// entry: another card, or a surface that does not render it.
 		callCtx = mcp.WithRequestMeta(callCtx, meta)
 	}
+	if meta := approvalPrivateRequestMeta(approval); meta != nil {
+		// The person's Private box on an email card: the sender keeps the
+		// email out of the team Outbox (true) or saves it (false), whatever
+		// the model passed.
+		callCtx = mcp.WithRequestMeta(callCtx, meta)
+	}
 	// Workspace-file references (ADR-0066/0088) are read now, as the agent
 	// loop reads them just before its own dispatch (agentcore mcpTool.call):
 	// the card and the stored arguments keep the reference, and the bytes
@@ -823,6 +829,7 @@ func (s *Server) runStagedScheduleTask(ctx context.Context, approval *store.Appr
 		Cron:                 strings.TrimSpace(p.Cron),
 		MaxIterations:        p.MaxIterations,
 		AllowNetwork:         p.AllowNetwork,
+		PrivateEmails:        p.PrivateEmails,
 		ThinkingBudgetTokens: p.ThinkingBudgetTokens,
 		Tags:                 sanitizeTaskTagSlice(p.Tags),
 		// The connectors this conversation had enabled when the card was staged

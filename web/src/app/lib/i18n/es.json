@@ -6467,5 +6467,11 @@
   "expect_version must be a number": "expect_version debe ser un número",
   "Only the first {0} people are listed; the counts above cover everyone. Search or shorten the period to find the rest.": "Solo se muestran las primeras {0} personas; los recuentos de arriba incluyen a todas. Busca o acorta el periodo para encontrar el resto.",
   "These are the {0} that have waited longest; {1} more are waiting.": "Estas son las {0} que más tiempo llevan esperando; hay {1} más en espera.",
-  "Done, but the list could not be refreshed, so it may be out of date. Try again in a moment.": "Hecho, pero no se pudo actualizar la lista, así que puede no estar al día. Vuelve a intentarlo en un momento."
+  "Done, but the list could not be refreshed, so it may be out of date. Try again in a moment.": "Hecho, pero no se pudo actualizar la lista, así que puede no estar al día. Vuelve a intentarlo en un momento.",
+  "Private: don't save to the Outbox": "Privado: no guardar en la Bandeja de salida",
+  "Private: not saved to the Outbox": "Privado: no se guardó en la Bandeja de salida",
+  "Private emails": "Correos privados",
+  "Emails this task sends are not saved to the team Outbox.": "Los correos que envía esta tarea no se guardan en la Bandeja de salida del equipo.",
+  "Emails:": "Correos:",
+  "private, not saved to the Outbox": "privados, no se guardan en la Bandeja de salida"
 }

@@ -246,6 +246,7 @@ func TestTaskRegistryRoundTrip(t *testing.T) {
 		RetryPolicy:                &models.RetryPolicy{Backoff: "exponential", InitialDelaySeconds: 30},
 		AllowNetwork:               true,
 		CarryContext:               true,
+		PrivateEmails:              true,
 		AllowEventTriggers:         true,
 		Persona:                    "security-auditor",
 		Description:                "round-trip fixture",

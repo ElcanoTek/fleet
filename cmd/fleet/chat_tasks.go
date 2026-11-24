@@ -322,11 +322,12 @@ func taskSchedulerProvider(schedStorage *storage.Storage, budgetGate *budget.Enf
 		}
 
 		tc := schedmodels.TaskCreate{
-			Title:        req.Title,
-			Prompt:       req.Prompt,
-			Recurrence:   req.Cron,
-			ScheduledFor: req.RunAt,
-			AllowNetwork: req.AllowNetwork,
+			Title:         req.Title,
+			Prompt:        req.Prompt,
+			Recurrence:    req.Cron,
+			ScheduledFor:  req.RunAt,
+			AllowNetwork:  req.AllowNetwork,
+			PrivateEmails: req.PrivateEmails,
 		}
 		if m := strings.TrimSpace(req.Model); m != "" {
 			tc.Model = &m

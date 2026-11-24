@@ -3061,6 +3061,7 @@ export function ChatExperience({
           progress_updates?: boolean;
           narrowable?: unknown;
           stoppable?: boolean;
+          private_option?: boolean;
         }>;
         resolved_approvals?: Array<{
           approval_id: string;
@@ -3081,6 +3082,7 @@ export function ChatExperience({
           progress_updates?: boolean;
           progress?: unknown;
           narrowed?: unknown;
+          private_choice?: unknown;
           stoppable?: boolean;
           stopping?: boolean;
           stopped?: boolean;
@@ -3316,6 +3318,7 @@ export function ChatExperience({
           progressUpdates: p.progress_updates === true || undefined,
           narrowable: parseApprovalNarrowable(p.narrowable),
           stoppable: p.stoppable === true || undefined,
+          privateOption: p.private_option === true || undefined,
         })),
       ];
       const memoryCards: MemoryProposal[] = pendingMemoryProposals.map((p) => ({

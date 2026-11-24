@@ -22,6 +22,13 @@ import (
 // or the transport owns (`progressToken`), and a server reads one namespace.
 const RequestMetaPrefix = "fleet/"
 
+// PrivateEmailsMetaKey carries the person's choice to keep an email out of the
+// team Outbox: true for a call of a scheduled task set to send privately or an
+// email card approved with Private ticked, false for an email card approved
+// with it unticked. Absent leaves the tool's own `private` argument. The
+// bundle's email sender reads it (example-config mcp/outbox.py).
+const PrivateEmailsMetaKey = RequestMetaPrefix + "private_emails"
+
 type requestMetaKey struct{}
 
 // WithRequestMeta attaches `_meta` entries to the tools/call made under ctx.

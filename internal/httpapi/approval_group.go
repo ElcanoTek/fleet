@@ -67,6 +67,10 @@ type approvalGroupRequest struct {
 	// (the single-card POST's card_sha256, approvalCardRequestMeta). Every id
 	// must be in Approve; a card absent from it attests no card.
 	CardSHA256 approvalGroupCardDigests `json:"card_sha256,omitempty"`
+	// Private maps an approved email card's id to its Private box (the
+	// single-card POST's private, approval_private.go). Every id must be in
+	// Approve; a card absent from it runs with its own argument.
+	Private approvalGroupPrivate `json:"private,omitempty"`
 }
 
 // maxApprovalGroupNarrowedValues bounds the approved values one group
@@ -220,6 +224,13 @@ func (s *Server) handleApprovalGroup(w http.ResponseWriter, r *http.Request, con
 				return
 			}
 		}
+		// So must a Private choice (approval_private.go).
+		if _, ok := req.Private[d.id]; ok && a.Status == "pending" {
+			if err := checkRequestedPrivate(a, groupDecisionRequest(req, d.id, d.approve), nil); err != nil {
+				http.Error(w, fmt.Sprintf("approval %s: %v", quoteClientValue(d.id), err), http.StatusBadRequest)
+				return
+			}
+		}
 	}
 
 	// Detached: once the decision is accepted it is applied whole, whatever
@@ -282,13 +293,17 @@ func (s *Server) handleApprovalGroup(w http.ResponseWriter, r *http.Request, con
 // is loaded: every narrowed card is approved, none is narrowed to nothing,
 // and the values stay within maxApprovalGroupNarrowedValues.
 // groupDecisionRequest is the single-card decision a group decision makes for
-// one card: scope once, its narrowing, and the card digest it echoed.
+// one card: scope once, its narrowing, the card digest it echoed, and its
+// email Private box.
 func groupDecisionRequest(req approvalGroupRequest, id string, approve bool) approvalRequest {
 	out := approvalRequest{Approved: approve, Scope: "once"}
 	if approve {
 		out.ApprovedValues = groupApprovedValues(req.Narrow, id)
 		out.NarrowedArg = req.NarrowArgs[id]
 		out.CardSHA256 = req.CardSHA256[id]
+		if private, ok := req.Private[id]; ok {
+			out.Private = &private
+		}
 	}
 	return out
 }
@@ -319,6 +334,11 @@ func checkGroupNarrowing(req approvalGroupRequest) error {
 	for id := range req.CardSHA256 {
 		if !approving[id] {
 			return fmt.Errorf("card_sha256 names approval %s, which is not approved", quoteClientValue(id))
+		}
+	}
+	for id := range req.Private {
+		if !approving[id] {
+			return fmt.Errorf("private names approval %s, which is not approved", quoteClientValue(id))
 		}
 	}
 	if total > maxApprovalGroupNarrowedValues {

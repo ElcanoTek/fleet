@@ -823,6 +823,9 @@ type TaskTemplateTask struct {
 	Timezone      string  `yaml:"timezone,omitempty" json:"timezone,omitempty"`
 	Priority      int     `yaml:"priority,omitempty" json:"priority,omitempty"`
 	AllowNetwork  bool    `yaml:"allow_network,omitempty" json:"allow_network,omitempty"`
+	// PrivateEmails pre-ticks the form's Private emails switch: the task's
+	// sent email stays out of the team Outbox.
+	PrivateEmails bool `yaml:"private_emails,omitempty" json:"private_emails,omitempty"`
 	// AllowDelegation is the removed sub-agent opt-out (ADR-0112). It does
 	// nothing and is not served to the web; the key is kept only so the strict
 	// decoder still loads bundles whose task templates carry it.
