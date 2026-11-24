@@ -48,6 +48,7 @@ func seedWindowTurns(t *testing.T, s *Store, convID string, turns int) [][]int64
 
 func newWindowConversation(t *testing.T, s *Store) string {
 	t.Helper()
+	seedAccount(t, s, "owner@x.com")
 	conv, err := s.CreateConversation(context.Background(), "owner@x.com", "t", "generic", "", false)
 	if err != nil {
 		t.Fatalf("create conversation: %v", err)

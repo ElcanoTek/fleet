@@ -354,6 +354,7 @@ func TestHistoryWindowProjectsLikeTheWholeHistory(t *testing.T) {
 	s := serverFixture(t)
 	ctx := context.Background()
 	const owner, mate = "owner@x.com", "mate@x.com"
+	seedUsers(t, s, owner, mate)
 	conv, err := s.store.CreateConversation(ctx, owner, "multi", "generic", "", false)
 	if err != nil {
 		t.Fatalf("create conversation: %v", err)
