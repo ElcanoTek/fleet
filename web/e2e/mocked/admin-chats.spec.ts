@@ -117,7 +117,7 @@ for (const size of [
         }
         return r.fulfill({ json: { admin_note: note() } });
       });
-      await page.route("**/api/conversations/conv-report", (r: Route) =>
+      await page.route(/\/api\/conversations\/conv-report(?:\?|$)/, (r: Route) =>
         r.fulfill({
           json: {
             conversation: { id: "conv-report", title: "Weekly client report", persona: "default", model: "m", user_email: DANA, created_at: NOW - 86400, updated_at: NOW - 60 },

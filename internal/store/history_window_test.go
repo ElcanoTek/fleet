@@ -211,7 +211,7 @@ func TestLoadHistoryTailWithNoTurnStartReturnsEverything(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 	convID := newWindowConversation(t, s)
-	var batch []agent.HistoryEntry
+	batch := make([]agent.HistoryEntry, 0, 600)
 	for i := range 600 {
 		batch = append(batch, windowEntry(t, "assistant", "text", agent.TextContent{Text: fmt.Sprint(i)}))
 	}
@@ -258,7 +258,7 @@ func TestLoadHistoryTailIsScopedToItsConversation(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 	a, b := newWindowConversation(t, s), newWindowConversation(t, s)
-	var aIDs []int64
+	aIDs := make([]int64, 0, 20)
 	for range 4 {
 		aIDs = append(aIDs, flatten(seedWindowTurns(t, s, a, 1))...)
 		seedWindowTurns(t, s, b, 1)

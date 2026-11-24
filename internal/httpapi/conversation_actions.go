@@ -99,6 +99,23 @@ func (s *Server) withViewerPin(ctx context.Context, viewer string, conv *store.C
 	return &shown
 }
 
+func (s *Server) loadConversationHistoryForGet(ctx context.Context, id, user, owner string, omitHistory, windowed bool, window historyWindowRequest) ([]historyEntryResponse, *historyPage, error) {
+	if omitHistory {
+		return []historyEntryResponse{}, nil, nil
+	}
+	if windowed {
+		return loadHistoryPage(ctx, s.store, id, user, owner, window)
+	}
+	history, err := s.store.LoadHistory(ctx, id)
+	if err != nil {
+		return nil, nil, err
+	}
+	// historyForParticipant: the owner's own entries carry
+	// `injected_context`; another multiplayer participant's are omitted
+	// so their attachment paths are not exposed.
+	return historyForParticipant(history, user, owner), nil, nil
+}
+
 func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, user, id string, conv *store.Conversation) {
 	isAutonomousConv := s.isAcceptedAutonomousConversation(r.Context(), conv)
 	if approvalID := r.URL.Query().Get("approval_id"); approvalID != "" {
@@ -114,28 +131,10 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, u
 		http.Error(w, werr.Error(), http.StatusBadRequest)
 		return
 	}
-	// Always a non-nil slice, so the JSON carries `[]` for no history.
-	historyPayload := []historyEntryResponse{}
-	var page *historyPage
-	switch {
-	case omitHistory:
-	case windowed:
-		var err error
-		historyPayload, page, err = loadHistoryPage(r.Context(), s.store, id, user, conv.UserEmail, window)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-	default:
-		history, err := s.store.LoadHistory(r.Context(), id)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		// historyForParticipant: the owner's own entries carry
-		// `injected_context`; another multiplayer participant's are omitted
-		// so their attachment paths are not exposed.
-		historyPayload = historyForParticipant(history, user, conv.UserEmail)
+	historyPayload, page, err := s.loadConversationHistoryForGet(r.Context(), id, user, conv.UserEmail, omitHistory, windowed, window)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
 	pending, err := s.store.ListPendingApprovals(r.Context(), user, id)
 	if err != nil {

@@ -30,11 +30,13 @@ type conversationRead struct {
 	Page         *historyPage           `json:"history_page"`
 }
 
-func getConversation(t *testing.T, h http.Handler, id, query, user string) (conversationRead, map[string]json.RawMessage) {
+const windowTestOwner = "owner@x.com"
+
+func getConversation(t *testing.T, h http.Handler, id, query string) (conversationRead, map[string]json.RawMessage) {
 	t.Helper()
-	w := do(t, h, http.MethodGet, "/conversations/"+id+query, nil, user)
+	w := do(t, h, http.MethodGet, "/conversations/"+id+query, nil, windowTestOwner)
 	if w.Code != http.StatusOK {
-		t.Fatalf("GET %s as %s: %d %s", query, user, w.Code, w.Body.String())
+		t.Fatalf("GET %s as %s: %d %s", query, windowTestOwner, w.Code, w.Body.String())
 	}
 	var read conversationRead
 	var keys map[string]json.RawMessage
@@ -98,14 +100,13 @@ func TestConversationGetWithoutAWindowIsUnchanged(t *testing.T) {
 	t.Parallel()
 	s := serverFixture(t)
 	h := s.Routes()
-	const owner = "owner@x.com"
-	id := newRouteProbeConversationAs(t, h, owner)
-	var all []int64
+	id := newRouteProbeConversationAs(t, h)
+	all := make([]int64, 0, 40)
 	for n := range 8 {
 		all = append(all, appendEntries(t, s.store, id, windowTurn(t, n, ""))...)
 	}
 
-	read, keys := getConversation(t, h, id, "", owner)
+	read, keys := getConversation(t, h, id, "")
 	if !reflect.DeepEqual(responseIDs(read.History), all) {
 		t.Fatalf("history ids %v, want every stored entry %v", responseIDs(read.History), all)
 	}
@@ -130,7 +131,7 @@ func TestConversationGetWithoutAWindowIsUnchanged(t *testing.T) {
 		t.Error("the whole-history read lost a field of the owner's own entries")
 	}
 
-	_, keys = getConversation(t, h, id, "?omit_history=1", owner)
+	_, keys = getConversation(t, h, id, "?omit_history=1")
 	if string(keys["history"]) != "[]" {
 		t.Errorf("omit_history history = %s, want []", keys["history"])
 	}
@@ -138,15 +139,15 @@ func TestConversationGetWithoutAWindowIsUnchanged(t *testing.T) {
 		t.Error("omit_history carries history_page")
 	}
 	// An empty window parameter is no window.
-	read, keys = getConversation(t, h, id, "?limit=&before=&from=", owner)
+	read, keys = getConversation(t, h, id, "?limit=&before=&from=")
 	if _, ok := keys["history_page"]; ok || len(read.History) != len(all) {
 		t.Error("empty window parameters changed the read")
 	}
 }
 
-func newRouteProbeConversationAs(t *testing.T, h http.Handler, user string) string {
+func newRouteProbeConversationAs(t *testing.T, h http.Handler) string {
 	t.Helper()
-	w := do(t, h, http.MethodPost, "/conversations", map[string]string{"title": "window", "persona": "generic"}, user)
+	w := do(t, h, http.MethodPost, "/conversations", map[string]string{"title": "window", "persona": "generic"}, windowTestOwner)
 	if w.Code != http.StatusOK {
 		t.Fatalf("create conversation: %d body=%s", w.Code, w.Body.String())
 	}
@@ -164,14 +165,13 @@ func TestConversationGetWindowPagesBackToTheWholeHistory(t *testing.T) {
 	t.Parallel()
 	s := serverFixture(t)
 	h := s.Routes()
-	const owner = "owner@x.com"
-	id := newRouteProbeConversationAs(t, h, owner)
+	id := newRouteProbeConversationAs(t, h)
 	for n := range 9 {
 		appendEntries(t, s.store, id, windowTurn(t, n, ""))
 	}
-	full, _ := getConversation(t, h, id, "", owner)
+	full, _ := getConversation(t, h, id, "")
 
-	first, _ := getConversation(t, h, id, "?limit=7", owner)
+	first, _ := getConversation(t, h, id, "?limit=7")
 	if first.Page == nil || !first.Page.HasMore {
 		t.Fatalf("first window page = %+v, want has_more", first.Page)
 	}
@@ -192,7 +192,7 @@ func TestConversationGetWindowPagesBackToTheWholeHistory(t *testing.T) {
 		if !page.HasMore {
 			break
 		}
-		read, _ := getConversation(t, h, id, fmt.Sprintf("?limit=7&before=%d", page.NextBefore), owner)
+		read, _ := getConversation(t, h, id, fmt.Sprintf("?limit=7&before=%d", page.NextBefore))
 		if read.Page == nil || len(read.History) == 0 {
 			t.Fatalf("page before %d: %+v with %d entries", page.NextBefore, read.Page, len(read.History))
 		}
@@ -218,18 +218,18 @@ func TestConversationGetWindowPagesBackToTheWholeHistory(t *testing.T) {
 
 	// A limit past the cap is clamped, not refused; one that covers the
 	// history returns it all with nothing more.
-	all, _ := getConversation(t, h, id, "?limit=100000", owner)
+	all, _ := getConversation(t, h, id, "?limit=100000")
 	if all.Page == nil || all.Page.HasMore || !reflect.DeepEqual(all.History, full.History) {
 		t.Errorf("limit past the cap: page %+v, %d entries", all.Page, len(all.History))
 	}
 	// from re-reads a held window, and a turn appended since is part of it.
 	appendEntries(t, s.store, id, windowTurn(t, 99, ""))
-	again, _ := getConversation(t, h, id, fmt.Sprintf("?from=%d", first.Page.NextBefore), owner)
+	again, _ := getConversation(t, h, id, fmt.Sprintf("?from=%d", first.Page.NextBefore))
 	if again.Page == nil || again.Page.NextBefore != first.Page.NextBefore || len(again.History) != len(first.History)+5 {
 		t.Errorf("from re-read: page %+v with %d entries, want the same start and %d", again.Page, len(again.History), len(first.History)+5)
 	}
 	// from an id inside a turn starts at that turn's opening message.
-	mid, _ := getConversation(t, h, id, fmt.Sprintf("?from=%d", first.History[2].ID), owner)
+	mid, _ := getConversation(t, h, id, fmt.Sprintf("?from=%d", first.History[2].ID))
 	if mid.Page.NextBefore != first.Page.NextBefore {
 		t.Errorf("from a mid-turn id started at %d, want the turn's opening message %d", mid.Page.NextBefore, first.Page.NextBefore)
 	}
@@ -239,15 +239,14 @@ func TestConversationGetWindowRejectsBadParameters(t *testing.T) {
 	t.Parallel()
 	s := serverFixture(t)
 	h := s.Routes()
-	const owner = "owner@x.com"
-	id := newRouteProbeConversationAs(t, h, owner)
+	id := newRouteProbeConversationAs(t, h)
 	appendEntries(t, s.store, id, windowTurn(t, 0, ""))
 	for _, q := range []string{
 		"?limit=0", "?limit=-5", "?limit=abc", "?limit=1.5",
 		"?before=10", "?limit=5&before=0", "?limit=5&before=x",
 		"?from=0", "?from=-1", "?from=x", "?from=5&limit=5", "?from=5&before=9",
 	} {
-		w := do(t, h, http.MethodGet, "/conversations/"+id+q, nil, owner)
+		w := do(t, h, http.MethodGet, "/conversations/"+id+q, nil, windowTestOwner)
 		if w.Code != http.StatusBadRequest {
 			t.Errorf("GET %s = %d, want 400", q, w.Code)
 		}
@@ -276,8 +275,7 @@ func TestConversationGetWindowKeepsTheAccessGate(t *testing.T) {
 	t.Parallel()
 	s := serverFixture(t)
 	h := s.Routes()
-	const owner = "owner@x.com"
-	id := newRouteProbeConversationAs(t, h, owner)
+	id := newRouteProbeConversationAs(t, h)
 	for n := range 4 {
 		appendEntries(t, s.store, id, windowTurn(t, n, ""))
 	}
@@ -440,8 +438,8 @@ func TestHistoryWindowKeepsEarlierDashboardCards(t *testing.T) {
 	s := serverFixture(t)
 	h := s.Routes()
 	ctx := context.Background()
-	const owner, mate = "owner@x.com", "mate@x.com"
-	id := newRouteProbeConversationAs(t, h, owner)
+	const owner, mate = windowTestOwner, "mate@x.com"
+	id := newRouteProbeConversationAs(t, h)
 	history := multiSenderHistory(t)
 	// A compaction summary between the cards and the window.
 	history = append(history[:len(history):len(history)], hEntry(t, "assistant", "summary", agent.SummaryContent{Text: "private summary text"}))
@@ -449,7 +447,7 @@ func TestHistoryWindowKeepsEarlierDashboardCards(t *testing.T) {
 	ids := appendEntries(t, s.store, id, history)
 	summaryID := ids[len(ids)-6]
 
-	read, _ := getConversation(t, h, id, "?limit=3", owner)
+	read, _ := getConversation(t, h, id, "?limit=3")
 	if read.Page == nil || !read.Page.HasMore || read.Page.Earlier == nil {
 		t.Fatalf("page = %+v, want has_more with earlier", read.Page)
 	}

@@ -51,10 +51,10 @@ type historyWindowRequest struct {
 	from   int64
 }
 
-// errHistoryWindow is a refused window parameter; its text is the 400 body.
-type errHistoryWindow string
+// historyWindowError is a refused window parameter; its text is the 400 body.
+type historyWindowError string
 
-func (e errHistoryWindow) Error() string { return string(e) }
+func (e historyWindowError) Error() string { return string(e) }
 
 // parseHistoryWindow reads the window parameters. windowed is false when the
 // request names none of them (an empty value counts as absent), which is the
@@ -67,13 +67,13 @@ func parseHistoryWindow(q url.Values) (req historyWindowRequest, windowed bool, 
 	positive := func(name, raw string) (int64, error) {
 		n, perr := strconv.ParseInt(raw, 10, 64)
 		if perr != nil || n < 1 {
-			return 0, errHistoryWindow(name + " must be a positive integer")
+			return 0, historyWindowError(name + " must be a positive integer")
 		}
 		return n, nil
 	}
 	if from != "" {
 		if limit != "" || before != "" {
-			return req, false, errHistoryWindow("from cannot be combined with limit or before")
+			return req, false, historyWindowError("from cannot be combined with limit or before")
 		}
 		if req.from, err = positive("from", from); err != nil {
 			return req, false, err
@@ -81,13 +81,16 @@ func parseHistoryWindow(q url.Values) (req historyWindowRequest, windowed bool, 
 		return req, true, nil
 	}
 	if limit == "" {
-		return req, false, errHistoryWindow("before requires limit")
+		return req, false, historyWindowError("before requires limit")
 	}
 	n, err := positive("limit", limit)
 	if err != nil {
 		return req, false, err
 	}
-	req.limit = int(min(n, maxHistoryWindowLimit))
+	if n > maxHistoryWindowLimit {
+		n = maxHistoryWindowLimit
+	}
+	req.limit = int(n)
 	if before != "" {
 		if req.before, err = positive("before", before); err != nil {
 			return req, false, err
