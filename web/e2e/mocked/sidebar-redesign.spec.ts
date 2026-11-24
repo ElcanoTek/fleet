@@ -145,7 +145,6 @@ const patrolsAt = (NOW: number) => [
     run_count: 44,
     approval_mode: "auto",
     mine: true,
-    skipped: { reason: "approval_pending", count: 3, slots: [NOW - 7200, NOW - 3600, NOW - 600] },
   },
   {
     id: "pt-2",
@@ -893,13 +892,11 @@ test.describe("on a desktop", () => {
     await expect(release.getByTestId("patrol-next")).toHaveText("in 19h");
     await expect(release.getByTestId("patrol-run-now")).toBeVisible();
     await expect(release.getByTestId("patrol-pause")).toHaveAccessibleName("Pause Fleet release watch (weekdays 8am ET)");
-    // A paused one says so, and offers to resume; one being skipped says why, once.
+    // A paused one says so, and offers to resume.
     const paused = page.locator('[data-patrol-id="pt-4"]');
     await expect(paused.getByTestId("patrol-next")).toHaveText("paused");
     await expect(paused.getByTestId("patrol-pause")).toHaveAccessibleName("Resume Backfill scan");
-    const skipped = page.locator('[data-patrol-id="pt-1"]');
-    await expect(skipped.getByTestId("patrol-skipped")).toHaveText("3 runs skipped · approval waiting");
-    await expect(skipped.getByTestId("patrol-next")).toHaveText("in 30m");
+    await expect(page.locator('[data-patrol-id="pt-1"]').getByTestId("patrol-next")).toHaveText("in 30m");
 
     // A teammate's patrol: whose it is, and only a way to its chat.
     const theirs = shared.first();

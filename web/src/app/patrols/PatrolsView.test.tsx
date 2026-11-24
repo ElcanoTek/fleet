@@ -420,15 +420,6 @@ describe("the Patrols page", () => {
     await waitFor(() => expect(api.deleteSchedule).toHaveBeenCalledWith("c-1", "pt-1"));
   });
 
-  it("a patrol whose runs are being skipped says so once, and still says when it checks next", async () => {
-    list = [patrol({ skipped: { reason: "approval_pending", count: 3 } }), patrol({ id: "pt-9", skipped: { reason: "approval_pending", count: 1 } })];
-    render(<Page />);
-    await waitFor(() => expect(card("pt-1")).toBeTruthy());
-    expect(within(card("pt-1")).getByTestId("patrol-skipped")).toHaveTextContent("3 runs skipped · approval waiting");
-    expect(within(card("pt-1")).getByTestId("patrol-next")).toHaveTextContent("in 19h");
-    expect(within(card("pt-9")).getByTestId("patrol-skipped")).toHaveTextContent("1 run skipped · approval waiting");
-  });
-
   it("search finds a patrol by its name, its chat, or whose it is", async () => {
     render(<Page />);
     await waitFor(() => expect(screen.getAllByTestId("patrol-card")).toHaveLength(3));

@@ -182,8 +182,7 @@ the redesign needed.
   teammate's alike, ends with **Open chat**: a link to the patrol's chat that
   needs no opening of the row, the last control on each so it sits in one
   column down the page (on a phone each card has two lines under the name:
-  its state, then its controls). A patrol whose runs are being skipped behind
-  an approval card says so once, in a chip.
+  its state, then its controls).
 - **Opening a row** reads `GET /api/patrols/{id}` and shows the approval mode
   (the chat's setting, changed here; Autonomous asks for the same acceptance
   as everywhere), **Recent runs**, what each run is asked to do, **Edit
@@ -377,7 +376,7 @@ build chose differently, and why.
 - **"Fleet opens to" is a list in the gear's panel and a dropdown in the full
   panel**, where the list of chats can be long.
 - **A patrol's countdown is one unit** ("in 19h"), with the exact time in its
-  tooltip, and a skipped patrol says so once (the chip), not twice.
+  tooltip.
 - **Background tasks keeps its page as it was**: the task list and everything
   under the header are untouched. **New task** is one button in the page
   header and an item in the sidebar's **+** menu; the sidebar's own New task
@@ -417,10 +416,10 @@ migration.
   Multiplayer chat: its approval mode is the chat owner's to change, so the
   page shows it without a control), and for a teammate's patrol
   `owner_email`, `multiplayer` and
-  `team_visible`; the caller's own active patrols carry `skipped` when runs
-  are being held behind an approval card (`store.PatrolSkips`). The caller's
-  own entries are unchanged otherwise, so an older client reads the list as
-  before.
+  `team_visible`. The caller's own entries are unchanged otherwise, so an
+  older client reads the list as before. (They carried `skipped` while a
+  waiting approval card held a patrol's runs; that hold and the field went
+  with [ADR-0120](adr/0120-a-waiting-approval-card-does-not-hold-a-scheduled-run.md).)
 - **`GET /api/patrols/{id}`** (new; `handlePatrolByID`, mounted in the
   browser gateway) returns `{patrol, runs}`: the patrol as the list gives it,
   plus its `prompt` for its creator only, and up to 20 entries of its run

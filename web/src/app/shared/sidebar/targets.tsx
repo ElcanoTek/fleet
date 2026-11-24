@@ -83,8 +83,6 @@ export type PatrolBrief = {
   /** How a teammate's patrol's chat is shared with the caller. */
   multiplayer?: boolean;
   team_visible?: boolean;
-  /** The caller's own active patrol is being skipped behind an approval card. */
-  skipped?: { reason: string; count: number; slots?: number[] };
   /** What each run is asked to do: GET /api/patrols/{id} only, for its creator. */
   prompt?: string;
 };

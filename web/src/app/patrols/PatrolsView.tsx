@@ -76,6 +76,8 @@ function runText(run: PatrolRun): string {
     return run.run_number ? `${what} · ${tr("Run #{0}", [run.run_number])}` : what;
   }
   if (run.outcome === "busy") {
+    // No run is skipped for a waiting approval card any more; a row recorded
+    // when one was still reads as it happened.
     if (run.reason === "approval_pending") return tr("Skipped: an approval was waiting");
     if (run.reason === "patrol_in_flight") return tr("Skipped: the previous run was still going");
     if (run.reason === "queue_full") return tr("Skipped: the chat's queue was full");
@@ -190,7 +192,6 @@ function PatrolCard({
   const canSetMode = mine && patrol.owns_chat !== false;
   const paused = patrol.status === "paused";
   const [confirmingAutonomous, setConfirmingAutonomous] = useState(false);
-  const skipped = own && !paused && (patrol.skipped?.count ?? 0) > 0;
   const [detail, setDetail] = useState<Detail | null>(null);
   const [detailState, setDetailState] = useState<"idle" | "loading" | "failed">("idle");
   const [busy, setBusy] = useState(false);
@@ -221,7 +222,7 @@ function PatrolCard({
     return () => {
       live = false;
     };
-  }, [expanded, patrol.id, patrol.run_count, patrol.last_run_at, patrol.status, patrol.next_run_at, patrol.skipped?.count]);
+  }, [expanded, patrol.id, patrol.run_count, patrol.last_run_at, patrol.status, patrol.next_run_at]);
 
   // One action at a time per patrol: a Run now during a save would race it.
   const act = async (fn: () => Promise<unknown>, failed: string) => {
@@ -273,8 +274,6 @@ function PatrolCard({
   // "in 19h": to one unit, as the sidebar's row says it. The exact time is
   // the tooltip's.
   const nextAt = patrol.next_run_at ?? 0;
-  // A patrol that skipped runs says so once, in the chip beside this; here it
-  // still says when it checks next.
   const next = paused
     ? tr("paused")
     : nextAt > now
@@ -311,11 +310,7 @@ function PatrolCard({
             aria-hidden="true"
             className={[
               "inline-block size-2 shrink-0 rounded-full",
-              paused
-                ? "border-2 border-[var(--color-text-muted)]"
-                : skipped
-                  ? "bg-[var(--color-warning)] shadow-[0_0_0_3px_var(--color-warning-tint)]"
-                  : "bg-[var(--color-state-ok)]",
+              paused ? "border-2 border-[var(--color-text-muted)]" : "bg-[var(--color-state-ok)]",
             ].join(" ")}
           />
           <span className="grid min-w-0 flex-1 gap-[3px]">
@@ -342,19 +337,8 @@ function PatrolCard({
             controls at the card's right edge), the same on every card, so
             nothing wraps differently from one patrol to the next. */}
         <div className="ml-auto flex min-w-0 max-w-full flex-wrap items-center justify-end gap-2 pb-1 pl-[3.5rem] max-sm:w-full sm:pb-0 sm:pl-0">
-          {skipped || next ? (
+          {next ? (
           <div className="flex min-w-0 flex-wrap items-center gap-2 max-sm:basis-full">
-          {skipped ? (
-            <span
-              data-testid="patrol-skipped"
-              className="inline-flex h-7 items-center gap-1.5 rounded-full border border-[var(--color-warning-border)] bg-[var(--color-warning-tint)] px-2.5 text-[0.75rem] text-[var(--color-warning-text)]"
-            >
-              <Icon name="alert-triangle" className="size-3 shrink-0 text-[var(--color-warning-icon)]" />
-              {patrol.skipped?.count === 1
-                ? tr("1 run skipped · approval waiting")
-                : tr("{0} runs skipped · approval waiting", [patrol.skipped?.count ?? 0])}
-            </span>
-          ) : null}
           <span
             data-testid="patrol-next"
             title={!paused && nextAt > 0 ? `${formatCountdown(nextAt, now)} · ${new Date(nextAt * 1000).toLocaleString()}` : undefined}

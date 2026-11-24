@@ -195,9 +195,7 @@ chat's approval mode and the chat it lives in, with the time until its next
 run at the right (or **paused**). On a patrol of your own the row also has
 **Run now** and a pause or resume button. Every row ends with **Open chat**,
 which goes straight to the patrol's chat without opening the row, on your own
-patrols and on a teammate's alike. A patrol whose runs are being skipped
-because an approval card is waiting says so on its row, with the number of
-runs skipped.
+patrols and on a teammate's alike.
 
 Click a row to open it:
 
@@ -285,10 +283,16 @@ and `git push` still ask, and only turns triggered by the conversation owner use
 Auto-approve or Autonomous).
 If a patrol turn does stage an approval card, the card stays open for 24 hours
 and automatically resumes the patrol turn as soon as you approve it.
-While the card waits on you, the patrol's scheduled runs are skipped rather
-than stacked up behind it, and the Patrol bar says so under that patrol:
-**Patrol on hold**, with the times of the runs it skipped. Approve or decline
-the card and the next scheduled run goes ahead.
+A card that is waiting for you does not hold the patrol: its next scheduled run
+goes ahead on time, and so does a timer. The waiting card is not changed by
+that. It keeps its own deadline, and you can still approve or decline it
+afterwards. The run is told which cards are waiting, and asked to report them
+as waiting, not done, and not to request the same action again. In a later
+turn, a new request for a tool usually replaces the card already waiting for
+that tool (the replaced card says it was superseded). A run is asked to do that
+only to bring its own earlier card up to date (today's report in place of
+yesterday's), to leave a card you asked for alone, and to say when it replaced
+one.
 Conversations with an active or paused patrol are exempt from retention sweeps
 until the patrol is stopped.
 

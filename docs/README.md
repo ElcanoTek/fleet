@@ -298,7 +298,7 @@ above fails otherwise.
 - [`BUNDLE-PREFLIGHT.md`](BUNDLE-PREFLIGHT.md) — Bundle preflight in CI — the reusable gate and the `mcp_catalog` check
 - [`BUNDLE-STAGING.md`](BUNDLE-STAGING.md) — Staging the default bundle for a bare install on an SELinux host (#1655)
 - [`CHAT-EXPORT.md`](CHAT-EXPORT.md) — Downloading a chat
-- [`CHAT-PATROLS.md`](CHAT-PATROLS.md) — In-Chat Patrols & Timers (`chat_patrol`)
+- [`CHAT-PATROLS.md`](CHAT-PATROLS.md) — In-Chat Patrols & Timers (`chat_patrol`); a waiting approval card does not hold a scheduled run, and the run is told which cards are waiting ([ADR-0120](adr/0120-a-waiting-approval-card-does-not-hold-a-scheduled-run.md))
 - [`CHAT-TRANSFER.md`](CHAT-TRANSFER.md) — Transferring a chat, with its dashboard and patrols, to another person
 - [`CHAT-HISTORY-WINDOW.md`](CHAT-HISTORY-WINDOW.md) — opening a long conversation on its newest turns: the windowed `GET /conversations/{id}` (`limit`/`before`/`from`, `history_page`), **Load earlier messages**, and gzip for the JSON reads
 - [`CHAT-ORDER.md`](CHAT-ORDER.md) — your own order for pinned chats and for each project's chats, and the Temporary sort (Reorder mode; `GET`/`PUT /api/conversations/order`)

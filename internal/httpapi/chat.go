@@ -729,7 +729,9 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	// project's standing instructions plus its SHARED memories (tagged
 	// "[project] ") alongside personal memory.
 	projectInstructions, projectMemoryBullets := s.projectTurnContext(reqCtx, user, conv)
-	memories, err := s.store.ListMemories(reqCtx, user)
+	// The sender's memories and, for an in-chat patrol turn, the approval
+	// cards waiting on them.
+	memories, waitingApprovals, err := s.memoriesAndWaitingApprovals(reqCtx, user, conv.ID, req.inputKind)
 	if err != nil {
 		fail(http.StatusInternalServerError, err)
 		return true
@@ -931,6 +933,9 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	// is told which cards the chat is showing: its own replay may not hold
 	// the turns that drew them.
 	injected = appendConversationCardsBlock(injected, req.inputKind, fullHistory)
+	// A patrol turn is also told which approval cards are still waiting on
+	// its owner, so it neither repeats a staged action nor reports it done.
+	injected = appendWaitingApprovalsBlock(injected, req.inputKind, waitingApprovals, time.Now())
 
 	// Lockdown model migration, at the last moment before the client can be
 	// TOLD about it: every fallible preparation above (history, memories,

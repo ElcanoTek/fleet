@@ -29,7 +29,14 @@ func serverFixture(t *testing.T) *Server {
 	t.Helper()
 	// A database of the test's own (fleetdb), so nothing is shared with any
 	// other test and nothing needs wiping.
-	st, err := store.Open(fleetdb.New(t).ChatDSN(), fleetdb.ChatPool())
+	return serverFixtureOn(t, fleetdb.New(t))
+}
+
+// serverFixtureOn is serverFixture on a database the test holds, for a test
+// that also opens the scheduler on it (db.SchedDB) to claim a real fire.
+func serverFixtureOn(t *testing.T, db fleetdb.DB) *Server {
+	t.Helper()
+	st, err := store.Open(db.ChatDSN(), fleetdb.ChatPool())
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}

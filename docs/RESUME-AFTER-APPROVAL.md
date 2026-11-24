@@ -97,7 +97,10 @@ agent_policy:
    turn is already running, the row waits in the queue (the web shows it as an
    **auto-continue** chip that can be removed or sent now) and that turn's
    completion drains it. A Stop with scope all cancels it like any queued
-   input.
+   input. The running turn can be an in-chat patrol's: a scheduled run is not
+   held while a card waits
+   ([ADR-0120](adr/0120-a-waiting-approval-card-does-not-hold-a-scheduled-run.md)),
+   so a card approved during the run resumes after it.
 5. **The input is fleet's, labelled.** The row's message, and so the turn's
    user-role input, reads for example:
 

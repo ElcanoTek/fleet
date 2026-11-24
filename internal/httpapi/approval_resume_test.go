@@ -28,6 +28,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/fakellm"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/store"
+	"github.com/ElcanoTek/fleet/internal/testdb/fleetdb"
 )
 
 const (
@@ -180,7 +181,13 @@ type resumeHarness struct {
 // installs policy (zero = no bundle declaration) and shortens the debounce.
 func newResumeHarness(t *testing.T, policy agentcore.AgentPolicy, debounce time.Duration) *resumeHarness {
 	t.Helper()
-	s := serverFixture(t)
+	return newResumeHarnessOn(t, fleetdb.New(t), policy, debounce)
+}
+
+// newResumeHarnessOn is newResumeHarness on a database the test holds.
+func newResumeHarnessOn(t *testing.T, db fleetdb.DB, policy agentcore.AgentPolicy, debounce time.Duration) *resumeHarness {
+	t.Helper()
+	s := serverFixtureOn(t, db)
 	seedUsers(t, s, "alice@x.com")
 	agentcore.ConfigureAgentPolicy(policy)
 	t.Cleanup(func() { agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{}) })
