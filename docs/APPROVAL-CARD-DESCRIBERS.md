@@ -92,7 +92,7 @@ Any failure leaves the card off. That covers no describer on the server, a
 timeout, a transport or tool error, output that is not exactly the schema, a
 secret-like value, or a failed store write. The row, the event and the
 countdown are then the generic card's, exactly as before. Describing never
-blocks or fails staging. Each failure is logged with its detail (passed through the secret
+blocks or fails staging, except through a valid refusal (below). Each failure is logged with its detail (passed through the secret
 redaction first, since a malformed card's error can echo a value) and emitted
 on the turn stream as `tool.approval_card_fallback`
 `{approval_id, tool, reason}`, with `reason` one of `describer_unavailable`, `describer_gated`,
@@ -101,6 +101,20 @@ on the turn stream as `tool.approval_card_fallback`
 The describer's output never reaches the model: it is display data on the
 approval row. The model's tool result for the staged call is the same
 `APPROVAL_REQUIRED` text as before.
+
+**One exception: a refusal ([ADR-0121](adr/0121-a-describer-may-refuse-a-call-its-server-will-refuse.md)).**
+A describer that knows its server will refuse the call whatever the person
+decides (the arguments name no valid record, a hash is malformed) returns a
+valid card with `refuse: {code, message}`. Fleet then stages nothing: no
+approval row, no supersede of the tool's earlier cards, no
+`tool.approval_required` event. The model's tool result is
+`ARGUMENTS_REFUSED: <message> (<code>). Nothing was staged for approval and
+nothing ran: fix the arguments and call <tool> again`. Only a card that
+passes every check above refuses: a timeout, an error or an invalid card
+still falls back to the generic card and stages it. The message is held to
+the card's text rules and the secret-redaction check, so it carries nothing
+a card could not. Autonomous mode runs the call without a card and does not
+act on a refusal; the server refuses the call itself there.
 
 ### The card schema
 
@@ -147,6 +161,11 @@ approval row. The model's tool result for the staged call is the same
   [APPROVAL-RESULT-CARDS.md](APPROVAL-RESULT-CARDS.md); an older fleet refuses
   a card that carries it and shows the generic card).
 - **Flags.** A flag `code` is a short lowercase token (`[a-z0-9][a-z0-9_.-]{0,63}`).
+- **Refusal.** The optional top-level `refuse` is `{"code", "message"}`: `code`
+  is a flag-code token, `message` is required text of at most 2000
+  characters. A card that carries it is never staged (above) and never
+  stored. An older fleet refuses a card that carries it and shows the
+  generic card, so a bundle can ship it before every box has the release.
 - **Size limits.**
   - 128 KiB of raw output, and the same for the stored card (up to 100 resolved cards ride one conversation GET).
   - 500 items.

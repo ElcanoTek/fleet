@@ -541,7 +541,10 @@ func (a *approvalStager) recordAutonomousAction(toolName, toolCallID, rawInput s
 	if a.store == nil {
 		return errors.New("approval store is not configured")
 	}
-	cardJSON, _ := a.describeApproval(toolName, rawInput)
+	// A describer refusal (ADR-0121) is not acted on here: Autonomous mode
+	// runs the call without a card, and the server refuses it itself, so
+	// there is no card anyone could approve by mistake.
+	cardJSON, _, _ := a.describeApproval(toolName, rawInput)
 	seat := a.seatFor(toolName)
 	approval, err := a.store.CreateApproval(a.ctx, a.conversationID, a.userEmail, toolName, toolCallID, rawInput, a.expiryUnixFor(toolName), seat)
 	if err != nil {
@@ -1031,11 +1034,19 @@ func (a *approvalStager) stage(toolName, toolCallID, rawInput string, critical b
 
 	// A bundle-declared describer turns the call into a readable card
 	// (approval_card.go). Bounded and best-effort: any failure leaves the
-	// generic arguments card, and staging goes on either way. It runs BEFORE
+	// generic arguments card, and staging goes on either way (a describer's
+	// explicit refusal is the one exception, handled just below). It runs BEFORE
 	// the supersede below: that rejects the previous card irreversibly, so a
 	// turn stopped during the describer's few seconds must not leave the user
 	// with neither the old card nor its replacement.
-	cardJSON, cardFallback := a.describeApproval(toolName, rawInput)
+	cardJSON, cardFallback, refusal := a.describeApproval(toolName, rawInput)
+	// The describer says its server will refuse this call whatever the
+	// person decides (ADR-0121): stage nothing, so nobody approves a call that
+	// cannot run, and the model learns what to fix now. Before the supersede
+	// below, so the refused call leaves earlier cards as they were.
+	if refusal != nil {
+		return "", &agentcore.StageRefusedError{Reason: fmt.Sprintf("%s (%s). Nothing was staged for approval and nothing ran: fix the arguments and call %s again", strings.TrimRight(strings.TrimSpace(refusal.Message), "."), refusal.Code, toolName)}
+	}
 
 	// Supersede any older pending approvals for this same tool in this
 	// conversation. Keeps the UI clean when the agent retries — e.g.

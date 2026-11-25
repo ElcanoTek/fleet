@@ -1603,6 +1603,12 @@
       ]
     },
     {
+      "message": "refuse.code {0} is not a valid code",
+      "fields": [
+        "%q"
+      ]
+    },
+    {
       "message": "remote connector {0} must be enabled directly in the Tools picker",
       "fields": [
         "%q"
