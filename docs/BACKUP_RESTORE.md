@@ -189,9 +189,10 @@ or, for a dump from before M6, reconciled with its legacy ledgers first.
 What `fleet backup --db=all` archives in `fleet-files-<stamp>.tar.gz`: every
 directory directly under `<workspace root>/mcp-runs/` (the workspace root is
 `FLEET_WORKSPACE_ROOT` from the shell or the env file, else `workspace` under
-the service home: `/var/lib/fleet/workspace` on a systemd box) **except** the per-run `task-<id>` directories — one
-scheduled occurrence's ledger, removed by the maintenance sweep once its task
-is done — with every file and folder inside it. Paths in the archive start with
+the service home: `/var/lib/fleet/workspace` on a systemd box) **except** the per-run
+`task-<task UUID>` directories (matched by that exact name) — one scheduled
+occurrence's ledger, removed by the maintenance sweep once its task is done —
+with every file and folder inside it. Paths in the archive start with
 `mcp-runs/`, relative to the workspace root, and keep their owner and mode.
 
 - **Never followed:** a symlinked `mcp-runs/` fails the archive; symlinks,
@@ -202,7 +203,8 @@ is done — with every file and folder inside it. Paths in the archive start wit
   it was opened. A connector whose state is an append-only log plus a counter
   replaced by rename (the campaign-code store) reads such a copy as its state at
   that moment, at worst minus a line torn mid-append, which its reader skips.
-- **Bounded:** over 1 GiB of files fails the archive rather than filling the
+- **Bounded:** over 1 GiB of files — counted as they are copied, so a file that
+  grows during the run counts at its copied size — fails the archive rather than filling the
   backup disk every night for the retention window; connector state is counters,
   logs and templates.
 - **Checked:** the archive is written under a temporary name, read back end to

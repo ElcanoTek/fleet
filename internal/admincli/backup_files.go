@@ -10,6 +10,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"syscall"
@@ -27,7 +28,8 @@ import (
 // `fleet backup --db=all` therefore also writes fleet-files-<stamp>.tar.gz beside
 // the dump: every directory directly under mcp-runs/ except the per-run
 // task-<id> directories (one scheduled occurrence's ledger, removed by the
-// maintenance sweep once its task is done — transient, not state). Symlinks,
+// maintenance sweep once its task is done — transient, not state; matched by
+// their exact "task-<uuid>" name). Symlinks,
 // sockets, FIFOs and devices are never archived or followed. The archive is
 // verified by reading it back before the run reports it, pruned with the dumps,
 // and restored by hand with tar (docs/BACKUP_RESTORE.md "Connector state").
@@ -38,12 +40,13 @@ import (
 // state at that moment, at worst minus a line torn mid-append, which its reader
 // skips.
 
-const (
-	connectorStateParent = "mcp-runs"
-	// runDirPrefix names the per-run directories under mcp-runs/ (the
-	// maintenance sweep's SweepTaskWorkspaces), which are not kept state.
-	runDirPrefix = "task-"
-)
+const connectorStateParent = "mcp-runs"
+
+// runDirName matches exactly the per-run directories under mcp-runs/:
+// "task-" + the task's UUID (scheduledrun.taskMCPRunKey), which the maintenance
+// sweep removes once the task is done. Anything else — a connector's own
+// "task-board", say — is kept state.
+var runDirName = regexp.MustCompile(`^task-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 // maxConnectorStateBytes bounds what one run archives. Connector state is
 // counters, logs and templates (kilobytes); a tree past this is something
@@ -88,7 +91,7 @@ func connectorStateEntries(root string) ([]stateEntry, int64, error) {
 	var entries []stateEntry
 	var total int64
 	for _, top := range tops {
-		if !top.IsDir() || strings.HasPrefix(top.Name(), runDirPrefix) {
+		if !top.IsDir() || runDirName.MatchString(top.Name()) {
 			continue // a symlink, a stray file, or one run's own directory
 		}
 		dir := filepath.Join(parent, top.Name())
@@ -157,8 +160,11 @@ func writeConnectorStateArchive(root, outPath string) (dirs []string, err error)
 	defer parent.Close()
 	gz := gzip.NewWriter(tmp)
 	tw := tar.NewWriter(gz)
+	// The bound holds for what is copied, not only for what was listed: a file
+	// that grew after the listing is copied at its new size, out of this budget.
+	budget := maxConnectorStateBytes
 	for _, e := range entries {
-		if err = addStateEntry(tw, parent, e); err != nil {
+		if err = addStateEntry(tw, parent, e, &budget); err != nil {
 			return nil, err
 		}
 		if e.info.IsDir() && strings.Count(e.rel, "/") == 1 {
@@ -190,8 +196,10 @@ func writeConnectorStateArchive(root, outPath string) (dirs []string, err error)
 // (the os.Root over mcp-runs/) without following a symlink planted since the
 // listing and without blocking on a FIFO, checked to still be a regular file,
 // and copied up to the size it has now: an append-only log that grows during
-// the copy is archived as it was when opened.
-func addStateEntry(tw *tar.Writer, parent *os.Root, e stateEntry) error {
+// the copy is archived as it was when opened. The size is taken out of
+// *budget, the bytes the archive may still hold; a file past it fails the
+// archive.
+func addStateEntry(tw *tar.Writer, parent *os.Root, e stateEntry, budget *int64) error {
 	if e.info.IsDir() {
 		hdr, err := tar.FileInfoHeader(e.info, "")
 		if err != nil {
@@ -216,6 +224,10 @@ func addStateEntry(tw *tar.Writer, parent *os.Root, e stateEntry) error {
 	if !info.Mode().IsRegular() {
 		return nil // replaced by something that is not a file since the listing
 	}
+	if info.Size() > *budget {
+		return fmt.Errorf("connector state is over %d MiB by %s: refusing to archive it (it is not counters and logs)", maxConnectorStateBytes>>20, e.rel)
+	}
+	*budget -= info.Size()
 	hdr, err := tar.FileInfoHeader(info, "")
 	if err != nil {
 		return fmt.Errorf("archive %s: %w", e.rel, err)
@@ -245,6 +257,7 @@ func verifyConnectorStateArchive(p string, want int) error {
 	}
 	tr := tar.NewReader(gz)
 	n := 0
+	var total int64
 	for {
 		hdr, err := tr.Next()
 		if errors.Is(err, io.EOF) {
@@ -256,8 +269,9 @@ func verifyConnectorStateArchive(p string, want int) error {
 		if !strings.HasPrefix(hdr.Name, connectorStateParent+"/") {
 			return fmt.Errorf("verify the archive: unexpected entry %q", hdr.Name)
 		}
-		if hdr.Size < 0 || hdr.Size > maxConnectorStateBytes {
-			return fmt.Errorf("verify the archive: entry %q claims %d bytes", hdr.Name, hdr.Size)
+		total += hdr.Size
+		if hdr.Size < 0 || total > maxConnectorStateBytes {
+			return fmt.Errorf("verify the archive: entry %q takes it past %d MiB", hdr.Name, maxConnectorStateBytes>>20)
 		}
 		if _, err := io.CopyN(io.Discard, tr, hdr.Size); err != nil {
 			return fmt.Errorf("verify the archive: %w", err)

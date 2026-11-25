@@ -33,7 +33,8 @@ func writeState(t *testing.T) string {
 	mk("mcp-runs/campaign-codes/REK.jsonl", "{\"n\":1}\n{\"n\":2}\n{\"n\":3}\n")
 	mk("mcp-runs/campaign-codes/.REK.lock", "")
 	mk("mcp-runs/email-templates/team/welcome.html", "<p>hi</p>")
-	mk("mcp-runs/task-0b6f3c2a/ledger.json", "per-run, swept")
+	mk("mcp-runs/task-0b6f3c2a-5d1e-4f7a-9c3b-2e8d6a4f1b90/ledger.json", "per-run, swept")
+	mk("mcp-runs/task-board/cards.json", "a connector folder that only starts like a run dir")
 	mk("mcp-runs/stray.txt", "a file directly under mcp-runs is not a state folder")
 	mk("conv-1/notes.txt", "a conversation workspace is not connector state")
 	outside := filepath.Join(t.TempDir(), "secret.txt")
@@ -96,7 +97,7 @@ func TestConnectorStateArchiveKeepsStateOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("writeConnectorStateArchive: %v", err)
 	}
-	if want := []string{"campaign-codes", "email-templates"}; !slices.Equal(dirs, want) {
+	if want := []string{"campaign-codes", "email-templates", "task-board"}; !slices.Equal(dirs, want) {
 		t.Errorf("dirs = %v, want %v", dirs, want)
 	}
 	names, bodies := readArchive(t, out)
@@ -108,6 +109,8 @@ func TestConnectorStateArchiveKeepsStateOnly(t *testing.T) {
 		"mcp-runs/email-templates/",
 		"mcp-runs/email-templates/team/",
 		"mcp-runs/email-templates/team/welcome.html",
+		"mcp-runs/task-board/",
+		"mcp-runs/task-board/cards.json",
 	}
 	if !slices.Equal(names, want) {
 		t.Errorf("archive holds %v, want %v (no run dir, stray file, conversation, symlink or FIFO)", names, want)
@@ -152,7 +155,7 @@ func TestConnectorStateArchiveRestoresWithTar(t *testing.T) {
 	if string(got) != `{"prefix":"REK","high":3}` {
 		t.Errorf("restored counter = %q", got)
 	}
-	if _, err := os.Stat(filepath.Join(dest, "mcp-runs/task-0b6f3c2a")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(dest, "mcp-runs/task-0b6f3c2a-5d1e-4f7a-9c3b-2e8d6a4f1b90")); !os.IsNotExist(err) {
 		t.Errorf("a per-run dir was restored: %v", err)
 	}
 }
@@ -162,7 +165,7 @@ func TestConnectorStateArchiveNothingToKeep(t *testing.T) {
 	for name, setup := range map[string]func(root string){
 		"no mcp-runs": func(string) {},
 		"only run dirs": func(root string) {
-			if err := os.MkdirAll(filepath.Join(root, "mcp-runs/task-1"), 0o700); err != nil {
+			if err := os.MkdirAll(filepath.Join(root, "mcp-runs/task-6f1c0d2e-8a3b-4c5d-9e7f-0a1b2c3d4e5f"), 0o700); err != nil {
 				t.Fatal(err)
 			}
 		},
@@ -237,5 +240,47 @@ func TestBackupConnectorStateUsesWorkspaceRoot(t *testing.T) {
 	}
 	if !backupFilePattern.MatchString(filepath.Base(p)) {
 		t.Errorf("prune would never remove %s", filepath.Base(p))
+	}
+}
+
+// A file that grew after the listing is copied at its new size, out of the same
+// budget: the bound holds for what is archived, not only for what was listed.
+func TestAddStateEntryEnforcesBudget(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	dir := filepath.Join(root, "mcp-runs", "campaign-codes")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(dir, "REK.jsonl")
+	if err := os.WriteFile(p, []byte("0123456789"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	listed, err := os.Lstat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// It grows after the listing.
+	if err := os.WriteFile(p, []byte("0123456789abcdefghij"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	parent, err := os.OpenRoot(filepath.Join(root, "mcp-runs"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer parent.Close()
+	tw := tar.NewWriter(io.Discard)
+	e := stateEntry{rel: "mcp-runs/campaign-codes/REK.jsonl", info: listed}
+
+	budget := int64(15) // room for the listed size, not the grown one
+	if err := addStateEntry(tw, parent, e, &budget); err == nil || !strings.Contains(err.Error(), "refusing to archive") {
+		t.Fatalf("err = %v, want the budget refusal", err)
+	}
+	budget = 25
+	if err := addStateEntry(tw, parent, e, &budget); err != nil {
+		t.Fatalf("addStateEntry within budget: %v", err)
+	}
+	if budget != 5 {
+		t.Errorf("budget left = %d, want 5", budget)
 	}
 }
