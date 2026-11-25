@@ -13,8 +13,8 @@ import (
 func TestBackupFilePattern(t *testing.T) {
 	t.Parallel()
 
-	match := []string{"fleet-chat-20260627T080000Z.dump", "fleet-sched-20260101T000000Z.dump"}
-	noMatch := []string{"fleet-other-x.dump", "notes.txt", "fleet-chat.sql", "chat-20260627.dump"}
+	match := []string{"fleet-chat-20260627T080000Z.dump", "fleet-sched-20260101T000000Z.dump", "fleet-files-20261126T020000Z.tar.gz"}
+	noMatch := []string{"fleet-other-x.dump", "notes.txt", "fleet-chat.sql", "chat-20260627.dump", "fleet-files-x.tar", "fleet-files-x.tar.gz.tmp", ".fleet-files-123.tmp"}
 	for _, n := range match {
 		if !backupFilePattern.MatchString(n) {
 			t.Errorf("expected %q to match backup pattern", n)
