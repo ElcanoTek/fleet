@@ -334,23 +334,39 @@ if the swap itself fails, the newer binary is restarted. With `--no-restart`
 the command never touches the schema (the service is not its to stop): stop
 fleet, run `fleet migrate down --to <version>` with the live binary, then
 `fleet release rollback --no-restart`. Rolling forward again needs nothing:
-the newer binary migrates up on start. A rollback with no record only swaps
-binaries, and writes a record for the binary that becomes `fleet.prev`. When
-the database cannot be read, `rollback` refuses (exit 8, nothing changed); to
-swap the binaries anyway, without the schema check, remove
-`<install-dir>/fleet.prev.schema` and run it again (`fleet.prev` then refuses
-the database if the release you are leaving migrated it).
+the newer binary migrates up on start.
+
+**No record, or a database it cannot read.** Without `fleet.prev.schema`
+(a `fleet.prev` installed by a release before the record existed, or an
+install that could not write it) nothing says which versions `fleet.prev`
+ships, and swapping blind would start a binary that refuses the database if
+the release you are leaving applied a migration. So `rollback` refuses (exit
+8, nothing changed), as it does when the database cannot be read. Choose
+explicitly:
+
+```sh
+# the schema is compatible (that release applied no migration):
+sudo fleet release rollback --without-schema-check
+# it is not: take it down first, with the live (newer) binary
+sudo systemctl stop fleet && sudo fleet backup --db=all
+sudo /opt/fleet/fleet.prev migrate status        # lists the versions it does not ship (REFUSED)
+sudo fleet migrate down --to <the newest version fleet.prev ships>
+sudo fleet release rollback --without-schema-check
+```
+
+`--without-schema-check` swaps the binaries only — you assert the schema is
+compatible — and writes a record for the binary that becomes `fleet.prev`
+when it can read the database. It cannot be combined with `--migrate-down`.
 
 What this does **not** cover:
 
-- **No record, no schema check.** `fleet.prev.schema` is written by installs
-  from the release that introduced it on; a `fleet.prev` installed by an
-  earlier release has none, and `rollback` then only swaps binaries, as
-  before. If the previous binary then refuses the database (`journalctl -u
-  fleet` shows "Refusing to downgrade" naming the versions), stop fleet, run
+- **`--without-schema-check` is your assertion.** If it was wrong, the
+  previous binary refuses the database (`journalctl -u fleet` shows
+  "Refusing to downgrade" naming the versions): stop fleet, run
   `fleet migrate down --to <the newest version that binary ships>` with the
   newer binary (now `fleet.prev`, e.g. `sudo /opt/fleet/fleet.prev migrate
-  down --to <v>`), and start it again.
+  down --to <v>`), and start it again. A rollback by a release before this
+  check (the live binary predates it) still swaps binaries only.
 - **`fleet update --tag <older> --allow-downgrade` across a migration.** The
   older binary is the one running that install, and it does not ship the down
   migrations of the newer versions, so it fails its gate and the install rolls

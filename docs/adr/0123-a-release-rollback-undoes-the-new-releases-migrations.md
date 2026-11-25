@@ -53,7 +53,11 @@ presented the rollback as the safety net.
 4. **A manual rollback asks.** `fleet release rollback` refuses (exit 9,
    nothing changed) when the database holds migrations above what
    `fleet.prev` ran on, unless `--migrate-down` — by then the newer tables hold
-   real data — and never changes the schema with `--no-restart`.
+   real data — and never changes the schema with `--no-restart`. With no
+   record for `fleet.prev`, or a database it cannot read, it cannot tell
+   whether `fleet.prev` runs on the database, so it refuses (exit 8) unless
+   `--without-schema-check`: the operator asserts the schema is compatible
+   (or took it down with `fleet migrate down`), and only the binaries swap.
 5. **Nothing else changes.** A binary still refuses an unknown schema; the
    service still migrates up on start; `scripts/update.sh` itself runs no
    migration; `helm rollback` runs none either (the chart has no hook).
@@ -80,8 +84,10 @@ presented the rollback as the safety net.
 - A rollback of a release with no new migration reads the database once more,
   and keeps the new binary if the database cannot be read at all.
 - A `fleet.prev` installed by a release before this one has no record; its
-  manual rollback only swaps binaries, as before. An older binary running the
-  install (by hand) cannot undo newer versions and keeps the new binary.
+  manual rollback is refused until the operator passes
+  `--without-schema-check` (after a manual `fleet migrate down` if needed).
+  An older binary running the install (by hand) cannot undo newer versions
+  and keeps the new binary.
 - Kubernetes is not covered: before `helm rollback` past a migration, an
   operator runs `fleet migrate down` with the newer image.
 

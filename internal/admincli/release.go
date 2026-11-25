@@ -91,12 +91,16 @@ const releaseUsage = `fleet release — signed release artifacts (docs/RELEASE-A
       the new migrations' down migrations, and its rollback then keeps the new
       binary. Reinstalling the live binary swaps nothing. --no-restart swaps
       only (fleet not run by systemd).
-  fleet release rollback [--install-dir /opt/fleet] [--service fleet] [--health-url <url> | --server-addr <addr>] [--no-restart] [--migrate-down]
+  fleet release rollback [--install-dir /opt/fleet] [--service fleet] [--health-url <url> | --server-addr <addr>] [--no-restart]
+                         [--migrate-down | --without-schema-check]
       put fleet.prev back as the live binary, restart and wait for /readyz.
-      When the database was migrated past the version fleet.prev ran on, it
-      refuses unless --migrate-down, which undoes those migrations first
-      (dropping what was stored in the tables and columns they added: take
-      a backup with fleet backup --db=all before)
+      When the database was migrated past the versions recorded for
+      fleet.prev, it refuses unless --migrate-down, which undoes those
+      migrations first (dropping what was stored in the tables and columns
+      they added: take a backup with fleet backup --db=all before). With no
+      record (fleet.prev.schema), or a database it cannot read, it refuses
+      unless --without-schema-check: swap the binaries only, asserting the
+      schema is compatible (or that you took it down with fleet migrate down)
 
 Exit codes of install and rollback: 0 done; 2 usage; 4 install rolled back
 (the previous binary is live again); 5 failed (read the message); 6 another
@@ -295,6 +299,7 @@ type installFlags struct {
 	installDir, service, healthURL, serverAddr string
 	healthTimeout                              time.Duration
 	noRollback, noRestart, migrateDown         bool
+	withoutSchemaCheck                         bool
 	probeServerName                            string
 }
 
@@ -345,7 +350,8 @@ func (i *installFlags) options(w io.Writer) (release.InstallOptions, error) {
 	o := release.InstallOptions{
 		InstallDir: i.installDir, Service: i.service, HealthURL: url,
 		HealthTimeout: i.healthTimeout, NoRollback: i.noRollback, NoRestart: i.noRestart,
-		MigrateDown: i.migrateDown, Restarter: installRestarter, Log: w,
+		MigrateDown: i.migrateDown, WithoutSchemaCheck: i.withoutSchemaCheck,
+		Restarter: installRestarter, Log: w,
 		// A rollback undoes the migrations the newer binary applied before
 		// fleet.prev starts, which refuses a database it does not know.
 		Schema: installSchema(),
@@ -523,8 +529,12 @@ func releaseRollback(ctx context.Context, argv []string) int {
 	var inf installFlags
 	inf.register(fs)
 	fs.BoolVar(&inf.migrateDown, "migrate-down", false, "undo the database migrations above the version fleet.prev ran on (drops what was stored in what they added; back up first)")
+	fs.BoolVar(&inf.withoutSchemaCheck, "without-schema-check", false, "swap the binaries without checking that fleet.prev runs on the database (you assert the schema is compatible, or took it down by hand)")
 	if err := fs.Parse(argv); err != nil {
 		return 2
+	}
+	if inf.migrateDown && inf.withoutSchemaCheck {
+		return errf(2, "--migrate-down and --without-schema-check cannot be combined: --migrate-down needs the check to know what to undo")
 	}
 	if fs.NArg() > 0 {
 		return errf(2, "unexpected argument %q", fs.Arg(0))

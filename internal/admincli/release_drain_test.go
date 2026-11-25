@@ -70,7 +70,7 @@ func TestReleaseRollbackHandsOffTheUpdateDrain(t *testing.T) {
 			t.Setenv("FLEET_DRAIN_OWNER_TOKEN", token)
 
 			installDir := t.TempDir()
-			for name, body := range map[string]string{"fleet": "NEW", "fleet.prev": "OLD"} {
+			for name, body := range map[string]string{"fleet": "NEW", "fleet.prev": "OLD", "fleet.prev.schema": "210 211 212 213 214\n"} {
 				if err := os.WriteFile(filepath.Join(installDir, name), []byte(body), 0o755); err != nil {
 					t.Fatal(err)
 				}

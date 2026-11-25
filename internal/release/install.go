@@ -106,9 +106,16 @@ type InstallOptions struct {
 	// (ErrMigrateDownNeeded). The automatic rollback inside Install does not
 	// need it.
 	MigrateDown bool
-	Restarter   Restarter
-	Prober      Prober
-	Log         io.Writer
+	// WithoutSchemaCheck makes a manual Rollback swap the binaries without
+	// checking that fleet.prev runs on the database (`fleet release rollback
+	// --without-schema-check`): the operator asserts the schema is compatible,
+	// or took it down by hand. Without it, a rollback with no record of the
+	// versions fleet.prev ran on, or a database it cannot read, is refused
+	// before anything changes. It cannot be combined with MigrateDown.
+	WithoutSchemaCheck bool
+	Restarter          Restarter
+	Prober             Prober
+	Log                io.Writer
 }
 
 // InstallResult says what happened.
@@ -366,7 +373,9 @@ func (o *InstallOptions) rollbackContext(ctx context.Context) (context.Context, 
 // a database that gained versions since is first taken back — only with
 // MigrateDown and a restart, since it drops what the newer release stored in
 // its tables and columns; otherwise the rollback is refused
-// (ErrMigrateDownNeeded) before anything changes. Then, as in Install: stop,
+// (ErrMigrateDownNeeded) before anything changes. With Schema set and no
+// record, or a database it cannot read, it is refused (ErrNothingChanged)
+// unless WithoutSchemaCheck, which swaps the binaries only. Then, as in Install: stop,
 // swap, run the down migrations, start. If the down migrations fail, the swap
 // is undone and the newer binary restarted. The replaced binary's record
 // becomes the versions the database held before the rollback.
@@ -403,11 +412,18 @@ func Rollback(ctx context.Context, o InstallOptions) error {
 	var cur []int
 	curKnown, downTo, needDown := false, 0, false
 	switch {
-	case o.Schema != nil && hasRec:
+	case o.Schema == nil:
+		// No database seam (a caller that wires none): binaries only.
+	case o.WithoutSchemaCheck && o.MigrateDown:
+		return unchanged(errors.New("--without-schema-check and --migrate-down cannot be combined: --migrate-down needs the check to know what to undo"))
+	case o.WithoutSchemaCheck:
+		o.logf("swapping the binaries without checking that %s runs on the database (--without-schema-check)", prevName)
+		cur, curKnown = o.optionalApplied(ctx)
+	case hasRec:
 		if cur, err = o.Schema.Applied(ctx); err != nil {
 			return unchanged(fmt.Errorf("%s has its database versions recorded, and the database's cannot be read: %w. "+
-				"To swap the binaries without the schema check, remove %s and run the rollback again (%s then refuses the database if it was migrated past it)",
-				prevName, err, filepath.Join(o.InstallDir, schemaRecordName), prevName))
+				"To swap the binaries anyway, run `fleet release rollback --without-schema-check` (%s then refuses the database if the release you are leaving migrated it)",
+				prevName, err, prevName))
 		}
 		curKnown = true
 		if downTo, needDown, err = undoTarget(rec, cur); err != nil {
@@ -418,8 +434,16 @@ func Rollback(ctx context.Context, o InstallOptions) error {
 				return err
 			}
 		}
-	case o.Schema != nil:
-		cur, curKnown = o.optionalApplied(ctx)
+	default:
+		// Without a record nothing says which versions fleet.prev ships, and
+		// swapping blind starts a binary that refuses the database whenever
+		// the release being left applied a migration.
+		return unchanged(fmt.Errorf("%s has no record of the database versions it ran on (%s is missing: an install by a release before this record, "+
+			"or one that could not write it), so this rollback cannot tell whether %s can run on the database. If the release you are leaving applied "+
+			"a migration %s does not ship, %s would refuse the database. Either stop fleet, take a backup (fleet backup --db=all), run "+
+			"`fleet migrate down --to <the newest version %s ships>` with the live binary (`%s migrate status` lists the versions it does not ship) and then "+
+			"`fleet release rollback --without-schema-check`; or, if you know the schema is compatible, run `fleet release rollback --without-schema-check`",
+			prevName, filepath.Join(o.InstallDir, schemaRecordName), prevName, prevName, prevName, prevName, prev))
 	}
 
 	if needDown {

@@ -609,20 +609,78 @@ func TestRollbackMigrateDownFailures(t *testing.T) {
 	})
 }
 
+// TestRollbackWithoutARecord: with no record of the versions fleet.prev ran
+// on, a rollback cannot tell whether fleet.prev runs on the database — if the
+// release being left applied a migration, swapping blind starts a binary that
+// refuses it. So it refuses, changing nothing, until the operator says so
+// (WithoutSchemaCheck), which swaps the binaries only.
 func TestRollbackWithoutARecord(t *testing.T) {
-	t.Run("no record: binaries only, a record written for the new fleet.prev", func(t *testing.T) {
+	noRecord := func(t *testing.T) *schemaWorld {
+		t.Helper()
 		w := installedNewOverOld(t)
 		if err := os.Remove(filepath.Join(w.dir, schemaRecordName)); err != nil {
 			t.Fatal(err)
 		}
-		_ = Rollback(context.Background(), w.opts(""))
+		return w
+	}
+	t.Run("refused", func(t *testing.T) {
+		w := noRecord(t)
+		reads := w.reads
+		err := Rollback(context.Background(), w.opts(""))
+		if !errors.Is(err, ErrNothingChanged) || !strings.Contains(err.Error(), "--without-schema-check") || !strings.Contains(err.Error(), "fleet migrate down") {
+			t.Fatalf("got %v", err)
+		}
+		if w.live() != "NEW" || w.running != "NEW" || len(w.events) != 0 || w.reads != reads {
+			t.Fatalf("live %s running %q events %v reads %d: the refusal changed something", w.live(), w.running, w.events, w.reads-reads)
+		}
+	})
+	t.Run("--without-schema-check swaps the binaries only", func(t *testing.T) {
+		w := noRecord(t)
+		o := w.opts("")
+		o.WithoutSchemaCheck = true
+		_ = Rollback(context.Background(), o) // OLD then refuses the database: the operator's call
 		for _, e := range w.events {
 			if strings.HasPrefix(e, "down:") {
-				t.Fatalf("events %v: no record, no down", w.events)
+				t.Fatalf("events %v: no down without the check", w.events)
 			}
 		}
 		if w.live() != "OLD" || w.record() != "216" {
 			t.Fatalf("live %s record %s", w.live(), w.record())
+		}
+	})
+	t.Run("--without-schema-check after a manual down", func(t *testing.T) {
+		w := noRecord(t)
+		_ = w.Stop(context.Background(), "fleet")
+		w.db = 214 // the operator ran fleet migrate down --to 214
+		o := w.opts("")
+		o.WithoutSchemaCheck = true
+		if err := Rollback(context.Background(), o); err != nil {
+			t.Fatal(err)
+		}
+		if w.live() != "OLD" || w.running != "OLD" || w.refused {
+			t.Fatalf("live %s running %q refused %v", w.live(), w.running, w.refused)
+		}
+	})
+	t.Run("unreadable database with a record", func(t *testing.T) {
+		w := installedNewOverOld(t)
+		w.versionErrs = []error{errors.New("connection refused")}
+		err := Rollback(context.Background(), w.opts(""))
+		if !errors.Is(err, ErrNothingChanged) || !strings.Contains(err.Error(), "--without-schema-check") {
+			t.Fatalf("got %v", err)
+		}
+		if w.live() != "NEW" || len(w.events) != 0 {
+			t.Fatal("the refusal changed something")
+		}
+	})
+	t.Run("both flags", func(t *testing.T) {
+		w := installedNewOverOld(t)
+		o := w.opts("")
+		o.WithoutSchemaCheck, o.MigrateDown = true, true
+		if err := Rollback(context.Background(), o); !errors.Is(err, ErrNothingChanged) || !strings.Contains(err.Error(), "cannot be combined") {
+			t.Fatalf("got %v", err)
+		}
+		if w.live() != "NEW" {
+			t.Fatal("swapped")
 		}
 	})
 }

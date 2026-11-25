@@ -100,6 +100,24 @@ func TestReleaseRollbackMigrateDown(t *testing.T) {
 	if b, _ := os.ReadFile(filepath.Join(installDir, "fleet.prev.schema")); string(b) != "210 211 212 213 214 215\n" {
 		t.Errorf("record of the new fleet.prev = %q", b)
 	}
+
+	// No record: refused (exit 8) until --without-schema-check; the two
+	// flags together are a usage error.
+	if err := os.Remove(filepath.Join(installDir, "fleet.prev.schema")); err != nil {
+		t.Fatal(err)
+	}
+	if rc := releaseRollback(context.Background(), args()); rc != releaseExitNothingChanged {
+		t.Fatalf("rollback without a record rc=%d, want %d", rc, releaseExitNothingChanged)
+	}
+	if rc := releaseRollback(context.Background(), args("--migrate-down", "--without-schema-check")); rc != 2 {
+		t.Fatalf("both flags rc=%d, want 2", rc)
+	}
+	if rc := releaseRollback(context.Background(), args("--without-schema-check")); rc != 0 {
+		t.Fatalf("rollback --without-schema-check rc=%d", rc)
+	}
+	if b, _ := os.ReadFile(filepath.Join(installDir, "fleet")); string(b) != "NEW" || len(schema.downs) != 1 {
+		t.Fatalf("live %s downs %v: --without-schema-check must swap the binaries only", b, schema.downs)
+	}
 }
 
 // TestReleaseSchemaDSNFollowsTheServer: a box that sets no DATABASE_URL and
