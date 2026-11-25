@@ -389,11 +389,17 @@ release **tag** it installs and `git pull`s the client-config checkout, then:
    `sandbox.image` skips this step;
 3. **installs** (`fleet release install`): the running binary is kept as
    `fleet.prev`, the new one renamed over `fleet` atomically, `systemctl
-   restart` (the service migrates on start — `update` runs no migrations), then
+   restart` (the service migrates on start — `update` itself migrates nothing
+   up; the only schema change of the install is the rollback's undo below), then
    a wait for `/readyz` (`FLEET_HEALTH_TIMEOUT`, default 90 s). If it is not
-   ready, `fleet.prev` goes back, the service restarts on it, and `update`
-   exits non-zero saying it rolled back (the failed binary is kept as
-   `fleet.failed`).
+   ready, the service is stopped, `fleet.prev` goes back, the migrations the
+   new binary applied on start are undone with its own down migrations (the
+   previous binary refuses a newer schema), the service starts on
+   `fleet.prev`, and `update` exits non-zero saying it rolled back (the failed binary is kept as
+   `fleet.failed`). Whatever the failed release wrote into the tables and
+   columns those migrations added is dropped; if they cannot be undone, the
+   new binary stays live and `update` says it was not rolled back
+   ([RELEASE-ARTIFACTS.md](RELEASE-ARTIFACTS.md)).
 
 The sandbox step runs before the install on purpose: if the image cannot be
 verified, pulled or built and the resolved ref is absent from the service
@@ -432,7 +438,10 @@ its `/readyz` gate). See [RELEASE-ARTIFACTS.md](RELEASE-ARTIFACTS.md).
 
 **Rolling back on purpose.** `sudo fleet release rollback` swaps `fleet.prev`
 and `fleet` and restarts behind the same `/readyz` gate (running it twice undoes
-itself). To go back further, or to realign the checkout too, install an older
+itself). When the release you are leaving migrated the database past the
+version `fleet.prev` ran on, it refuses until you take a backup
+(`fleet backup --db=all`) and pass `--migrate-down`, which undoes those
+migrations — and what they stored — first. To go back further, or to realign the checkout too, install an older
 release: `sudo fleet update --tag <tag> --allow-downgrade` (the newest ten
 releases stay downloadable).
 

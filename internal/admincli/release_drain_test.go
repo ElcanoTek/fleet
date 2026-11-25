@@ -70,16 +70,17 @@ func TestReleaseRollbackHandsOffTheUpdateDrain(t *testing.T) {
 			t.Setenv("FLEET_DRAIN_OWNER_TOKEN", token)
 
 			installDir := t.TempDir()
-			for name, body := range map[string]string{"fleet": "NEW", "fleet.prev": "OLD"} {
+			for name, body := range map[string]string{"fleet": "NEW", "fleet.prev": "OLD", "fleet.prev.schema": "210 211 212 213 214\n"} {
 				if err := os.WriteFile(filepath.Join(installDir, name), []byte(body), 0o755); err != nil {
 					t.Fatal(err)
 				}
 			}
 			rs := &drainSeenRestarter{marker: marker}
-			oldR, oldP := installRestarter, newInstallProber
+			oldR, oldP, oldS := installRestarter, newInstallProber, installSchema
 			installRestarter = rs
 			newInstallProber = func(*tls.Config, io.Writer) release.Prober { return drainProber{marker: marker} }
-			t.Cleanup(func() { installRestarter, newInstallProber = oldR, oldP })
+			installSchema = func() release.Schema { return &fakeReleaseSchema{db: 214} } // no database here
+			t.Cleanup(func() { installRestarter, newInstallProber, installSchema = oldR, oldP, oldS })
 
 			rc := releaseRollback(context.Background(), []string{"--install-dir", installDir, "--health-url", "http://127.0.0.1:1/readyz", "--health-timeout", "1s"})
 			_, statErr := os.Stat(marker)

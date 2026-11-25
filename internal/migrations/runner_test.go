@@ -583,3 +583,92 @@ func TestUpRefusesUnadoptedPreM6(t *testing.T) {
 		t.Fatalf("status on unadopted pre-M6 db = %+v, %v", rep, err)
 	}
 }
+
+// TestDownForAnOlderBinary is the database half of a release rollback
+// (`fleet release install`, internal/release Schema): an older build refuses
+// a database a newer one migrated, and the newer build's Down to the newest
+// version Applied listed before the upgrade makes it run again — with the
+// rows the older schema holds intact.
+func TestDownForAnOlderBinary(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db := emptyDB(t)
+	older := testEmbeddedRunner(t)
+	newer := runnerFor(t, embeddedPlus(t, "fixture"))
+
+	if vs, err := Applied(ctx, db); err != nil || len(vs) != 0 {
+		t.Fatalf("Applied before any ledger = %v, %v; want none", vs, err)
+	}
+	if err := older.up(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	mustExec(t, db, `INSERT INTO core.server_presence (instance_id) VALUES ('kept-by-the-older-schema')`)
+	before, err := Applied(ctx, db)
+	if err != nil || !reflect.DeepEqual(before, versionsOf(older.set)) {
+		t.Fatalf("Applied = %v, %v; want the older build's versions", before, err)
+	}
+
+	if err := newer.up(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	if vs, err := Applied(ctx, db); err != nil || vs[len(vs)-1] != 9900 || len(vs) != len(before)+1 {
+		t.Fatalf("Applied after the newer build = %v, %v", vs, err)
+	}
+	var uv UnknownVersionError
+	if err := older.up(ctx, db); !errors.As(err, &uv) || !reflect.DeepEqual(uv.Versions, []int{9900}) {
+		t.Fatalf("older up = %v, want UnknownVersionError{9900}", err)
+	}
+	// The older build cannot do the undo: it does not ship 9900's down.
+	if _, err := older.down(ctx, db, before[len(before)-1], false); !errors.As(err, &uv) {
+		t.Fatalf("older down = %v, want UnknownVersionError", err)
+	}
+
+	plan, err := newer.down(ctx, db, before[len(before)-1], false)
+	if err != nil || len(plan.Steps) != 1 || plan.Steps[0].Version != 9900 {
+		t.Fatalf("down = %+v, %v", plan, err)
+	}
+	if vs, err := Applied(ctx, db); err != nil || !reflect.DeepEqual(vs, before) {
+		t.Fatalf("Applied after down = %v, %v; want %v", vs, err, before)
+	}
+	if err := older.up(ctx, db); err != nil {
+		t.Fatalf("the older build still refuses the database after down: %v", err)
+	}
+	var n int
+	if err := db.QueryRow(`SELECT count(*) FROM core.server_presence WHERE instance_id = 'kept-by-the-older-schema'`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("the older schema's row: count %d, %v", n, err)
+	}
+}
+
+// TestDownLockTimeout: with a statement lock timeout (DownBounded), a down
+// migration whose DROP waits behind a reader's lock fails promptly, naming
+// the migration and the lock timeout, and leaves its version applied.
+func TestDownLockTimeout(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db := emptyDB(t)
+	r := runnerFor(t, embeddedPlus(t, "fixture"))
+	if err := r.up(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	reader, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = reader.Rollback() }()
+	var n int
+	if err := reader.QueryRowContext(ctx, `SELECT count(*) FROM sched.tasks`).Scan(&n); err != nil { // ACCESS SHARE, held
+		t.Fatal(err)
+	}
+	r.stmtLockTimeout = 300 * time.Millisecond
+	start := time.Now()
+	_, err = r.down(ctx, db, LegacyLatest, false)
+	if err == nil || !strings.Contains(err.Error(), "9900") || !strings.Contains(err.Error(), "lock timeout") {
+		t.Fatalf("down = %v, want a lock timeout naming 9900", err)
+	}
+	if time.Since(start) > 15*time.Second {
+		t.Fatalf("down took %s", time.Since(start))
+	}
+	if vs := ledgerVersions(t, db); vs[len(vs)-1] != 9900 {
+		t.Fatalf("ledger ends at %d after the failed down", vs[len(vs)-1])
+	}
+}

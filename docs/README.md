@@ -107,7 +107,9 @@ there) and [`../.agents/skills/steward/SKILL.md`](../.agents/skills/steward/SKIL
 - **One identity table** (one `core.users` row per person, role plus Operations Center scope, the merge of the scheduler's users, the retired Operations Center bearer): [`docs/IDENTITY.md`](IDENTITY.md) + [ADR-0105](adr/0105-one-identity-table.md)
 - **Who is calling** (the typed request principal, the one account lookup both planes share, why no handler reads an identity header): [`docs/PRINCIPAL.md`](PRINCIPAL.md) + [ADR-0108](adr/0108-typed-principal.md)
 - **Database migrations** (the two runners, safe-DDL patterns, the migration DDL
-  linter, `fleet migrate status`, rollback scope): [`docs/MIGRATIONS.md`](MIGRATIONS.md)
+  linter, `fleet migrate status`, rollback scope, and how a release rollback
+  undoes the new release's migrations): [`docs/MIGRATIONS.md`](MIGRATIONS.md) +
+  [ADR-0123](adr/0123-a-release-rollback-undoes-the-new-releases-migrations.md)
 - **The browser tier** (the fleet binary serves the Vite SPA and every
   `/api/*` route in-process — auth gate, CSRF, OIDC, CSP, SSE — and how the
   Next.js `fleet-web` tier was retired on upgrade):
@@ -381,7 +383,7 @@ above fails otherwise.
 - [`MODEL-DEFAULTS.md`](MODEL-DEFAULTS.md) — Gemini 4 Hydrogen as primary default (2026-11-13) with Claude Opus 5.5 as fallback frontier tier, operator model rollout across chats & recurring tasks, and the history of default swaps; plus the self-correcting refusal a lockdown conversation returns for a model its allow-list forbids
 - [`MS365-MCP.md`](MS365-MCP.md) — Built-in Microsoft 365 OAuth and Graph MCP Surface (`internal/ms365mcp`)
 - [`MULTIPLAYER-CHAT.md`](MULTIPLAYER-CHAT.md) — Multiplayer chat mode: collaborative team conversations with per-turn sender identity and optional default-on sharing
-- [`RELEASE-ARTIFACTS.md`](RELEASE-ARTIFACTS.md) — Signed release artifacts: what each release publishes (binaries, GHCR images, SBOMs, provenance), how `fleet update` verifies, swaps and rolls back, and how client bundles get their sandbox image (#2051, ADR-0100)
+- [`RELEASE-ARTIFACTS.md`](RELEASE-ARTIFACTS.md) — Signed release artifacts: what each release publishes (binaries, GHCR images, SBOMs, provenance), how `fleet update` verifies, swaps and rolls back (undoing the failed release's migrations first, ADR-0123), and how client bundles get their sandbox image (#2051, ADR-0100)
 - [`NOTIFICATIONS.md`](NOTIFICATIONS.md) — Task notifications (email + webhook) & admin management, including the `blocked` status
 - [`ONE-DATABASE.md`](ONE-DATABASE.md) — One persistence plane: both stores in one database (schemas `chat` and `sched`), configured by `DATABASE_URL` alone; the legacy two-database layout and `fleet db consolidate` were removed in phase 2 (#2049, ADR-0098)
 - [`IDENTITY.md`](IDENTITY.md) — One identity table: `core.users`, role + `ops_scope`, the merge and its report, what changed for operators (#2049 M4, ADR-0105)

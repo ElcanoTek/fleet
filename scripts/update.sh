@@ -19,7 +19,9 @@
 #   5. swap the binary in atomically (`fleet release install`: the previous one is
 #      kept as fleet.prev), restart — the service runs its own migrations on
 #      start; this script runs none — wait for /readyz, and roll back to
-#      fleet.prev automatically when the new binary does not become ready.
+#      fleet.prev automatically when the new binary does not become ready
+#      (the install first undoes any migration the new binary applied, with
+#      its down migrations, since fleet.prev refuses a newer schema).
 #
 # The sandbox step runs BEFORE the install on purpose: its fail-closed abort
 # (missing image, failed build) must leave the box coherent — old binary, old
@@ -1890,6 +1892,7 @@ artifact_swap_only() {
     INSTALL_STATE=swapped
     warn "$1 — ${RELEASE_TAG} is installed at ${INSTALL_DIR}/fleet but NOT running: restart fleet with your supervisor now."
     warn "  if it does not come up: sudo fleet release rollback --install-dir ${INSTALL_DIR} --no-restart, then restart it again"
+    warn "  (if ${RELEASE_TAG} migrated the database, that rollback refuses and says how: stop fleet, fleet migrate down --to <version> with this binary, then the rollback)"
   else
     die "could not install ${RELEASE_TAG} into ${INSTALL_DIR} (above) — the previous binary is unchanged"
   fi
@@ -1943,7 +1946,12 @@ else
   #
   # Swap + restart + readiness gate + automatic rollback, in one verb of the
   # VERIFIED new binary, which re-verifies the staged files before it trusts
-  # them (exit 4 = rolled back to the previous binary). The drain is handed
+  # them. Its exit codes: 0 live and ready; 4 rolled back to the previous
+  # binary (any migration the new one applied undone first); 7 / 10 NOT rolled
+  # back — those migrations could not be undone and the previous binary
+  # refuses a newer schema, so the new binary was kept and restarted (7 ready,
+  # 10 not ready); 8 refused before changing anything (the previous binary
+  # still runs); 5 anything else (docs/RELEASE-ARTIFACTS.md). The drain is handed
   # to it (the marker's path and this run's owner token): it stops the old
   # process, removes the marker, and only then starts the new binary — and
   # does the same for the previous binary if it has to roll back.
@@ -1980,12 +1988,26 @@ else
       fleet_sandbox_reclaim_release_images "$SANDBOX_RECLAIM_FILE" "" "$sandbox_current" "$sandbox_current_tag" "$sandbox_base" "$sandbox_image_ref"
     fi
   else
-    if [[ "$FLEET_WEB_TIER_STOPPED" == "1" ]]; then
+    # 7 / 10: the new binary stays (it serves the web UI itself), so the old
+    # web tier must stay stopped; every other outcome leaves the previous
+    # binary in place, which the old tier fronted.
+    if [[ "$FLEET_WEB_TIER_STOPPED" == "1" && "$_install_rc" != "7" && "$_install_rc" != "10" ]]; then
       warn "the old web tier (fleet-web) was stopped but NOT removed; with fleet back on the previous binary, restore it with: sudo systemctl enable --now fleet-web"
     fi
-    if [[ "$_install_rc" == "4" ]]; then
-      die "${RELEASE_TAG} did not become ready, so ${SERVICE_NAME} was rolled back to the previous binary (now live again; the failed one is ${INSTALL_DIR}/fleet.failed) — journalctl -u ${SERVICE_NAME} -n 100"
-    fi
+    case "$_install_rc" in
+      4)
+        die "${RELEASE_TAG} did not become ready, so ${SERVICE_NAME} was rolled back to the previous binary (now live again, with any database migration ${RELEASE_TAG} applied undone; the failed one is ${INSTALL_DIR}/fleet.failed) — journalctl -u ${SERVICE_NAME} -n 100"
+        ;;
+      7)
+        die "${RELEASE_TAG} failed its first readiness check and was NOT rolled back: the rollback could not take the database back to the schema the previous binary runs on (above), and that binary refuses a newer one. ${SERVICE_NAME} was restarted on ${RELEASE_TAG} and is ready now — journalctl -u ${SERVICE_NAME} -n 100; docs/RELEASE-ARTIFACTS.md (Roll back)"
+        ;;
+      10)
+        die "${RELEASE_TAG} did not become ready and was NOT rolled back: the rollback could not take the database back to the schema the previous binary runs on (above), and that binary refuses a newer one. ${SERVICE_NAME} stays on ${RELEASE_TAG}, which is still not ready — journalctl -u ${SERVICE_NAME} -n 100; docs/RELEASE-ARTIFACTS.md (Roll back)"
+        ;;
+      8)
+        die "the install of ${RELEASE_TAG} was refused before anything changed (above): ${SERVICE_NAME} still runs the binary it ran before"
+        ;;
+    esac
     die "${SERVICE_NAME} did not come back up — journalctl -u ${SERVICE_NAME} -n 50"
   fi
 
