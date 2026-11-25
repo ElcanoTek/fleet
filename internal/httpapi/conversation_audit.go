@@ -63,7 +63,7 @@ func (s *Server) handleConversationAudit(w http.ResponseWriter, r *http.Request,
 
 	entries, err := s.store.ListToolCalls(r.Context(), convID, toolFilter, fromUnix, limit)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 

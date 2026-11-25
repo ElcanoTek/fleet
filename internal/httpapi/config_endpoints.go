@@ -224,7 +224,7 @@ func (s *Server) listPersonas(w http.ResponseWriter, r *http.Request) {
 	}
 	names, err := s.agent.ListPersonas()
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 	// The caller's own personas are a nice-to-have on this roster: a failed

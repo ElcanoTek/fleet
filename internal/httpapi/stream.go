@@ -81,7 +81,7 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request, convID str
 	// below stays as defense in depth.
 	turn, err := s.store.LookupTurnInConversation(r.Context(), requestedTurnID, convID)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 	if turn == nil || turn.ConversationID != convID {
@@ -91,7 +91,7 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request, convID str
 	}
 	events, err := s.store.LoadTurnEvents(r.Context(), requestedTurnID, lastEventID)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 	// The in-memory buffer is gone (evicted after TTL, or wiped by a restart). If

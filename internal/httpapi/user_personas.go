@@ -63,7 +63,7 @@ func (s *Server) userPersonasCollection(w http.ResponseWriter, r *http.Request) 
 	case http.MethodGet:
 		list, err := s.store.ListUserPersonas(r.Context(), user)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeInternalError(w, r, err)
 			return
 		}
 		workspace, _ := s.agent.ListPersonas()
@@ -81,12 +81,12 @@ func (s *Server) userPersonasCollection(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		if err := s.checkBasePersona(in.BasePersona); err != nil {
-			s.userPersonaError(w, err)
+			s.userPersonaError(w, r, err)
 			return
 		}
 		p, err := s.store.CreateUserPersona(r.Context(), user, in)
 		if err != nil {
-			s.userPersonaError(w, err)
+			s.userPersonaError(w, r, err)
 			return
 		}
 		writeJSON(w, r, p)
@@ -109,7 +109,7 @@ func (s *Server) userPersonaByID(w http.ResponseWriter, r *http.Request) {
 	case sub == "approve" && r.Method == http.MethodPost:
 		p, err := s.store.ApproveUserPersona(r.Context(), user, id)
 		if err != nil {
-			s.userPersonaError(w, err)
+			s.userPersonaError(w, r, err)
 			return
 		}
 		writeJSON(w, r, p)
@@ -121,18 +121,18 @@ func (s *Server) userPersonaByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := s.checkBasePersona(in.BasePersona); err != nil {
-			s.userPersonaError(w, err)
+			s.userPersonaError(w, r, err)
 			return
 		}
 		p, err := s.store.UpdateUserPersona(r.Context(), user, id, in)
 		if err != nil {
-			s.userPersonaError(w, err)
+			s.userPersonaError(w, r, err)
 			return
 		}
 		writeJSON(w, r, p)
 	case r.Method == http.MethodDelete:
 		if err := s.store.DeleteUserPersona(r.Context(), user, id); err != nil {
-			s.userPersonaError(w, err)
+			s.userPersonaError(w, r, err)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -141,7 +141,7 @@ func (s *Server) userPersonaByID(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) userPersonaError(w http.ResponseWriter, err error) {
+func (s *Server) userPersonaError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case writeAccountGone(w, err):
 	case errors.Is(err, store.ErrUserPersonaInvalid):
@@ -149,7 +149,7 @@ func (s *Server) userPersonaError(w http.ResponseWriter, err error) {
 	case errors.Is(err, store.ErrUserPersonaNotFound):
 		http.Error(w, "persona not found", http.StatusNotFound)
 	default:
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalErrorFromHelper(w, r, err)
 	}
 }
 

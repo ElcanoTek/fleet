@@ -44,7 +44,7 @@ func (s *Server) replayAcceptedInput(w http.ResponseWriter, r *http.Request, use
 		// Fail closed: proceeding without the lookup could run (and bill) a
 		// duplicate turn for an input_id that was already accepted. A 500
 		// lets the client retry the same input_id safely.
-		http.Error(w, "input lookup failed: "+err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return true
 	}
 	if existing == nil {
@@ -109,7 +109,7 @@ func (s *Server) recoverFirstSubmission(w http.ResponseWriter, r *http.Request, 
 	existing, err := s.lookupUserScopedInput(r.Context(), user, clientID)
 	if err != nil {
 		unlock()
-		http.Error(w, "input lookup failed: "+err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return func() {}, true
 	}
 	if existing != nil {
@@ -141,7 +141,7 @@ func (s *Server) claimDirectInput(w http.ResponseWriter, r *http.Request, user s
 		// every resend "already running".
 		releaseSlot()
 		s.settleDirectInput(claimID, "") // settled "did not run", never left running
-		http.Error(w, "input claim failed: "+err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return nil, true
 	}
 	if !created {

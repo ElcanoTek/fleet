@@ -133,7 +133,7 @@ func (s *Server) handleSidebar(w http.ResponseWriter, r *http.Request) {
 		}
 		raw, err := json.Marshal(l)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeInternalError(w, r, err)
 			return
 		}
 		applied, err := s.store.SetSidebarLayout(ctx, user, raw, rev)
@@ -238,7 +238,7 @@ func (s *Server) handleAdminSidebar(w http.ResponseWriter, r *http.Request) {
 		}
 		raw, err := json.Marshal(l)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeInternalError(w, r, err)
 			return
 		}
 		actor := userFromCtx(ctx)

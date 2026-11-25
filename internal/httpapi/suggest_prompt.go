@@ -36,7 +36,7 @@ func (s *Server) handleSuggestPrompt(w http.ResponseWriter, r *http.Request, con
 
 	history, err := s.store.LoadHistory(ctx, convID)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 	history = redactHistoryForSender(history, user, conv.UserEmail)

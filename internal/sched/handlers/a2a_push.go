@@ -120,7 +120,7 @@ func a2aPushWireConfig(cfg *models.A2APushConfig) *wire.PushConfig {
 func (h *Handlers) a2aPushTask(w http.ResponseWriter, r *http.Request, p principal, req a2abridge.Request, rawTaskID string) (*models.Task, bool) {
 	task, err := h.a2aVisibleTask(p, wire.TaskID(rawTaskID))
 	if err != nil {
-		a2aWrite(w, r, a2aErrorFrom(req.ID, err))
+		a2aWrite(w, r, a2aErrorFrom(r.Context(), req.ID, err))
 		return nil, false
 	}
 	if !taskActableByPrincipal(p, task) {
@@ -154,7 +154,7 @@ func (h *Handlers) a2aCreatePushConfig(w http.ResponseWriter, r *http.Request, p
 		return
 	}
 	if err := a2aValidatePushURL(params.URL); err != nil {
-		a2aWrite(w, r, a2aErrorFrom(req.ID, err))
+		a2aWrite(w, r, a2aErrorFrom(r.Context(), req.ID, err))
 		return
 	}
 	task, ok := h.a2aPushTask(w, r, p, req, params.taskID())
@@ -196,7 +196,7 @@ func (h *Handlers) a2aGetPushConfig(w http.ResponseWriter, r *http.Request, p pr
 	}
 	cfg, err := h.storage.GetA2APushConfig(r.Context(), task.ID, params.ID)
 	if errors.Is(err, sql.ErrNoRows) {
-		a2aWrite(w, r, a2aErrorFrom(req.ID, fmt.Errorf("%w: task %s has no push-notification config %q",
+		a2aWrite(w, r, a2aErrorFrom(r.Context(), req.ID, fmt.Errorf("%w: task %s has no push-notification config %q",
 			wire.ErrTaskNotFound, task.ID, params.ID)))
 		return
 	}

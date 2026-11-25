@@ -62,7 +62,7 @@ func (s *Server) requireAutonomousAcceptance(w http.ResponseWriter, r *http.Requ
 	}
 	_, accepted, err := s.store.GetAutonomousAcceptance(r.Context(), userEmail)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return false
 	}
 	if !accepted {
@@ -91,7 +91,7 @@ func (s *Server) handleAutonomousAccept(w http.ResponseWriter, r *http.Request) 
 	}
 	if err := s.store.AcceptAutonomousPolicy(r.Context(), user, store.CurrentAutonomousPolicyVersion); err != nil {
 		if !writeAccountGone(w, err) {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeInternalError(w, r, err)
 		}
 		return
 	}
@@ -379,7 +379,7 @@ func (s *Server) handleConversationAutoSubmitPause(w http.ResponseWriter, r *htt
 	}
 	rows, err := s.store.PauseUIAutoSubmits(r.Context(), id, strings.TrimSpace(req.CallID))
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 	nowMs := time.Now().UnixMilli()

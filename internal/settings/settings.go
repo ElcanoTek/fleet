@@ -509,7 +509,8 @@ func (s *Service) Set(ctx context.Context, key, value, updatedBy string) (Resolv
 		// Compensate: a value that did not take effect must not lie in wait in
 		// the DB to be silently activated by the next boot's ApplyAll.
 		if delErr := s.st.DeleteWorkspaceSetting(ctx, key); delErr != nil {
-			return Resolved{}, fmt.Errorf("%w (and rolling back the persisted row failed: %w — run Reset)", err, delErr)
+			logging.From(ctx).Error("workspace settings: rolling back a value that did not apply failed", "key", safe.LogSafe(key), "err", safe.LogSafe(delErr.Error()))
+			return Resolved{}, compensationFailed(err, "rolling back the persisted row failed — run Reset")
 		}
 		return Resolved{}, err
 	}
@@ -572,7 +573,8 @@ func (s *Service) Reset(ctx context.Context, key, updatedBy string) (Resolved, e
 	if err := s.apply(key, s.defaults[key], false); err != nil {
 		if hadRow {
 			if _, restoreErr := s.st.SetWorkspaceSetting(ctx, key, prev.Value, prev.UpdatedBy); restoreErr != nil {
-				return Resolved{}, fmt.Errorf("%w (and restoring the previous value failed: %w)", err, restoreErr)
+				logging.From(ctx).Error("workspace settings: restoring the previous value failed", "key", safe.LogSafe(key), "err", safe.LogSafe(restoreErr.Error()))
+				return Resolved{}, compensationFailed(err, "restoring the previous value failed — set it again")
 			}
 		}
 		return Resolved{}, err
@@ -619,7 +621,42 @@ func (s *Service) apply(key, value string, override bool) error {
 		return fmt.Errorf("no apply hook wired for %s", key)
 	}
 	if err := hook(value, override); err != nil {
-		return fmt.Errorf("apply %s: %w", key, err)
+		return &ApplyError{Key: key, Err: err}
 	}
 	return nil
+}
+
+// ApplyError is a setting whose apply hook refused the value: a
+// configuration dependency, such as the guardrail URL a non-off guardrail
+// mode needs. Its text is the hook's own, written from configuration, so the
+// API answers it as is. Compensation, when set, says the write that should
+// have undone the change (Set's rollback, Reset's restore) failed too, and
+// what to do; the stored row then disagrees with the running system. That
+// write's own error is logged.
+type ApplyError struct {
+	Key          string
+	Err          error
+	Compensation string
+}
+
+func (e *ApplyError) Error() string {
+	msg := fmt.Sprintf("apply %s: %v", e.Key, e.Err)
+	if e.Compensation != "" {
+		msg += " (and " + e.Compensation + ")"
+	}
+	return msg
+}
+
+func (e *ApplyError) Unwrap() error { return e.Err }
+
+// compensationFailed marks err (an *ApplyError from apply) as one whose undo
+// write failed too.
+func compensationFailed(err error, what string) error {
+	var ae *ApplyError
+	if errors.As(err, &ae) {
+		withComp := *ae
+		withComp.Compensation = what
+		return &withComp
+	}
+	return err
 }

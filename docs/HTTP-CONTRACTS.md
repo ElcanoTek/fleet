@@ -112,6 +112,96 @@ because npm places a peer next to its parent. So the generator lives in
 When `openapi-typescript` supports TypeScript 7, the workspace folds back
 into `web/package.json`.
 
+## Error responses
+
+An error answer is either a refusal the reader can act on or an internal
+error. This holds for the chat API (`internal/httpapi`), the browser gateway
+(`internal/webui`), the orchestrator handlers (`internal/sched/handlers`) and
+the binary's own routes and probes (`cmd/fleet`).
+
+- **A refusal** carries the handler's own sentence: a validation failure, a
+  decode error, a typed refusal ("a turn is running in this chat; stop it or
+  wait for it to finish, then transfer", a store input error such as
+  "nothing to change"). It is almost always a 4xx. The chat API answers it as
+  a `text/plain` body, the orchestrator as `{"detail": "…"}`.
+- **An internal error** is a failure the reader cannot act on: a store,
+  driver, filesystem or network error. The response never repeats what the
+  failing component said. It is logged, and answered with a fixed message.
+  The log record differs by layer:
+
+  | Layer | Log message | Fields | Answer |
+  |---|---|---|---|
+  | Chat API (`writeInternalError`, `logInternalError` in `internal/httpapi/internal_error.go`) | `internal error answered with a fixed message` | the request's correlation ids (`request_id`, `user_id`, …), `method`, `route`, `at` (the handler and line that hit the error), `err` | 500, body `internal error` |
+  | Orchestrator handlers | per route ("update task tags failed", …); batch and import records: `internal error answered with a fixed message`; A2A: `A2A: internal error answered with a fixed message` | the request's correlation ids, `err` | the route's fixed `detail` ("Failed to update tags"), a record's `error`, or an A2A error, each `internal error` where no sentence of its own fits |
+  | Browser gateway | per case (`model catalog: internal error answered with a fixed message`, `gateway: backend request could not be built`, `index: bootstrap could not be encoded`) | the request's correlation ids, `err` | 502 "the model catalog could not be loaded" / "chat-server unreachable" / "orchestrator unreachable", or 500 `internal error` |
+  | `cmd/fleet` | `config reload failed`, `model tier reload failed`, `mcp reload failed`, `readiness: database ping failed`, `manage_tasks: a task change could not be saved` | the request's correlation ids, `err` | "… reload failed; the server log has the reason", the `/readyz` detail "database ping failed; the server log has the reason", the manage_tasks detail "the change could not be saved; try again" ("the task no longer exists" for a task deleted meanwhile) |
+
+- **Fixed 5xx sentences.** A few 5xx answers keep a sentence of their own
+  because it tells the reader what to do: the server shutting down or
+  reconnecting (503), a workspace that could not be prepared, "the message
+  could not be recorded against its turn; send it again", "transfer failed",
+  "the change was partly applied: …; reload", a setting whose undo write
+  failed ("… (and rolling back the persisted row failed — run Reset)"), and
+  the partial-success answers ("user created, but assigning
+  role/team/Operations Center access failed"). A path that picks its status
+  at run time passes the error through `failureText`: it keeps a 4xx's text
+  and one of these sentences, and treats any other 5xx as an internal error.
+- **Typed refusals with a status of their own.**
+  - A setting value the apply hook refused for the current configuration
+    (`settings.ApplyError`, "guardrail mode block requires guardrail_url…")
+    answers 409 with the hook's text.
+  - Notification secrets the current key cannot decrypt answer 409 with what
+    to do.
+  - Input sent to a live browser session that has ended answers 410 "the
+    browser session has ended". Input the page refused
+    (`playwrightrunner.CommandError`) answers 422 with the worker's report,
+    credentials masked.
+  - A remote MCP failure keeps its redacted text (400) unless it is a
+    database error (`IsDatabaseError`: a server error, a failed or broken
+    connection, a closed pool), which is an internal error.
+- **JSON fields.** A setting write's `rollout_error` and a rollout's
+  `partial_error` carry fixed sentences, or `internal error`. A batch or
+  import record's `error` carries a create refusal's text, or
+  `internal error` for a store failure. A failed administrator request
+  records a store refusal's text, "the chat no longer exists", or
+  `internal error`. An A2A error that wraps no wire sentinel says
+  `internal error`.
+- **Stream frames.** `turn.error`'s `message` is one of these:
+  - the text of a refusal written for the sender (`agent.TurnRefusalError`: a
+    model lockdown does not allow, one with no provider route (with how to
+    pick another), or a Lockdown chat on a server with no sandbox image);
+  - "the workspace is at capacity right now — please resend your message in
+    a moment";
+  - "conversation history could not be saved";
+  - "content blocked by workspace guardrail";
+  - otherwise "the turn ended unexpectedly due to an internal error".
+
+  `summary.error`'s `message` is the credits message, a refusal's text (a
+  lockdown model, or one with no provider route), `summaryStaleMessage`, "the
+  summary could not be saved; try again", or "summarizing failed; try
+  again". The failure itself is logged.
+- **Translation.** Every fixed sentence shown in the web UI is in the
+  browser's message catalog (`web/src/app/lib/i18n/backend-messages.json`)
+  with its Spanish and Portuguese translations, so `localizeError` shows it
+  in the reader's language.
+
+`TestNoErrorTextInResponses` (`internal/httpapi/error_text_guard_test.go`)
+keeps error text out of these places. It fails when `x.Error()`, or an error
+value formatted with `fmt.Sprintf`, reaches one of them:
+
+- a 5xx `http.Error` or `writeError`, or one whose status is chosen at run
+  time;
+- a JSON body;
+- an `error`, `message` or `detail` field outside a constant-4xx write
+  (except in the files of two CLI verbs, `fleet validate-config` and
+  `fleet mcp test`, whose details are terminal output);
+- a stream frame;
+- an A2A error response with the internal or server error code.
+
+It has a short allowlist, with the reason for each entry. It sees only what
+is written at the call: text passed through a variable is the reviewer's to
+check.
+
 ## Phase 3 shipped: one router, one listener
 
 `cmd/fleet/router.go` (`buildPublicRouter`) is one chi tree on the public

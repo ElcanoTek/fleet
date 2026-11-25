@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
@@ -10,7 +11,9 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/ElcanoTek/fleet/internal/httpapi"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/pgtext"
+	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/sched/budget"
 	scheddb "github.com/ElcanoTek/fleet/internal/sched/db"
 	schedmodels "github.com/ElcanoTek/fleet/internal/sched/models"
@@ -71,7 +74,7 @@ func taskManagerProvider(schedStorage *storage.Storage) func(context.Context, ht
 					continue
 				}
 				if _, err := schedStorage.CancelTaskAtomic(t.ID, "stopped from chat by "+req.RequestedBy); err != nil {
-					res.Skipped = append(res.Skipped, httpapi.TaskMutationEntry{ID: t.ID.String(), Label: label, Detail: err.Error()})
+					res.Skipped = append(res.Skipped, httpapi.TaskMutationEntry{ID: t.ID.String(), Label: label, Detail: taskMutationFailure(ctx, err)})
 					continue
 				}
 				res.Changed = append(res.Changed, httpapi.TaskMutationEntry{ID: t.ID.String(), Label: label, Detail: "stopped"})
@@ -79,7 +82,7 @@ func taskManagerProvider(schedStorage *storage.Storage) func(context.Context, ht
 			}
 			detail, err := applyTaskMutation(ctx, schedStorage, t, req)
 			if err != nil {
-				res.Skipped = append(res.Skipped, httpapi.TaskMutationEntry{ID: t.ID.String(), Label: label, Detail: err.Error()})
+				res.Skipped = append(res.Skipped, httpapi.TaskMutationEntry{ID: t.ID.String(), Label: label, Detail: taskMutationFailure(ctx, err)})
 				continue
 			}
 			res.Changed = append(res.Changed, httpapi.TaskMutationEntry{ID: t.ID.String(), Label: label, Detail: detail})
@@ -407,4 +410,20 @@ func workerStatsProvider(schedStorage *storage.Storage) func(context.Context) (*
 			FailedToday:    ds.FailedTasksToday,
 		}, nil
 	}
+}
+
+// taskMutationFailure is the detail a manage_tasks report shows for a task
+// it could not change. A refusal ("cannot cancel task with status: …", a cron
+// that never fires) keeps its text, a task deleted meanwhile reads as such,
+// and a database error is logged and reported as a fixed sentence, since the
+// report reaches the chat and the model.
+func taskMutationFailure(ctx context.Context, err error) string {
+	if errors.Is(err, sql.ErrNoRows) {
+		return "the task no longer exists"
+	}
+	if httpapi.IsDatabaseError(err) {
+		logging.From(ctx).Error("manage_tasks: a task change could not be saved", "err", safe.LogSafe(err.Error()))
+		return "the change could not be saved; try again"
+	}
+	return err.Error()
 }

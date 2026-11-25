@@ -46,7 +46,8 @@ func (s *Server) handleConversationTransfer(w http.ResponseWriter, r *http.Reque
 	}
 	res, err := s.transferConversation(ctx, conv, req.ToEmail)
 	if err != nil {
-		http.Error(w, err.Error(), transferErrorStatus(err))
+		status := transferErrorStatus(err)
+		http.Error(w, failureText(ctx, r, status, err), status)
 		return
 	}
 	logging.From(ctx).Info("conversations: chat transferred",

@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/apiversion"
@@ -17,6 +18,8 @@ import (
 	"github.com/ElcanoTek/fleet/internal/diskguard"
 	"github.com/ElcanoTek/fleet/internal/health"
 	"github.com/ElcanoTek/fleet/internal/httpapi"
+	"github.com/ElcanoTek/fleet/internal/logging"
+	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/sandbox"
 )
 
@@ -244,12 +247,26 @@ func diskProbe(guard *diskguard.Guard) func(context.Context) health.Result {
 	}
 }
 
+// pingProbePingFailed is the detail of a failed database ping. The driver's
+// error (which names the database, its user and host) is logged instead:
+// /readyz answers whoever can reach it.
+const pingProbePingFailed = "database ping failed; the server log has the reason"
+
 // pingProbe times a DB ping and reports latency, or an error result on failure.
+// The failure is logged once when the ping starts failing and once when it
+// recovers, not on every /readyz while the database stays down.
 func pingProbe(db dbPinger) func(context.Context) health.Result {
+	var down atomic.Bool
 	return func(ctx context.Context) health.Result {
 		start := time.Now()
 		if err := db.Ping(ctx); err != nil {
-			return health.Result{Status: health.StatusError, Detail: err.Error()}
+			if !down.Swap(true) {
+				logging.From(ctx).Warn("readiness: database ping failed", "err", safe.LogSafe(err.Error()))
+			}
+			return health.Result{Status: health.StatusError, Detail: pingProbePingFailed}
+		}
+		if down.Swap(false) {
+			logging.From(ctx).Info("readiness: database ping recovered")
 		}
 		return health.Result{Status: health.StatusOK, LatencyMs: time.Since(start).Milliseconds()}
 	}

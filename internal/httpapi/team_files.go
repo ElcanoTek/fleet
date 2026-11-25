@@ -134,7 +134,7 @@ func (s *Server) handleConversationOutputs(w http.ResponseWriter, r *http.Reques
 		// A read failure happens first and changes nothing.
 		outs, truncated, err := s.ownerOutputs(r.Context(), convID)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeInternalError(w, r, err)
 			return
 		}
 		if err := s.store.SetOutputShared(r.Context(), user, convID, body.Path, *body.Shared); err != nil {
@@ -146,7 +146,7 @@ func (s *Server) handleConversationOutputs(w http.ResponseWriter, r *http.Reques
 			case errors.Is(err, store.ErrConversationNotFound):
 				http.Error(w, "not found", http.StatusNotFound)
 			default:
-				http.Error(w, err.Error(), http.StatusInternalServerError)
+				writeInternalError(w, r, err)
 			}
 			return
 		}
@@ -160,7 +160,7 @@ func (s *Server) handleConversationOutputs(w http.ResponseWriter, r *http.Reques
 	}
 	outs, truncated, err := s.ownerOutputs(r.Context(), convID)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 	writeOutputsResponse(w, r, outs, truncated, conv.TeamVisible)
@@ -201,7 +201,7 @@ func (s *Server) handleTeamFile(w http.ResponseWriter, r *http.Request, user, co
 	// the rows discovery reads, not the whole history.
 	ok, err := s.store.CanTeamRead(r.Context(), user, convID)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 	if !ok {
@@ -216,12 +216,12 @@ func (s *Server) handleTeamFile(w http.ResponseWriter, r *http.Request, user, co
 	// can be downloaded, never widens it.
 	history, err := s.discoveryHistory(r.Context(), convID, 0)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 	outs, _, err := s.outputsFromHistory(r.Context(), convID, history)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 	allowed := false
@@ -273,7 +273,7 @@ func (s *Server) handleTeamFile(w http.ResponseWriter, r *http.Request, user, co
 func (s *Server) handleTeamLink(w http.ResponseWriter, r *http.Request, user, convID string) {
 	tl, err := s.store.ResolveTeamLink(r.Context(), user, convID)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 	out := map[string]any{"status": tl.Status, "viewer_email": user}

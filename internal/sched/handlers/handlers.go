@@ -35,6 +35,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/ratelimit"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/sched/apikeys"
+	"github.com/ElcanoTek/fleet/internal/sched/budget"
 	"github.com/ElcanoTek/fleet/internal/sched/db"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
@@ -473,6 +474,23 @@ type createRefusalError struct {
 }
 
 func (e *createRefusalError) Error() string { return e.detail }
+
+// itemErrorText is the per-record error text of a batch or import result: a
+// create refusal's or a budget refusal's own text. Anything else is an
+// internal error (a store failure): it is logged and answered with the fixed
+// "internal error", as writeBudgetRefusal and a2aCreateError answer it.
+func itemErrorText(ctx context.Context, err error) string {
+	var refusal *createRefusalError
+	if errors.As(err, &refusal) {
+		return refusal.detail
+	}
+	var exceeded *budget.ExceededError
+	if errors.As(err, &exceeded) {
+		return exceeded.Error()
+	}
+	logging.From(ctx).Error("internal error answered with a fixed message", "err", safe.LogSafe(err.Error()))
+	return "internal error"
+}
 
 // taskNameUniqueIndex is the partial unique index on tasks.name (migration
 // 036): two tasks may not share a non-empty name.
@@ -2151,7 +2169,8 @@ func (h *Handlers) UpdateTaskTags(w http.ResponseWriter, r *http.Request) {
 
 	updated, err := h.storage.UpdateTaskTags(r.Context(), taskID, add, remove)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to update tags: %v", err))
+		logging.From(r.Context()).Error("update task tags failed", "task_id", taskID, "err", safe.LogSafe(err.Error()))
+		writeError(w, http.StatusInternalServerError, "Failed to update tags")
 		return
 	}
 	localizeTask(updated)

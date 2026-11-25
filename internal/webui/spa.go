@@ -21,7 +21,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/principal"
+	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/websession"
 )
 
@@ -437,7 +439,8 @@ func (g *Gateway) renderIndex(w http.ResponseWriter, r *http.Request, status int
 	}
 	bootJSON, err := json.Marshal(boot) // escapes <, >, & — safe inside <script>
 	if err != nil {
-		http.Error(w, "bootstrap: "+err.Error(), http.StatusInternalServerError)
+		logging.From(r.Context()).Error("index: bootstrap could not be encoded", "err", safe.LogSafe(err.Error()))
+		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	var out strings.Builder

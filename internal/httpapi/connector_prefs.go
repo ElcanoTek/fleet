@@ -36,7 +36,7 @@ func (s *Server) connectorPrefs(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		prefs, err := s.store.ListConnectorPrefs(r.Context(), user)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeInternalError(w, r, err)
 			return
 		}
 		out := make([]store.ConnectorPref, 0, len(prefs))
@@ -80,7 +80,7 @@ func (s *Server) connectorPrefs(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeInternalError(w, r, err)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -92,7 +92,7 @@ func (s *Server) connectorPrefs(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := s.store.DeleteConnectorPref(r.Context(), user, kind, id); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeInternalError(w, r, err)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)

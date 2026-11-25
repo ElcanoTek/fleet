@@ -92,7 +92,7 @@ func (s *Server) pushSubscribe(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.store.UpsertPushSubscription(r.Context(), user, req.Endpoint, req.Keys.Auth, req.Keys.P256dh); err != nil {
 		if !writeAccountGone(w, err) {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeInternalError(w, r, err)
 		}
 		return
 	}
@@ -123,7 +123,7 @@ func (s *Server) pushUnsubscribe(w http.ResponseWriter, r *http.Request) {
 	}
 	user := userFromCtx(r.Context())
 	if err := s.store.DeleteUserPushSubscription(r.Context(), user, req.Endpoint); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -155,7 +155,7 @@ func (s *Server) pushStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	held, err := s.store.HasUserPushSubscription(r.Context(), userFromCtx(r.Context()), req.Endpoint)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 	writeJSON(w, r, map[string]bool{"subscribed": held})
@@ -201,7 +201,7 @@ func (s *Server) pushRenew(w http.ResponseWriter, r *http.Request) {
 	}
 	renewed, err := s.store.RenewPushSubscription(r.Context(), user, req.OldEndpoint, req.Endpoint, req.Keys.Auth, req.Keys.P256dh)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 	writeJSON(w, r, map[string]bool{"renewed": renewed})

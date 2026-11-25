@@ -87,10 +87,10 @@ type AdminActor struct {
 
 func (a AdminActor) validate() error {
 	if strings.TrimSpace(a.Email) == "" {
-		return errors.New("admin actor email is required")
+		return errInput("admin actor email is required")
 	}
 	if a.Via != AdminViaCLI && a.Via != AdminViaWeb {
-		return fmt.Errorf("admin actor via must be %q or %q", AdminViaCLI, AdminViaWeb)
+		return errInputf("admin actor via must be %q or %q", AdminViaCLI, AdminViaWeb)
 	}
 	return nil
 }
@@ -588,10 +588,10 @@ func (s *Store) AdminAppendNotice(ctx context.Context, a AdminActor, convID, tex
 	}
 	t := strings.TrimSpace(text)
 	if t == "" {
-		return errors.New("notice text is required")
+		return errInput("notice text is required")
 	}
 	if utf8.RuneCountInString(t) > 1000 {
-		return errors.New("a notice is at most 1000 characters")
+		return errInput("a notice is at most 1000 characters")
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -640,6 +640,20 @@ func (c AdminChatChange) empty() bool {
 	return c.Title == nil && c.Model == nil && c.ApprovalMode == nil
 }
 
+// AdminPartialChangeError is an AdminUpdateChat that applied part of the
+// change (Did, each recorded and announced in the chat) before a step failed
+// with Err.
+type AdminPartialChangeError struct {
+	Did []string
+	Err error
+}
+
+func (e *AdminPartialChangeError) Error() string {
+	return fmt.Sprintf("partly applied (%s), then: %v", strings.Join(e.Did, "; "), e.Err)
+}
+
+func (e *AdminPartialChangeError) Unwrap() error { return e.Err }
+
 // AdminUpdateChat applies an admin change to a chat's title, model or
 // approval mode, records it, and writes a notice into the chat. It
 // returns the chat as it is afterwards.
@@ -652,7 +666,7 @@ func (s *Store) AdminUpdateChat(ctx context.Context, a AdminActor, convID string
 		return AdminChat{}, err
 	}
 	if c.empty() {
-		return AdminChat{}, errors.New("nothing to change")
+		return AdminChat{}, errInput("nothing to change")
 	}
 	cur, err := s.AdminGetChat(ctx, convID)
 	if err != nil {
@@ -670,7 +684,7 @@ func (s *Store) AdminUpdateChat(ctx context.Context, a AdminActor, convID string
 	if c.Title != nil {
 		t := strings.TrimSpace(*c.Title)
 		if t == "" {
-			return AdminChat{}, errors.New("title cannot be empty")
+			return AdminChat{}, errInput("title cannot be empty")
 		}
 		if t != cur.Title {
 			// The manual rename path: it renames a title the owner locked,
@@ -682,9 +696,9 @@ func (s *Store) AdminUpdateChat(ctx context.Context, a AdminActor, convID string
 		m := strings.TrimSpace(*c.Model)
 		switch {
 		case m == "":
-			return AdminChat{}, errors.New("model cannot be empty")
+			return AdminChat{}, errInput("model cannot be empty")
 		case len(m) > 200 || strings.ContainsAny(m, " \t\r\n"):
-			return AdminChat{}, fmt.Errorf("%q is not a model slug", m)
+			return AdminChat{}, errInputf("%q is not a model slug", m)
 		case cur.Lockdown && m != cur.Model:
 			return AdminChat{}, fmt.Errorf("%w: a Lockdown chat keeps its model", ErrAdminChatNotAllowed)
 		}
@@ -737,7 +751,7 @@ func (s *Store) AdminUpdateChat(ctx context.Context, a AdminActor, convID string
 	}
 	if applyErr != nil {
 		if len(did) > 0 {
-			return AdminChat{}, fmt.Errorf("partly applied (%s), then: %w", strings.Join(did, "; "), applyErr)
+			return AdminChat{}, &AdminPartialChangeError{Did: did, Err: applyErr}
 		}
 		return AdminChat{}, applyErr
 	}
@@ -793,26 +807,26 @@ func (s *Store) CreateAdminRequest(ctx context.Context, in AdminRequestInput) (A
 	switch in.Kind {
 	case AdminRequestMessage:
 		if payload == "" {
-			return AdminRequest{}, errors.New("the message is empty")
+			return AdminRequest{}, errInput("the message is empty")
 		}
 		if len(payload) > MaxAdminMessageBytes {
-			return AdminRequest{}, fmt.Errorf("the message is %d bytes; the limit is %d", len(payload), MaxAdminMessageBytes)
+			return AdminRequest{}, errInputf("the message is %d bytes; the limit is %d", len(payload), MaxAdminMessageBytes)
 		}
 	case AdminRequestTransfer:
 		if payload == "" || !strings.Contains(payload, "@") {
-			return AdminRequest{}, errors.New("the new owner's email is required")
+			return AdminRequest{}, errInput("the new owner's email is required")
 		}
 		payload = strings.ToLower(payload)
 	case AdminRequestStop:
 		payload = ""
 	case AdminRequestArchive:
 		if payload != "archive" && payload != "unarchive" {
-			return AdminRequest{}, errors.New(`an archive request's payload is "archive" or "unarchive"`)
+			return AdminRequest{}, errInput(`an archive request's payload is "archive" or "unarchive"`)
 		}
 	case AdminRequestDelete, AdminRequestRestore, AdminRequestPurge:
 		payload = ""
 	default:
-		return AdminRequest{}, fmt.Errorf("unknown admin request kind %q", in.Kind)
+		return AdminRequest{}, errInputf("unknown admin request kind %q", in.Kind)
 	}
 	var chat AdminChat
 	switch in.Kind {

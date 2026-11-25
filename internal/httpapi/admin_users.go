@@ -103,7 +103,7 @@ func (s *Server) handleAdminUserCreate(w http.ResponseWriter, r *http.Request) {
 		case store.IsInputError(err):
 			http.Error(w, err.Error(), http.StatusBadRequest)
 		default:
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeInternalError(w, r, err)
 		}
 		return
 	}
@@ -113,7 +113,8 @@ func (s *Server) handleAdminUserCreate(w http.ResponseWriter, r *http.Request) {
 	// it rather than unwinding the create.
 	if body.Role != nil || body.TeamID != nil || opsGrant != nil {
 		if u, err = s.store.SetUserAccess(r.Context(), email, body.Role, body.TeamID, opsGrant); err != nil {
-			http.Error(w, "user created, but assigning role/team/Operations Center access failed: "+err.Error(), http.StatusInternalServerError)
+			logInternalError(r.Context(), r, err, 0)
+			http.Error(w, "user created, but assigning role/team/Operations Center access failed", http.StatusInternalServerError)
 			return
 		}
 	}
@@ -331,14 +332,16 @@ func writeAccountDeleteRefusal(w http.ResponseWriter, r *http.Request, err error
 			http.Error(w, errAccountDeleteKeysBusy, http.StatusServiceUnavailable)
 			return
 		}
-		http.Error(w, fmt.Sprintf("the account's user API keys could not be updated before the deletion (%s); nothing was deleted", notBound.Err), http.StatusInternalServerError)
+		logInternalError(r.Context(), r, err, 1)
+		http.Error(w, "the account's user API keys could not be updated before the deletion; nothing was deleted", http.StatusInternalServerError)
 		return
 	}
 	// One of the account's trees could not be moved aside, so nothing was
 	// deleted (accountdelete.FilesNotSetAsideError).
 	var notMoved *accountdelete.FilesNotSetAsideError
 	if errors.As(err, &notMoved) {
-		http.Error(w, fmt.Sprintf("the account's files could not be moved aside before the deletion (%s), so nothing was deleted; fix that and try again", notMoved.Err), http.StatusInternalServerError)
+		logInternalError(r.Context(), r, err, 1)
+		http.Error(w, "the account's files could not be moved aside before the deletion, so nothing was deleted; the server log has the reason", http.StatusInternalServerError)
 		return
 	}
 	// Another account took the address between the read and the deletion.
@@ -346,7 +349,7 @@ func writeAccountDeleteRefusal(w http.ResponseWriter, r *http.Request, err error
 		http.Error(w, "the account changed while it was being deleted; nothing was deleted", http.StatusConflict)
 		return
 	}
-	http.Error(w, err.Error(), http.StatusInternalServerError)
+	writeInternalErrorFromHelper(w, r, err)
 }
 
 // errAccountDeleteKeysBusy answers a deletion refused because the API-key
@@ -374,7 +377,7 @@ func (s *Server) handleAdminUserPassword(w http.ResponseWriter, r *http.Request,
 		case store.IsInputError(err):
 			http.Error(w, err.Error(), http.StatusBadRequest)
 		default:
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeInternalError(w, r, err)
 		}
 		return
 	}
@@ -411,7 +414,7 @@ func (s *Server) handleAdminTeamRename(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 	s.reconcileAllMultiplayerAccess(r.Context(), affectedConvIDs...)

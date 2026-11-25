@@ -350,7 +350,7 @@ above fails otherwise.
 - [`GUARDRAILS.md`](GUARDRAILS.md) — Prompt-injection guardrails (#702)
 - [`HOOKS.md`](HOOKS.md) — Governed lifecycle hooks (#788)
 - [`HOSTED-CONNECTORS-RUNBOOK.md`](HOSTED-CONNECTORS-RUNBOOK.md) — Hosted MCP connectors — operator runbook
-- [`HTTP-CONTRACTS.md`](HTTP-CONTRACTS.md) — Generated HTTP contracts: what is generated from the router and the route catalog, the drift gate, and what phase 3/4 of #2050 adds (ADR-0109)
+- [`HTTP-CONTRACTS.md`](HTTP-CONTRACTS.md) — Generated HTTP contracts: what is generated from the router and the route catalog, the drift gate, and what phase 3/4 of #2050 adds (ADR-0109); how an error answer is shaped (a refusal's sentence, or a logged internal error answered with a fixed message)
 - [`implementation-plans-enhancements.md`](implementation-plans-enhancements.md) — Implementation plans: enhancements (all shipped)
 - [`IN-HOUSED-DEPENDENCIES.md`](IN-HOUSED-DEPENDENCIES.md) — In-housed dependencies
 - [`INPUT-QUEUE.md`](INPUT-QUEUE.md) — Input queue & mid-turn steering (#785)

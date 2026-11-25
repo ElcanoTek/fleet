@@ -17,7 +17,7 @@ func (s *Server) handleMigrations(w http.ResponseWriter, r *http.Request) {
 	}
 	report, err := s.store.MigrationStatus(r.Context())
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 	writeJSON(w, r, report)

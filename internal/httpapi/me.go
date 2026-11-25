@@ -61,7 +61,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	}
 	u, err := s.store.GetUser(r.Context(), userFromCtx(r.Context()))
 	if err != nil {
-		s.writeUserLookupError(w, err)
+		s.writeUserLookupError(w, r, err)
 		return
 	}
 	writeJSON(w, r, s.meResponseFor(r.Context(), u))
@@ -82,7 +82,7 @@ type teamResponse struct {
 func (s *Server) handleMyTeamGet(w http.ResponseWriter, r *http.Request) {
 	u, err := s.store.GetUser(r.Context(), userFromCtx(r.Context()))
 	if err != nil {
-		s.writeUserLookupError(w, err)
+		s.writeUserLookupError(w, r, err)
 		return
 	}
 	out := teamResponse{meResponse: s.meResponseFor(r.Context(), u)}
@@ -137,7 +137,7 @@ func (s *Server) handleMyTeam(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "that team already exists — ask an admin to add you to it", http.StatusConflict)
 			return
 		}
-		s.writeUserLookupError(w, err)
+		s.writeUserLookupError(w, r, err)
 		return
 	}
 	s.reconcileAllMultiplayerAccess(r.Context(), affectedConvIDs...)
@@ -147,14 +147,14 @@ func (s *Server) handleMyTeam(w http.ResponseWriter, r *http.Request) {
 }
 
 // writeUserLookupError maps the store's user errors onto the two statuses this
-// surface can produce; anything else is a 500 with the store's own message.
-func (s *Server) writeUserLookupError(w http.ResponseWriter, err error) {
+// surface can produce; anything else is an internal error (writeInternalError).
+func (s *Server) writeUserLookupError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, store.ErrUserNotFound):
 		http.Error(w, "user not found", http.StatusNotFound)
 	case store.IsInputError(err):
 		http.Error(w, err.Error(), http.StatusBadRequest)
 	default:
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalErrorFromHelper(w, r, err)
 	}
 }

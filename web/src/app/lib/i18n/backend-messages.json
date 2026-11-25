@@ -36,6 +36,7 @@
     "Failed to save budget",
     "Failed to save file",
     "Failed to set task owner",
+    "Failed to update tags",
     "Failed to update task",
     "Failed to validate model.",
     "Failed to verify budget principal",
@@ -150,12 +151,16 @@
     "chat schedule store is not configured",
     "chat store unavailable",
     "chat turn panicked",
+    "chat-server unreachable",
+    "chat-server unreachable: no backend",
     "client_id must be a valid Microsoft Entra Application (client) UUID",
     "client_request_id must be at most 128 characters",
     "conflict=replace requires admin permission",
+    "content blocked by workspace guardrail",
     "conversation has no content to promote",
     "conversation has no content to save as a prompt",
     "conversation has no history to summarize",
+    "conversation history could not be saved",
     "conversation id required",
     "conversation is in lockdown mode but the server has no sandbox image configured",
     "conversation not found",
@@ -232,6 +237,7 @@
     "insufficient key scope: this key type cannot upload task files",
     "insufficient role: a readonly user cannot modify resources",
     "internal error",
+    "internal error (nothing from this upload was saved)",
     "invalid JSON",
     "invalid JSON payload",
     "invalid access action",
@@ -317,6 +323,8 @@
     "only the project owner can do that",
     "openrouter models response contained no usable entries",
     "ops_role admin is the Fleet admin role; send role admin instead",
+    "orchestrator unreachable",
+    "orchestrator unreachable: no backend",
     "outcome \"done\" with a failed, mismatched, needs_check or unclear item",
     "outcome \"failed\" with an applied item",
     "outcome \"unclear\" with a needs_check item and no unclear one: use \"mismatch\" or \"partial\"",
@@ -358,6 +366,7 @@
     "run_if: a host-side pre-run gate can only be changed by an admin",
     "run_if: task is already pending dispatch, so its gate can no longer be evaluated for this run; change the gate while the task is scheduled, or cancel and recreate it",
     "sandbox_limits.cpus must be \u003e 0",
+    "saved, but applying the provider table failed; the previous table is still in use",
     "scheduled time cannot be in the past",
     "scheduled time is too far in the future",
     "scheduling from chat is not configured on this server",
@@ -380,8 +389,10 @@
     "staged path is occupied by a non-regular file",
     "store returned nil approval",
     "store unavailable",
+    "stored notification secrets cannot be decrypted (was FLEET_MCP_OAUTH_ENCRYPTION_KEY rotated?); re-enter the secrets and save, or revert to env config",
     "streaming unsupported",
     "suggestion has no frozen model target; dismiss it and request a new suggestion",
+    "summarizing failed; try again",
     "task is not awaiting a wake",
     "task is not waiting for that event",
     "tasks must not be empty",
@@ -396,6 +407,8 @@
     "the API-key store is busy with another change; try again in a few seconds",
     "the Stop was sent, but the turn has not confirmed it yet",
     "the account changed while it was being deleted; nothing was deleted",
+    "the account's files could not be moved aside before the deletion, so nothing was deleted; the server log has the reason",
+    "the account's user API keys could not be updated before the deletion; nothing was deleted",
     "the assistant could not draft this patrol; try again or edit the draft yourself",
     "the chat made with this client_request_id was deleted; retry with a new one",
     "the deletion did not complete and the account could not be read back; its files are held until that is confirmed, and the next maintenance pass puts them back or removes them",
@@ -403,15 +416,21 @@
     "the input could not be withdrawn from the queue",
     "the message could not be queued behind the running turn; send it again",
     "the message could not be recorded against its turn; send it again",
+    "the model catalog could not be loaded",
     "the patrol changed since you opened it; reload and edit again",
     "the patrol's instructions changed since you opened them; reload and edit again",
     "the pinned note changed since you opened it; reload and edit again",
+    "the rollout was applied, but its fallback retry state could not be cleared; run the rollout again",
+    "the rollout was applied, but its fallback retry state could not be read; run the rollout again",
     "the schedule changed while it was being run; try again",
     "the scheduler is not running",
     "the server is not taking new turns right now; the run starts when it does",
     "the server is reconnecting to its database; try again",
+    "the summary could not be saved; try again",
     "the turn ended before its input was saved",
+    "the turn ended unexpectedly due to an internal error",
     "the turn journal lost a write; refusing to record success for an incompletely journaled turn",
+    "the workspace is at capacity right now — please resend your message in a moment",
     "thinking_budget_tokens must be \u003e= 0 (0 = off, omit to inherit the default)",
     "this API key was minted for an earlier account under this email, or before the account existed; mint a new key for the account (fleet sched apikey create \u003cname\u003e --type user --user \u003cemail\u003e)",
     "this account no longer exists",
@@ -440,6 +459,7 @@
     "unknown search type (only \"conversations\" is indexed)",
     "unknown skill",
     "until must be an RFC3339 timestamp",
+    "user created, but assigning role/team/Operations Center access failed",
     "user email required",
     "user keys are minted with `fleet sched apikey create \u003cname\u003e --type user --user \u003cemail\u003e`",
     "user not found",
@@ -782,12 +802,6 @@
       "message": "CreateTurn: {0}",
       "fields": [
         "%w"
-      ]
-    },
-    {
-      "message": "Failed to update tags: {0}",
-      "fields": [
-        "%v"
       ]
     },
     {
@@ -1860,18 +1874,6 @@
       ]
     },
     {
-      "message": "the account's files could not be moved aside before the deletion ({0}), so nothing was deleted; fix that and try again",
-      "fields": [
-        "%s"
-      ]
-    },
-    {
-      "message": "the account's user API keys could not be updated before the deletion ({0}); nothing was deleted",
-      "fields": [
-        "%s"
-      ]
-    },
-    {
       "message": "the approval was narrowed, but its record {0}; nothing was run",
       "fields": [
         "%s"
@@ -1882,6 +1884,18 @@
       "fields": [
         "%s",
         "%s"
+      ]
+    },
+    {
+      "message": "the change was partly applied: {0}; reload",
+      "fields": [
+        "%s"
+      ]
+    },
+    {
+      "message": "the chat rollout failed after {0} scheduled task(s) were updated; run the rollout again",
+      "fields": [
+        "%d"
       ]
     },
     {

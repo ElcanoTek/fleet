@@ -486,13 +486,13 @@ func (h *Handlers) a2aSendMessage(w http.ResponseWriter, r *http.Request, p prin
 			return
 		}
 		if err := a2aValidatePushURL(params.Config.PushConfig.URL); err != nil {
-			a2aWrite(w, r, a2aErrorFrom(req.ID, err))
+			a2aWrite(w, r, a2aErrorFrom(r.Context(), req.ID, err))
 			return
 		}
 	}
 	prompt, err := a2aPromptFromMessage(params.Message)
 	if err != nil {
-		a2aWrite(w, r, a2aErrorFrom(req.ID, err))
+		a2aWrite(w, r, a2aErrorFrom(r.Context(), req.ID, err))
 		return
 	}
 
@@ -645,7 +645,7 @@ func (h *Handlers) a2aAwaitOutcome(ctx context.Context, taskID uuid.UUID, latest
 func (h *Handlers) a2aAnswerTask(w http.ResponseWriter, r *http.Request, p principal, req a2abridge.Request, rawID wire.TaskID, answer string, cfg *wire.SendMessageConfig, streaming bool) {
 	task, err := h.a2aVisibleTask(p, rawID)
 	if err != nil {
-		a2aWrite(w, r, a2aErrorFrom(req.ID, err))
+		a2aWrite(w, r, a2aErrorFrom(r.Context(), req.ID, err))
 		return
 	}
 	if !taskActableByPrincipal(p, task) {
@@ -686,7 +686,7 @@ func (h *Handlers) a2aAnswerTask(w http.ResponseWriter, r *http.Request, p princ
 	// the way a caller subscribes to the outcome of the answer it just gave.
 	if cfg != nil && cfg.PushConfig != nil {
 		if err := a2aValidatePushURL(cfg.PushConfig.URL); err != nil {
-			a2aWrite(w, r, a2aErrorFrom(req.ID, err))
+			a2aWrite(w, r, a2aErrorFrom(r.Context(), req.ID, err))
 			return
 		}
 		if err := h.a2aStorePushConfigInline(r, task.ID, cfg.PushConfig); err != nil {
@@ -741,8 +741,10 @@ func a2aCreateError(ctx context.Context, id json.RawMessage, err error) a2abridg
 	return a2abridge.NewErrorResponse(id, wire.ErrInternalError, "task creation failed on the server; try again", nil)
 }
 
-// a2aErrorFrom renders an error already wrapping one of the wire sentinels.
-func a2aErrorFrom(id json.RawMessage, err error) a2abridge.Response {
+// a2aErrorFrom renders an error wrapping one of the wire sentinels with its
+// text. Any other error is an internal error: logged, and answered with a
+// fixed message.
+func a2aErrorFrom(ctx context.Context, id json.RawMessage, err error) a2abridge.Response {
 	for _, sentinel := range []error{
 		wire.ErrTaskNotFound, wire.ErrTaskNotCancelable, wire.ErrUnsupportedOperation,
 		wire.ErrUnsupportedContentType, wire.ErrInvalidParams, wire.ErrPushNotificationNotSupported,
@@ -752,7 +754,8 @@ func a2aErrorFrom(id json.RawMessage, err error) a2abridge.Response {
 			return a2abridge.NewErrorResponse(id, sentinel, err.Error(), nil)
 		}
 	}
-	return a2abridge.NewErrorResponse(id, wire.ErrInternalError, err.Error(), nil)
+	logging.From(ctx).Error("A2A: internal error answered with a fixed message", "err", safe.LogSafe(err.Error()))
+	return a2abridge.NewErrorResponse(id, wire.ErrInternalError, "internal error", nil)
 }
 
 // a2aGetTask implements GetTask: an ADR-0043-scoped read. The result is the
@@ -773,7 +776,7 @@ func (h *Handlers) a2aGetTask(w http.ResponseWriter, r *http.Request, p principa
 	}
 	task, err := h.a2aVisibleTask(p, params.ID)
 	if err != nil {
-		a2aWrite(w, r, a2aErrorFrom(req.ID, err))
+		a2aWrite(w, r, a2aErrorFrom(r.Context(), req.ID, err))
 		return
 	}
 	a2aWrite(w, r, a2abridge.NewResponse(req.ID, a2abridge.BuildTask(task, h.a2a.PublicBaseURL, true)))
@@ -845,7 +848,7 @@ func (h *Handlers) a2aListTasks(w http.ResponseWriter, r *http.Request, p princi
 	if params.PageToken != "" {
 		var err error
 		if offset, err = a2aParsePageToken(params.PageToken); err != nil {
-			a2aWrite(w, r, a2aErrorFrom(req.ID, err))
+			a2aWrite(w, r, a2aErrorFrom(r.Context(), req.ID, err))
 			return
 		}
 	}
@@ -933,7 +936,7 @@ func (h *Handlers) a2aCancelTask(w http.ResponseWriter, r *http.Request, p princ
 	}
 	task, err := h.a2aVisibleTask(p, params.ID)
 	if err != nil {
-		a2aWrite(w, r, a2aErrorFrom(req.ID, err))
+		a2aWrite(w, r, a2aErrorFrom(r.Context(), req.ID, err))
 		return
 	}
 	if !taskCreatedByPrincipal(p, task) && !p.hasPermission(models.PermissionCancelTask) {
@@ -956,7 +959,7 @@ func (h *Handlers) a2aCancelTask(w http.ResponseWriter, r *http.Request, p princ
 			return
 		}
 		if strings.Contains(err.Error(), "no rows") {
-			a2aWrite(w, r, a2aErrorFrom(req.ID, fmt.Errorf("%w: no task %q is visible to this credential", wire.ErrTaskNotFound, task.ID)))
+			a2aWrite(w, r, a2aErrorFrom(r.Context(), req.ID, fmt.Errorf("%w: no task %q is visible to this credential", wire.ErrTaskNotFound, task.ID)))
 			return
 		}
 		a2aWrite(w, r, a2abridge.NewErrorResponse(req.ID, wire.ErrInternalError, "failed to cancel the task", nil))
@@ -991,7 +994,7 @@ func (h *Handlers) a2aSubscribeToTask(w http.ResponseWriter, r *http.Request, p 
 	}
 	task, err := h.a2aVisibleTask(p, params.ID)
 	if err != nil {
-		a2aWrite(w, r, a2aErrorFrom(req.ID, err))
+		a2aWrite(w, r, a2aErrorFrom(r.Context(), req.ID, err))
 		return
 	}
 	if task.Status.IsTerminal() {

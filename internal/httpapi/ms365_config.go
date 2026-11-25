@@ -134,7 +134,7 @@ func (s *Server) handleMS365Config(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := st.SetMS365MCPConfig(r.Context(), clientID, tenantID, userFromCtx(r.Context())); err != nil {
-			http.Error(w, "save Microsoft 365 configuration: "+err.Error(), http.StatusInternalServerError)
+			writeInternalError(w, r, err)
 			return
 		}
 		ms365mcp.SetCachedCredentials(clientID, tenantID)
@@ -150,7 +150,7 @@ func (s *Server) handleMS365Config(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := st.DeleteMS365MCPConfig(r.Context()); err != nil {
-			http.Error(w, "reset Microsoft 365 configuration: "+err.Error(), http.StatusInternalServerError)
+			writeInternalError(w, r, err)
 			return
 		}
 		ms365mcp.SetCachedCredentials("", "")

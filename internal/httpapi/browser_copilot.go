@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"net/http"
@@ -84,8 +85,27 @@ func (s *Server) handleBrowserSessionInput(w http.ResponseWriter, r *http.Reques
 		writeJSONStatus(w, r, http.StatusBadRequest, map[string]string{"error": "invalid input payload"})
 		return
 	}
+	// A navigation target is checked here, so its refusal reaches the viewer;
+	// a failure of the browser worker itself is an internal error.
+	if ev.Type == "navigate" && strings.TrimSpace(ev.URL) != "" {
+		if _, err := playwrightrunner.ValidateTargetURL(ev.URL, true); err != nil {
+			writeJSONStatus(w, r, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+	}
 	if err := sess.SendInput(r.Context(), ev); err != nil {
-		writeJSONStatus(w, r, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		var refused *playwrightrunner.CommandError
+		switch {
+		case errors.Is(err, playwrightrunner.ErrSessionClosed):
+			writeJSONStatus(w, r, http.StatusGone, map[string]string{"error": "the browser session has ended"})
+		case errors.As(err, &refused):
+			// The page refused the input: the worker's report, credentials
+			// masked, is what the viewer needs.
+			writeJSONStatus(w, r, http.StatusUnprocessableEntity, map[string]string{"error": refused.Error()})
+		default:
+			logInternalError(r.Context(), r, err, 0)
+			writeJSONStatus(w, r, http.StatusInternalServerError, map[string]string{"error": internalErrorMessage})
+		}
 		return
 	}
 	info := sess.Info(nil)

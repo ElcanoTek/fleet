@@ -65,7 +65,7 @@ func (s *Server) handleAdminNotifySettings(w http.ResponseWriter, r *http.Reques
 	case http.MethodGet:
 		view, err := s.notifySettings.View(r.Context())
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeInternalError(w, r, err)
 			return
 		}
 		writeJSON(w, r, view)
@@ -83,14 +83,14 @@ func (s *Server) handleAdminNotifySettings(w http.ResponseWriter, r *http.Reques
 		}
 		view, err := s.notifySettings.Save(r.Context(), in, userFromCtx(r.Context()))
 		if err != nil {
-			httpErrorForNotifySettings(w, err)
+			httpErrorForNotifySettings(w, r, err)
 			return
 		}
 		writeJSON(w, r, view)
 	case http.MethodDelete:
 		view, err := s.notifySettings.Revert(r.Context(), userFromCtx(r.Context()))
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeInternalError(w, r, err)
 			return
 		}
 		writeJSON(w, r, view)
@@ -119,19 +119,29 @@ func (s *Server) handleAdminNotifySettingsTest(w http.ResponseWriter, r *http.Re
 	}
 	result, err := s.notifySettings.Test(r.Context(), body.Channel)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		httpErrorForNotifySettings(w, r, err)
 		return
 	}
 	writeJSON(w, r, result)
 }
 
+// errNotifySecretsUnreadable answers a save or test that needed the stored
+// secrets after the encryption key changed: what to do, without the
+// decryption error (logged).
+var errNotifySecretsUnreadable = errors.New("stored notification secrets cannot be decrypted (was FLEET_MCP_OAUTH_ENCRYPTION_KEY rotated?); re-enter the secrets and save, or revert to env config")
+
 // httpErrorForNotifySettings maps validation failures (shape checks in
 // NotifySettingsInput.normalize, reported before anything persists) to 400,
-// everything else to 500.
-func httpErrorForNotifySettings(w http.ResponseWriter, err error) {
-	if errors.Is(err, store.ErrInvalidNotifySettings) {
+// stored secrets the current key cannot decrypt to 409 with what to do, and
+// everything else to an internal error.
+func httpErrorForNotifySettings(w http.ResponseWriter, r *http.Request, err error) {
+	switch {
+	case errors.Is(err, store.ErrInvalidNotifySettings):
 		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+	case errors.Is(err, store.ErrNotifySecretsUndecryptable):
+		logInternalError(r.Context(), r, err, 1)
+		http.Error(w, errNotifySecretsUnreadable.Error(), http.StatusConflict)
+	default:
+		writeInternalErrorFromHelper(w, r, err)
 	}
-	http.Error(w, err.Error(), http.StatusInternalServerError)
 }

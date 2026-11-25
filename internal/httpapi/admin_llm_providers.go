@@ -47,7 +47,7 @@ func (s *Server) handleAdminLLMProviders(w http.ResponseWriter, r *http.Request)
 	case http.MethodGet:
 		providers, err := s.store.ListLLMProviders(r.Context())
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeInternalError(w, r, err)
 			return
 		}
 		writeJSON(w, r, map[string]any{"providers": providers})
@@ -76,7 +76,7 @@ func (s *Server) handleAdminLLMProviders(w http.ResponseWriter, r *http.Request)
 		}
 		p, err := s.store.CreateLLMProvider(r.Context(), in)
 		if err != nil {
-			httpErrorForLLMProvider(w, err)
+			httpErrorForLLMProvider(w, r, err)
 			return
 		}
 		s.applyLLMProviderChange(w, r, p)
@@ -123,7 +123,7 @@ func (s *Server) handleAdminLLMProviderItem(w http.ResponseWriter, r *http.Reque
 		if body.APIKey == nil || body.ContextWindowTokens == nil || body.Region == nil {
 			existing, err := s.store.ListLLMProviders(r.Context())
 			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
+				writeInternalError(w, r, err)
 				return
 			}
 			for _, p := range existing {
@@ -153,13 +153,13 @@ func (s *Server) handleAdminLLMProviderItem(w http.ResponseWriter, r *http.Reque
 		}
 		p, err := s.store.UpdateLLMProvider(r.Context(), id, in)
 		if err != nil {
-			httpErrorForLLMProvider(w, err)
+			httpErrorForLLMProvider(w, r, err)
 			return
 		}
 		s.applyLLMProviderChange(w, r, p)
 	case http.MethodDelete:
 		if err := s.store.DeleteLLMProvider(r.Context(), id); err != nil {
-			httpErrorForLLMProvider(w, err)
+			httpErrorForLLMProvider(w, r, err)
 			return
 		}
 		s.applyLLMProviderChange(w, r, map[string]any{"deleted": true})
@@ -185,7 +185,7 @@ func (s *Server) handleAdminLLMProviderTest(w http.ResponseWriter, r *http.Reque
 	}
 	cfg, err := s.store.GetLLMProviderConfig(r.Context(), id)
 	if err != nil {
-		httpErrorForLLMProvider(w, err)
+		httpErrorForLLMProvider(w, r, err)
 		return
 	}
 	result := agentcore.ProbeProvider(r.Context(), agentcore.ProviderConfig{
@@ -206,8 +206,8 @@ func (s *Server) handleAdminLLMProviderTest(w http.ResponseWriter, r *http.Reque
 func (s *Server) applyLLMProviderChange(w http.ResponseWriter, r *http.Request, result any) {
 	if s.llmProvidersChanged != nil {
 		if err := s.llmProvidersChanged(r.Context()); err != nil {
-			http.Error(w, "saved, but applying the provider table failed: "+err.Error(),
-				http.StatusInternalServerError)
+			logInternalError(r.Context(), r, err, 0)
+			http.Error(w, "saved, but applying the provider table failed; the previous table is still in use", http.StatusInternalServerError)
 			return
 		}
 	}
@@ -250,14 +250,14 @@ func validateLLMProviderRow(in store.LLMProviderInput, effectiveKey string) erro
 	return nil
 }
 
-func httpErrorForLLMProvider(w http.ResponseWriter, err error) {
+func httpErrorForLLMProvider(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, store.ErrLLMProviderNotFound):
 		http.Error(w, err.Error(), http.StatusNotFound)
 	case errors.Is(err, store.ErrLLMProviderExists), store.IsInputError(err):
 		http.Error(w, err.Error(), http.StatusBadRequest)
 	default:
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalErrorFromHelper(w, r, err)
 	}
 }
 
@@ -306,7 +306,7 @@ func (s *Server) handleLLMProviderModels(w http.ResponseWriter, r *http.Request)
 	}
 	providers, err := s.store.ListLLMProviders(r.Context())
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 	type entry struct {

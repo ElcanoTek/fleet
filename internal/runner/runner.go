@@ -1180,7 +1180,9 @@ func (p *Pool) finishSuccess(ctx context.Context, task *models.Task, session *mo
 		// structured contract gives the failure the structured-output
 		// persistence class (non-retryable unless retry_on opts in).
 		if len(task.OutputSchema) > 0 {
-			persistErr := fmt.Errorf("%w: commit validated output and success under lease: %w", agentcore.ErrStructuredOutputPersistence, err)
+			// The store's error is logged above; the run log and the task's
+			// error message get a fixed sentence.
+			persistErr := fmt.Errorf("%w: the validated output and success could not be recorded", agentcore.ErrStructuredOutputPersistence)
 			p.submitLog(ctx, task, session, persistErr.Error())
 			p.handleRunFailure(ctx, task, session, persistErr, token, start)
 			return
@@ -1188,7 +1190,8 @@ func (p *Pool) finishSuccess(ctx context.Context, task *models.Task, session *mo
 		// A free-form run did its work, and its success cannot be recorded:
 		// record that as a terminal error rather than leave the row running
 		// for lease recovery to run again.
-		msg := truncate.Runes("Task finished, but its success could not be recorded ("+err.Error()+"); it was not run again", maxTerminalMessageRunes, "…")
+		// The store's error is logged above; the message is fixed text.
+		msg := "Task finished, but its success could not be recorded; it was not run again"
 		landed := p.recordTerminalError(ctx, task.ID, token, "unrecordable success", msg)
 		p.submitLog(ctx, task, session, msg)
 		if landed {

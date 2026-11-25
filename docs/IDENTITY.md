@@ -238,8 +238,9 @@ advises on each demoted split admin, unknown role and duplicate username in it.
     directory the move must look into that cannot be read (the attachment
     directory included; only one that is not there means nothing to move),
     stops the deletion before anything is deleted: the trees already moved
-    go back, and the web route answers 500 (the CLI exits non-zero) with the
-    reason and that nothing was deleted. After the commit the address's
+    go back, and the web route answers 500 saying that nothing was deleted,
+    with the reason in the server log (the CLI exits non-zero with the
+    reason). After the commit the address's
     paths are checked once more (below); if
     the server stops between the move and the commit, the maintenance pass
     removes the trees left aside (the account was being deleted) once they

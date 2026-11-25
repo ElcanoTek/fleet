@@ -397,7 +397,7 @@ func TestWriteScheduleError_RunNowRefusals(t *testing.T) {
 		{models.ErrChatScheduleNotFound, http.StatusNotFound},
 	} {
 		rec := httptest.NewRecorder()
-		writeScheduleError(rec, tc.err)
+		writeScheduleError(rec, nil, tc.err)
 		if rec.Code != tc.want {
 			t.Errorf("%v: status %d, want %d", tc.err, rec.Code, tc.want)
 		}

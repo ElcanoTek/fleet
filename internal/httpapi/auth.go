@@ -380,7 +380,7 @@ func writeNotTakingTurns(w http.ResponseWriter, err error) {
 		writeServerReconnecting(w)
 		return
 	}
-	http.Error(w, err.Error(), http.StatusServiceUnavailable)
+	http.Error(w, errServerShuttingDown.Error(), http.StatusServiceUnavailable)
 }
 
 // errKeyStoreBusy is the answer to a not-yet-bound user key whose binding
@@ -497,7 +497,7 @@ func (s *Server) handleSessionEpoch(w http.ResponseWriter, r *http.Request) {
 	}
 	epoch, err := s.store.SessionEpoch(r.Context(), userFromCtx(r.Context()))
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 	writeJSON(w, r, sessionEpochResponse{SessionEpoch: epoch})

@@ -135,7 +135,7 @@ func (g *Gateway) registerOrchestrator(mux *http.ServeMux) {
 // path-based exemptions see the same path on every mount.
 func (g *Gateway) serveOrchestrator(w http.ResponseWriter, r *http.Request, sub string) {
 	if g.orch == nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "orchestrator unreachable: no backend"})
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": errOrchestratorNoBackend.Error()})
 		return
 	}
 	escaped := sub

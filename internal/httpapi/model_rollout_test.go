@@ -352,7 +352,8 @@ func TestModelRollout_TaskFailureAbortsBeforeChatAndPartialError207(t *testing.T
 	if err := json.Unmarshal(w.Body.Bytes(), &partial); err != nil {
 		t.Fatalf("decode 207 response: %v", err)
 	}
-	if partial.TasksUpdated != 2 || !strings.Contains(partial.PartialError, "2 scheduled task(s) updated") {
+	// The chat phase's error is logged; partial_error is fixed text.
+	if partial.TasksUpdated != 2 || !strings.Contains(partial.PartialError, "after 2 scheduled task(s) were updated") || strings.Contains(partial.PartialError, "chat db unavailable") {
 		t.Fatalf("unexpected 207 body: %+v", partial)
 	}
 }
@@ -519,8 +520,9 @@ func TestPendingFallbackRolloutFromPropagatesStoreErrors(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if !strings.Contains(resp.RolloutError, "clear pending fallback rollout state") {
-		t.Fatalf("expected RolloutError to surface clear failure, got %+v", resp)
+	// The store's error is logged; rollout_error is the fixed internal error.
+	if resp.RolloutError != internalErrorMessage || resp.RolloutRetry == nil {
+		t.Fatalf("expected RolloutError to report the clear failure with a retry, got %+v", resp)
 	}
 }
 

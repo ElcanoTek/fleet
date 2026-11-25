@@ -288,7 +288,7 @@ func (m *SessionManager) GetSession(id string, ownerEmail string, viewToken stri
 	closed := sess.closed
 	sess.mu.Unlock()
 	if closed {
-		return nil, errors.New("browser session is closed")
+		return nil, ErrSessionClosed
 	}
 	if !sess.Authorize(ownerEmail, viewToken) {
 		return nil, errors.New("not authorized for this browser session")
@@ -490,7 +490,7 @@ func (s *LiveSession) SubscribeFrames() (<-chan FrameEvent, func(), error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return nil, nil, errors.New("browser session is closed")
+		return nil, nil, ErrSessionClosed
 	}
 	if len(s.subscribers) >= maxSubscribersPerID {
 		return nil, nil, errors.New("too many live viewers connected to this session")
@@ -575,11 +575,23 @@ func (s *LiveSession) watchdog(m *SessionManager) {
 	}
 }
 
+// ErrSessionClosed is a command sent to a live browser session that has
+// ended (closed by its owner, idle, or its worker gone).
+var ErrSessionClosed = errors.New("browser session is closed")
+
+// CommandError is a command the browser worker ran and reported failed: the
+// page refused it (a navigation the session does not allow, an element that
+// is not there). Its text is the worker's report with the session's
+// credentials masked.
+type CommandError struct{ msg string }
+
+func (e *CommandError) Error() string { return e.msg }
+
 func (s *LiveSession) sendCommand(ctx context.Context, cmd workerCommand, timeout time.Duration) (*RunResult, error) {
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
-		return nil, errors.New("browser session is closed")
+		return nil, ErrSessionClosed
 	}
 	replyCh := make(chan workerMessage, 1)
 	if cmd.ReqID != "" {
@@ -609,7 +621,7 @@ func (s *LiveSession) sendCommand(ctx context.Context, cmd workerCommand, timeou
 	select {
 	case msg, ok := <-replyCh:
 		if !ok {
-			return nil, errors.New("browser session closed while waiting for response")
+			return nil, fmt.Errorf("%w while waiting for response", ErrSessionClosed)
 		}
 		s.mu.Lock()
 		creds := s.credentials
@@ -619,7 +631,7 @@ func (s *LiveSession) sendCommand(ctx context.Context, cmd workerCommand, timeou
 			if errMsg == "" {
 				errMsg = "browser session command failed"
 			}
-			return nil, errors.New(errMsg)
+			return nil, &CommandError{msg: errMsg}
 		}
 		if msg.Result != nil {
 			scrubResult(msg.Result, creds)

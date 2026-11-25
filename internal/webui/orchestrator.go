@@ -161,7 +161,7 @@ func (g *Gateway) handleDiscuss(w http.ResponseWriter, r *http.Request) {
 	taskStatus, taskHdr, taskBody, ok1 := g.callCaptureLimit(g.orch, call{method: http.MethodGet, target: "/tasks/" + enc, header: g.orchHeaders(auth), who: auth.who}, maxBackendDocumentSize)
 	logStatus, logHdr, logBody, ok2 := g.callCaptureLimit(g.orch, call{method: http.MethodGet, target: "/logs/" + enc, header: g.orchHeaders(auth), who: auth.who}, maxBackendDocumentSize)
 	if !ok1 || !ok2 {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "orchestrator unreachable: no backend"})
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": errOrchestratorNoBackend.Error()})
 		return
 	}
 	// A revoked session on either lookup clears the stale cookie, exactly as
@@ -201,7 +201,7 @@ func (g *Gateway) handleDiscuss(w http.ResponseWriter, r *http.Request) {
 	}{"Discuss run: " + preview, formatDigest(task, log)})
 	status, hdr, resp, ok := g.callCapture(g.chat, call{method: http.MethodPost, target: "/conversations", header: h, who: who, body: body, contentLength: n})
 	if !ok {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "chat-server unreachable: no backend"})
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": errChatServerNoBackend.Error()})
 		return
 	}
 	if status == http.StatusUnauthorized && hdr.Get("X-Session-Revoked") == "1" {

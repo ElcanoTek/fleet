@@ -180,7 +180,7 @@ func TestModelCatalogAndRankings(t *testing.T) {
 	}
 	// Empty catalog: 502 with the reason.
 	e.g.models.openrouter = fixedCatalog{}
-	if res := e.do(signedIn(t, req("GET", "/api/model-catalog", ""))); res.StatusCode != 502 {
+	if res := e.do(signedIn(t, req("GET", "/api/model-catalog", ""))); res.StatusCode != 502 || !strings.Contains(readBody(t, res), errNoUsableModels.Error()) {
 		t.Fatalf("%d", res.StatusCode)
 	}
 	if res := e.do(req("GET", "/api/model-catalog", "")); res.StatusCode != 401 {
@@ -490,5 +490,21 @@ func TestCatwalkFailureCached(t *testing.T) {
 	}
 	if got := hits.Load(); got != 2 {
 		t.Fatalf("outbound fetches after the TTL = %d, want 2", got)
+	}
+}
+
+// A catwalk fetch that fails answers 502 with a fixed message: the fetch's
+// own error (the upstream URL and status) is logged, not returned.
+func TestCatwalkFailureAnswersAFixedMessage(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer srv.Close()
+	e := newTestEnv(t)
+	e.g.models.catwalkURL = srv.URL + "/"
+	res := e.do(signedIn(t, req("GET", "/api/catwalk-models", "")))
+	body := readBody(t, res)
+	if res.StatusCode != http.StatusBadGateway || !strings.Contains(body, errModelCatalogUnavailable.Error()) || strings.Contains(body, srv.URL) || strings.Contains(body, "502") {
+		t.Fatalf("%d %s", res.StatusCode, body)
 	}
 }

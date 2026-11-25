@@ -75,7 +75,7 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 
 	results, total, err := s.store.SearchConversations(r.Context(), user, q, limit, offset)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 	if results == nil {

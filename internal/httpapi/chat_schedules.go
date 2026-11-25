@@ -407,7 +407,7 @@ func (s *Server) handleSubresourceWithArg(w http.ResponseWriter, r *http.Request
 	}
 }
 
-func writeScheduleError(w http.ResponseWriter, err error) {
+func writeScheduleError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, store.ErrChatScheduleNotFound), errors.Is(err, store.ErrConversationNotFound),
 		errors.Is(err, models.ErrChatScheduleNotFound):
@@ -419,7 +419,7 @@ func writeScheduleError(w http.ResponseWriter, err error) {
 	case errors.Is(err, models.ErrChatScheduleQueueFull):
 		http.Error(w, err.Error(), http.StatusTooManyRequests)
 	default:
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalErrorFromHelper(w, r, err)
 	}
 }
 
@@ -456,7 +456,7 @@ func (s *Server) handleScheduleList(w http.ResponseWriter, r *http.Request, user
 	includeTerminal := r.URL.Query().Get("all") == "1"
 	items, err := s.store.ListChatSchedules(r.Context(), user, conv.ID, includeTerminal)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 	effectiveMode := s.effectiveOwnerApprovalMode(r.Context(), convOwnerEmail(conv, user), conv)
@@ -550,11 +550,11 @@ func (s *Server) handleScheduleCreate(w http.ResponseWriter, r *http.Request, us
 		AllowMultiple:   req.AllowMultiple,
 	})
 	if err != nil {
-		writeScheduleError(w, err)
+		writeScheduleError(w, r, err)
 		return
 	}
 	if err := s.applyScheduleApprovalMutation(r.Context(), user, conv, req.ApprovalMode, parsedMode, req.AutoApprove, true); err != nil {
-		writeScheduleError(w, err)
+		writeScheduleError(w, r, err)
 		return
 	}
 	s.armShortScheduleTimer(sched.NextRunAt)
@@ -618,11 +618,11 @@ func (s *Server) handleSchedulePatch(w http.ResponseWriter, r *http.Request, use
 	}
 	sched, err := s.store.UpdateChatSchedule(r.Context(), user, conv.ID, scheduleID, patch)
 	if err != nil {
-		writeScheduleError(w, err)
+		writeScheduleError(w, r, err)
 		return
 	}
 	if err := s.applyScheduleApprovalMutation(r.Context(), user, conv, req.ApprovalMode, parsedMode, req.AutoApprove, false); err != nil {
-		writeScheduleError(w, err)
+		writeScheduleError(w, r, err)
 		return
 	}
 	if sched.Status == store.ChatScheduleStatusActive {
@@ -641,7 +641,7 @@ func (s *Server) handleSchedulePatch(w http.ResponseWriter, r *http.Request, use
 func (s *Server) handleScheduleDelete(w http.ResponseWriter, r *http.Request, user string, conv *store.Conversation, scheduleID string) {
 	sched, err := s.store.CancelChatSchedule(r.Context(), user, conv.ID, scheduleID)
 	if err != nil {
-		writeScheduleError(w, err)
+		writeScheduleError(w, r, err)
 		return
 	}
 	s.emitPatrolUpdate(r.Context(), user, conv.ID, nil, conv.AutoApprove, conv.EffectiveApprovalMode())
@@ -673,7 +673,7 @@ func (s *Server) handleScheduleRunNow(w http.ResponseWriter, r *http.Request, us
 	// The schedule must be the caller's, in this conversation, and live.
 	current, err := s.store.ListChatSchedules(r.Context(), user, conv.ID, true)
 	if err != nil {
-		writeScheduleError(w, err)
+		writeScheduleError(w, r, err)
 		return
 	}
 	var target *store.ChatSchedule
@@ -683,21 +683,21 @@ func (s *Server) handleScheduleRunNow(w http.ResponseWriter, r *http.Request, us
 		}
 	}
 	if target == nil {
-		writeScheduleError(w, store.ErrChatScheduleNotFound)
+		writeScheduleError(w, r, store.ErrChatScheduleNotFound)
 		return
 	}
 	if target.Status != store.ChatScheduleStatusActive && target.Status != store.ChatScheduleStatusPaused {
-		writeScheduleError(w, fmt.Errorf("%w: cannot trigger a %s schedule", store.ErrInvalidChatSchedule, target.Status))
+		writeScheduleError(w, r, fmt.Errorf("%w: cannot trigger a %s schedule", store.ErrInvalidChatSchedule, target.Status))
 		return
 	}
 	delivery, err := s.chatSchedules.RunChatScheduleNow(r.Context(), scheduleID)
 	if err != nil {
-		writeScheduleError(w, err)
+		writeScheduleError(w, r, err)
 		return
 	}
 	switch delivery.Outcome {
 	case models.ChatScheduleGone:
-		writeScheduleError(w, store.ErrConversationNotFound)
+		writeScheduleError(w, r, store.ErrConversationNotFound)
 		return
 	case models.ChatScheduleStale, models.ChatScheduleSuperseded:
 		http.Error(w, "the schedule changed while it was being run; try again", http.StatusConflict)

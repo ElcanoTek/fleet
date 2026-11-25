@@ -187,7 +187,7 @@ func (s *Server) handleAdminStorageCleanup(w http.ResponseWriter, r *http.Reques
 	if req.DeleteConversations {
 		n, err := s.store.DeleteUnpinnedOlderThan(r.Context(), time.Now().Add(-age))
 		if err != nil {
-			http.Error(w, "delete conversations: "+err.Error(), http.StatusInternalServerError)
+			writeInternalError(w, r, err)
 			return
 		}
 		resp.DeletedConversations = n

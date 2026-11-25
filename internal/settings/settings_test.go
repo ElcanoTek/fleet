@@ -14,9 +14,10 @@ import (
 // validation ordering, apply hooks) is tested without Postgres; the real
 // store methods have their own DB-gated test.
 type fakeStore struct {
-	rows    map[string]store.WorkspaceSetting
-	failGet error
-	failSet error
+	rows       map[string]store.WorkspaceSetting
+	failGet    error
+	failSet    error
+	failDelete error
 }
 
 func newFakeStore() *fakeStore { return &fakeStore{rows: map[string]store.WorkspaceSetting{}} }
@@ -42,6 +43,9 @@ func (f *fakeStore) SetWorkspaceSetting(_ context.Context, key, value, updatedBy
 }
 
 func (f *fakeStore) DeleteWorkspaceSetting(_ context.Context, key string) error {
+	if f.failDelete != nil {
+		return f.failDelete
+	}
 	delete(f.rows, key)
 	return nil
 }
@@ -436,11 +440,31 @@ func TestSetCompensatesOnApplyFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
-	if _, err := svc.Set(context.Background(), "auto_title_enabled", "true", "admin@x"); err == nil {
-		t.Fatal("want apply error")
+	_, err = svc.Set(context.Background(), "auto_title_enabled", "true", "admin@x")
+	var applyErr *ApplyError
+	if !errors.As(err, &applyErr) || applyErr.Compensation != "" || err.Error() != "apply auto_title_enabled: hook down" {
+		t.Fatalf("want an undone *ApplyError with the hook's text, got %v", err)
 	}
 	if _, ok := st.rows["auto_title_enabled"]; ok {
 		t.Error("a failed apply must roll back the persisted row")
+	}
+}
+
+// A rollback that fails too is still an *ApplyError, carrying what to do; the
+// store's own error is logged, not in the text.
+func TestSetApplyFailureWhoseRollbackFails(t *testing.T) {
+	st := newFakeStore()
+	hooks := testHooks(map[string]string{})
+	hooks["auto_title_enabled"] = func(string, bool) error { return fmt.Errorf("hook down") }
+	svc, err := NewService(st, testDefaults(), hooks)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	st.failDelete = errors.New(`ERROR: relation "core.workspace_settings" does not exist (SQLSTATE 42P01)`)
+	_, err = svc.Set(context.Background(), "auto_title_enabled", "true", "admin@x")
+	var applyErr *ApplyError
+	if !errors.As(err, &applyErr) || !strings.Contains(err.Error(), "run Reset") || strings.Contains(err.Error(), "SQLSTATE") {
+		t.Fatalf("want an *ApplyError naming Reset without the store's text, got %v", err)
 	}
 }
 
