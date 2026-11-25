@@ -75,6 +75,18 @@ type Store struct {
 	// presenceLost is set while this server's presence lock connection has
 	// dropped and the lock is not held again yet (ServerPresenceLost).
 	presenceLost atomic.Bool
+	// serverInstance names this server in core.server_presence: the row its
+	// presence heartbeat writes and the one its owner lock writes while it
+	// takes that lock back (serverInstanceID).
+	serverInstanceMu sync.Mutex
+	serverInstance   string
+	// dsn opens lockDB, the connections that hold the server locks
+	// (lockConn), kept apart from db so the configured pool is all for
+	// queries.
+	dsn        string
+	lockDBOnce sync.Once
+	lockDB     *sql.DB
+	lockDBErr  error
 	// tokenCipher encrypts the per-user remote-MCP OAuth secrets at rest (#443).
 	// nil = the remote-MCP-OAuth feature is disabled (no FLEET_MCP_OAUTH_ENCRYPTION_KEY);
 	// the token CRUD then fails closed via secretbox.ErrNoCipher rather than
@@ -335,7 +347,7 @@ func Open(dsn string, pool PoolConfig) (*Store, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
-	st := &Store{db: db, searchEnabled: true}
+	st := &Store{db: db, dsn: dsn, searchEnabled: true}
 	if err := st.seedAcceptedInputSeq(context.Background()); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("seed input queue sequence: %w", err)
@@ -343,9 +355,47 @@ func Open(dsn string, pool PoolConfig) (*Store, error) {
 	return st, nil
 }
 
-// Close the underlying database.
+// Close the underlying database, and the lock sessions' (lockConn).
 func (s *Store) Close() error {
+	s.lockDBOnce.Do(func() {}) // no lock connections opened after Close
+	if s.lockDB != nil {
+		_ = s.lockDB.Close()
+	}
 	return s.db.Close()
+}
+
+// lockDBMaxConns bounds the lock sessions one process holds at a time: a
+// server's owner and presence connections, each briefly with a second one
+// while it is taken again after a drop; a CLI account deletion holds one.
+const lockDBMaxConns = 4
+
+// lockConn opens a dedicated connection for holding a server lock (the owner
+// lock, the presence lock, a CLI account deletion's exclusive presence
+// lock). These come from a small database handle of their own, opened on
+// first use with the store's DSN, never from the configured pool: a lock
+// session is held for the life of the process, and taking it out of the
+// pool would leave a small pool (FLEET_CHAT_DB_MAX_CONNS=2, or 1) with no
+// connection for the server's own queries, the presence heartbeat first.
+// The caller discards the connection when it lets go (its session
+// settings must not be reused).
+func (s *Store) lockConn(ctx context.Context) (*sql.Conn, error) {
+	s.lockDBOnce.Do(func() {
+		db, err := dbtrace.Open(s.dsn)
+		if err != nil {
+			s.lockDBErr = fmt.Errorf("open the server lock connections: %w", err)
+			return
+		}
+		db.SetMaxOpenConns(lockDBMaxConns)
+		db.SetMaxIdleConns(0)
+		s.lockDB = db
+	})
+	if s.lockDBErr != nil {
+		return nil, s.lockDBErr
+	}
+	if s.lockDB == nil {
+		return nil, errors.New("store closed")
+	}
+	return s.lockDB.Conn(ctx)
 }
 
 // PanicEventRecord is the secret-safe persistence shape for one contained

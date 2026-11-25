@@ -104,6 +104,10 @@ there) and [`../.agents/skills/steward/SKILL.md`](../.agents/skills/steward/SKIL
   cookie and redeemed on the landing every sign-in leg ends on; the
   open-redirect rules; the revoked-session `?return_to=`):
   [`docs/DEEP-LINK-SIGN-IN.md`](DEEP-LINK-SIGN-IN.md)
+- **One server per database** (a second `fleet serve` on a database another
+  one owns refuses before its boot recovery, naming the owner; the wait on a
+  restart; what the CLIs may still do alongside a server):
+  [ADR-0122](adr/0122-one-server-owns-the-database.md)
 - **One identity table** (one `core.users` row per person, role plus Operations Center scope, the merge of the scheduler's users, the retired Operations Center bearer): [`docs/IDENTITY.md`](IDENTITY.md) + [ADR-0105](adr/0105-one-identity-table.md)
 - **Who is calling** (the typed request principal, the one account lookup both planes share, why no handler reads an identity header): [`docs/PRINCIPAL.md`](PRINCIPAL.md) + [ADR-0108](adr/0108-typed-principal.md)
 - **Database migrations** (the two runners, safe-DDL patterns, the migration DDL

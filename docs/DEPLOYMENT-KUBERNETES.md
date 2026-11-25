@@ -24,7 +24,7 @@ Same agent loop, same security model, one backend switch:
 
 | Piece | Where it runs |
 | --- | --- |
-| fleet control plane (chat + orchestrator + MCP broker) | one Deployment replica — **never more**; the scheduler leases and worker semaphore are single-owner |
+| fleet control plane (chat + orchestrator + MCP broker) | one Deployment replica — **never more**; the scheduler leases and worker semaphore are single-owner, and a second `fleet serve` on the same database refuses at start ([ADR-0122](adr/0122-one-server-owns-the-database.md)) |
 | Agent sandboxes (bash, run_python, file ops) | **ephemeral pods**, one per turn / sealed run / persistent-REPL conversation, created and exec'd by the control plane over the apiserver |
 | MCP credentials | the control-plane process, always (ADR-0003) — sandbox pods carry no env, no secrets, no service-account token |
 | Workspace | one **ReadWriteMany** PVC mounted at the *same absolute path* in the control plane and every sandbox pod |

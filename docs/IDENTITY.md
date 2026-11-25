@@ -283,7 +283,12 @@ advises on each demoted split admin, unknown role and duplicate username in it.
   server starting while a CLI deletion
   runs waits for it, without a deadline, before it opens its listeners
   (logging every 30 seconds that it is waiting; a stop signal meanwhile exits
-  cleanly). The message says to delete the account from Settings →
+  cleanly). That server has already taken the database's owner lock (a
+  second key, held exclusive by the one `fleet serve` that owns the
+  database, ADR-0122); the CLI never takes that one, so the two never wait
+  on each other in a cycle. The server's lock connections and the CLI's set
+  TCP keepalives for their own session, so Postgres lets go of the lock of a
+  host that vanished within about half a minute instead of hours. The message says to delete the account from Settings →
   Admin → Users while the server runs (that deletion stops the account's
   requests and turns, forgets its in-memory decisions and moves its files
   aside under the server's request gate, which a CLI cannot do for a server

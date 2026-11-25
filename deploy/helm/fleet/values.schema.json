@@ -184,7 +184,7 @@
             "FLEET_BUDGET_WINDDOWN_FRACTION": { "type": ["string", "number", "boolean"], "description": "Budget fraction at which the agent is told to wind down; clamped to (0,1]. Default: 0.8." },
             "FLEET_CHAT_DATABASE_URL": { "type": ["string", "number", "boolean"], "description": "Retired (ADR-0098): the chat store's DSN in the removed two-database layout. Set, fleet refuses to start; use DATABASE_URL. Secret: set it through config.existingSecret, not config.env." },
             "FLEET_CHAT_DB_CONNECT_TIMEOUT": { "type": ["string", "number", "boolean"], "description": "Chat pool: timeout of the initial ping at startup. Default: 5s." },
-            "FLEET_CHAT_DB_MAX_CONNS": { "type": ["string", "number", "boolean"], "description": "Chat pool: maximum open connections. The /readyz chat_db check holds one more connection of its own, outside this pool. Default: 25." },
+            "FLEET_CHAT_DB_MAX_CONNS": { "type": ["string", "number", "boolean"], "description": "Chat pool: maximum open connections. The /readyz chat_db check holds one more connection of its own, outside this pool, and a running server holds two more for its owner and presence locks (ADR-0122). Default: 25." },
             "FLEET_CHAT_DB_MAX_CONN_IDLE_TIME": { "type": ["string", "number", "boolean"], "description": "Chat pool: close a connection idle this long; 0 never does. Default: 0." },
             "FLEET_CHAT_DB_MAX_CONN_LIFETIME": { "type": ["string", "number", "boolean"], "description": "Chat pool: maximum connection lifetime; 0 is unlimited. Default: 5m." },
             "FLEET_CHAT_DB_MIN_CONNS": { "type": ["string", "number", "boolean"], "description": "Chat pool: maximum idle connections kept. Default: 5." },

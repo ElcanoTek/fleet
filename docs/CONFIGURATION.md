@@ -123,7 +123,7 @@ client bundle's manifest names them, and fleet admits them at startup ([MCP-BUND
 | `DB_PASSWORD` | string | — | server | Postgres password for the discrete DSN parts. **Secret.** |
 | `DB_NAME` | string | `fleet` | server | Postgres database name for the discrete DSN parts. |
 | `DB_SSLMODE` | string | `disable` | server | Postgres sslmode for the discrete DSN parts. |
-| `FLEET_CHAT_DB_MAX_CONNS` | int | `25` | server | Chat pool: maximum open connections. The /readyz chat_db check holds one more connection of its own, outside this pool. *Validated at boot*. |
+| `FLEET_CHAT_DB_MAX_CONNS` | int | `25` | server | Chat pool: maximum open connections. The /readyz chat_db check holds one more connection of its own, outside this pool, and a running server holds two more for its owner and presence locks (ADR-0122). *Validated at boot*. |
 | `FLEET_CHAT_DB_MIN_CONNS` | int | `5` | server | Chat pool: maximum idle connections kept. *Validated at boot*. |
 | `FLEET_CHAT_DB_MAX_CONN_IDLE_TIME` | duration | `0` | server | Chat pool: close a connection idle this long; 0 never does. *Validated at boot*. |
 | `FLEET_CHAT_DB_MAX_CONN_LIFETIME` | duration | `5m` | server | Chat pool: maximum connection lifetime; 0 is unlimited. *Validated at boot*. |
