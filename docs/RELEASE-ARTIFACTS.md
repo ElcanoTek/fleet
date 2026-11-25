@@ -208,6 +208,74 @@ What it does, in order (`scripts/update.sh`):
    (There is no other restart path: the on-box `--from-source` build that
    restarted itself was removed by ADR-0101.)
 
+   **A rollback first undoes the migrations the new release applied**
+   ([ADR-0123](adr/0123-a-release-rollback-undoes-the-new-releases-migrations.md)).
+   Every store open migrates, so a release that ships a migration has usually
+   applied it by the time its readiness gate fails (a slow boot past
+   `FLEET_HEALTH_TIMEOUT`, a later boot step failing, a database that stopped
+   answering), and the previous binary refuses a database holding a version
+   it does not ship ("Refusing to downgrade", [MIGRATIONS.md](MIGRATIONS.md))
+   — swapping binaries alone would leave systemd restarting a binary that
+   refuses to boot. So before it restarts, the install reads the versions
+   `core.schema_versions` holds and writes them to
+   `<install-dir>/fleet.prev.schema`, beside the `fleet.prev` they describe.
+   It reaches the database the way `fleet serve` does: `DATABASE_URL` or the
+   `DB_*` parts from the environment or the env file, else the localhost
+   defaults. If the gate fails it stops the service, puts `fleet.prev` in
+   place (so a `fleet` command opening a store meanwhile is refused instead
+   of migrating up again), reads the versions again (5 tries, 3 s apart) and,
+   when versions appeared since, runs the down migrations of the binary
+   running the install back to the newest recorded version — then starts
+   `fleet.prev`. That binary is the new release, as `fleet update` runs it,
+   so it ships those down migrations. Each down migration's lock waits are
+   bounded (60 s), so a `DROP` stuck behind a long reader (a `pg_dump`) fails
+   with "lock timeout" naming the migration instead of running out the
+   rollback's time. A release that applied nothing has nothing undone; the
+   database is still read once more to be sure. A `fleet.failed` left by an
+   earlier failed install is removed when an install starts, so a rollback
+   only ever puts back the binary it just moved aside.
+
+   - **What the undo drops.** A down migration removes what its up migration
+     added (new tables, columns and allowed values), so whatever the failed
+     release wrote into those during its readiness window is lost. Data an up
+     migration rewrote in place is **not** put back — 0200 backfilled
+     `approval_mode` from `auto_approve`, 0201 turned `autonomous` into
+     `auto` — and the previous binary runs on it as it is. No backup is taken
+     first (`fleet backup --db=all` before an update you are worried about;
+     the `fleet-backup.timer` takes one daily).
+   - **The install needs the versions before it starts.** With an automatic
+     rollback possible (a restart, a binary to go back to, no
+     `--no-rollback`), an install that cannot read them refuses before
+     changing anything (exit 8) — it could not know what to undo. Fix the
+     connection, or install by hand with `--no-rollback`. Without a rollback
+     armed (`--no-rollback`, `--no-restart`) the read is a short best effort
+     (quiet with `--no-restart`, where Postgres may not be up yet) that only
+     feeds the record.
+   - **When the undo cannot run, the new binary stays.** If the versions
+     cannot be read after the failed gate, a down migration fails, the
+     versions that appeared are not all newer than the recorded ones, the
+     database recorded none before, the service cannot be stopped on its
+     own, or the new binary cannot be kept as `fleet.failed` (its way back)
+     or `fleet.prev` cannot be put in place, `fleet.prev` would refuse the
+     database (or the rollback cannot proceed safely); the new binary goes back,
+     is restarted, and the install exits 7 (ready now) or 10 (still not
+     ready). The same happens when the install is run by hand with an older
+     binary (`sudo fleet release install` from `/opt/fleet/fleet`): it does
+     not ship the new versions' down migrations, so its undo is refused.
+     update.sh reports that the box was NOT rolled back.
+
+   | Exit | `fleet release install` / `rollback` |
+   | --- | --- |
+   | 0 | done |
+   | 2 | usage |
+   | 4 | install rolled back: the previous binary is live again (any migration the new one applied undone) |
+   | 5 | failed — read the message |
+   | 6 | another install or rollback holds the install dir |
+   | 7 | install NOT rolled back: the new binary was kept, restarted, and is ready |
+   | 8 | refused before changing the live binary, `fleet.prev`, the database or the service (verification, free space, unreadable database versions, …); an install may already have removed an earlier failed install's `fleet.failed` |
+   | 9 | rollback refused: needs `--migrate-down` (or, with `--no-restart`, a manual `fleet migrate down`) |
+   | 10 | install NOT rolled back: the new binary was kept and restarted, and is not ready |
+
 **No systemd, or no fleet unit (a custom supervisor).** Update still installs
 the verified binary — the same atomic swap, `fleet.prev` kept — but cannot
 restart it: `fleet release install --no-restart`. It says so and does not
@@ -244,6 +312,61 @@ gates on the address the deployment listens on (`FLEET_SERVER_ADDR` /
 says otherwise). The checkout and bundle are not moved by `rollback`; `fleet doctor` reports the
 mismatch, and `fleet update --tag <that release> --allow-downgrade` realigns
 everything when you mean to stay back.
+
+**Rolling back past a migration.** When the database holds migrations above
+the versions `fleet.prev.schema` records (the release you are leaving
+migrated it), `fleet.prev` would refuse the database, so `rollback` refuses
+first, changing nothing (exit 9), and names the version. Unlike the automatic
+rollback, which undoes what a release that never became ready wrote within
+its readiness window, a rollback you run later undoes migrations whose tables
+and columns hold real data by then, so it is opt-in:
+
+```sh
+sudo fleet backup --db=all              # keep this dump
+sudo fleet release rollback --migrate-down
+```
+
+`--migrate-down` stops the service, swaps the binaries, runs the down
+migrations of the binary running the command (`/opt/fleet/fleet`, the newer
+one) to the recorded version, starts and gates.
+If a down migration fails, the swap is undone and the newer binary restarted;
+if the swap itself fails, the newer binary is restarted. With `--no-restart`
+the command never touches the schema (the service is not its to stop): stop
+fleet, run `fleet migrate down --to <version>` with the live binary, then
+`fleet release rollback --no-restart`. Rolling forward again needs nothing:
+the newer binary migrates up on start. A rollback with no record only swaps
+binaries, and writes a record for the binary that becomes `fleet.prev`. When
+the database cannot be read, `rollback` refuses (exit 8, nothing changed); to
+swap the binaries anyway, without the schema check, remove
+`<install-dir>/fleet.prev.schema` and run it again (`fleet.prev` then refuses
+the database if the release you are leaving migrated it).
+
+What this does **not** cover:
+
+- **No record, no schema check.** `fleet.prev.schema` is written by installs
+  from the release that introduced it on; a `fleet.prev` installed by an
+  earlier release has none, and `rollback` then only swaps binaries, as
+  before. If the previous binary then refuses the database (`journalctl -u
+  fleet` shows "Refusing to downgrade" naming the versions), stop fleet, run
+  `fleet migrate down --to <the newest version that binary ships>` with the
+  newer binary (now `fleet.prev`, e.g. `sudo /opt/fleet/fleet.prev migrate
+  down --to <v>`), and start it again.
+- **`fleet update --tag <older> --allow-downgrade` across a migration.** The
+  older binary is the one running that install, and it does not ship the down
+  migrations of the newer versions, so it fails its gate and the install rolls
+  back to the newer binary (which needs no undo). To really go back, run
+  `fleet migrate down --to <the older release's newest version>` with the
+  current binary first (fleet stopped), then the downgrade.
+- **Kubernetes.** `helm rollback` only changes the image; the chart has no
+  migration job or hook, so an older image refuses a database a newer one
+  migrated and the pod crash-loops. Before `helm rollback` past a release that
+  shipped a migration, scale the Deployment to 0 and run `fleet migrate down
+  --to <v>` with the **newer** image against the same database (and secret),
+  then roll back ([DEPLOYMENT-KUBERNETES.md](DEPLOYMENT-KUBERNETES.md)).
+
+`fleet migrate status`, run with the older binary or image, lists the
+versions it does not ship as `REFUSED`; the `--to` version is the newest
+applied version below them.
 
 **Retention.** The newest ten GitHub release objects are kept (they carry the
 downloadable files); images stay in GHCR for every tag; tags are permanent;

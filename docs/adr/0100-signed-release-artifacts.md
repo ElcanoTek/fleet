@@ -11,7 +11,10 @@
 - **Issue:** #2051
 - **Amended by:** [ADR-0101](0101-remove-the-on-box-build.md) (2026-11-07: the
   `--from-source` path decision 9 kept is removed, with the shell verifier's
-  first-update fallback; boxes need a published release)
+  first-update fallback; boxes need a published release);
+  [ADR-0123](0123-a-release-rollback-undoes-the-new-releases-migrations.md)
+  (2026-11-25: the rollback in decision 6 first undoes the migrations the new
+  release applied)
 
 ## Context
 
@@ -87,6 +90,9 @@ new one over `fleet` atomically, restarts (the service runs its own migrations
 on start, as before), waits for `/readyz`, and rolls back to `fleet.prev`
 automatically when it is not ready (the failed binary is kept as
 `fleet.failed`). `fleet release rollback` performs the same swap on demand.
+**Amended by ADR-0123:** the rollback first takes the database back to the
+versions it held before the install, with the new release's down migrations,
+since `fleet.prev` refuses a newer schema; the installer's only schema change.
 
 **7. Sandbox images.** A bundle that ships **no** Containerfile, or the generic
 one unchanged, runs the release's signed `fleet-sandbox` image: its digest comes

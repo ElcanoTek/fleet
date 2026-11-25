@@ -20,7 +20,13 @@ There is no `fleet migrate up`: **every store open migrates** (`store.Open`,
 When the database is current that is one read of the ledger. The scheduler's
 open then runs the identity merge (`identity.MergeLegacySchedUsers`, ADR-0105),
 the one post-migration step. `scripts/update.sh` and `scripts/bootstrap.sh`
-never migrate; the service does on start.
+never migrate; the service does on start. The one place a release step
+changes the schema is a **rollback**: a failed `fleet release install` (and
+`fleet release rollback --migrate-down`) runs the newer binary's down
+migrations back to the version the database was at before the install, so the
+previous binary — which refuses a version it does not ship — can start
+([below](#going-down-fleet-migrate-down), [RELEASE-ARTIFACTS.md](RELEASE-ARTIFACTS.md#roll-back),
+[ADR-0123](adr/0123-a-release-rollback-undoes-the-new-releases-migrations.md)).
 
 ## Layout and numbering
 
@@ -53,7 +59,9 @@ edited file under `sql/legacy/`.
    don't write `BEGIN`/`COMMIT`. A migration that fails records nothing and
    leaves nothing behind.
 4. The `.down.sql` undoes exactly what the `.up.sql` did, so
-   `fleet migrate down` can step back one release.
+   `fleet migrate down` can step back one release — and so can the automatic
+   rollback of a release that fails its readiness gate, which runs it with no
+   operator watching ([Going down](#going-down-fleet-migrate-down)).
 5. Never rename or edit a shipped migration — add a new one. Shipped
    migrations are append-only: the ledger records each file's name and
    SHA-256, the runner refuses a database whose recorded name or checksum
@@ -221,7 +229,28 @@ runs every applied version above `--to` newest first, each in a transaction
 that runs its `.down.sql` and deletes its ledger row, under the migration lock.
 It prints the `fleet backup --db=all` advice before anything else. It never goes
 below 177: the legacy sched `.down.sql` files stay in the tree as history, and
-the legacy chat files never had any.
+the legacy chat files never had any. Run it with the **newer** binary: an older
+one does not ship the down migrations of the versions it refuses.
+
+**Releases go down the same way.** `fleet release install` records the
+versions the database holds before it restarts onto the new binary (beside
+the previous binary, as `fleet.prev.schema`). When the new binary fails its
+readiness gate after migrating, the install stops the service, puts the
+previous binary in place, runs this same `Down` in-process (the installing
+binary is the new release; each lock wait bounded) to the newest recorded
+version, and only then starts the previous binary. A manual
+`fleet release rollback` does the same only with `--migrate-down`, because by
+then the newer tables and columns hold real data. A down migration drops what
+its up migration added, so data written into those is lost — that is why every
+`.down.sql` must undo exactly its `.up.sql` and nothing more. Data an up
+migration rewrote in place is not restored by the shipped down migrations
+(0200's `approval_mode` backfill, 0201's `autonomous` → `auto`); the older
+binary runs on the rewritten values. A future migration whose rewrite an older
+binary could not read needs a down migration that puts it back. `helm
+rollback` runs nothing (the chart has no migration job or hook): scale to 0
+and run `fleet migrate down` with the newer image first.
+[RELEASE-ARTIFACTS.md](RELEASE-ARTIFACTS.md#roll-back) has both procedures and
+what they do not cover.
 
 ## Zero-downtime / safe-DDL patterns
 
@@ -329,3 +358,5 @@ Until then the legacy files stay, frozen.
   loader; ADR-0107 lists what they need (a dirty row while running, one
   statement per file, no ledger row in the same transaction).
 - **A pre-migration `--backup-first` auto-dump.** Use `fleet backup --db=all`.
+  `fleet update` takes none before installing, and the automatic rollback's
+  down migrations run without one.

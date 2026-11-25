@@ -6,6 +6,7 @@ package admincli
 import (
 	"context"
 	"crypto/tls"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -19,7 +20,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/config/envreg"
+	"github.com/ElcanoTek/fleet/internal/migrations"
 	"github.com/ElcanoTek/fleet/internal/release"
 	"github.com/ElcanoTek/fleet/internal/version"
 )
@@ -81,10 +84,27 @@ const releaseUsage = `fleet release — signed release artifacts (docs/RELEASE-A
                         [--health-url <url> | --server-addr <host:port>] [--health-timeout 90s] [--no-rollback] [--no-restart]
       atomically swap the verified binary in (the old one is kept as fleet.prev),
       restart the service (it migrates on start), wait for /readyz, and roll back
-      automatically when it does not become ready. Reinstalling the live binary
-      swaps nothing. --no-restart swaps only (fleet not run by systemd).
-  fleet release rollback [--install-dir /opt/fleet] [--service fleet] [--health-url <url> | --server-addr <addr>] [--no-restart]
-      put fleet.prev back as the live binary, restart and wait for /readyz
+      automatically when it does not become ready — first undoing, with this
+      binary's down migrations, any database migration it applied, so
+      fleet.prev can run on the database. Run it with the NEW (staged,
+      verified) binary, as fleet update does: an older binary does not ship
+      the new migrations' down migrations, and its rollback then keeps the new
+      binary. Reinstalling the live binary swaps nothing. --no-restart swaps
+      only (fleet not run by systemd).
+  fleet release rollback [--install-dir /opt/fleet] [--service fleet] [--health-url <url> | --server-addr <addr>] [--no-restart] [--migrate-down]
+      put fleet.prev back as the live binary, restart and wait for /readyz.
+      When the database was migrated past the version fleet.prev ran on, it
+      refuses unless --migrate-down, which undoes those migrations first
+      (dropping what was stored in the tables and columns they added: take
+      a backup with fleet backup --db=all before)
+
+Exit codes of install and rollback: 0 done; 2 usage; 4 install rolled back
+(the previous binary is live again); 5 failed (read the message); 6 another
+install or rollback is running; 7 install NOT rolled back, the new binary was
+restarted and is ready; 8 refused before changing the live binary, fleet.prev,
+the database or the service (an earlier fleet.failed may be gone); 9 rollback needs
+--migrate-down (with --no-restart: a manual fleet migrate down); 10 install NOT
+rolled back, the new binary was restarted but is not ready.
 
 Shared: --cache-dir <dir> (the pinned cosign; default /var/cache/fleet as root),
 FLEET_RELEASE_BASE_URL (asset mirror), FLEET_SIGSTORE_TRUSTED_ROOT (offline trust root).
@@ -274,7 +294,7 @@ func releaseSandbox(ctx context.Context, argv []string) int {
 type installFlags struct {
 	installDir, service, healthURL, serverAddr string
 	healthTimeout                              time.Duration
-	noRollback, noRestart                      bool
+	noRollback, noRestart, migrateDown         bool
 	probeServerName                            string
 }
 
@@ -325,7 +345,10 @@ func (i *installFlags) options(w io.Writer) (release.InstallOptions, error) {
 	o := release.InstallOptions{
 		InstallDir: i.installDir, Service: i.service, HealthURL: url,
 		HealthTimeout: i.healthTimeout, NoRollback: i.noRollback, NoRestart: i.noRestart,
-		Restarter: installRestarter, Log: w,
+		MigrateDown: i.migrateDown, Restarter: installRestarter, Log: w,
+		// A rollback undoes the migrations the newer binary applied before
+		// fleet.prev starts, which refuses a database it does not know.
+		Schema: installSchema(),
 	}
 	if i.noRestart {
 		return o, nil // nothing is probed
@@ -348,6 +371,91 @@ var (
 	newInstallProber                   = func(cfg *tls.Config, log io.Writer) release.Prober {
 		return release.HTTPProber{TLS: cfg, Log: log}
 	}
+	installSchema = func() release.Schema { return releaseSchema{} }
+)
+
+// releaseSchema is release.Schema over the one database and THIS binary's
+// migrations — which, for `fleet release install` run as update.sh runs it,
+// are the new release's, so it carries the down migration of every version
+// the new release may have applied. dsn, when set, is used as is (tests).
+type releaseSchema struct{ dsn string }
+
+// releaseSchemaReadTimeout bounds one read of the ledger;
+// releaseDownLockTimeout bounds each lock wait of the down migrations, well
+// inside the rollback's budget (FLEET_HEALTH_TIMEOUT + 7 minutes).
+const (
+	releaseSchemaReadTimeout = 15 * time.Second
+	releaseDownLockTimeout   = 60 * time.Second
+)
+
+// releaseSchemaDSN is the database `fleet serve` connects to, resolved exactly
+// as the server resolves it — DATABASE_URL or the DB_* parts from the
+// environment or the env file, else the localhost defaults the server falls
+// back to (the update's idle gate does the same) — unlike chatDSN, which
+// refuses the bare defaults. A configuration the server would refuse (a
+// retired per-store key) is an error.
+func releaseSchemaDSN() (string, error) {
+	d, err := resolvedDSNs()
+	if err != nil {
+		return "", err
+	}
+	return d.OverrideFor("", config.ChatSchema), nil
+}
+
+func (s releaseSchema) open() (*sql.DB, error) {
+	dsn := s.dsn
+	if dsn == "" {
+		var err error
+		if dsn, err = releaseSchemaDSN(); err != nil {
+			return nil, err
+		}
+	}
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(2)
+	return db, nil
+}
+
+func (s releaseSchema) Applied(ctx context.Context) ([]int, error) {
+	db, err := s.open()
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = db.Close() }()
+	ctx, cancel := context.WithTimeout(ctx, releaseSchemaReadTimeout)
+	defer cancel()
+	return migrations.Applied(ctx, db)
+}
+
+func (s releaseSchema) DownTo(ctx context.Context, v int) ([]int, error) {
+	db, err := s.open()
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = db.Close() }()
+	plan, err := migrations.DownBounded(ctx, db, v, releaseDownLockTimeout)
+	if err != nil {
+		return nil, err
+	}
+	undone := make([]int, 0, len(plan.Steps))
+	for _, m := range plan.Steps {
+		undone = append(undone, m.Version)
+	}
+	return undone, nil
+}
+
+// Exit codes of `fleet release install` and `rollback` (update.sh reads them;
+// docs/RELEASE-ARTIFACTS.md lists them).
+const (
+	releaseExitRolledBack      = 4  // install: the previous binary is live again
+	releaseExitFailed          = 5  // anything else: read the message
+	releaseExitBusy            = 6  // another install or rollback holds the install dir
+	releaseExitKeptNewReady    = 7  // install: not rolled back; the new binary was restarted and is ready
+	releaseExitNothingChanged  = 8  // refused before changing anything
+	releaseExitMigrateDown     = 9  // rollback: needs --migrate-down (or, with --no-restart, a manual down)
+	releaseExitKeptNewNotReady = 10 // install: not rolled back; the new binary was restarted but is not ready
 )
 
 func releaseInstall(ctx context.Context, argv []string) int {
@@ -361,17 +469,17 @@ func releaseInstall(ctx context.Context, argv []string) int {
 	}
 	v, err := newVerifier(ctx, releaseCacheDir(f.cacheDir))
 	if err != nil {
-		return errf(5, "verifier: %v", err)
+		return errf(releaseExitNothingChanged, "verifier: %v — nothing was changed", err)
 	}
 	// Re-verify the staged files: they were verified by `fetch`, possibly by a
 	// different process, and the install must not trust that on its word.
 	got, err := release.LoadVerified(ctx, v, f.dir, tag, release.HostArch())
 	if err != nil {
-		return errf(5, "%s: %v", f.dir, err)
+		return errf(releaseExitNothingChanged, "%s: %v — nothing was changed", f.dir, err)
 	}
 	o, err := inf.options(os.Stderr)
 	if err != nil {
-		return errf(5, "install %s: %v", tag, err)
+		return errf(releaseExitNothingChanged, "install %s: %v — nothing was changed", tag, err)
 	}
 	defer got.BinaryFile.Close()
 	o.Binary = got.Binary
@@ -381,11 +489,23 @@ func releaseInstall(ctx context.Context, argv []string) int {
 	if err != nil {
 		switch {
 		case errors.Is(err, release.ErrRolledBack):
-			return errf(4, "%v — the previous binary is live again; the failed one is kept as %s", err, filepath.Join(inf.installDir, "fleet.failed"))
+			undone := ""
+			if len(res.UndoneMigrations) > 0 {
+				undone = fmt.Sprintf("; the database migrations it applied (%s) were undone first", joinIntsCSV(res.UndoneMigrations))
+			}
+			return errf(releaseExitRolledBack, "%v — the previous binary is live again%s; the failed one is kept as %s", err, undone, filepath.Join(inf.installDir, "fleet.failed"))
+		case errors.Is(err, release.ErrKeptNew):
+			code := releaseExitKeptNewNotReady
+			if res.Restarted {
+				code = releaseExitKeptNewReady
+			}
+			return errf(code, "install %s: %v — %s is still the new binary; journalctl -u %s -n 100, and see docs/RELEASE-ARTIFACTS.md (Roll back)", tag, err, res.Live, inf.service)
 		case errors.Is(err, release.ErrBusy):
-			return errf(6, "install %s: %v", tag, err)
+			return errf(releaseExitBusy, "install %s: %v", tag, err)
+		case errors.Is(err, release.ErrNothingChanged):
+			return errf(releaseExitNothingChanged, "install %s: %v", tag, err)
 		}
-		return errf(5, "install %s: %v", tag, err)
+		return errf(releaseExitFailed, "install %s: %v", tag, err)
 	}
 	switch {
 	case inf.noRestart:
@@ -402,6 +522,7 @@ func releaseRollback(ctx context.Context, argv []string) int {
 	fs := flag.NewFlagSet("release rollback", flag.ContinueOnError)
 	var inf installFlags
 	inf.register(fs)
+	fs.BoolVar(&inf.migrateDown, "migrate-down", false, "undo the database migrations above the version fleet.prev ran on (drops what was stored in what they added; back up first)")
 	if err := fs.Parse(argv); err != nil {
 		return 2
 	}
@@ -410,13 +531,18 @@ func releaseRollback(ctx context.Context, argv []string) int {
 	}
 	o, err := inf.options(os.Stderr)
 	if err != nil {
-		return errf(5, "rollback: %v", err)
+		return errf(releaseExitNothingChanged, "rollback: %v — nothing was changed", err)
 	}
 	if err := release.Rollback(ctx, o); err != nil {
-		if errors.Is(err, release.ErrBusy) {
-			return errf(6, "rollback: %v", err)
+		switch {
+		case errors.Is(err, release.ErrBusy):
+			return errf(releaseExitBusy, "rollback: %v", err)
+		case errors.Is(err, release.ErrMigrateDownNeeded):
+			return errf(releaseExitMigrateDown, "rollback: %v", err)
+		case errors.Is(err, release.ErrNothingChanged):
+			return errf(releaseExitNothingChanged, "rollback: %v", err)
 		}
-		return errf(5, "rollback: %v", err)
+		return errf(releaseExitFailed, "rollback: %v", err)
 	}
 	if inf.noRestart {
 		fmt.Fprintf(os.Stderr, "rolled back: %s is the previous binary again — NOT restarted (--no-restart); restart it with your supervisor\n", filepath.Join(inf.installDir, "fleet"))
@@ -424,6 +550,14 @@ func releaseRollback(ctx context.Context, argv []string) int {
 	}
 	fmt.Fprintf(os.Stderr, "rolled back: %s is the previous binary again and ready (%s); the one it replaced is now fleet.prev\n", filepath.Join(inf.installDir, "fleet"), o.HealthURL)
 	return 0
+}
+
+func joinIntsCSV(vs []int) string {
+	parts := make([]string, len(vs))
+	for i, v := range vs {
+		parts[i] = fmt.Sprint(v)
+	}
+	return strings.Join(parts, ", ")
 }
 
 func orNone(s string) string {

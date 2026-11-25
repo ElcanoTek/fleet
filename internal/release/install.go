@@ -40,7 +40,8 @@ const (
 // Restarter restarts the service. Under the shipped Type=notify unit
 // `systemctl restart` returns once the new process signalled READY=1, and the
 // process runs its database migrations before that (services self-migrate on
-// start; the updater never runs migrations itself).
+// start; the updater never migrates up itself — its one schema change is the
+// rollback's down migrations, see Schema and ADR-0123).
 type Restarter interface {
 	Restart(ctx context.Context, service string) error
 }
@@ -92,9 +93,22 @@ type InstallOptions struct {
 	// gives up and rolls back (the v2026.11.07.21 rollout). Its error is
 	// reported, never a reason to leave the service stopped.
 	ClearDrain func() error
-	Restarter  Restarter
-	Prober     Prober
-	Log        io.Writer
+	// Schema, when set, makes a rollback undo the database migrations the
+	// newer binary applied before fleet.prev starts (see Schema). Install
+	// records the database's versions before the restart and refuses to start
+	// without them when a rollback is possible; Rollback uses the versions
+	// recorded for fleet.prev. Nil: binaries are swapped and the schema is
+	// left as it is.
+	Schema Schema
+	// MigrateDown lets a manual Rollback undo the migrations above the
+	// version fleet.prev ran on (`fleet release rollback --migrate-down`).
+	// Without it such a rollback is refused before anything changes
+	// (ErrMigrateDownNeeded). The automatic rollback inside Install does not
+	// need it.
+	MigrateDown bool
+	Restarter   Restarter
+	Prober      Prober
+	Log         io.Writer
 }
 
 // InstallResult says what happened.
@@ -107,6 +121,9 @@ type InstallResult struct {
 	Unchanged bool
 	// Restarted: the service was restarted and passed its readiness gate.
 	Restarted bool
+	// UndoneMigrations lists the database migrations a rollback undid so
+	// fleet.prev could run on the database, newest first.
+	UndoneMigrations []int
 }
 
 // ErrRolledBack wraps a failed install that was rolled back successfully: the
@@ -140,21 +157,35 @@ func (o *InstallOptions) logf(format string, a ...any) {
 //  5. restart the service (which migrates on start) and wait for HealthURL —
 //     with ClearDrain set, as stop, clear the update drain marker, start, so
 //     the new process never starts draining;
-//  6. on a failed restart or health gate, rename fleet.prev's bytes back,
-//     restart, and re-check — under a fresh context, so an interrupted gate
-//     still rolls back — and the box ends on a binary that answered ready, or
-//     the error says plainly that neither did.
+//  6. on a failed restart or health gate — under a fresh context, so an
+//     interrupted gate still rolls back — rename fleet.prev's bytes back,
+//     restart, and re-check. With Schema set (the versions read before step
+//     5 are then required), the service is stopped first, and once fleet.prev
+//     is live the migrations the new binary applied are undone before it
+//     starts. The box ends on a binary that answered ready, or the error says
+//     plainly that neither did. When the migrations cannot be undone,
+//     fleet.prev would refuse the database, so the new binary goes back and is
+//     restarted instead, and the error wraps ErrKeptNew.
+//
+// Every refusal before step 4 changed nothing and wraps ErrNothingChanged.
 func Install(ctx context.Context, o InstallOptions) (InstallResult, error) {
 	res := InstallResult{Live: filepath.Join(o.InstallDir, liveName)}
+	// Every return before the swap below changed nothing.
+	unchanged := func(err error) error {
+		if errors.Is(err, ErrNothingChanged) {
+			return err
+		}
+		return fmt.Errorf("%w: %w", ErrNothingChanged, err)
+	}
 	if err := os.MkdirAll(o.InstallDir, 0o755); err != nil { //nolint:gosec // G301: the install dir holds a world-executable binary.
-		return res, err
+		return res, unchanged(err)
 	}
 	// Everything below goes through the RESOLVED, validated path: a symlink
 	// on the way to the configured one could be retargeted after the check,
 	// and only the real directory's ancestors were checked.
 	dir, err := checkInstallDir(o.InstallDir)
 	if err != nil {
-		return res, err
+		return res, unchanged(err)
 	}
 	o.InstallDir = dir
 	afterInstallDirCheck()
@@ -163,13 +194,13 @@ func Install(ctx context.Context, o InstallOptions) (InstallResult, error) {
 	res.Live = live
 	unlock, err := lockDir(o.InstallDir)
 	if err != nil {
-		return res, err
+		return res, unchanged(err)
 	}
 	defer unlock()
 
 	same, err := o.sameAsLive(live)
 	if err != nil {
-		return res, err
+		return res, unchanged(err)
 	}
 	if same {
 		res.Unchanged = true
@@ -188,23 +219,41 @@ func Install(ctx context.Context, o InstallOptions) (InstallResult, error) {
 	}
 
 	if err := checkFreeSpace(o.InstallDir, o.Binary); err != nil {
-		return res, err
+		return res, unchanged(err)
+	}
+	_, liveErr := os.Stat(live)
+	before, beforeKnown, err := o.schemaBefore(ctx, liveErr == nil)
+	if err != nil {
+		return res, unchanged(err)
 	}
 	staging := filepath.Join(o.InstallDir, stagingName)
 	if err := o.stage(staging); err != nil {
 		_ = os.Remove(staging)
-		return res, fmt.Errorf("stage the new binary: %w", err)
+		return res, unchanged(fmt.Errorf("stage the new binary: %w", err))
 	}
-	if _, err := os.Stat(live); err == nil {
+	// A fleet.failed left by an earlier failed install is not this one's: a
+	// rollback below that could not write its own must never find it and put
+	// it back as the live binary.
+	failed := filepath.Join(o.InstallDir, failedName)
+	if err := os.Remove(failed); err == nil {
+		o.logf("removed %s, kept from an earlier failed install", failed)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		_ = os.Remove(staging)
+		return res, unchanged(fmt.Errorf("remove the earlier %s: %w", failed, err))
+	}
+	if liveErr == nil {
 		if err := replaceLink(live, prev); err != nil {
 			_ = os.Remove(staging)
-			return res, fmt.Errorf("keep the previous binary: %w", err)
+			return res, unchanged(fmt.Errorf("keep the previous binary: %w", err))
 		}
 		res.Previous = prev
+		o.saveSchemaRecord(before, beforeKnown)
 	}
-	if err := os.Rename(staging, live); err != nil {
+	if err := renameIntoLive(staging, live); err != nil {
 		_ = os.Remove(staging)
-		return res, fmt.Errorf("swap in the new binary: %w", err)
+		// Not ErrNothingChanged: fleet.prev (and its record) now name the
+		// live binary, which itself is unchanged and still running.
+		return res, fmt.Errorf("swap in the new binary: %w (the live binary is unchanged and still running; %s was replaced by a link to it)", err, prev)
 	}
 	syncDir(o.InstallDir)
 	o.logf("installed %s (previous kept as %s)", live, prev)
@@ -227,15 +276,69 @@ func Install(ctx context.Context, o InstallOptions) (InstallResult, error) {
 	o.logf("the new binary failed its gate (%v) — rolling back to %s", gateErr, prev)
 	rbCtx, cancel := o.rollbackContext(ctx)
 	defer cancel()
-	_ = replaceLink(live, filepath.Join(o.InstallDir, failedName))
-	if err := restorePrevious(o.InstallDir); err != nil {
+	if beforeKnown {
+		// The schema changes with fleet stopped, and fleet.prev goes live
+		// BEFORE the down migrations run, so nothing that runs the live
+		// binary in between (a CLI verb opening a store migrates) can apply
+		// the new versions again: fleet.prev refuses them instead.
+		if err := o.stopForSchema(rbCtx); err != nil {
+			return o.keepNew(rbCtx, res, gateErr, err)
+		}
+	}
+	if err := replaceLink(live, failed); err != nil {
+		if beforeKnown {
+			// fleet.failed is how the new binary comes back if the down
+			// migrations fail; without it, do not swap. Still on the new
+			// binary, stopped: keepNew restarts it.
+			_ = os.Remove(failed)
+			_ = os.Remove(failed + ".tmp") // replaceLink's copy fallback
+			return o.keepNew(rbCtx, res, gateErr, fmt.Errorf("keep the new binary as %s: %w", failed, err))
+		}
+		o.logf("warning: could not keep the failed binary as %s: %v", failed, err)
+	}
+	if err := restoreFile(o.InstallDir, prevName); err != nil {
+		err = fmt.Errorf("restore %s: %w", prev, err)
+		if beforeKnown {
+			// Stopped above, still on the new binary: bring it back.
+			_ = os.Remove(failed)
+			return o.keepNew(rbCtx, res, gateErr, err)
+		}
 		return res, fmt.Errorf("%w; and the rollback could not restore %s: %w", gateErr, prev, err)
+	}
+	if beforeKnown {
+		undone, err := o.undoMigrations(rbCtx, before)
+		res.UndoneMigrations = undone
+		if err != nil {
+			// fleet.prev would refuse this database. The new binary runs on it
+			// whatever state it is in (it ships every version applied), so it
+			// goes back and is the one that comes up.
+			o.logf("cannot take the database back to the schema %s runs on (%v) — putting the new binary back", prev, err)
+			if serr := restoreFile(o.InstallDir, failedName); serr != nil {
+				rerr := restartAndProbe(rbCtx, o)
+				return res, fmt.Errorf("%w; %w; and putting the new binary back failed too (%w), so %s (the previous binary) is live on a database it refuses: "+
+					"copy %s over it and start %s (restart: %v)", gateErr, err, serr, live, failed, o.Service, rerr)
+			}
+			_ = os.Remove(failed)
+			return o.keepNew(rbCtx, res, gateErr, err)
+		}
 	}
 	if err := restartAndProbe(rbCtx, o); err != nil {
 		return res, fmt.Errorf("%w; rolled back to %s, but it did not become ready either: %w", gateErr, prev, err)
 	}
 	res.RolledBack = true
 	return res, fmt.Errorf("%w: %w", ErrRolledBack, gateErr)
+}
+
+// keepNew ends a rollback that could not take the database back to the
+// schema fleet.prev runs on: the new binary is live, so restart it and say
+// whether it answered ready (ErrKeptNew either way).
+func (o *InstallOptions) keepNew(ctx context.Context, res InstallResult, gateErr, cause error) (InstallResult, error) {
+	o.logf("cannot roll back to %s (%v) — restarting the new binary instead", prevName, cause)
+	if rerr := restartAndProbe(ctx, *o); rerr != nil {
+		return res, fmt.Errorf("%w: %w; %w; and the new binary, restarted, is not ready either: %w", ErrKeptNew, gateErr, cause, rerr)
+	}
+	res.Restarted = true
+	return res, fmt.Errorf("%w: %w; %w; the new binary was restarted and is ready now", ErrKeptNew, gateErr, cause)
 }
 
 // rollbackContext is the bounded context a rollback runs under: it keeps the
@@ -258,18 +361,32 @@ func (o *InstallOptions) rollbackContext(ctx context.Context) (context.Context, 
 // the new fleet.prev, so a second rollback undoes the first. The restart runs
 // under its own bounded context: interrupting the command after the swap must
 // not leave the service unrestarted on a binary nobody checked.
+//
+// With Schema set and versions recorded for fleet.prev (Install writes them),
+// a database that gained versions since is first taken back — only with
+// MigrateDown and a restart, since it drops what the newer release stored in
+// its tables and columns; otherwise the rollback is refused
+// (ErrMigrateDownNeeded) before anything changes. Then, as in Install: stop,
+// swap, run the down migrations, start. If the down migrations fail, the swap
+// is undone and the newer binary restarted. The replaced binary's record
+// becomes the versions the database held before the rollback.
 func Rollback(ctx context.Context, o InstallOptions) error {
+	unchanged := func(err error) error {
+		if errors.Is(err, ErrNothingChanged) || errors.Is(err, ErrMigrateDownNeeded) || errors.Is(err, ErrBusy) {
+			return err
+		}
+		return fmt.Errorf("%w: %w", ErrNothingChanged, err)
+	}
 	if _, err := os.Stat(filepath.Join(o.InstallDir, prevName)); err != nil {
-		return fmt.Errorf("no previous binary at %s to roll back to", filepath.Join(o.InstallDir, prevName))
+		return unchanged(fmt.Errorf("no previous binary at %s to roll back to", filepath.Join(o.InstallDir, prevName)))
 	}
 	// As in Install: only the resolved, validated path from here on.
 	dir, err := checkInstallDir(o.InstallDir)
 	if err != nil {
-		return err
+		return unchanged(err)
 	}
 	o.InstallDir = dir
 	afterInstallDirCheck()
-	live := filepath.Join(o.InstallDir, liveName)
 	prev := filepath.Join(o.InstallDir, prevName)
 	unlock, err := lockDir(o.InstallDir)
 	if err != nil {
@@ -277,30 +394,128 @@ func Rollback(ctx context.Context, o InstallOptions) error {
 	}
 	defer unlock()
 	if err := checkFreeSpace(o.InstallDir, prev); err != nil {
+		return unchanged(err)
+	}
+	rbCtx, cancel := o.rollbackContext(ctx)
+	defer cancel()
+
+	rec, hasRec := readSchemaRecord(o.InstallDir)
+	var cur []int
+	curKnown, downTo, needDown := false, 0, false
+	switch {
+	case o.Schema != nil && hasRec:
+		if cur, err = o.Schema.Applied(ctx); err != nil {
+			return unchanged(fmt.Errorf("%s has its database versions recorded, and the database's cannot be read: %w. "+
+				"To swap the binaries without the schema check, remove %s and run the rollback again (%s then refuses the database if it was migrated past it)",
+				prevName, err, filepath.Join(o.InstallDir, schemaRecordName), prevName))
+		}
+		curKnown = true
+		if downTo, needDown, err = undoTarget(rec, cur); err != nil {
+			return unchanged(err)
+		}
+		if needDown {
+			if err := o.migrateDownAllowed(downTo); err != nil {
+				return err
+			}
+		}
+	case o.Schema != nil:
+		cur, curKnown = o.optionalApplied(ctx)
+	}
+
+	if needDown {
+		if err := o.stopForSchema(rbCtx); err != nil {
+			if _, ok := o.Restarter.(StopStarter); !ok {
+				return unchanged(err)
+			}
+			return o.restartLive(rbCtx, fmt.Errorf("%w — nothing was swapped", err))
+		}
+	}
+	if err := o.swapPrev(cur, curKnown, rec, hasRec); err != nil {
+		if needDown {
+			return o.restartLive(rbCtx, fmt.Errorf("swap in %s: %w", prevName, err))
+		}
 		return err
 	}
+	if needDown {
+		o.logf("undoing the database migrations above version %d so %s can run on it", downTo, liveName)
+		undone, err := o.Schema.DownTo(rbCtx, downTo)
+		if err != nil {
+			err = fmt.Errorf("undo the migrations above version %d: %w", downTo, err)
+			// The binary just swapped in would refuse this database: swap back.
+			if serr := o.swapPrev(rec, true, cur, true); serr != nil {
+				return o.restartLive(rbCtx, fmt.Errorf("%w; and swapping the newer binary back failed too: %w", err, serr))
+			}
+			return o.restartLive(rbCtx, fmt.Errorf("%w — the swap was undone", err))
+		}
+		o.logf("undid migration(s) %s: the database is at version %d", joinVersions(undone), downTo)
+	}
+	if o.NoRestart {
+		return nil
+	}
+	return restartAndProbe(rbCtx, o)
+}
+
+// migrateDownAllowed refuses, before anything changed, a manual rollback
+// whose down migrations were not asked for (MigrateDown) or cannot run here
+// (--no-restart: the service it would have to stop is not ours). Unlike the
+// automatic rollback, which undoes what a release that never became ready
+// wrote within its readiness window, a manual rollback may come days later,
+// when the newer tables and columns hold real data.
+func (o *InstallOptions) migrateDownAllowed(to int) error {
+	switch {
+	case o.NoRestart:
+		return fmt.Errorf("%w: the database holds migrations above version %d, the newest %s ran on — nothing was changed. "+
+			"Stop fleet, take a backup (fleet backup --db=all), run `fleet migrate down --to %d` with the live binary, then run `fleet release rollback --no-restart` again",
+			ErrMigrateDownNeeded, to, prevName, to)
+	case !o.MigrateDown:
+		return fmt.Errorf("%w: the database holds migrations above version %d, the newest %s ran on — nothing was changed. "+
+			"Rolling back undoes them, which drops what this release stored in the tables and columns they added. "+
+			"Take a backup first (fleet backup --db=all), then run `fleet release rollback --migrate-down`",
+			ErrMigrateDownNeeded, to, prevName)
+	}
+	return nil
+}
+
+// restartLive restarts whatever binary is live after a rollback step failed
+// with the service stopped, and returns err with how that went.
+func (o *InstallOptions) restartLive(ctx context.Context, err error) error {
+	if rerr := restartAndProbe(ctx, *o); rerr != nil {
+		return fmt.Errorf("%w; restarting %s on the live binary failed too: %w", err, o.Service, rerr)
+	}
+	return fmt.Errorf("%w; %s was restarted on the live binary", err, o.Service)
+}
+
+// swapPrev exchanges fleet and fleet.prev: fleet.prev's bytes are staged,
+// the live binary is hard-linked as fleet.prev (its record becomes newRec),
+// and the staged copy renamed over fleet. If that rename fails, fleet.prev
+// and its record (oldRec) are put back, best effort, so the old binary is not
+// lost.
+func (o *InstallOptions) swapPrev(newRec []int, newKnown bool, oldRec []int, oldKnown bool) error {
+	live := filepath.Join(o.InstallDir, liveName)
+	prev := filepath.Join(o.InstallDir, prevName)
 	staging := filepath.Join(o.InstallDir, rollbackName)
 	if err := copyFileSync(prev, staging); err != nil {
 		_ = os.Remove(staging)
 		return err
 	}
+	liveExists := false
 	if _, err := os.Stat(live); err == nil {
+		liveExists = true
 		if err := replaceLink(live, prev); err != nil {
 			_ = os.Remove(staging)
 			return err
 		}
+		o.saveSchemaRecord(newRec, newKnown)
 	}
-	if err := os.Rename(staging, live); err != nil {
+	if err := renameIntoLive(staging, live); err != nil {
+		if liveExists && replaceLink(staging, prev) == nil {
+			o.saveSchemaRecord(oldRec, oldKnown)
+		}
 		_ = os.Remove(staging)
 		return err
 	}
 	syncDir(o.InstallDir)
-	if o.NoRestart {
-		return nil
-	}
-	rbCtx, cancel := o.rollbackContext(ctx)
-	defer cancel()
-	return restartAndProbe(rbCtx, o)
+	return nil
 }
 
 // lockDir takes an exclusive, non-blocking flock on <dir>/.fleet.lock. Two
@@ -424,18 +639,24 @@ var checkFreeSpace = func(dir, src string) error {
 	return nil
 }
 
-func restorePrevious(dir string) error {
+// restoreFile makes <dir>/<name>'s bytes the live binary: staged as a copy,
+// then renamed over fleet.
+func restoreFile(dir, name string) error {
 	staging := filepath.Join(dir, rollbackName)
-	if err := copyFileSync(filepath.Join(dir, prevName), staging); err != nil {
+	if err := copyFileSync(filepath.Join(dir, name), staging); err != nil {
 		return err
 	}
-	if err := os.Rename(staging, filepath.Join(dir, liveName)); err != nil {
+	if err := renameIntoLive(staging, filepath.Join(dir, liveName)); err != nil {
 		_ = os.Remove(staging)
 		return err
 	}
 	syncDir(dir)
 	return nil
 }
+
+// renameIntoLive is the rename that puts a staged binary in place; a test
+// seam for a swap that fails.
+var renameIntoLive = os.Rename
 
 func restartAndProbe(ctx context.Context, o InstallOptions) error {
 	drainErr, err := o.restart(ctx)
@@ -559,8 +780,9 @@ func (o *InstallOptions) restart(ctx context.Context) (drainErr, err error) {
 }
 
 // replaceLink makes dst a hard link to src, replacing dst. A filesystem that
-// cannot link falls back to a synced copy.
-func replaceLink(src, dst string) error {
+// cannot link falls back to a synced copy. A var: a test seam for a link (or
+// its copy fallback, out of space) that fails.
+var replaceLink = func(src, dst string) error {
 	tmp := dst + ".tmp"
 	_ = os.Remove(tmp)
 	if err := os.Link(src, tmp); err != nil {

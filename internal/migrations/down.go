@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"time"
 
 	"github.com/ElcanoTek/fleet/internal/logging"
 )
@@ -13,6 +14,36 @@ import (
 // ErrNotAdopted is returned by Down and Force on a database that has no
 // core.schema_versions yet: start this release once first (it adopts).
 var ErrNotAdopted = errors.New(Table + " does not exist yet: start this fleet release once (it adopts the legacy ledgers), then retry")
+
+// Applied lists the versions core.schema_versions records, ascending: none
+// when the ledger is empty or does not exist yet. It is read-only and does
+// not care whether this build ships those versions, so it reads a database a
+// newer fleet migrated as well as an older one. `fleet release install`
+// records it before it restarts onto a new binary: an automatic rollback
+// undoes exactly the versions that appeared since (internal/release, Schema).
+func Applied(ctx context.Context, db *sql.DB) ([]int, error) {
+	exists, err := ledgerExists(ctx, db)
+	if err != nil || !exists {
+		return nil, err
+	}
+	rows, err := db.QueryContext(ctx, `SELECT version FROM core.schema_versions ORDER BY version`)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", Table, err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []int
+	for rows.Next() {
+		var v int
+		if err := rows.Scan(&v); err != nil {
+			return nil, fmt.Errorf("read %s: %w", Table, err)
+		}
+		out = append(out, v)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read %s: %w", Table, err)
+	}
+	return out, nil
+}
 
 // DownPlan lists the migrations Down undoes, newest first.
 type DownPlan struct {
@@ -32,6 +63,25 @@ func Down(ctx context.Context, db *sql.DB, to int, dryRun bool) (DownPlan, error
 		return DownPlan{To: to}, err
 	}
 	return r.down(ctx, db, to, dryRun)
+}
+
+// DownBounded is Down (never a dry run) with every lock wait bounded by
+// lockTimeout: the migration lock, and each down migration's own table locks
+// (SET LOCAL lock_timeout). A DROP queued behind a long reader — a pg_dump
+// holds ACCESS SHARE on every table it dumps — then fails with Postgres's
+// "canceling statement due to lock timeout", naming the migration, instead
+// of waiting until the caller's deadline cuts it off unexplained. For the
+// unattended rollback of a release (internal/release), which has a budget.
+func DownBounded(ctx context.Context, db *sql.DB, to int, lockTimeout time.Duration) (DownPlan, error) {
+	r, err := embeddedRunner()
+	if err != nil {
+		return DownPlan{To: to}, err
+	}
+	if lockTimeout > 0 {
+		r.lockTimeout = lockTimeout
+		r.stmtLockTimeout = lockTimeout
+	}
+	return r.down(ctx, db, to, false)
 }
 
 func (r *runner) down(ctx context.Context, db *sql.DB, to int, dryRun bool) (plan DownPlan, err error) {
@@ -97,6 +147,12 @@ func (r *runner) undo(ctx context.Context, conn *sql.Conn, m Migration) (err err
 	}()
 	if _, err = tx.ExecContext(ctx, `SET LOCAL search_path TO `+m.SearchPath()); err != nil {
 		return fmt.Errorf("down %d (%s): set search_path: %w", m.Version, m.Name, err)
+	}
+	if r.stmtLockTimeout > 0 {
+		// An integer of milliseconds: nothing to quote.
+		if _, err = tx.ExecContext(ctx, fmt.Sprintf(`SET LOCAL lock_timeout = %d`, r.stmtLockTimeout.Milliseconds())); err != nil {
+			return fmt.Errorf("down %d (%s): set lock_timeout: %w", m.Version, m.Name, err)
+		}
 	}
 	if _, err = tx.ExecContext(ctx, m.Down); err != nil {
 		return migrationError(m, m.Down, fmt.Errorf("down: %w", err))

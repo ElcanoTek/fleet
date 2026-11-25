@@ -4,6 +4,9 @@
 - **Date:** 2026-11-08
 - **Deciders:** fleet maintainers
 - **Amends:** [ADR-0098](0098-one-database-two-schemas.md)
+- **Amended by:** [ADR-0123](0123-a-release-rollback-undoes-the-new-releases-migrations.md)
+  (2026-11-25: a failed release install runs the new release's down migrations
+  unattended, and `fleet release rollback --migrate-down` runs them on request)
 - **Issue:** #2049 ("One persistence plane"), milestone M6
 - **Design note:** [docs/MIGRATIONS.md](../MIGRATIONS.md)
 

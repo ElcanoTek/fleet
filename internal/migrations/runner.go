@@ -41,6 +41,9 @@ const defaultLockTimeout = 5 * time.Minute
 type runner struct {
 	set         *Set
 	lockTimeout time.Duration
+	// stmtLockTimeout, when set, bounds each down migration's own lock waits
+	// (DownBounded).
+	stmtLockTimeout time.Duration
 }
 
 func newRunner(set *Set) *runner { return &runner{set: set, lockTimeout: defaultLockTimeout} }
