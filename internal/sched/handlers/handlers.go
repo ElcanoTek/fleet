@@ -2169,7 +2169,7 @@ func (h *Handlers) UpdateTaskTags(w http.ResponseWriter, r *http.Request) {
 
 	updated, err := h.storage.UpdateTaskTags(r.Context(), taskID, add, remove)
 	if err != nil {
-		logging.From(r.Context()).Error("update task tags failed", "task_id", taskID, "err", safe.LogSafe(err.Error()))
+		logging.From(r.Context()).Error("update task tags failed", "task_id", safe.LogSafe(taskID.String()), "err", safe.LogSafe(err.Error()))
 		writeError(w, http.StatusInternalServerError, "Failed to update tags")
 		return
 	}

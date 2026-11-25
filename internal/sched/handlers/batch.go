@@ -6,6 +6,7 @@ package handlers
 import (
 	"fmt"
 	"net/http"
+	"strconv"
 
 	"github.com/google/uuid"
 
@@ -322,7 +323,7 @@ func (h *Handlers) CreateTaskBatch(w http.ResponseWriter, r *http.Request) {
 	// DB failure rolls every row back. Non-atomic: best-effort multi-row insert.
 	if len(toInsert) > 0 {
 		if _, err := h.storage.AddTaskBatch(r.Context(), toInsert, req.Atomic); err != nil {
-			logging.From(r.Context()).Error("task batch insert failed", "atomic", req.Atomic, "err", safe.LogSafe(err.Error()))
+			logging.From(r.Context()).Error("task batch insert failed", "atomic", safe.LogSafe(strconv.FormatBool(req.Atomic)), "err", safe.LogSafe(err.Error()))
 			// Atomic failure: nothing was committed — surface every would-be
 			// created task as failed so the caller can retry the whole batch.
 			if req.Atomic {
