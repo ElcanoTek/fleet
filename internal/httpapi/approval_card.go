@@ -12,7 +12,9 @@
 // Any failure — no describer resolvable, a timeout, a tool error, output that
 // is not exactly this schema, or a card the secret redaction would alter —
 // leaves the card off and the generic arguments card renders, as before.
-// Describing never blocks or fails staging. See docs/APPROVAL-CARD-DESCRIBERS.md.
+// Describing never blocks or fails staging, with one exception: a valid card
+// that says the server will refuse the call (ApprovalCard.Refuse, ADR-0121)
+// stops the card, and the model is told why. See docs/APPROVAL-CARD-DESCRIBERS.md.
 
 package httpapi
 
@@ -67,6 +69,21 @@ type ApprovalCard struct {
 	Subtitle string             `json:"subtitle,omitempty"`
 	Items    []ApprovalCardItem `json:"items"`
 	Footer   string             `json:"footer,omitempty"`
+	// Refuse, when set, says the server will refuse this call whatever the
+	// person decides (its arguments name no valid record, for example), so no
+	// card is staged at all: the model gets Message as the call's result and
+	// can call again (ADR-0121). It can only stop a card, never approve or
+	// change one. A refused card is never stored, so a stored card never
+	// carries it.
+	Refuse *ApprovalCardRefusal `json:"refuse,omitempty"`
+}
+
+// ApprovalCardRefusal is a describer's statement that its server will refuse
+// the staged call: a machine code (the flag-code shape) and a plain message
+// telling the model what to fix.
+type ApprovalCardRefusal struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
 }
 
 // ApprovalCardItem is one record the call touches.
@@ -211,6 +228,14 @@ func validateApprovalCard(c *ApprovalCard) error {
 	if err := cardText("footer", c.Footer, approvalCardMaxText, false); err != nil {
 		return err
 	}
+	if c.Refuse != nil {
+		if !approvalCardFlagCode.MatchString(c.Refuse.Code) {
+			return fmt.Errorf("refuse.code %q is not a valid code", c.Refuse.Code)
+		}
+		if err := cardText("refuse.message", c.Refuse.Message, approvalCardMaxText, true); err != nil {
+			return err
+		}
+	}
 	if c.Items == nil {
 		return errors.New("items is required")
 	}
@@ -308,24 +333,29 @@ const (
 // describeApproval runs the bundle-declared describer for a staged call and
 // returns the canonical card JSON, or "" with a fallback reason. "" with no
 // reason means no describer is declared for the tool (nothing to report).
-func (a *approvalStager) describeApproval(toolName, rawInput string) (cardJSON, reason string) {
+//
+// A card that carries a refusal (ApprovalCard.Refuse, ADR-0121) comes back
+// as refusal instead, with no card and no fallback reason: the server says it
+// will refuse the call, so the caller stages nothing. Only a card that passed
+// every check below counts; any failure still falls back to the generic card.
+func (a *approvalStager) describeApproval(toolName, rawInput string) (cardJSON, reason string, refusal *ApprovalCardRefusal) {
 	suffix := agentcore.CardDescriberFor(toolName)
 	if suffix == "" || !strings.HasPrefix(toolName, "mcp_") {
-		return "", ""
+		return "", "", nil
 	}
 	broker, catalog, seats := a.mcpScope()
 	if broker == nil {
-		return "", cardFallbackUnresolved
+		return "", cardFallbackUnresolved, nil
 	}
 	server, _, err := resolveMCPTool(catalog, toolName)
 	if err != nil {
 		logging.From(a.ctx).Error("approval card: resolve failed", "tool", safe.LogSafe(toolName), "err", redactedForLog(err))
-		return "", cardFallbackUnresolved
+		return "", cardFallbackUnresolved, nil
 	}
 	describer, ok := resolveDescriber(catalog, server, suffix)
 	if !ok {
 		logging.From(a.ctx).Info("approval card: no single describer found on the server", "suffix", safe.LogSafe(suffix), "server", safe.LogSafe(server), "tool", safe.LogSafe(toolName))
-		return "", cardFallbackUnresolved
+		return "", cardFallbackUnresolved, nil
 	}
 	// Re-check the describer's identity at call time, under the one policy
 	// the loop uses: it runs with no approval, so it must never be a
@@ -338,7 +368,7 @@ func (a *approvalStager) describeApproval(toolName, rawInput string) (cardJSON, 
 	}
 	if agentcore.IsCriticalTool(full) || !readOnly {
 		logging.From(a.ctx).Info("approval card: describer is critical or not parallel-safe; not called", "describer", safe.LogSafe(full))
-		return "", cardFallbackUnresolved
+		return "", cardFallbackUnresolved, nil
 	}
 	// The loop's other per-call gates apply too. A persona that does not
 	// offer the describer (Gate-4) means the model could not call it either,
@@ -352,11 +382,11 @@ func (a *approvalStager) describeApproval(toolName, rawInput string) (cardJSON, 
 	a.mcpMu.RUnlock()
 	if !agentcore.PersonaPermitsTool(persona, full) || agentcore.PreToolUseHookMatches(full) || agentcore.InteractiveHiddenTool(full) {
 		logging.From(a.ctx).Info("approval card: describer is gated by the persona, a pre_tool_use hook or interactive_hidden_tools; not called", "describer", safe.LogSafe(full))
-		return "", cardFallbackGated
+		return "", cardFallbackGated, nil
 	}
 	var args map[string]any
 	if err := decodeJSONNumbers([]byte(rawInput), &args); err != nil || args == nil {
-		return "", cardFallbackInvalid
+		return "", cardFallbackInvalid, nil
 	}
 	ctx, cancel := context.WithTimeout(mcp.WithCallTimeout(a.ctx, approvalCardDescriberTimeout), approvalCardDescriberTimeout)
 	defer cancel()
@@ -364,24 +394,28 @@ func (a *approvalStager) describeApproval(toolName, rawInput string) (cardJSON, 
 	switch {
 	case err != nil && (errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil):
 		logging.From(ctx).Warn("approval card: describer timed out", "describer", safe.LogSafe(full), "timeout", approvalCardDescriberTimeout)
-		return "", cardFallbackTimeout
+		return "", cardFallbackTimeout, nil
 	case err != nil:
 		logging.From(ctx).Error("approval card: describer failed", "describer", safe.LogSafe(full), "err", redactedForLog(err))
-		return "", cardFallbackError
+		return "", cardFallbackError, nil
 	case isErr:
 		logging.From(ctx).Error("approval card: describer reported an error", "describer", safe.LogSafe(full))
-		return "", cardFallbackError
+		return "", cardFallbackError, nil
 	}
-	_, canonical, err := parseApprovalCard([]byte(strings.TrimSpace(text)))
+	card, canonical, err := parseApprovalCard([]byte(strings.TrimSpace(text)))
 	if err != nil {
 		logging.From(ctx).Error("approval card: describer output refused", "describer", safe.LogSafe(full), "err", redactedForLog(err))
-		return "", cardFallbackInvalid
+		return "", cardFallbackInvalid, nil
 	}
 	if tools.RedactionWouldAlter(canonical) {
 		logging.From(ctx).Warn("approval card: describer output carries a secret-like value; card withheld", "describer", safe.LogSafe(full))
-		return "", cardFallbackRedacted
+		return "", cardFallbackRedacted, nil
 	}
-	return string(canonical), ""
+	if card.Refuse != nil {
+		logging.From(ctx).Info("approval card: describer refused the call; nothing staged", "describer", safe.LogSafe(full), "code", safe.LogSafe(card.Refuse.Code))
+		return "", "", card.Refuse
+	}
+	return string(canonical), "", nil
 }
 
 // resolveDescriber finds the describer tool on the given registered server:

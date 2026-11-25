@@ -610,3 +610,93 @@ func TestParseApprovalCard_LinkLabel(t *testing.T) {
 		}
 	}
 }
+
+// A describer may say its server will refuse the call (ADR-0121). The card is
+// then never staged: no approval row, no supersede of earlier cards, no
+// approval event, and the model gets the describer's message as a refusal.
+func TestStage_DescriberRefusalStagesNothing(t *testing.T) {
+	describerPolicy(t)
+	refusal := `{"title":"This plan couldn't be checked","items":[],"refuse":{"code":"values_sha256_invalid","message":"values_sha256 must be the plan's full 64-character sha256; copy it again from the finalize result."}}`
+	broker := &describerBroker{text: refusal}
+	st := &supersedeOrderStore{broker: broker}
+	sink := &eventSink{}
+	a := newDescribingStager(broker, st, sink)
+
+	id, err := a.Stage("mcp_deals_update_deal", "call-1", describedArgs)
+	var refused *agentcore.StageRefusedError
+	if id != "" || !errors.As(err, &refused) {
+		t.Fatalf("Stage = %q, %v; want a StageRefusedError and no approval id", id, err)
+	}
+	for _, want := range []string{"copy it again from the finalize result", "(values_sha256_invalid)", "Nothing was staged for approval and nothing ran", "call mcp_deals_update_deal again"} {
+		if !strings.Contains(refused.Reason, want) {
+			t.Fatalf("refusal = %q, want it to contain %q", refused.Reason, want)
+		}
+	}
+	if strings.Contains(refused.Reason, "result.. ") || strings.Contains(refused.Reason, "result. (") {
+		t.Fatalf("refusal = %q, the message's own full stop must not double up", refused.Reason)
+	}
+	if st.created != nil {
+		t.Fatalf("an approval row was created for a refused call: %+v", st.created)
+	}
+	if st.callsAtSupersede != 0 {
+		t.Fatal("a refused call superseded the earlier cards")
+	}
+	if st.card != "" {
+		t.Fatalf("a refused card was stored: %s", st.card)
+	}
+	for _, name := range []string{"tool.approval_required", "tool.approval_card_fallback", "tool.approval_superseded"} {
+		if eventNamed(sink, name) != nil {
+			t.Fatalf("%s was emitted for a refused call", name)
+		}
+	}
+}
+
+// Only a card that passes every check can refuse. An off-schema refusal, a
+// bad code, a blank message or a secret in the message falls back to the
+// generic card like any other describer failure, and staging goes on.
+func TestStage_InvalidDescriberRefusalFallsBack(t *testing.T) {
+	describerPolicy(t)
+	secret := "ghp_" + strings.Repeat("a1B2", 9)
+	cases := map[string]struct {
+		text   string
+		reason string
+	}{
+		"bad code":       {`{"title":"x","items":[],"refuse":{"code":"Not Valid!","message":"m"}}`, cardFallbackInvalid},
+		"blank message":  {`{"title":"x","items":[],"refuse":{"code":"c","message":"  "}}`, cardFallbackInvalid},
+		"unknown key":    {`{"title":"x","items":[],"refuse":{"code":"c","message":"m","retry":true}}`, cardFallbackInvalid},
+		"null refuse":    {`{"title":"x","items":[],"refuse":null}`, cardFallbackInvalid},
+		"secret message": {`{"title":"x","items":[],"refuse":{"code":"c","message":"key ` + secret + `"}}`, cardFallbackRedacted},
+		"tool error":     {`{"title":"x","items":[],"refuse":{"code":"c","message":"m"}}`, cardFallbackError},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			broker := &describerBroker{text: tc.text, isErr: name == "tool error"}
+			sink := &eventSink{}
+			a := newDescribingStager(broker, &cardStageStore{}, sink)
+			id, err := a.Stage("mcp_deals_update_deal", "call-1", describedArgs)
+			if err != nil || id != "ap-new" {
+				t.Fatalf("Stage = %q, %v; an invalid refusal must not block staging", id, err)
+			}
+			fb := eventNamed(sink, "tool.approval_card_fallback")
+			if fb == nil || fb["reason"] != tc.reason {
+				t.Fatalf("fallback event = %v, want reason %q", fb, tc.reason)
+			}
+		})
+	}
+}
+
+// A refusal parses (and round-trips) as part of the card schema.
+func TestParseApprovalCard_Refuse(t *testing.T) {
+	t.Parallel()
+	raw := `{"title":"x","items":[],"refuse":{"code":"values_sha256_invalid","message":"Copy the hash again."}}`
+	card, canonical, err := parseApprovalCard([]byte(raw))
+	if err != nil || card.Refuse == nil || card.Refuse.Code != "values_sha256_invalid" {
+		t.Fatalf("parse = %+v, %v", card, err)
+	}
+	if _, again, err := parseApprovalCard(canonical); err != nil || string(again) != string(canonical) {
+		t.Fatalf("refusal card did not round-trip: %v", err)
+	}
+	if _, canonical, _ := parseApprovalCard([]byte(goodCard)); strings.Contains(string(canonical), "refuse") {
+		t.Fatalf("a card without a refusal gained one: %s", canonical)
+	}
+}

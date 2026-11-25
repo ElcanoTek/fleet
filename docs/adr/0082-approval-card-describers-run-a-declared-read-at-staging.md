@@ -1,6 +1,6 @@
 # ADR-0082: Approval-card describers run a bundle-declared read at staging
 
-- **Status:** Accepted
+- **Status:** Accepted (rules 5 and 6 amended by [ADR-0121](0121-a-describer-may-refuse-a-call-its-server-will-refuse.md): a valid card may refuse the call)
 - **Date:** 2026-10-09
 - **Deciders:** fleet maintainers
 - **Relates to:** [ADR-0042](0042-child-side-mcp-scope-authorization.md)
