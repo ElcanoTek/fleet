@@ -1836,6 +1836,13 @@ func approvalError(status int, text string) approvalDecision {
 	return approvalDecision{status: status, errText: text}
 }
 
+// approvalInternalError logs err (an internal error) and answers 500 with
+// internalErrorMessage, as writeInternalError does for a handler.
+func approvalInternalError(ctx context.Context, err error) approvalDecision {
+	logInternalError(ctx, nil, err, 1)
+	return approvalError(http.StatusInternalServerError, internalErrorMessage)
+}
+
 func approvalBody(body map[string]any) approvalDecision {
 	return approvalDecision{body: body}
 }
@@ -1883,7 +1890,7 @@ func (s *Server) decideApproval(ctx context.Context, done <-chan struct{}, user,
 func (s *Server) decideAdmittedApproval(ctx context.Context, done <-chan struct{}, user, convID, approvalID string, req approvalRequest) approvalDecision {
 	approval, err := s.store.GetApproval(ctx, user, approvalID)
 	if err != nil {
-		return approvalError(http.StatusInternalServerError, err.Error())
+		return approvalInternalError(ctx, err)
 	}
 	if approval == nil {
 		return approvalError(http.StatusNotFound, "approval not found")
@@ -1932,7 +1939,7 @@ func (s *Server) decideAdmittedApproval(ctx context.Context, done <-chan struct{
 		resultText := timeoutResultTextFor(approval.ToolName)
 		claimed, err := s.store.ClaimExpiredApproval(ctx, user, approvalID, "rejected", resultText)
 		if err != nil {
-			return approvalError(http.StatusInternalServerError, err.Error())
+			return approvalInternalError(ctx, err)
 		}
 		if claimed {
 			appendToolResultToHistory(execCtx, s.store, convID, approval.ToolName,
@@ -1953,7 +1960,7 @@ func (s *Server) decideAdmittedApproval(ctx context.Context, done <-chan struct{
 		claimMsg, historyMsg := rejectionMessages(approval.ToolName)
 		claimed, err := s.store.ClaimApproval(ctx, user, approvalID, "rejected", claimMsg)
 		if err != nil {
-			return approvalError(http.StatusInternalServerError, err.Error())
+			return approvalInternalError(ctx, err)
 		}
 		if !claimed {
 			return s.resolvedApprovalDecision(ctx, user, approvalID)
@@ -2006,7 +2013,7 @@ func (s *Server) decideAdmittedApproval(ctx context.Context, done <-chan struct{
 		}
 	}
 	if err != nil {
-		return approvalError(http.StatusInternalServerError, err.Error())
+		return approvalInternalError(ctx, err)
 	}
 	if !claimed {
 		return s.resolvedApprovalDecision(ctx, user, approvalID)
@@ -2421,7 +2428,7 @@ func (s *Server) handleSuggestAdvancedApproval(execCtx context.Context, w http.R
 		claimed, err := s.store.ClaimApproval(r.Context(), user, approval.ID, "rejected",
 			"User dismissed the model-switch suggestion.")
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeInternalError(w, r, err)
 			return
 		}
 		if !claimed {
@@ -2461,8 +2468,7 @@ func (s *Server) handleSuggestAdvancedApproval(execCtx context.Context, w http.R
 	resultText := fmt.Sprintf("User accepted the suggestion (%s). Conversation pinned to %s.", action, advancedModel)
 	claimed, err := s.store.ClaimApprovalAndSetModel(r.Context(), user, approval.ID, resultText, approval.ConversationID, advancedModel)
 	if err != nil {
-		logging.From(r.Context()).Error("ClaimApprovalAndSetModel failed (suggest_advanced approval)", "err", err)
-		http.Error(w, "could not pin conversation model: "+err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 	if !claimed {

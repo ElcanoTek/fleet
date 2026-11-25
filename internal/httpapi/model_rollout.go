@@ -167,7 +167,7 @@ func (s *Server) handleAdminModelRollout(w http.ResponseWriter, r *http.Request)
 	}
 	res, status, err := s.executeModelRollout(r.Context(), req)
 	if err != nil {
-		http.Error(w, err.Error(), status)
+		http.Error(w, failureText(r.Context(), r, status, err), status)
 		return
 	}
 	writeJSONStatus(w, r, status, res)
@@ -265,13 +265,40 @@ func (s *Server) resolveExplicitRolloutSlugs(req ModelRolloutRequest, t *resolve
 	return nil
 }
 
+// The texts a rollout reports in partial_error / rollout_error. The cause of
+// each is logged; errors.New keeps them in the browser's message catalog.
+var (
+	errRolloutStateUnread    = errors.New("the rollout was applied, but its fallback retry state could not be read; run the rollout again")
+	errRolloutStateUncleared = errors.New("the rollout was applied, but its fallback retry state could not be cleared; run the rollout again")
+)
+
+// rolloutReportedError is a rollout failure whose text the rollout wrote for
+// the admin: an input refusal (a target model that does not resolve, answered
+// with 400), or a partial rollout's fixed partial_error text.
+type rolloutReportedError struct{ err error }
+
+func (e rolloutReportedError) Error() string { return e.err.Error() }
+func (e rolloutReportedError) Unwrap() error { return e.err }
+
+// rolloutErrorText is the rollout_error text of a setting write whose
+// follow-up rollout failed: a rolloutReportedError's own text; anything else
+// is logged and answered with internalErrorMessage.
+func rolloutErrorText(ctx context.Context, r *http.Request, err error) string {
+	var reported rolloutReportedError
+	if errors.As(err, &reported) {
+		return reported.Error()
+	}
+	logInternalError(ctx, r, err, 1)
+	return internalErrorMessage
+}
+
 func (s *Server) executeModelRollout(ctx context.Context, req ModelRolloutRequest) (ModelRolloutResponse, int, error) {
 	if !req.DryRun {
 		// Pre-validate explicit slugs before acquiring the cross-store lock so
 		// invalid inputs fail fast with 400.
 		if !req.SyncCurrent {
 			if _, err := s.resolveRolloutTargets(req); err != nil {
-				return ModelRolloutResponse{}, http.StatusBadRequest, err
+				return ModelRolloutResponse{}, http.StatusBadRequest, rolloutReportedError{err}
 			}
 		}
 		release, err := s.acquireModelRolloutLock(ctx)
@@ -286,7 +313,7 @@ func (s *Server) executeModelRollout(ctx context.Context, req ModelRolloutReques
 func (s *Server) executeModelRolloutLocked(ctx context.Context, req ModelRolloutRequest) (ModelRolloutResponse, int, error) {
 	t, err := s.resolveRolloutTargets(req)
 	if err != nil {
-		return ModelRolloutResponse{}, http.StatusBadRequest, err
+		return ModelRolloutResponse{}, http.StatusBadRequest, rolloutReportedError{err}
 	}
 
 	out := ModelRolloutResponse{
@@ -311,7 +338,7 @@ func (s *Server) executeModelRolloutLocked(ctx context.Context, req ModelRollout
 	}
 	if err := s.runChatRolloutPhase(ctx, t, req.DryRun, &out); err != nil {
 		if !req.DryRun && out.TasksUpdated > 0 {
-			out.PartialError = fmt.Sprintf("%s (%d scheduled task(s) updated before chat rollout failed)", err.Error(), out.TasksUpdated)
+			out.PartialError = fmt.Errorf("the chat rollout failed after %d scheduled task(s) were updated; run the rollout again", out.TasksUpdated).Error()
 			logging.From(ctx).Warn("Model rollout partially completed",
 				"actor", safe.LogSafe(userFromCtx(ctx)),
 				"tasks_updated", out.TasksUpdated,
@@ -326,7 +353,8 @@ func (s *Server) executeModelRolloutLocked(ctx context.Context, req ModelRollout
 		pending, perr := s.loadPendingFallbackFromLocked(ctx)
 		if perr != nil {
 			if out.TasksUpdated > 0 || out.ChatsUpdated > 0 {
-				out.PartialError = fmt.Sprintf("read pending fallback rollout state: %s", perr.Error())
+				logInternalError(ctx, nil, fmt.Errorf("read pending fallback rollout state: %w", perr), 0)
+				out.PartialError = errRolloutStateUnread.Error()
 				return out, http.StatusMultiStatus, nil
 			}
 			return ModelRolloutResponse{}, http.StatusInternalServerError, fmt.Errorf("read pending fallback rollout state: %w", perr)
@@ -334,7 +362,8 @@ func (s *Server) executeModelRolloutLocked(ctx context.Context, req ModelRollout
 		if req.SyncCurrent || (t.chatTarget != "" && (t.chatFrom == "" || (pending != "" && t.chatFrom == pending))) {
 			if cerr := s.clearPendingFallbackFromLocked(ctx); cerr != nil {
 				if out.TasksUpdated > 0 || out.ChatsUpdated > 0 {
-					out.PartialError = fmt.Sprintf("clear pending fallback rollout state: %s", cerr.Error())
+					logInternalError(ctx, nil, fmt.Errorf("clear pending fallback rollout state: %w", cerr), 0)
+					out.PartialError = errRolloutStateUncleared.Error()
 					return out, http.StatusMultiStatus, nil
 				}
 				return ModelRolloutResponse{}, http.StatusInternalServerError, fmt.Errorf("clear pending fallback rollout state: %w", cerr)
@@ -490,7 +519,14 @@ func (s *Server) rolloutAfterSettingChangeLocked(ctx context.Context, key, prevF
 	if err != nil {
 		if pendingFallbackCandidate != "" {
 			if serr := s.savePendingFallbackFromLocked(ctx, pendingFallbackCandidate); serr != nil {
-				err = fmt.Errorf("%w (also failed saving fallback retry state: %w)", err, serr)
+				var reported rolloutReportedError
+				if errors.As(err, &reported) {
+					// The admin keeps the rollout's own refusal; the retry
+					// state that could not be saved is logged.
+					logInternalError(ctx, nil, fmt.Errorf("save pending fallback rollout state: %w", serr), 0)
+				} else {
+					err = fmt.Errorf("%w (also failed saving fallback retry state: %w)", err, serr)
+				}
 			}
 		}
 		retryCopy := req
@@ -499,11 +535,13 @@ func (s *Server) rolloutAfterSettingChangeLocked(ctx context.Context, key, prevF
 	if res.PartialError != "" {
 		if pendingFallbackCandidate != "" {
 			if serr := s.savePendingFallbackFromLocked(ctx, pendingFallbackCandidate); serr != nil {
-				res.PartialError = fmt.Sprintf("%s (also failed saving fallback retry state: %v)", res.PartialError, serr)
+				// partial_error keeps saying what was applied; the retry state
+				// that could not be saved is logged.
+				logInternalError(ctx, nil, fmt.Errorf("save pending fallback rollout state: %w", serr), 0)
 			}
 		}
 		retryCopy := req
-		return &res, &retryCopy, errors.New(res.PartialError)
+		return &res, &retryCopy, rolloutReportedError{errors.New(res.PartialError)}
 	}
 	if key == "advanced_model" {
 		if cerr := s.clearPendingFallbackFromLocked(ctx); cerr != nil {

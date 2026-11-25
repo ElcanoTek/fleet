@@ -204,7 +204,7 @@ func (s *Server) applyTurnModelOverride(w http.ResponseWriter, r *http.Request, 
 	}
 	if reqModel != conv.Model {
 		if err := s.store.SetModel(r.Context(), convOwnerEmail(conv, user), conv.ID, reqModel); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeInternalError(w, r, err)
 			return false
 		}
 		conv.Model = reqModel
@@ -240,14 +240,14 @@ func (s *Server) applyTurnConversationFlags(w http.ResponseWriter, r *http.Reque
 	// mirroring how replying to an archived email brings it back to the inbox.
 	if conv.ArchivedAt != nil {
 		if err := s.store.SetArchived(r.Context(), ownerEmail, conv.ID, false); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeInternalError(w, r, err)
 			return false
 		}
 		conv.ArchivedAt = nil
 	}
 	if approvalMode != nil && isOwner && parsedMode != conv.EffectiveApprovalMode() {
 		if err := s.store.SetApprovalMode(r.Context(), ownerEmail, conv.ID, parsedMode); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeInternalError(w, r, err)
 			return false
 		}
 		conv.ApprovalMode = parsedMode
@@ -257,7 +257,7 @@ func (s *Server) applyTurnConversationFlags(w http.ResponseWriter, r *http.Reque
 		}
 	} else if approvalMode == nil && autoApprove != nil && *autoApprove != conv.AutoApprove && isOwner {
 		if err := s.store.SetAutoApprove(r.Context(), ownerEmail, conv.ID, *autoApprove); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeInternalError(w, r, err)
 			return false
 		}
 		conv.AutoApprove = *autoApprove
@@ -421,7 +421,7 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 			persona = s.cfg.PersonaDefault
 		}
 		if err := s.checkConversationPersona(r.Context(), user, persona); err != nil {
-			s.userPersonaError(w, err)
+			s.userPersonaError(w, r, err)
 			return
 		}
 		title := strings.TrimSpace(req.Title)
@@ -455,7 +455,7 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 		conv, err = s.store.CreateConversation(r.Context(), user, title, persona, reqModel, lockdown)
 		if err != nil {
 			if !writeAccountGone(w, err) {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
+				writeInternalError(w, r, err)
 			}
 			return
 		}
@@ -656,7 +656,7 @@ func (s *Server) admitActiveTurnOrAbort(convID string, buf *turnBuffer, turnToke
 	}
 	s.finishTurn(convID, turnToken)
 	s.maybeDrainQueue(convID)
-	fail(http.StatusServiceUnavailable, errors.New("server is shutting down"))
+	fail(http.StatusServiceUnavailable, errServerShuttingDown)
 	return false
 }
 
@@ -701,7 +701,7 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 			if directInputID != "" {
 				s.settleDirectInput(directInputID, "")
 			}
-			http.Error(w, err.Error(), status)
+			http.Error(w, failureTextSkip(reqCtx, r, status, err, 1), status)
 			return
 		}
 		logging.From(reqCtx).Error("queued turn launch failed", "user", safe.LogSafe(user), "conv_id", safe.LogSafe(conv.ID), "err", err)
@@ -828,7 +828,7 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 		turnCancel()
 		s.finishTurn(conv.ID, turnToken)
 		s.maybeDrainQueue(conv.ID) // no turn goroutine will run the completion-tail drain
-		fail(http.StatusInternalServerError, errors.New("the message could not be recorded against its turn; send it again"))
+		fail(http.StatusInternalServerError, errTurnNotRecorded)
 		return true
 	}
 	if !s.bindQueuedInputIf(queued, turnID) {
@@ -1160,7 +1160,7 @@ func (s *Server) seedConversationMCP(w http.ResponseWriter, r *http.Request, use
 		sort.Strings(clean)
 		if len(clean) > 0 || len(conv.OptionalMCPServersEnabled) > 0 {
 			if err := s.store.SetOptionalMCPServers(r.Context(), user, conv.ID, clean); err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
+				writeInternalError(w, r, err)
 				return false
 			}
 		}
@@ -1174,7 +1174,7 @@ func (s *Server) seedConversationMCP(w http.ResponseWriter, r *http.Request, use
 		}
 		if len(accounts) > 0 {
 			if err := s.store.SetConversationMCPAccounts(r.Context(), user, conv.ID, accounts); err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
+				writeInternalError(w, r, err)
 				return false
 			}
 			conv.MCPAccounts = accounts
@@ -1183,7 +1183,7 @@ func (s *Server) seedConversationMCP(w http.ResponseWriter, r *http.Request, use
 	if approvalMode != nil {
 		if parsedMode != store.ConversationApprovalManual {
 			if err := s.store.SetApprovalMode(r.Context(), user, conv.ID, parsedMode); err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
+				writeInternalError(w, r, err)
 				return false
 			}
 		}
@@ -1191,7 +1191,7 @@ func (s *Server) seedConversationMCP(w http.ResponseWriter, r *http.Request, use
 		conv.AutoApprove = parsedMode != store.ConversationApprovalManual
 	} else if autoApprove != nil && *autoApprove {
 		if err := s.store.SetAutoApprove(r.Context(), user, conv.ID, true); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeInternalError(w, r, err)
 			return false
 		}
 		conv.AutoApprove = true
@@ -1334,7 +1334,7 @@ func (s *Server) runTurnAsync(
 	// seal the buffer and the user sees an error instead of a stuck "Thinking…".
 	defer safe.RecoverContext(turnCtx, "httpapi.runTurnAsync", func(any) {
 		turnErr = errTurnPanicked
-		buf.Emit("turn.error", map[string]any{"message": "the turn ended unexpectedly due to an internal error"})
+		buf.Emit("turn.error", map[string]any{"message": errTurnFailed.Error()})
 	})
 
 	// Mock mode: short-circuit the LLM loop with a scripted stream for
@@ -1464,7 +1464,7 @@ func (s *Server) runTurnAsync(
 		turnErr = err
 		logging.From(turnCtx).Error("RunTurn error", "user", safe.LogSafe(user), "conv_id", safe.LogSafe(conv.ID), "err", safe.LogSafe(err.Error()))
 		if !errors.Is(err, ErrModelSelectionRequired) {
-			buf.Emit("turn.error", map[string]any{"message": err.Error(), "user_email": user})
+			buf.Emit("turn.error", map[string]any{"message": turnErrorMessage(err), "user_email": user})
 		}
 		return
 	}

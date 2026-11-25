@@ -1598,7 +1598,7 @@ func takeTurnSandboxFrom(ctx context.Context, taker turnSandboxTaker, p turnSand
 	// A per-conversation lockdown OR the fleet-wide lockdown mode seals the turn.
 	if p.lockdown || mode == sandbox.NetworkModeLockdown {
 		if p.lockdown && !p.lockdownAvailable {
-			return nil, nil, fmt.Errorf("conversation is in lockdown mode but the server has no sandbox image configured")
+			return nil, nil, &TurnRefusalError{Err: errors.New("conversation is in lockdown mode but the server has no sandbox image configured")}
 		}
 		sb, cleanup, err := taker.TakeContainer(ctx)
 		if errors.Is(err, sandbox.ErrContainerUnavailable) {
@@ -2019,7 +2019,7 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 	}
 
 	if in.Lockdown && in.Model != "" && !m.config.LockdownAllows(in.Model) {
-		return nil, fmt.Errorf("model %q not allowed in lockdown mode", in.Model)
+		return nil, &TurnRefusalError{Err: fmt.Errorf("model %q not allowed in lockdown mode", in.Model)}
 	}
 
 	release, err := m.admitInteractiveTurn(ctx)
@@ -2031,7 +2031,7 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 	// Reject stale/unconfigured selections before provisioning a sandbox or MCP
 	// scope. No provider call is needed to explain how to repair the selection.
 	if _, err := m.CheckModelRoute(in.Model); err != nil {
-		return nil, fmt.Errorf("resolve model: %w", err)
+		return nil, &TurnRefusalError{Err: fmt.Errorf("resolve model: %w", err)}
 	}
 
 	sb, sbCleanup, err := m.takeTurnSandbox(ctx, in.Lockdown, in.ConversationID)
@@ -2574,6 +2574,17 @@ func humanMessageForReason(reason agentcore.StreamErrorReason, status int, strea
 // layer detects it with errors.Is and does NOT emit a generic turn.error
 // (turn.model_required was already emitted). Mirrors chat's sentinel.
 var ErrModelSelectionRequired = fmt.Errorf("model selection required")
+
+// TurnRefusalError is a RunTurn failure whose text is written for the person
+// who sent the message: a model lockdown does not allow, one the workspace
+// has no provider route for (the text says how to pick another), or a
+// Lockdown chat on a server with no sandbox image configured. Its text names
+// only the model or the configuration, and the fix. The chat API shows it as is; any other turn failure
+// is answered with a fixed message.
+type TurnRefusalError struct{ Err error }
+
+func (e *TurnRefusalError) Error() string { return e.Err.Error() }
+func (e *TurnRefusalError) Unwrap() error { return e.Err }
 
 // ErrHistoryCommitFailed marks a turn that failed because its canonical
 // history could not be durably committed (#798) — before the first provider

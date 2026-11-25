@@ -344,14 +344,14 @@ func (h *Handlers) importRecord(r *http.Request, rec models.TaskExportRecord, ac
 		}
 		id, err := h.replaceTaskByName(r, rec, gates)
 		if err != nil {
-			result.Status, result.Error = models.TaskImportErrored, err.Error()
+			result.Status, result.Error = models.TaskImportErrored, itemErrorText(r.Context(), err)
 			return result
 		}
 		result.ID = &id
 		return result
 	default:
 		if dryRun && filesRefused != nil {
-			result.Status, result.Error = models.TaskImportErrored, filesRefused.Error()
+			result.Status, result.Error = models.TaskImportErrored, itemErrorText(r.Context(), filesRefused)
 			return result
 		}
 		result.Status = models.TaskImportCreated
@@ -364,7 +364,7 @@ func (h *Handlers) importRecord(r *http.Request, rec models.TaskExportRecord, ac
 			if conflict == models.TaskImportConflictSkip && errors.As(err, &refusal) && refusal.status == http.StatusConflict {
 				return skipped()
 			}
-			result.Status, result.Error = models.TaskImportErrored, err.Error()
+			result.Status, result.Error = models.TaskImportErrored, itemErrorText(r.Context(), err)
 			return result
 		}
 		result.ID = &id

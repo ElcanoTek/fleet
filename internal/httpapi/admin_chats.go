@@ -192,7 +192,7 @@ func (s *Server) executeClaimedAdminRequest(ctx context.Context, st adminChatSto
 		}
 		res, err := s.transferConversation(ctx, conv, r.Payload)
 		if err != nil {
-			s.finishAdminRequest(ctx, st, r, store.AdminRequestFailed, err.Error(), "")
+			s.finishAdminRequest(ctx, st, r, store.AdminRequestFailed, adminRequestFailure(ctx, err), "")
 			return
 		}
 		s.finishAdminRequest(ctx, st, r, store.AdminRequestDone,
@@ -229,7 +229,7 @@ func (s *Server) executeClaimedAdminRequest(ctx context.Context, st adminChatSto
 		s.adminDeleteToBin(ctx, st, r)
 	case store.AdminRequestRestore:
 		if err := st.AdminRestoreChat(ctx, r.ConversationID); err != nil {
-			s.finishAdminRequest(ctx, st, r, store.AdminRequestFailed, err.Error(), "")
+			s.finishAdminRequest(ctx, st, r, store.AdminRequestFailed, adminRequestFailure(ctx, err), "")
 			return
 		}
 		s.finishAdminRequest(ctx, st, r, store.AdminRequestDone, "restored from the recycle bin; its patrols stay paused",
@@ -253,7 +253,7 @@ func (s *Server) adminDeleteToBin(ctx context.Context, st adminChatStore, r stor
 	paused, err := st.AdminMoveChatToBin(ctx, r.ConversationID,
 		fmt.Sprintf("An administrator moved this chat to the recycle bin; it is deleted for good after %d days unless restored. Reason: %s", store.AdminRecycleBinDays, r.Reason))
 	if err != nil {
-		s.finishAdminRequest(ctx, st, r, store.AdminRequestFailed, "delete failed: "+err.Error(), "")
+		s.finishAdminRequest(ctx, st, r, store.AdminRequestFailed, "delete failed: "+adminRequestFailure(ctx, err), "")
 		return
 	}
 	// The chat is in the bin: stop whatever was running in it.
@@ -275,7 +275,7 @@ func (s *Server) adminPurge(ctx context.Context, st adminChatStore, r store.Admi
 		owner = c.OwnerEmail
 	}
 	if err := st.AdminPurgeChat(ctx, r.ConversationID); err != nil {
-		s.finishAdminRequest(ctx, st, r, store.AdminRequestFailed, "permanent delete failed: "+err.Error(), "")
+		s.finishAdminRequest(ctx, st, r, store.AdminRequestFailed, "permanent delete failed: "+adminRequestFailure(ctx, err), "")
 		return
 	}
 	s.adminStopConversation(ctx, r.ConversationID)
@@ -345,10 +345,18 @@ func (s *Server) adminActor(r *http.Request) store.AdminActor {
 
 // adminChatError maps a store error to a status and a message the browser
 // can show.
-func adminChatError(w http.ResponseWriter, err error) {
+func adminChatError(w http.ResponseWriter, r *http.Request, err error) {
 	var stale *store.ChatSchedulePromptChangedError
 	var staleDef *store.ChatScheduleDefinitionChangedError
+	var partial *store.AdminPartialChangeError
 	switch {
+	case errors.As(err, &partial):
+		// First: it unwraps to the step that failed (a chat deleted
+		// mid-change reads as not found), which must not hide that part of
+		// the change was applied. What did change is recorded in the chat;
+		// the failed step is logged.
+		logInternalError(r.Context(), r, err, 1)
+		http.Error(w, fmt.Sprintf("the change was partly applied: %s; reload", strings.Join(partial.Did, "; ")), http.StatusInternalServerError)
 	case errors.Is(err, store.ErrConversationNotFound), errors.Is(err, store.ErrChatScheduleNotFound):
 		http.Error(w, "not found", http.StatusNotFound)
 	case errors.As(err, &stale):
@@ -359,13 +367,43 @@ func adminChatError(w http.ResponseWriter, err error) {
 		http.Error(w, "the pinned note changed since you opened it; reload and edit again", http.StatusConflict)
 	case errors.Is(err, store.ErrAdminReasonRequired):
 		http.Error(w, "a reason is required: it is recorded and shown in the chat", http.StatusBadRequest)
-	case errors.Is(err, store.ErrAdminChatNotAllowed), errors.Is(err, store.ErrInvalidChatSchedule),
-		errors.Is(err, store.ErrAdminChatAmbiguous), errors.Is(err, store.ErrChatScheduleAmbiguous),
-		errors.Is(err, store.ErrAdminChatState), errors.Is(err, store.ErrAdminNoteEmpty), errors.Is(err, store.ErrAdminNoteTooLong):
+	case isAdminChatRefusal(err):
 		http.Error(w, err.Error(), http.StatusBadRequest)
 	default:
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeInternalErrorFromHelper(w, r, err)
 	}
+}
+
+// isAdminChatRefusal reports whether err is one of the store's typed refusals
+// of an administrator's request (a sentinel, or a store.InputError such as
+// "nothing to change"), whose text is written for the admin.
+func isAdminChatRefusal(err error) bool {
+	if store.IsInputError(err) {
+		return true
+	}
+	for _, refusal := range []error{
+		store.ErrAdminChatNotAllowed, store.ErrInvalidChatSchedule, store.ErrAdminChatAmbiguous,
+		store.ErrChatScheduleAmbiguous, store.ErrAdminChatState, store.ErrAdminNoteEmpty, store.ErrAdminNoteTooLong,
+	} {
+		if errors.Is(err, refusal) {
+			return true
+		}
+	}
+	return false
+}
+
+// adminRequestFailure is the stored result of an administrator's request
+// that failed with err, which the admin chats page shows: a typed refusal
+// (the store's, or a transfer's) keeps its text; anything else is an internal
+// error, logged and recorded as internalErrorMessage.
+func adminRequestFailure(ctx context.Context, err error) string {
+	switch {
+	case errors.Is(err, store.ErrConversationNotFound):
+		return "the chat no longer exists"
+	case isAdminChatRefusal(err):
+		return err.Error()
+	}
+	return failureTextSkip(ctx, nil, transferErrorStatus(err), err, 1)
 }
 
 // adminChatFilterFromQuery reads the filter the chat listing and the overview
@@ -398,7 +436,7 @@ func (s *Server) handleAdminChats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 	writeJSON(w, r, map[string]any{"chats": chats})
@@ -419,7 +457,7 @@ func (s *Server) handleAdminChatOverview(w http.ResponseWriter, r *http.Request)
 	}
 	overview, err := st.AdminChatOverview(r.Context(), adminChatFilterFromQuery(r))
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 	writeJSON(w, r, map[string]any{"overview": overview})
@@ -458,7 +496,7 @@ func (s *Server) handleAdminChatItem(w http.ResponseWriter, r *http.Request) {
 	// purged there; everything that changes a live chat refuses it.
 	chat, err := st.AdminGetChatAny(r.Context(), parts[0])
 	if err != nil {
-		adminChatError(w, err)
+		adminChatError(w, r, err)
 		return
 	}
 	sub := ""
@@ -483,7 +521,7 @@ func (s *Server) handleAdminChatItem(w http.ResponseWriter, r *http.Request) {
 			BeforeID: max(before, 0), MaxTextRunes: maxChars,
 		})
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeInternalError(w, r, err)
 			return
 		}
 		writeJSON(w, r, map[string]any{"entries": entries})
@@ -497,7 +535,7 @@ func (s *Server) handleAdminChatItem(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := st.AdminAppendNotice(r.Context(), s.adminActor(r), chat.ID, body.Text); err != nil {
-			adminChatError(w, err)
+			adminChatError(w, r, err)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -515,7 +553,7 @@ func (s *Server) handleAdminChatItem(w http.ResponseWriter, r *http.Request) {
 		}
 		note, err := st.AdminSetNoteIfUnchanged(r.Context(), s.adminActor(r), chat.ID, body.Text, body.ExpectVersion)
 		if err != nil {
-			adminChatError(w, err)
+			adminChatError(w, r, err)
 			return
 		}
 		writeJSON(w, r, map[string]any{"note": note})
@@ -532,7 +570,7 @@ func (s *Server) handleAdminChatItem(w http.ResponseWriter, r *http.Request) {
 			expect = &v
 		}
 		if _, err := st.AdminClearNoteIfUnchanged(r.Context(), s.adminActor(r), chat.ID, expect); err != nil {
-			adminChatError(w, err)
+			adminChatError(w, r, err)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -597,17 +635,17 @@ func (s *Server) adminChatDetail(w http.ResponseWriter, r *http.Request, st admi
 	ctx := r.Context()
 	patrols, err := st.AdminListChatSchedules(ctx, store.AdminChatScheduleFilter{ConversationID: chat.ID, PatrolsOnly: false})
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 	actions, err := st.ListAdminActions(ctx, chat.ID, 20)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 	queue, err := s.store.ListQueuedInputs(ctx, "", chat.ID)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 	type queued struct {
@@ -627,12 +665,12 @@ func (s *Server) adminChatDetail(w http.ResponseWriter, r *http.Request, st admi
 	}
 	cards, err := st.AdminListPendingCards(ctx, chat.ID)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 	note, err := st.GetAdminNote(ctx, chat.ID)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 	writeJSON(w, r, map[string]any{
@@ -662,7 +700,7 @@ func (s *Server) adminChatPatch(w http.ResponseWriter, r *http.Request, st admin
 	if change.Title != nil || change.Model != nil || change.ApprovalMode != nil {
 		var err error
 		if after, err = st.AdminUpdateChat(r.Context(), s.adminActor(r), chat.ID, change, body.Reason); err != nil {
-			adminChatError(w, err)
+			adminChatError(w, r, err)
 			return
 		}
 	}
@@ -675,7 +713,7 @@ func (s *Server) adminChatPatch(w http.ResponseWriter, r *http.Request, st admin
 			Actor: s.adminActor(r), Kind: store.AdminRequestArchive, ConversationID: chat.ID, Payload: payload, Reason: body.Reason,
 		})
 		if err != nil {
-			adminChatError(w, err)
+			adminChatError(w, r, err)
 			return
 		}
 		ctx := context.WithoutCancel(r.Context())
@@ -729,7 +767,7 @@ func (s *Server) adminChatRequest(w http.ResponseWriter, r *http.Request, st adm
 		Actor: s.adminActor(r), Kind: body.Kind, ConversationID: chat.ID, Payload: payload, Reason: body.Reason,
 	})
 	if err != nil {
-		adminChatError(w, err)
+		adminChatError(w, r, err)
 		return
 	}
 	// Carried out now, on a context that outlives the request, rather than
@@ -767,7 +805,7 @@ func (s *Server) handleAdminPatrolItem(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet {
 		p, err := st.AdminGetChatSchedule(r.Context(), id)
 		if err != nil {
-			adminChatError(w, err)
+			adminChatError(w, r, err)
 			return
 		}
 		writeJSON(w, r, map[string]any{"patrol": p})
@@ -819,7 +857,7 @@ func (s *Server) handleAdminPatrolItem(w http.ResponseWriter, r *http.Request) {
 		}
 		res, err := st.AdminSetChatScheduleCron(r.Context(), actor, in)
 		if err != nil {
-			adminChatError(w, err)
+			adminChatError(w, r, err)
 			return
 		}
 		if res.DryRun {
@@ -838,7 +876,7 @@ func (s *Server) handleAdminPatrolItem(w http.ResponseWriter, r *http.Request) {
 		}
 		cur, err := st.AdminGetChatSchedule(r.Context(), id)
 		if err != nil {
-			adminChatError(w, err)
+			adminChatError(w, r, err)
 			return
 		}
 		title := cur.Title
@@ -851,14 +889,14 @@ func (s *Server) handleAdminPatrolItem(w http.ResponseWriter, r *http.Request) {
 			Actor:  &actor, Reason: why,
 		})
 		if err != nil {
-			adminChatError(w, err)
+			adminChatError(w, r, err)
 			return
 		}
 		out = after
 	case body.Status != nil:
 		after, err := st.AdminSetChatScheduleStatus(r.Context(), actor, id, strings.TrimSpace(*body.Status), body.Reason)
 		if err != nil {
-			adminChatError(w, err)
+			adminChatError(w, r, err)
 			return
 		}
 		if after.Status == store.ChatScheduleStatusActive {
@@ -916,7 +954,7 @@ func (s *Server) handleAdminChatActions(w http.ResponseWriter, r *http.Request) 
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	actions, err := st.ListAdminActions(r.Context(), "", limit)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 	writeJSON(w, r, map[string]any{"actions": actions})

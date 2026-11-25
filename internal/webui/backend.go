@@ -6,11 +6,14 @@ package webui
 import (
 	"bufio"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
 
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/principal"
+	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/websession"
 )
 
@@ -151,12 +154,39 @@ var textJSON = out{headers: contentTypeOnly, ctFallback: "application/json", gzi
 // passthroughJSON is chatServerPassthrough / proxyToOrchestrator.
 var passthroughJSON = out{headers: forwardedHeaders, ctFallback: "application/json"}
 
+// The 502 texts for a backend that is not wired (the browser-test harness
+// boots the gateway alone) or a backend request that could not be built.
+// errors.New keeps them in the browser's message catalog: a download's error
+// toast and the orchestrator client show the body's error through
+// localizeError.
+var (
+	errChatServerUnreachable   = errors.New("chat-server unreachable")
+	errOrchestratorUnreachable = errors.New("orchestrator unreachable")
+	errChatServerNoBackend     = errors.New("chat-server unreachable: no backend")
+	errOrchestratorNoBackend   = errors.New("orchestrator unreachable: no backend")
+)
+
+// backendUnreachable is the 502 text for the named backend; noBackend says
+// it is not wired at all.
+func backendUnreachable(name string, noBackend bool) string {
+	switch {
+	case name == "orchestrator" && noBackend:
+		return errOrchestratorNoBackend.Error()
+	case name == "orchestrator":
+		return errOrchestratorUnreachable.Error()
+	case noBackend:
+		return errChatServerNoBackend.Error()
+	default:
+		return errChatServerUnreachable.Error()
+	}
+}
+
 // dispatch runs c against backend h and re-emits the response per o. A nil
 // backend (the browser-test harness boots the gateway alone) answers the same
 // 502 the Next tier gave when chat-server was unreachable.
 func (g *Gateway) dispatch(w http.ResponseWriter, r *http.Request, h http.Handler, name string, c call, o out) {
 	if h == nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": name + " unreachable: no backend"})
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": backendUnreachable(name, true)})
 		return
 	}
 	ctx := backendContext(r.Context(), c.who)
@@ -169,7 +199,8 @@ func (g *Gateway) dispatch(w http.ResponseWriter, r *http.Request, h http.Handle
 	}
 	req, err := http.NewRequestWithContext(ctx, c.method, "http://127.0.0.1"+c.target, body)
 	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": name + " unreachable: " + err.Error()})
+		logging.From(r.Context()).Error("gateway: backend request could not be built", "backend", safe.LogSafe(name), "err", safe.LogSafe(err.Error()))
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": backendUnreachable(name, false)})
 		return
 	}
 	req.RequestURI = c.target

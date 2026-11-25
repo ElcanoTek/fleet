@@ -22,7 +22,7 @@ func TestRemoteMCPErrorScrubsRegisteredControlPlaneSecret(t *testing.T) {
 	agentcore.RegisterSecretLiteral(echoed)
 
 	rr := httptest.NewRecorder()
-	(&Server{}).remoteMCPError(rr, fmt.Errorf("could not connect to the MCP server: upstream rejected credential %s (401)", echoed))
+	(&Server{}).remoteMCPError(rr, nil, fmt.Errorf("could not connect to the MCP server: upstream rejected credential %s (401)", echoed))
 
 	body := rr.Body.String()
 	if strings.Contains(body, echoed) {

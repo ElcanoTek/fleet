@@ -101,7 +101,7 @@ func (s *Server) handleListConversations(w http.ResponseWriter, r *http.Request,
 			return
 		}
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeInternalError(w, r, err)
 			return
 		}
 		writeJSON(w, r, map[string]any{"conversations": list})
@@ -113,7 +113,7 @@ func (s *Server) handleListConversations(w http.ResponseWriter, r *http.Request,
 	if q.Get("scope") == "shared" {
 		list, err := s.store.ListSharedAndMultiplayerConversations(r.Context(), user)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeInternalError(w, r, err)
 			return
 		}
 		writeJSON(w, r, map[string]any{"conversations": list})
@@ -124,7 +124,7 @@ func (s *Server) handleListConversations(w http.ResponseWriter, r *http.Request,
 		Labels:       q["label"],
 	})
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 	autonomousAccepted := s.hasAcceptedAutonomous(r.Context(), user)
@@ -189,7 +189,7 @@ func (s *Server) listOrCreateConversations(w http.ResponseWriter, r *http.Reques
 			priorIDs := s.activeMultiplayerAndPendingConvIDsBestEffort(r.Context())
 			n, err := s.store.DeleteAllMatching(r.Context(), user, r.URL.Query().Get("label"))
 			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
+				writeInternalError(w, r, err)
 				return
 			}
 			s.reconcileAllMultiplayerAccess(r.Context(), priorIDs...)
@@ -207,7 +207,7 @@ func (s *Server) listOrCreateConversations(w http.ResponseWriter, r *http.Reques
 				return
 			}
 			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
+				writeInternalError(w, r, err)
 				return
 			}
 			// Reclaim each deleted conversation's persistent run_python sandbox
@@ -226,7 +226,7 @@ func (s *Server) listOrCreateConversations(w http.ResponseWriter, r *http.Reques
 			priorIDs := s.activeMultiplayerAndPendingConvIDsBestEffort(r.Context())
 			n, err := s.store.DeleteAllUnpinned(r.Context(), user)
 			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
+				writeInternalError(w, r, err)
 				return
 			}
 			s.reconcileAllMultiplayerAccess(r.Context(), priorIDs...)
@@ -264,7 +264,7 @@ func (s *Server) createConversation(w http.ResponseWriter, r *http.Request, user
 		// same row: already made means answer with it.
 		id := store.ConversationIDForCreateKey(user, key)
 		if existing, err := s.store.Get(r.Context(), user, id); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeInternalError(w, r, err)
 			return
 		} else if existing != nil {
 			writeJSON(w, r, existing)
@@ -275,7 +275,7 @@ func (s *Server) createConversation(w http.ResponseWriter, r *http.Request, user
 	persona := strings.TrimSpace(req.Persona)
 	if persona != "" {
 		if err := s.checkConversationPersona(r.Context(), user, persona); err != nil {
-			s.userPersonaError(w, err)
+			s.userPersonaError(w, r, err)
 			return
 		}
 	}
@@ -330,7 +330,7 @@ func (s *Server) createConversation(w http.ResponseWriter, r *http.Request, user
 		}
 		if err != nil {
 			s.rollbackCreatedConversation(user, conv.ID)
-			http.Error(w, "failed to seed conversation: "+err.Error(), http.StatusInternalServerError)
+			writeInternalError(w, r, err)
 			return
 		}
 	}
@@ -377,7 +377,7 @@ func (s *Server) bulkPatchConversations(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 	writeJSON(w, r, map[string]any{"updated": n})
@@ -584,7 +584,7 @@ func withOwnedOrMultiplayerConversation(notFound string, handler ownedConversati
 // as a 500 — which is what every sibling did before this helper, leaving the
 // client unable to tell a stale tab from an outage. Everything else is a
 // genuine fault.
-func writeConversationMutationError(w http.ResponseWriter, err error) {
+func writeConversationMutationError(w http.ResponseWriter, r *http.Request, err error) {
 	if errors.Is(err, store.ErrConversationNotFound) {
 		http.Error(w, "conversation not found", http.StatusNotFound)
 		return
@@ -593,7 +593,7 @@ func writeConversationMutationError(w http.ResponseWriter, err error) {
 		http.Error(w, "project not found", http.StatusNotFound)
 		return
 	}
-	http.Error(w, err.Error(), http.StatusInternalServerError)
+	writeInternalErrorFromHelper(w, r, err)
 }
 
 // conversationSubroutes maps each (sub, method) pair the old conversationByID

@@ -54,7 +54,7 @@ func (s *Server) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	resolved, err := s.workspaceSettings.Snapshot(r.Context())
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 	writeJSON(w, r, map[string]any{"settings": resolved})
@@ -102,7 +102,7 @@ func (s *Server) writeAdminSettingItem(w http.ResponseWriter, r *http.Request, k
 	if isModelTierSettingKey(key) {
 		release, err := s.acquireModelRolloutLock(ctx)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeInternalError(w, r, err)
 			return
 		}
 		defer release()
@@ -112,20 +112,20 @@ func (s *Server) writeAdminSettingItem(w http.ResponseWriter, r *http.Request, k
 	if key == "advanced_model" && wantRollout {
 		if normVal, verr := validateRolloutModelSlug(key, value); verr == nil {
 			if perr := s.preparePendingFallbackBeforeTierWriteLocked(ctx, prevFallback, normVal); perr != nil {
-				http.Error(w, perr.Error(), http.StatusInternalServerError)
+				writeInternalError(w, r, perr)
 				return
 			}
 		}
 	}
 	resolved, err := s.workspaceSettings.Set(ctx, key, value, userFromCtx(ctx))
 	if err != nil {
-		httpErrorForSetting(w, err)
+		httpErrorForSetting(w, r, err)
 		return
 	}
 	if !wantRollout {
 		if key == "advanced_model" {
 			if cerr := s.clearPendingFallbackFromLocked(ctx); cerr != nil {
-				http.Error(w, cerr.Error(), http.StatusInternalServerError)
+				writeInternalError(w, r, cerr)
 				return
 			}
 		}
@@ -135,7 +135,7 @@ func (s *Server) writeAdminSettingItem(w http.ResponseWriter, r *http.Request, k
 	rollout, retryReq, rerr := s.rolloutAfterSettingChangeLocked(ctx, key, prevFallback, prevTask, notifyChats)
 	resp := adminSettingWriteResponse{Resolved: resolved, Rollout: rollout}
 	if rerr != nil {
-		resp.RolloutError = rerr.Error()
+		resp.RolloutError = rolloutErrorText(ctx, r, rerr)
 		resp.RolloutRetry = retryReq
 	}
 	writeJSON(w, r, resp)
@@ -146,7 +146,7 @@ func (s *Server) resetAdminSettingItem(w http.ResponseWriter, r *http.Request, k
 	if isModelTierSettingKey(key) {
 		release, err := s.acquireModelRolloutLock(ctx)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeInternalError(w, r, err)
 			return
 		}
 		defer release()
@@ -156,7 +156,7 @@ func (s *Server) resetAdminSettingItem(w http.ResponseWriter, r *http.Request, k
 	if key == "advanced_model" && wantRollout {
 		snap, serr := s.workspaceSettings.Snapshot(ctx)
 		if serr != nil {
-			http.Error(w, serr.Error(), http.StatusInternalServerError)
+			writeInternalError(w, r, serr)
 			return
 		}
 		var resetDefault string
@@ -167,19 +167,19 @@ func (s *Server) resetAdminSettingItem(w http.ResponseWriter, r *http.Request, k
 			}
 		}
 		if perr := s.preparePendingFallbackBeforeTierWriteLocked(ctx, prevFallback, resetDefault); perr != nil {
-			http.Error(w, perr.Error(), http.StatusInternalServerError)
+			writeInternalError(w, r, perr)
 			return
 		}
 	}
 	resolved, err := s.workspaceSettings.Reset(ctx, key, userFromCtx(ctx))
 	if err != nil {
-		httpErrorForSetting(w, err)
+		httpErrorForSetting(w, r, err)
 		return
 	}
 	if !wantRollout {
 		if key == "advanced_model" {
 			if cerr := s.clearPendingFallbackFromLocked(ctx); cerr != nil {
-				http.Error(w, cerr.Error(), http.StatusInternalServerError)
+				writeInternalError(w, r, cerr)
 				return
 			}
 		}
@@ -189,21 +189,31 @@ func (s *Server) resetAdminSettingItem(w http.ResponseWriter, r *http.Request, k
 	rollout, retryReq, rerr := s.rolloutAfterSettingChangeLocked(ctx, key, prevFallback, prevTask, notifyChats)
 	resp := adminSettingWriteResponse{Resolved: resolved, Rollout: rollout}
 	if rerr != nil {
-		resp.RolloutError = rerr.Error()
+		resp.RolloutError = rolloutErrorText(ctx, r, rerr)
 		resp.RolloutRetry = retryReq
 	}
 	writeJSON(w, r, resp)
 }
 
 // httpErrorForSetting maps service errors: unknown key → 404, a validation
-// failure (reported before anything is persisted) → 400, persist/apply → 500.
-func httpErrorForSetting(w http.ResponseWriter, err error) {
+// failure (reported before anything is persisted) → 400, a value the apply
+// hook refused for the current configuration (settings.ApplyError, undone
+// already) → 409 with the hook's text, the same refusal whose undo write
+// failed → 500 with the hook's text and what to do, and anything else (the
+// store) → an internal error.
+func httpErrorForSetting(w http.ResponseWriter, r *http.Request, err error) {
+	var applyErr *settings.ApplyError
 	switch {
 	case errors.Is(err, settings.ErrUnknownKey):
 		http.Error(w, err.Error(), http.StatusNotFound)
 	case errors.Is(err, settings.ErrInvalidValue):
 		http.Error(w, err.Error(), http.StatusBadRequest)
+	case errors.As(err, &applyErr) && applyErr.Compensation == "":
+		http.Error(w, applyErr.Error(), http.StatusConflict)
+	case errors.As(err, &applyErr):
+		logInternalError(r.Context(), r, err, 1)
+		http.Error(w, applyErr.Error(), http.StatusInternalServerError)
 	default:
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalErrorFromHelper(w, r, err)
 	}
 }

@@ -149,6 +149,19 @@ func TestAdminChatRoutes(t *testing.T) {
 	if rec := adminDo(t, h, "admin@x", http.MethodPost, "/admin/chats/"+conv.ID+"/requests", `{"kind":"explode","reason":"r"}`); rec.Code != http.StatusBadRequest {
 		t.Fatalf("unknown kind = %d", rec.Code)
 	}
+	// The store's own validation refusals answer 400 with their text; only
+	// a store failure is an internal error.
+	for _, tc := range []struct{ method, path, body, want string }{
+		{http.MethodPatch, "/admin/chats/" + conv.ID, `{"title":"  ","reason":"r"}`, "title cannot be empty"},
+		{http.MethodPatch, "/admin/chats/" + conv.ID, `{"model":"not a slug","reason":"r"}`, `"not a slug" is not a model slug`},
+		{http.MethodPost, "/admin/chats/" + conv.ID + "/requests", `{"kind":"message","reason":"r"}`, "the message is empty"},
+		{http.MethodPost, "/admin/chats/" + conv.ID + "/requests", `{"kind":"transfer","reason":"r"}`, "the new owner's email is required"},
+	} {
+		rec := adminDo(t, h, "admin@x", tc.method, tc.path, tc.body)
+		if rec.Code != http.StatusBadRequest || strings.TrimSpace(rec.Body.String()) != tc.want {
+			t.Errorf("%s %s %s = %d %q, want 400 %q", tc.method, tc.path, tc.body, rec.Code, rec.Body.String(), tc.want)
+		}
+	}
 
 	rec = adminDo(t, h, "admin@x", http.MethodGet, "/admin/chat-actions", "")
 	var acts struct {

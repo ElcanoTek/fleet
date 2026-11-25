@@ -95,7 +95,7 @@ func (s *Server) handleTurnEventsPage(w http.ResponseWriter, r *http.Request, co
 
 	events, nextCursor, err := s.store.GetTurnEventPage(r.Context(), convID, cursor, limit, asc)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 

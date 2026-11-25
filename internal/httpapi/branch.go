@@ -44,7 +44,7 @@ func (s *Server) handleConversationBranch(w http.ResponseWriter, r *http.Request
 	var shared *store.TeamSharedConversation
 	parent, err := s.store.Get(r.Context(), user, parentConvID)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 	switch {
@@ -57,13 +57,13 @@ func (s *Server) handleConversationBranch(w http.ResponseWriter, r *http.Request
 		// discovery needs — neither wants the whole transcript loaded here.
 		shared, serr = s.store.GetTeamVisibleConversationMeta(r.Context(), user, parentConvID)
 		if serr != nil {
-			http.Error(w, serr.Error(), http.StatusInternalServerError)
+			writeInternalError(w, r, serr)
 			return
 		}
 		if shared == nil {
 			mp, merr := s.store.GetMultiplayerConversation(r.Context(), user, parentConvID)
 			if merr != nil {
-				http.Error(w, merr.Error(), http.StatusInternalServerError)
+				writeInternalError(w, r, merr)
 				return
 			}
 			if mp == nil {
@@ -119,7 +119,7 @@ func (s *Server) handleConversationBranch(w http.ResponseWriter, r *http.Request
 		case errors.Is(err, sql.ErrNoRows):
 			http.Error(w, "not found", http.StatusNotFound)
 		default:
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeInternalError(w, r, err)
 		}
 		return
 	}

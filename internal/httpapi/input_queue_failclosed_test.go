@@ -63,8 +63,8 @@ func TestChatSubmit_LookupErrorFailsClosed_IdlePath(t *testing.T) {
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("status=%d, want 500: %s", w.Code, w.Body.String())
 	}
-	if !strings.Contains(w.Body.String(), "input lookup failed") {
-		t.Fatalf("body = %q, want the lookup failure surfaced", w.Body.String())
+	if got := strings.TrimSpace(w.Body.String()); got != internalErrorMessage {
+		t.Fatalf("body = %q, want the fixed %q (the store's error is logged)", got, internalErrorMessage)
 	}
 	if len(st.history[conv.ID]) != 0 {
 		t.Fatal("a turn ran despite the failed idempotency check")
@@ -94,8 +94,8 @@ func TestQueueSubmit_CountErrorFailsClosed(t *testing.T) {
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("status=%d, want 500: %s", w.Code, w.Body.String())
 	}
-	if !strings.Contains(w.Body.String(), "input queue check failed") {
-		t.Fatalf("body = %q, want the count failure surfaced", w.Body.String())
+	if got := strings.TrimSpace(w.Body.String()); got != internalErrorMessage {
+		t.Fatalf("body = %q, want the fixed %q (the store's error is logged)", got, internalErrorMessage)
 	}
 	if n, _ := st.fakeChatStore.CountPendingInputs(context.Background(), conv.ID); n != 0 {
 		t.Fatalf("a row was enqueued despite the failed cap check: %d", n)
@@ -129,8 +129,8 @@ func TestQueueSubmit_LookupErrorAtCapIs500Not429(t *testing.T) {
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("status=%d, want 500 (not a false queue-full): %s", w.Code, w.Body.String())
 	}
-	if !strings.Contains(w.Body.String(), "input lookup failed") {
-		t.Fatalf("body = %q, want the lookup failure surfaced", w.Body.String())
+	if got := strings.TrimSpace(w.Body.String()); got != internalErrorMessage {
+		t.Fatalf("body = %q, want the fixed %q (the store's error is logged)", got, internalErrorMessage)
 	}
 }
 

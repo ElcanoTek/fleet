@@ -6,10 +6,12 @@ package handlers
 import (
 	"fmt"
 	"net/http"
+	"strconv"
 
 	"github.com/google/uuid"
 
 	"github.com/ElcanoTek/fleet/internal/logging"
+	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/sched/apikeys"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
@@ -286,7 +288,7 @@ func (h *Handlers) CreateTaskBatch(w http.ResponseWriter, r *http.Request) {
 		gates.uploadRefusal = fileRefusals[i]
 		t, err := h.admitCreate(r.Context(), gates, &req.Tasks[i], nil)
 		if err != nil {
-			failedList = append(failedList, models.BatchFailed{Index: i, Error: err.Error()})
+			failedList = append(failedList, models.BatchFailed{Index: i, Error: itemErrorText(r.Context(), err)})
 			validationFailed = true
 			continue
 		}
@@ -321,12 +323,13 @@ func (h *Handlers) CreateTaskBatch(w http.ResponseWriter, r *http.Request) {
 	// DB failure rolls every row back. Non-atomic: best-effort multi-row insert.
 	if len(toInsert) > 0 {
 		if _, err := h.storage.AddTaskBatch(r.Context(), toInsert, req.Atomic); err != nil {
+			logging.From(r.Context()).Error("task batch insert failed", "atomic", safe.LogSafe(strconv.FormatBool(req.Atomic)), "err", safe.LogSafe(err.Error()))
 			// Atomic failure: nothing was committed — surface every would-be
 			// created task as failed so the caller can retry the whole batch.
 			if req.Atomic {
 				for _, c := range createdList {
 					failedList = append(failedList, models.BatchFailed{
-						Index: c.Index, Error: "atomic batch rolled back: " + err.Error(),
+						Index: c.Index, Error: "atomic batch rolled back: the tasks could not be saved",
 					})
 				}
 				writeJSON(w, r, http.StatusUnprocessableEntity, models.BatchTaskResult{
@@ -341,7 +344,7 @@ func (h *Handlers) CreateTaskBatch(w http.ResponseWriter, r *http.Request) {
 			// failed and return 422 (total failure), not 207.
 			for _, c := range createdList {
 				failedList = append(failedList, models.BatchFailed{
-					Index: c.Index, Error: "failed to create task: " + err.Error(),
+					Index: c.Index, Error: "failed to create task: the tasks could not be saved",
 				})
 			}
 			writeJSON(w, r, http.StatusUnprocessableEntity, models.BatchTaskResult{

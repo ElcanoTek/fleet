@@ -49,7 +49,7 @@ func (s *Server) userSkillsCollection(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		skills, err := s.store.ListUserSkills(r.Context(), user)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeInternalError(w, r, err)
 			return
 		}
 		writeJSON(w, r, map[string]any{"skills": skills})
@@ -68,7 +68,7 @@ func (s *Server) userSkillsCollection(w http.ResponseWriter, r *http.Request) {
 			sk, err = s.store.CreateUserSkillWithVisibility(r.Context(), user, req.Name, req.Description, req.Body, req.Visibility)
 		}
 		if err != nil {
-			s.userSkillError(w, err)
+			s.userSkillError(w, r, err)
 			return
 		}
 		writeJSON(w, r, sk)
@@ -112,7 +112,7 @@ func (s *Server) userSkillByID(w http.ResponseWriter, r *http.Request) {
 			if vis == "" {
 				existing, gerr := s.store.GetUserSkill(r.Context(), user, id)
 				if gerr != nil {
-					s.userSkillError(w, gerr)
+					s.userSkillError(w, r, gerr)
 					return
 				}
 				vis = existing.Visibility
@@ -132,7 +132,7 @@ func (s *Server) userSkillByID(w http.ResponseWriter, r *http.Request) {
 			sk, err = s.store.UpdateUserSkillWithVisibility(r.Context(), user, id, req.Name, req.Description, req.Body, req.Status, req.Visibility)
 		}
 		if err != nil {
-			s.userSkillError(w, err)
+			s.userSkillError(w, r, err)
 			return
 		}
 		if req.EnabledForAll != nil {
@@ -140,14 +140,14 @@ func (s *Server) userSkillByID(w http.ResponseWriter, r *http.Request) {
 			// revision returns the base skill it was merged into.
 			sk, err = s.store.SetUserSkillEnabledForAll(r.Context(), user, sk.ID, *req.EnabledForAll)
 			if err != nil {
-				s.userSkillError(w, err)
+				s.userSkillError(w, r, err)
 				return
 			}
 		}
 		writeJSON(w, r, sk)
 	case http.MethodDelete:
 		if err := s.store.DeleteUserSkill(r.Context(), user, id); err != nil {
-			s.userSkillError(w, err)
+			s.userSkillError(w, r, err)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -156,7 +156,7 @@ func (s *Server) userSkillByID(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) userSkillError(w http.ResponseWriter, err error) {
+func (s *Server) userSkillError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case writeAccountGone(w, err):
 	case errors.Is(err, store.ErrUserSkillInvalid):
@@ -164,7 +164,7 @@ func (s *Server) userSkillError(w http.ResponseWriter, err error) {
 	case errors.Is(err, store.ErrUserSkillNotFound):
 		http.Error(w, "skill not found", http.StatusNotFound)
 	default:
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalErrorFromHelper(w, r, err)
 	}
 }
 

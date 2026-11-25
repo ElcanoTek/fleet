@@ -39,9 +39,14 @@ func (m *Manager) Summarize(ctx context.Context, in SummarizeInput) (*SummarizeR
 		return nil, fmt.Errorf("summarize: history is empty")
 	}
 	if in.Lockdown && in.Model != "" && !m.config.LockdownAllows(in.Model) {
-		return nil, fmt.Errorf("model %q not allowed in lockdown mode", in.Model)
+		return nil, &TurnRefusalError{Err: fmt.Errorf("model %q not allowed in lockdown mode", in.Model)}
 	}
 
+	// The route check RunTurn makes: a model the workspace cannot route is
+	// refused with the guidance on picking another, before any provider work.
+	if _, err := m.CheckModelRoute(in.Model); err != nil {
+		return nil, &TurnRefusalError{Err: fmt.Errorf("resolve summarize model: %w", err)}
+	}
 	model, err := m.modelResolver().Resolve(ctx, in.Model)
 	if err != nil {
 		return nil, fmt.Errorf("resolve summarize model: %w", err)

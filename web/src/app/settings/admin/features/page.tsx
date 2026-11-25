@@ -1,5 +1,6 @@
 import { formatFixed } from "@/app/lib/i18n";
 import { rich } from "@/app/lib/i18n/rich";
+import { localizeError } from "@/app/lib/i18n/errors";
 import { t as tr } from "@/app/lib/i18n";
 // Settings → Admin → Features (fleet-unified settings pass): every workspace
 // feature setting the server registers (GET /api/admin/settings), with its
@@ -443,10 +444,11 @@ function FeaturesAdmin() {
         return next;
       });
       if (rolloutError) {
+        const localized = localizeError(rolloutError);
         const detail =
           rollout && (rollout.chats_updated > 0 || rollout.tasks_updated > 0)
-            ? `${formatModelRolloutSummary(rollout)} — ${rolloutError}`
-            : rolloutError;
+            ? `${formatModelRolloutSummary(rollout)} — ${localized}`
+            : localized;
         setRolloutStatus({ state: "err", message: detail, retryBody: rolloutRetry });
       } else if (rollout) {
         setRolloutStatus({ state: "ok", message: formatModelRolloutSummary(rollout) });
@@ -512,7 +514,7 @@ function FeaturesAdmin() {
       if (result.partial_error) {
         setRolloutStatus({
           state: "err",
-          message: `${formatModelRolloutSummary(result)} — ${result.partial_error}`,
+          message: `${formatModelRolloutSummary(result)} — ${localizeError(result.partial_error)}`,
           retryBody: dryRun ? undefined : payload,
         });
       } else {

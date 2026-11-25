@@ -285,7 +285,7 @@ func (s *Server) handleBusySubmit(w http.ResponseWriter, r *http.Request, user s
 	if cerr != nil {
 		// Fail closed: the depth cap is the unattended-spend guard, so a count
 		// error must not silently waive it.
-		http.Error(w, "input queue check failed: "+cerr.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, cerr)
 		return false
 	}
 	if pending >= maxPendingInputs {
@@ -294,7 +294,7 @@ func (s *Server) handleBusySubmit(w http.ResponseWriter, r *http.Request, user s
 			// Fail closed, and as a 500 rather than the 429 below: a lookup
 			// error says nothing about whether this input_id was already
 			// accepted, and a false "queue full" would misdirect the client.
-			http.Error(w, "input lookup failed: "+lerr.Error(), http.StatusInternalServerError)
+			writeInternalError(w, r, lerr)
 			return false
 		}
 		if existing != nil {
@@ -311,7 +311,7 @@ func (s *Server) handleBusySubmit(w http.ResponseWriter, r *http.Request, user s
 		ViewContext: encodeQueuedViewContext(req),
 	})
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return false
 	}
 	s.cancelConversationAutoSubmits(r.Context(), conv.ID)
@@ -701,7 +701,7 @@ func (s *Server) handleQueueRoutes(w http.ResponseWriter, r *http.Request, user,
 	case subArg == "" && r.Method == http.MethodGet:
 		items, err := s.store.ListQueuedInputs(r.Context(), user, convID)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeInternalError(w, r, err)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -709,7 +709,7 @@ func (s *Server) handleQueueRoutes(w http.ResponseWriter, r *http.Request, user,
 	case subArg != "" && !strings.Contains(subArg, "/") && r.Method == http.MethodDelete:
 		ok, err := s.store.RemoveQueuedInput(r.Context(), user, convID, subArg)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeInternalError(w, r, err)
 			return
 		}
 		if !ok {
@@ -722,7 +722,7 @@ func (s *Server) handleQueueRoutes(w http.ResponseWriter, r *http.Request, user,
 		inputID := strings.TrimSuffix(subArg, "/send-now")
 		ok, err := s.store.PromoteQueuedInput(r.Context(), user, convID, inputID)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeInternalError(w, r, err)
 			return
 		}
 		if !ok {

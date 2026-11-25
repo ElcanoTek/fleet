@@ -70,7 +70,7 @@ func (s *Server) handleSharedFiles(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		files, err := s.store.ListSharedFiles(r.Context())
 		if err != nil {
-			http.Error(w, "list shared files: "+err.Error(), http.StatusInternalServerError)
+			writeInternalError(w, r, err)
 			return
 		}
 		if files == nil {
@@ -103,6 +103,10 @@ func (s *Server) sharedFilesMaxTotalBytes() int64 {
 // postSharedFiles accepts one-or-more files via multipart/form-data under the
 // "files" field (the /attachments shape), plus optional "folder" and
 // "description" fields applied to each file in the request.
+// errSharedUploadNotSaved answers a shared-file upload that hit an internal
+// error part-way: the batch is rolled back.
+var errSharedUploadNotSaved = errors.New("internal error (nothing from this upload was saved)")
+
 func (s *Server) postSharedFiles(w http.ResponseWriter, r *http.Request) {
 	maxBytes := s.cfg.UploadMaxBytes
 	if maxBytes <= 0 {
@@ -149,7 +153,7 @@ func (s *Server) postSharedFiles(w http.ResponseWriter, r *http.Request) {
 	if limit := s.sharedFilesMaxTotalBytes(); limit > 0 {
 		existing, err := s.store.TotalSharedFileBytes(r.Context())
 		if err != nil {
-			http.Error(w, "check library size: "+err.Error(), http.StatusInternalServerError)
+			writeInternalError(w, r, err)
 			return
 		}
 		if existing+incoming > limit {
@@ -183,7 +187,7 @@ func (s *Server) postSharedFiles(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, fmt.Sprintf("%s: %v (nothing from this upload was saved)", name, err), http.StatusConflict)
 				return
 			}
-			http.Error(w, "check shared file name: "+err.Error(), http.StatusInternalServerError)
+			writeInternalError(w, r, err)
 			return
 		}
 		names[i] = name
@@ -197,6 +201,8 @@ func (s *Server) postSharedFiles(w http.ResponseWriter, r *http.Request) {
 	// already created before the error is written, so the "nothing from this
 	// upload was saved" contract holds for every exit — not only the 409s.
 	// Under sharedFilesMu nothing else can have referenced those rows yet.
+	// fail rolls the batch back and answers status with msg, a whole sentence
+	// that says nothing from the upload was saved.
 	fail := func(status int, msg string) {
 		// The rollback runs on a context DETACHED from the request. The most
 		// likely way to reach this path is the request context being cancelled
@@ -210,25 +216,30 @@ func (s *Server) postSharedFiles(w http.ResponseWriter, r *http.Request) {
 		rbCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), sharedFileRollbackTimeout)
 		defer cancel()
 		s.rollbackSharedFileBatch(rbCtx, lib, out)
-		http.Error(w, msg+" (nothing from this upload was saved)", status)
+		http.Error(w, msg, status)
+	}
+	// failInternal rolls the batch back for an internal error: logged, and
+	// answered with the fixed message.
+	failInternal := func(err error) {
+		logInternalError(r.Context(), r, err, 1)
+		fail(http.StatusInternalServerError, errSharedUploadNotSaved.Error())
 	}
 	for i, fh := range files {
 		name := names[i]
 		id, err := randomToken()
 		if err != nil {
-			fail(http.StatusInternalServerError, "token: "+err.Error())
+			failInternal(err)
 			return
 		}
 		src, err := fh.Open()
 		if err != nil {
-			fail(http.StatusInternalServerError, "open upload: "+err.Error())
+			failInternal(err)
 			return
 		}
 		size, sha, err := lib.SaveCanonical(id, src)
 		_ = src.Close()
 		if err != nil {
-			logging.From(r.Context()).Error("shared files: save canonical failed", "name", safe.LogSafe(name), "err", err)
-			fail(http.StatusInternalServerError, "save upload: "+err.Error())
+			failInternal(err)
 			return
 		}
 		row, err := s.store.CreateSharedFile(r.Context(), store.SharedFile{
@@ -244,10 +255,10 @@ func (s *Server) postSharedFiles(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			_ = lib.RemoveCanonical(id)
 			if errors.Is(err, store.ErrSharedFileExists) || errors.Is(err, store.ErrSharedFileNameIsFolder) {
-				fail(http.StatusConflict, fmt.Sprintf("%s: %v", name, err))
+				fail(http.StatusConflict, fmt.Sprintf("%s: %v (nothing from this upload was saved)", name, err))
 				return
 			}
-			fail(http.StatusInternalServerError, "save shared file: "+err.Error())
+			failInternal(err)
 			return
 		}
 		if err := lib.Stage(row); err != nil {
@@ -334,7 +345,7 @@ func (s *Server) handleSharedFileItem(w http.ResponseWriter, r *http.Request) {
 func (s *Server) downloadSharedFile(w http.ResponseWriter, r *http.Request, id string) {
 	f, err := s.store.GetSharedFile(r.Context(), id)
 	if err != nil {
-		httpErrorForSharedFile(w, err)
+		httpErrorForSharedFile(w, r, err)
 		return
 	}
 	var src io.ReadSeeker
@@ -375,7 +386,7 @@ func (s *Server) patchSharedFile(w http.ResponseWriter, r *http.Request, id stri
 	}
 	old, err := s.store.GetSharedFile(r.Context(), id)
 	if err != nil {
-		httpErrorForSharedFile(w, err)
+		httpErrorForSharedFile(w, r, err)
 		return
 	}
 	name, folder, description := old.Name, old.Folder, old.Description
@@ -401,7 +412,7 @@ func (s *Server) patchSharedFile(w http.ResponseWriter, r *http.Request, id stri
 	defer s.sharedFilesMu.Unlock()
 	updated, err := s.store.UpdateSharedFileMeta(r.Context(), id, name, folder, description)
 	if err != nil {
-		httpErrorForSharedFile(w, err)
+		httpErrorForSharedFile(w, r, err)
 		return
 	}
 	if updated.Name != old.Name || updated.Folder != old.Folder {
@@ -422,7 +433,7 @@ func (s *Server) deleteSharedFile(w http.ResponseWriter, r *http.Request, id str
 	defer s.sharedFilesMu.Unlock()
 	f, err := s.store.DeleteSharedFile(r.Context(), id)
 	if err != nil {
-		httpErrorForSharedFile(w, err)
+		httpErrorForSharedFile(w, r, err)
 		return
 	}
 	lib := s.sharedFilesLibrary()
@@ -437,14 +448,14 @@ func (s *Server) deleteSharedFile(w http.ResponseWriter, r *http.Request, id str
 
 // httpErrorForSharedFile maps the store's shared-file sentinels onto statuses,
 // the same per-feature taxonomy shape as httpErrorForSetting.
-func httpErrorForSharedFile(w http.ResponseWriter, err error) {
+func httpErrorForSharedFile(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, store.ErrSharedFileNotFound):
 		http.Error(w, err.Error(), http.StatusNotFound)
 	case errors.Is(err, store.ErrSharedFileExists), errors.Is(err, store.ErrSharedFileNameIsFolder):
 		http.Error(w, err.Error(), http.StatusConflict)
 	default:
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalErrorFromHelper(w, r, err)
 	}
 }
 

@@ -69,7 +69,8 @@ func reloadConfigHandler(cfg *config.Config, opts ...reloadConfigOption) http.Ha
 		}
 		result, err := cfg.Reload(envreg.Get("FLEET_ENV_FILE"))
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			logging.From(r.Context()).Error("config reload failed", "err", safe.LogSafe(err.Error()))
+			http.Error(w, "config reload failed; the server log has the reason", http.StatusInternalServerError)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -110,7 +111,8 @@ func reloadModelTiersOnly(w http.ResponseWriter, r *http.Request, deps reloadCon
 		}
 		return nil
 	}); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		logging.From(r.Context()).Error("model tier reload failed", "err", safe.LogSafe(err.Error()))
+		http.Error(w, "model tier reload failed; the server log has the reason", http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -200,7 +202,8 @@ func mcpReloadHandler(mgr *agent.Manager) http.HandlerFunc {
 		}
 		summary, err := reloadMCPServers(r.Context(), mgr)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			logging.From(r.Context()).Error("mcp reload failed", "err", safe.LogSafe(err.Error()))
+			http.Error(w, "MCP reload failed; the server log has the reason", http.StatusInternalServerError)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")

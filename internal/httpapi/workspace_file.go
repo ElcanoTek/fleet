@@ -152,7 +152,7 @@ func (s *Server) handleWorkspaceFile(w http.ResponseWriter, r *http.Request, con
 		http.Error(w, "file not found", http.StatusNotFound)
 		return
 	case err != nil:
-		http.Error(w, "resolve path: "+err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 	if baseRawDir == rawWsDir && isPrivateWorkspacePath(filepath.ToSlash(rel)) {

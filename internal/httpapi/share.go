@@ -79,7 +79,7 @@ func (s *Server) handleConversationShare(w http.ResponseWriter, r *http.Request,
 	token := base64.RawURLEncoding.EncodeToString(raw)
 
 	if err := s.store.SetShareToken(r.Context(), user, convID, token, body.ExpiresAt); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 	writeJSONStatus(w, r, http.StatusCreated, map[string]any{
@@ -98,7 +98,7 @@ func (s *Server) handleConversationUnshare(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if err := s.store.RevokeShareToken(r.Context(), user, convID); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -155,7 +155,7 @@ func (s *Server) handleConversationShareWithTeam(w http.ResponseWriter, r *http.
 		} else {
 			current, _, err := s.ownerOutputs(r.Context(), convID)
 			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
+				writeInternalError(w, r, err)
 				return
 			}
 			for _, o := range current {
@@ -171,7 +171,7 @@ func (s *Server) handleConversationShareWithTeam(w http.ResponseWriter, r *http.
 			case errors.Is(err, store.ErrConversationNotFound):
 				http.Error(w, "not found", http.StatusNotFound)
 			default:
-				http.Error(w, err.Error(), http.StatusInternalServerError)
+				writeInternalError(w, r, err)
 			}
 			return
 		}
@@ -185,7 +185,7 @@ func (s *Server) handleConversationShareWithTeam(w http.ResponseWriter, r *http.
 	if body.Visible {
 		var err error
 		if outs, _, err = s.ownerOutputs(r.Context(), convID); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeInternalError(w, r, err)
 			return
 		}
 	}
@@ -207,7 +207,7 @@ func (s *Server) handleConversationShareWithTeam(w http.ResponseWriter, r *http.
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 	if !body.Visible {
@@ -309,7 +309,7 @@ func (s *Server) conversationOr404(w http.ResponseWriter, r *http.Request, user,
 		conv, err = s.store.Get(r.Context(), user, id)
 	}
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return nil, false
 	}
 	if conv == nil {
@@ -337,7 +337,7 @@ func (s *Server) handleConversationMultiplayerGet(w http.ResponseWriter, r *http
 	}
 	roster, err := s.store.ListMultiplayerRoster(r.Context(), user, convID)
 	if err != nil && !errors.Is(err, store.ErrConversationNotFound) {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 	writeJSON(w, r, map[string]any{
@@ -418,7 +418,7 @@ func (s *Server) handleConversationMultiplayerSet(w http.ResponseWriter, r *http
 		case errors.Is(err, store.ErrConversationNotFound):
 			http.Error(w, "not found", http.StatusNotFound)
 		default:
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeInternalError(w, r, err)
 		}
 	}
 	if body.Multiplayer != nil || body.Participants != nil || body.Excluded != nil {
@@ -456,7 +456,7 @@ func (s *Server) handleConversationMultiplayerSet(w http.ResponseWriter, r *http
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 	writeJSON(w, r, map[string]any{
@@ -732,7 +732,7 @@ type teamViewResponse struct {
 func (s *Server) handleConversationTeamView(w http.ResponseWriter, r *http.Request, convID, user string) {
 	version, err := s.store.TeamViewVersion(r.Context(), user, convID)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 	if version == "" {
@@ -751,7 +751,7 @@ func (s *Server) handleConversationTeamView(w http.ResponseWriter, r *http.Reque
 	}
 	snap, err := s.store.GetTeamVisibleConversation(r.Context(), user, convID)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 	if snap == nil {
@@ -762,12 +762,12 @@ func (s *Server) handleConversationTeamView(w http.ResponseWriter, r *http.Reque
 	}
 	excluded, err := s.store.ListOutputExclusions(r.Context(), snap.ID)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 	files, filesTruncated, err := conversationOutputsCtx(r.Context(), snap.ID, snap.Messages, excluded)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 	isOwner := pgtext.SameEmail(snap.OwnerEmail, user)
@@ -787,7 +787,7 @@ func (s *Server) handleConversationTeamView(w http.ResponseWriter, r *http.Reque
 	if !isOwner {
 		branches, berr := s.store.ViewerBranches(r.Context(), user, []string{snap.ID})
 		if berr != nil {
-			http.Error(w, berr.Error(), http.StatusInternalServerError)
+			writeInternalError(w, r, berr)
 			return
 		}
 		if vb, ok := branches[snap.ID]; ok {

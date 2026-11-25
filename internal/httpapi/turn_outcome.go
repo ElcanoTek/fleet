@@ -153,7 +153,7 @@ func (s *Server) handleTurnOutcome(w http.ResponseWriter, r *http.Request, convI
 
 	rec, err := s.store.LookupTurnOutcome(r.Context(), turnID, convID)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 	if rec == nil {

@@ -873,7 +873,7 @@ func (s *Server) handleConversationMCPServersSet(w http.ResponseWriter, r *http.
 		mergedSeen[n] = true
 	}
 	if fresh, ferr := s.getOwnedOrMultiplayerConversation(r.Context(), user, id); ferr != nil {
-		http.Error(w, ferr.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, ferr)
 		return
 	} else if fresh != nil {
 		conv = fresh
@@ -891,7 +891,7 @@ func (s *Server) handleConversationMCPServersSet(w http.ResponseWriter, r *http.
 	sort.Strings(merged)
 	persisted := merged
 	if err := s.store.SetOptionalMCPServers(r.Context(), callerEmail, id, persisted); err != nil {
-		writeConversationMutationError(w, err)
+		writeConversationMutationError(w, r, err)
 		return
 	}
 	mergedAccounts := make(map[string]string)
@@ -924,7 +924,7 @@ func (s *Server) handleConversationMCPServersSet(w http.ResponseWriter, r *http.
 		}
 	}
 	if err := s.store.SetConversationMCPAccounts(r.Context(), callerEmail, id, mergedAccounts); err != nil {
-		writeConversationMutationError(w, err)
+		writeConversationMutationError(w, r, err)
 		return
 	}
 	writeJSON(w, r, map[string]any{"enabled_optional": clean, "accounts": mcpAccountsWire(accounts)})

@@ -163,7 +163,7 @@ func (s *Server) handlePatrols(w http.ResponseWriter, r *http.Request) {
 	for page := 0; page < patrolsIndexMaxPages && len(out) < patrolsIndexMax; page++ {
 		items, err := s.store.ListUserPatrols(r.Context(), user, patrolsIndexMax, page*patrolsIndexMax)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeInternalError(w, r, err)
 			return
 		}
 		for _, p := range items {
@@ -177,7 +177,7 @@ func (s *Server) handlePatrols(w http.ResponseWriter, r *http.Request) {
 					if err != nil {
 						// An error is not "no access": answer 5xx so the page
 						// shows its load-failure state, never a false empty list.
-						http.Error(w, err.Error(), http.StatusInternalServerError)
+						writeInternalError(w, r, err)
 						return
 					}
 					ok = conv != nil
@@ -199,7 +199,7 @@ func (s *Server) handlePatrols(w http.ResponseWriter, r *http.Request) {
 	// the caller could not already open.
 	shared, err := s.store.ListSharedPatrols(r.Context(), user, patrolsIndexMax)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 	out = append(out, shared...)
@@ -226,7 +226,7 @@ func (s *Server) handlePatrolByID(w http.ResponseWriter, r *http.Request) {
 	}
 	p, err := s.store.GetUserPatrol(r.Context(), user, id)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 	if p == nil {
@@ -239,7 +239,7 @@ func (s *Server) handlePatrolByID(w http.ResponseWriter, r *http.Request) {
 		// The caller's own patrol, while they can still open its chat.
 		conv, err := s.getOwnedOrMultiplayerConversation(r.Context(), user, p.ConversationID)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeInternalError(w, r, err)
 			return
 		}
 		allowed = conv != nil
@@ -250,7 +250,7 @@ func (s *Server) handlePatrolByID(w http.ResponseWriter, r *http.Request) {
 		// past the listing's cap still opens.
 		conv, err := s.getOwnedOrMultiplayerConversation(r.Context(), user, p.ConversationID)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeInternalError(w, r, err)
 			return
 		}
 		allowed = conv != nil && conv.ArchivedAt == nil
@@ -259,7 +259,7 @@ func (s *Server) handlePatrolByID(w http.ResponseWriter, r *http.Request) {
 		// holds — the same query, narrowed to that chat (one rule, no cap).
 		conv, err := s.store.SharedOrMultiplayerConversation(r.Context(), user, p.ConversationID)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeInternalError(w, r, err)
 			return
 		}
 		allowed = conv != nil
@@ -275,7 +275,7 @@ func (s *Server) handlePatrolByID(w http.ResponseWriter, r *http.Request) {
 	}
 	runs, err := s.store.ListPatrolRuns(r.Context(), p.ID, store.MaxPatrolRuns)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 	writeJSON(w, r, map[string]any{"patrol": p, "runs": runs})

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -17,7 +18,10 @@ func TestModelDiscoveryTracksOnlySuccessfulProviderSwaps(t *testing.T) {
 	}
 	// This manager has no sandbox pool or broker. An unavailable model must
 	// still produce an actionable routing error before touching either one.
-	if _, err := m.RunTurn(context.Background(), TurnInput{Model: "google/gemini-3.8-flash"}, nil); err == nil || !strings.Contains(err.Error(), "choose a workspace model") {
+	// It is a TurnRefusalError: the chat API shows its text to the sender.
+	_, err := m.RunTurn(context.Background(), TurnInput{Model: "google/gemini-3.8-flash"}, nil)
+	var refusal *TurnRefusalError
+	if err == nil || !strings.Contains(err.Error(), "choose a workspace model") || !errors.As(err, &refusal) {
 		t.Fatalf("turn preflight = %v", err)
 	}
 	broken := []agentcore.ProviderConfig{{Name: "broken", Type: "unsupported"}}

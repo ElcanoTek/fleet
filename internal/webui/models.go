@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/logging"
+	"github.com/ElcanoTek/fleet/internal/safe"
 )
 
 // The model picker's catalog endpoints. The OpenRouter listing is the SAME
@@ -95,7 +97,7 @@ func (m *modelCatalogs) loadOpenRouter() (*orCatalog, error) {
 		}
 	}
 	if len(c.entries) == 0 {
-		return nil, errors.New("openrouter models response contained no usable entries")
+		return nil, errNoUsableModels
 	}
 	return c, nil
 }
@@ -195,8 +197,29 @@ func listLatestPerLab(c *orCatalog, tiers, relabelled []string) []agentcore.Mode
 	return out
 }
 
-func badGateway(w http.ResponseWriter, err error) {
-	writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+// The model catalog's fixed refusals.
+var (
+	errNoUsableModels          = errors.New("openrouter models response contained no usable entries")
+	errNoPerLabModels          = errors.New("no per-lab models were found")
+	errModelCatalogUnavailable = errors.New("the model catalog could not be loaded")
+)
+
+// badGateway answers 502 for a model catalog that could not be read.
+func badGateway(w http.ResponseWriter, r *http.Request, err error) {
+	writeJSON(w, http.StatusBadGateway, map[string]string{"error": catalogErrorText(r, err)})
+}
+
+// catalogErrorText keeps the text of one of the package's fixed catalog
+// refusals; anything else (the catwalk fetch failing) is logged and answered
+// with errModelCatalogUnavailable.
+func catalogErrorText(r *http.Request, err error) string {
+	for _, fixed := range []error{errValidateModel, errNoUsableModels, errNoPerLabModels} {
+		if errors.Is(err, fixed) {
+			return fixed.Error()
+		}
+	}
+	logging.From(r.Context()).Error("model catalog: internal error answered with a fixed message", "err", safe.LogSafe(err.Error()))
+	return errModelCatalogUnavailable.Error()
 }
 
 type catalogModel struct {
@@ -232,7 +255,7 @@ func (g *Gateway) registerModels(mux *http.ServeMux) {
 		}
 		c, err := g.models.loadOpenRouter()
 		if err != nil {
-			badGateway(w, err)
+			badGateway(w, r, err)
 			return
 		}
 		models := []catalogModel{}
@@ -254,12 +277,12 @@ func (g *Gateway) registerModels(mux *http.ServeMux) {
 		}
 		c, err := g.models.loadOpenRouter()
 		if err != nil {
-			badGateway(w, err)
+			badGateway(w, r, err)
 			return
 		}
 		entries := listLatestPerLab(c, []string{agentcore.DefaultCoreModel, agentcore.DefaultMaxModel}, g.cfg.RelabelledPinSlugs)
 		if len(entries) == 0 {
-			badGateway(w, errors.New("no per-lab models were found"))
+			badGateway(w, r, errNoPerLabModels)
 			return
 		}
 		models := []rankedModel{}
@@ -284,7 +307,7 @@ func (g *Gateway) registerModels(mux *http.ServeMux) {
 		}
 		providers, err := g.models.loadCatwalk(r.Context())
 		if err != nil {
-			badGateway(w, err)
+			badGateway(w, r, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"providers": providers})
@@ -314,7 +337,7 @@ func (g *Gateway) handleModelCheck(w http.ResponseWriter, r *http.Request) {
 		header: http.Header{}, who: sessionPrincipal(s),
 	})
 	if !ok {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "chat-server unreachable: no backend"})
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": errChatServerNoBackend.Error()})
 		return
 	}
 	if status == http.StatusUnauthorized && hdr.Get("X-Session-Revoked") == "1" {
@@ -328,7 +351,7 @@ func (g *Gateway) handleModelCheck(w http.ResponseWriter, r *http.Request) {
 	}
 	var route map[string]any
 	if err := json.Unmarshal(body, &route); err != nil {
-		badGateway(w, errValidateModel)
+		badGateway(w, r, errValidateModel)
 		return
 	}
 	if allowed, isBool := route["allowed"].(bool); isBool && !allowed {
@@ -344,7 +367,7 @@ func (g *Gateway) handleModelCheck(w http.ResponseWriter, r *http.Request) {
 	}
 	c, err := g.models.loadOpenRouter()
 	if err != nil {
-		badGateway(w, err)
+		badGateway(w, r, err)
 		return
 	}
 	// An unknown slug is allowed: a newly released model keeps working while

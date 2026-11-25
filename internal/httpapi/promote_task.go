@@ -59,7 +59,7 @@ func (s *Server) handlePromoteToTask(w http.ResponseWriter, r *http.Request, con
 
 	history, err := s.store.LoadHistory(ctx, convID)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 	transcript := transcriptFromHistory(history)
@@ -96,7 +96,7 @@ func (s *Server) handlePromoteToTask(w http.ResponseWriter, r *http.Request, con
 	}
 	rawInput, err := json.Marshal(params)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 
@@ -120,7 +120,7 @@ func (s *Server) handlePromoteToTask(w http.ResponseWriter, r *http.Request, con
 		taskConnectors: s.chatTaskConnectorsFor(user, convID),
 	}
 	if _, err := stager.Stage("schedule_task", "", string(rawInput)); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 

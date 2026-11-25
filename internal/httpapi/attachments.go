@@ -129,7 +129,7 @@ func (s *Server) postAttachments(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := os.MkdirAll(baseDir, 0o755); err != nil { //nolint:gosec // host-side upload landing area, readable by the host user only
-		http.Error(w, "mkdir uploads: "+err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 
@@ -150,8 +150,7 @@ func (s *Server) postAttachments(w http.ResponseWriter, r *http.Request) {
 		}
 		att, err := saveUpload(baseDir, fh)
 		if err != nil {
-			logging.From(r.Context()).Error("saveUpload failed", "filename", safe.LogSafe(fh.Filename), "err", safe.LogSafe(err.Error()))
-			http.Error(w, "save upload: "+err.Error(), http.StatusInternalServerError)
+			writeInternalError(w, r, err)
 			return
 		}
 		out = append(out, att)

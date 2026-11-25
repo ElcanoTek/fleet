@@ -142,7 +142,7 @@ func (s *Server) handleSummarize(w http.ResponseWriter, r *http.Request, user, c
 
 	history, err := s.store.LoadHistory(r.Context(), convID)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 	// Fingerprint the history the summary covers, BEFORE redaction: a message
@@ -193,11 +193,7 @@ func (s *Server) handleSummarize(w http.ResponseWriter, r *http.Request, user, c
 		if errors.Is(sumErr, r.Context().Err()) {
 			return
 		}
-		msg := sumErr.Error()
-		if agentcore.IsCreditsExhaustedError(sumErr) {
-			msg = agent.CreditsExhaustedMessage
-		}
-		emit("summary.error", map[string]any{"message": msg})
+		emit("summary.error", map[string]any{"message": summarizeErrorMessage(r, sumErr)})
 		return
 	}
 
@@ -209,9 +205,10 @@ func (s *Server) handleSummarize(w http.ResponseWriter, r *http.Request, user, c
 		CostUSD:          result.CostUSD,
 	})
 	if err := s.store.ReplaceSummary(r.Context(), user, convID, entry, snapshot); err != nil {
-		msg := err.Error()
-		if errors.Is(err, store.ErrSummaryStale) {
-			msg = summaryStaleMessage
+		msg := summaryStaleMessage
+		if !errors.Is(err, store.ErrSummaryStale) {
+			logInternalError(r.Context(), r, err, 0)
+			msg = errSummaryNotSaved.Error()
 		}
 		emit("summary.error", map[string]any{"message": msg})
 		return
@@ -226,6 +223,22 @@ func (s *Server) handleSummarize(w http.ResponseWriter, r *http.Request, user, c
 		CompletionTokens: result.CompletionTokens,
 		CostUSD:          result.CostUSD,
 	})
+}
+
+// summarizeErrorMessage is the summary.error text for a summary the model
+// did not produce: the credits message when the key is out of credits, a
+// lockdown refusal's own text (agent.TurnRefusalError), and
+// errSummarizeFailed for anything else, which is logged.
+func summarizeErrorMessage(r *http.Request, err error) string {
+	var refusal *agent.TurnRefusalError
+	switch {
+	case agentcore.IsCreditsExhaustedError(err):
+		return agent.CreditsExhaustedMessage
+	case errors.As(err, &refusal):
+		return refusal.Error()
+	}
+	logInternalError(r.Context(), r, err, 1)
+	return errSummarizeFailed.Error()
 }
 
 // mustSummaryEntry mirrors the agent package's mustEntry helper so

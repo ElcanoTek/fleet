@@ -171,12 +171,12 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, u
 	}
 	historyPayload, page, err := s.loadConversationHistoryForGet(r.Context(), id, user, conv.UserEmail, omitHistory, windowed, window)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 	pending, err := s.store.ListPendingApprovals(r.Context(), user, id)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 	approvals := s.formatPendingApprovalCards(pending, id, r.URL.Query().Get("approval_index") == "1", isAutonomousConv)
@@ -196,7 +196,7 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, u
 		}
 	}
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 	resolvedCards := make([]map[string]any, 0, len(resolved))
@@ -251,7 +251,7 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, u
 	// and back.
 	pendingMems, err := s.store.ListPendingMemoryProposalsForConversation(r.Context(), user, id)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 	// Resolve supersede-claim targets so re-hydrated cards can render
@@ -314,7 +314,7 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, u
 		var err error
 		uiAutoSubmits, err = s.store.ListActiveUIAutoSubmits(r.Context(), id)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeInternalError(w, r, err)
 			return
 		}
 	}
@@ -396,7 +396,7 @@ func (s *Server) includeExecutingApprovals(ctx context.Context, user, convID str
 // handleConversationDelete serves DELETE /conversations/{id}.
 func (s *Server) handleConversationDelete(w http.ResponseWriter, r *http.Request, user, id string) {
 	if err := s.store.Delete(r.Context(), user, id); err != nil {
-		writeConversationMutationError(w, err)
+		writeConversationMutationError(w, r, err)
 		return
 	}
 	s.enforceMultiplayerRevocation(r.Context(), id, &store.Conversation{UserEmail: user}, nil)
@@ -427,14 +427,14 @@ func (s *Server) handleConversationTruncate(w http.ResponseWriter, r *http.Reque
 		pivot, err = s.store.MaxMessageIDForRole(r.Context(), id, "user")
 	}
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 	if !s.cancelAutoSubmitsOrFail(r.Context(), w, id) {
 		return
 	}
 	if err := s.store.TruncateAfter(r.Context(), user, id, pivot); err != nil {
-		writeConversationMutationError(w, err)
+		writeConversationMutationError(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -463,7 +463,7 @@ func (s *Server) handleConversationPin(w http.ResponseWriter, r *http.Request, u
 		}
 	}
 	if err != nil {
-		writeConversationMutationError(w, err)
+		writeConversationMutationError(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -481,7 +481,7 @@ func (s *Server) handleConversationArchive(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if err := s.store.SetArchived(r.Context(), user, id, req.Archived); err != nil {
-		writeConversationMutationError(w, err)
+		writeConversationMutationError(w, r, err)
 		return
 	}
 	if req.Archived {
@@ -536,7 +536,7 @@ func (s *Server) handleConversationRefile(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if err != nil {
-		writeConversationMutationError(w, err)
+		writeConversationMutationError(w, r, err)
 		return
 	}
 	if updated, gerr := s.store.Get(r.Context(), user, id); gerr == nil && updated != nil && !updated.Multiplayer {
@@ -565,7 +565,7 @@ func (s *Server) handleConversationRename(w http.ResponseWriter, r *http.Request
 	// A manual rename sets the title AND locks it (#302) so the background
 	// auto-titler never overwrites the user's chosen name.
 	if err := s.store.RenameTitle(r.Context(), user, id, title); err != nil {
-		writeConversationMutationError(w, err)
+		writeConversationMutationError(w, r, err)
 		return
 	}
 	// If a turn is mid-flight (e.g. the user renames DURING first-turn
@@ -616,7 +616,7 @@ func (s *Server) handleConversationModel(w http.ResponseWriter, r *http.Request,
 		}
 	}
 	if err != nil {
-		writeConversationMutationError(w, err)
+		writeConversationMutationError(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -655,7 +655,7 @@ func (s *Server) handleApprovalTimeoutSet(w http.ResponseWriter, r *http.Request
 		}
 	}
 	if err := s.store.SetApprovalTimeout(r.Context(), user, id, req.ApprovalTimeoutSeconds); err != nil {
-		writeConversationMutationError(w, err)
+		writeConversationMutationError(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -690,7 +690,7 @@ func (s *Server) handleAutoApproveSet(w http.ResponseWriter, r *http.Request, us
 			return
 		}
 		if err := s.store.SetApprovalMode(r.Context(), user, id, mode); err != nil {
-			writeConversationMutationError(w, err)
+			writeConversationMutationError(w, r, err)
 			return
 		}
 		if mode != store.ConversationApprovalAutonomous {
@@ -709,7 +709,7 @@ func (s *Server) handleAutoApproveSet(w http.ResponseWriter, r *http.Request, us
 		enabled = *req.AutoApprove
 	}
 	if err := s.store.SetAutoApprove(r.Context(), user, id, enabled); err != nil {
-		writeConversationMutationError(w, err)
+		writeConversationMutationError(w, r, err)
 		return
 	}
 	if !enabled {
@@ -750,7 +750,7 @@ func (s *Server) handleThinkingConfigPut(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	if err := s.store.SetThinkingConfig(r.Context(), user, id, &store.ThinkingConfig{Enabled: req.Enabled, BudgetTokens: req.BudgetTokens}); err != nil {
-		writeConversationMutationError(w, err)
+		writeConversationMutationError(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -761,7 +761,7 @@ func (s *Server) handleThinkingConfigPut(w http.ResponseWriter, r *http.Request,
 // Clear the override → inherit the global default (#220).
 func (s *Server) handleThinkingConfigDelete(w http.ResponseWriter, r *http.Request, user, id string) {
 	if err := s.store.SetThinkingConfig(r.Context(), user, id, nil); err != nil {
-		writeConversationMutationError(w, err)
+		writeConversationMutationError(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -775,7 +775,7 @@ func (s *Server) handleThinkingConfigDelete(w http.ResponseWriter, r *http.Reque
 func (s *Server) handleConversationExport(w http.ResponseWriter, r *http.Request, user, id string, conv *store.Conversation) {
 	history, err := s.store.LoadHistory(r.Context(), id)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 	isOwner := pgtext.SameEmail(conv.UserEmail, user) || conv.UserEmail == ""

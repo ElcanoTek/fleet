@@ -239,7 +239,7 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		releaseTurn()
 		metrics.RecordWebhookTrigger(trig.Slug, "error")
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 
@@ -259,7 +259,7 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		releaseTurn()
 		metrics.RecordWebhookTrigger(trig.Slug, "error")
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 	bound = true
@@ -269,7 +269,7 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		releaseTurn()
 		metrics.RecordWebhookTrigger(trig.Slug, "error")
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 

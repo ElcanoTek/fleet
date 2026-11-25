@@ -78,7 +78,7 @@ func (s *Server) remoteMCPServers(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		servers, err := s.remoteMCP.ListServers(r.Context(), user)
 		if err != nil {
-			s.remoteMCPError(w, err)
+			s.remoteMCPError(w, r, err)
 			return
 		}
 		if servers == nil {
@@ -89,12 +89,12 @@ func (s *Server) remoteMCPServers(w http.ResponseWriter, r *http.Request) {
 		// their runs; read-only here, with the owner named for attribution).
 		shares, err := s.remoteMCP.SharesByOwner(r.Context(), user)
 		if err != nil {
-			s.remoteMCPError(w, err)
+			s.remoteMCPError(w, r, err)
 			return
 		}
 		sharedRows, err := s.remoteMCP.SharedWithMe(r.Context(), user)
 		if err != nil {
-			s.remoteMCPError(w, err)
+			s.remoteMCPError(w, r, err)
 			return
 		}
 		// The directory as it is served (effectiveRemoteCatalog): own rows
@@ -143,7 +143,7 @@ func (s *Server) remoteMCPServers(w http.ResponseWriter, r *http.Request) {
 			APIKeyPrefix: req.APIKeyPrefix,
 		})
 		if err != nil {
-			s.remoteMCPError(w, err)
+			s.remoteMCPError(w, r, err)
 			return
 		}
 		// Probed adds (open/api_key) validated the connection with a real MCP
@@ -188,7 +188,7 @@ func (s *Server) remoteMCPServerByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := s.remoteMCP.ShareServer(r.Context(), user, id, req.Grantee); err != nil {
-			s.remoteMCPError(w, err)
+			s.remoteMCPError(w, r, err)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -199,7 +199,7 @@ func (s *Server) remoteMCPServerByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := s.remoteMCP.UnshareServer(r.Context(), user, id, grantee); err != nil {
-			s.remoteMCPError(w, err)
+			s.remoteMCPError(w, r, err)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -216,7 +216,7 @@ func (s *Server) remoteMCPServerByID(w http.ResponseWriter, r *http.Request) {
 		}
 		report, err := s.remoteMCP.SetAPIKey(r.Context(), user, id, req.APIKey)
 		if err != nil {
-			s.remoteMCPError(w, err)
+			s.remoteMCPError(w, r, err)
 			return
 		}
 		writeJSON(w, r, struct {
@@ -228,7 +228,7 @@ func (s *Server) remoteMCPServerByID(w http.ResponseWriter, r *http.Request) {
 		// Make this seat the default among the caller's seats of the same
 		// connection name (#988). Owner-only; idempotent.
 		if err := s.remoteMCP.SetDefaultSeat(r.Context(), user, id); err != nil {
-			s.remoteMCPError(w, err)
+			s.remoteMCPError(w, r, err)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -241,26 +241,26 @@ func (s *Server) remoteMCPServerByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := s.remoteMCP.RenameSeat(r.Context(), user, id, req.Account); err != nil {
-			s.remoteMCPError(w, err)
+			s.remoteMCPError(w, r, err)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
 	case sub == "signout" && r.Method == http.MethodPost:
 		if err := s.remoteMCP.SignOut(r.Context(), user, id); err != nil {
-			s.remoteMCPError(w, err)
+			s.remoteMCPError(w, r, err)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
 	case sub == "authorize" && r.Method == http.MethodPost:
 		authURL, err := s.remoteMCP.Authorize(r.Context(), user, id)
 		if err != nil {
-			s.remoteMCPError(w, err)
+			s.remoteMCPError(w, r, err)
 			return
 		}
 		writeJSON(w, r, map[string]any{"redirect_url": authURL})
 	case sub == "" && r.Method == http.MethodDelete:
 		if err := s.remoteMCP.Disconnect(r.Context(), user, id); err != nil {
-			s.remoteMCPError(w, err)
+			s.remoteMCPError(w, r, err)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -325,7 +325,7 @@ func (s *Server) remoteMCPOAuthCallback(w http.ResponseWriter, r *http.Request) 
 	}
 	server, err := s.remoteMCP.Complete(r.Context(), user, req.State, req.Code)
 	if err != nil {
-		s.remoteMCPError(w, err)
+		s.remoteMCPError(w, r, err)
 		return
 	}
 	writeJSON(w, r, map[string]any{"ok": true, "server_id": server.ID, "name": server.Name, "status": server.Status})
@@ -340,7 +340,7 @@ func (s *Server) remoteMCPOAuthCallback(w http.ResponseWriter, r *http.Request) 
 // at acquisition (remotemcp's control-plane observer, #1274), so run the
 // relayed text through the process-wide scrubber: it is the redactor that sees
 // this error string, and pattern-matching alone would miss a novel bare token.
-func (s *Server) remoteMCPError(w http.ResponseWriter, err error) {
+func (s *Server) remoteMCPError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case writeAccountGone(w, err):
 	case errors.Is(err, store.ErrRemoteMCPNotFound):
@@ -359,10 +359,12 @@ func (s *Server) remoteMCPError(w http.ResponseWriter, err error) {
 		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
 	case errors.Is(err, remotemcp.ErrDisabled):
 		http.Error(w, "remote MCP OAuth is not configured", http.StatusServiceUnavailable)
+	case IsDatabaseError(err):
+		writeInternalErrorFromHelper(w, r, err)
 	default:
 		// Discovery / DCR / network / bad-URL failures: a 400 keeps it
-		// actionable (the user can fix the URL or try a different server)
-		// without leaking internal detail.
+		// actionable (the user can fix the URL or try a different server),
+		// with any credential redacted.
 		http.Error(w, agentcore.RedactSecrets(err.Error()), http.StatusBadRequest)
 	}
 }

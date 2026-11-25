@@ -27,7 +27,7 @@ func TestPingProbe(t *testing.T) {
 		t.Errorf("healthy ping: got %+v", got)
 	}
 	got := pingProbe(fakePinger{err: errors.New("down")})(context.Background())
-	if got.Status != health.StatusError || got.Detail != "down" {
+	if got.Status != health.StatusError || got.Detail != pingProbePingFailed {
 		t.Errorf("failed ping: got %+v", got)
 	}
 }

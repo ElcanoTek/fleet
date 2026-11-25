@@ -46,7 +46,7 @@ func (s *Server) resolveUserTeam(r *http.Request, user string) string {
 func (s *Server) projectForMember(w http.ResponseWriter, r *http.Request, user, id string) *store.Project {
 	p, err := s.store.GetProject(r.Context(), id)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return nil
 	}
 	if p == nil || !p.MemberOf(user, s.resolveUserTeam(r, user)) {
@@ -88,7 +88,7 @@ func (s *Server) projects(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		list, err := s.store.ListProjectsForUser(r.Context(), user, s.resolveUserTeam(r, user))
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeInternalError(w, r, err)
 			return
 		}
 		if list == nil {
@@ -123,7 +123,7 @@ func (s *Server) projects(w http.ResponseWriter, r *http.Request) {
 		}
 		created, err := s.store.CreateProject(r.Context(), p)
 		if err != nil {
-			writeMemoryStoreError(w, err)
+			writeMemoryStoreError(w, r, err)
 			return
 		}
 		writeJSON(w, r, created)
@@ -240,7 +240,7 @@ func (s *Server) projectByID(w http.ResponseWriter, r *http.Request) {
 		}
 		updated, err := s.store.UpdateProject(r.Context(), user, id, patch)
 		if err != nil {
-			writeMemoryStoreError(w, err)
+			writeMemoryStoreError(w, r, err)
 			return
 		}
 		if patch.TeamID != nil {
@@ -250,7 +250,7 @@ func (s *Server) projectByID(w http.ResponseWriter, r *http.Request) {
 	case http.MethodDelete:
 		affectedConvIDs := s.projectConvIDsBestEffort(r.Context(), id)
 		if err := s.store.DeleteProject(r.Context(), user, id); err != nil {
-			writeMemoryStoreError(w, err)
+			writeMemoryStoreError(w, r, err)
 			return
 		}
 		s.reconcileAllMultiplayerAccess(r.Context(), affectedConvIDs...)
@@ -272,7 +272,7 @@ func (s *Server) projectConversations(w http.ResponseWriter, r *http.Request, p 
 	user := userFromCtx(r.Context())
 	list, err := s.store.ListProjectConversationsForUser(r.Context(), user, p.ID)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 	// Previews are display sugar — a failure degrades to titles-only rather
@@ -312,7 +312,7 @@ func (s *Server) projectTeamConversations(w http.ResponseWriter, r *http.Request
 	user := userFromCtx(r.Context())
 	list, err := s.store.ListProjectTeamConversations(r.Context(), user, p.ID)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 	// Each row says whether the viewer has branched it ("You branched this",
@@ -323,7 +323,7 @@ func (s *Server) projectTeamConversations(w http.ResponseWriter, r *http.Request
 	}
 	branches, err := s.store.ViewerBranches(r.Context(), user, ids)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 	type teamConversation struct {
@@ -366,7 +366,7 @@ func (s *Server) projectImpact(w http.ResponseWriter, r *http.Request, p *store.
 	}
 	impact, err := s.store.ProjectImpact(r.Context(), p.ID)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 	writeJSON(w, r, impact)
@@ -395,7 +395,7 @@ func (s *Server) projectTransfer(w http.ResponseWriter, r *http.Request, user, p
 	}
 	p, err := s.store.GetProject(r.Context(), projectID)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 	admin := s.callerIsAdmin(r.Context())
@@ -460,7 +460,7 @@ func (s *Server) projectMembersByID(w http.ResponseWriter, r *http.Request, user
 	}
 	p, err := s.store.GetProject(r.Context(), projectID)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 	// Same shape as projectTransfer's gate, and the same 404 for everyone
@@ -473,7 +473,7 @@ func (s *Server) projectMembersByID(w http.ResponseWriter, r *http.Request, user
 	}
 	emails, err := s.store.ProjectMemberEmails(r.Context(), p.ID)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 	if emails == nil {
@@ -799,7 +799,7 @@ func (s *Server) projectFiles(w http.ResponseWriter, r *http.Request, p *store.P
 	}
 	convs, err := s.store.ListProjectConversationsForUser(ctx, user, p.ID)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 	// Most recently active first (the listing's order, made explicit here
@@ -815,7 +815,7 @@ func (s *Server) projectFiles(w http.ResponseWriter, r *http.Request, p *store.P
 	}
 	origins, err := s.store.BranchOriginsFor(ctx, ids)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 
@@ -848,13 +848,13 @@ func (s *Server) projectFiles(w http.ResponseWriter, r *http.Request, p *store.P
 	mineBudget, teamBudget := newSourcesBudgets()
 	mineCut, err := listSourcesHalf(ctx, convs, focus, &focusDone, mineBudget, addMine)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 
 	team, err := s.store.ListProjectTeamConversations(ctx, user, p.ID)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 	sortConversationsRecentFirst(team)
@@ -873,7 +873,7 @@ func (s *Server) projectFiles(w http.ResponseWriter, r *http.Request, p *store.P
 
 	teamCut, err := listSourcesHalf(ctx, team, focus, &focusDone, teamBudget(), addTeam)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 	groupsTruncated := mineCut || teamCut
@@ -1095,7 +1095,7 @@ func (s *Server) projectMyState(w http.ResponseWriter, r *http.Request, p *store
 	case http.MethodGet:
 		st, err := s.store.GetProjectUserState(r.Context(), p.ID, user)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeInternalError(w, r, err)
 			return
 		}
 		writeJSON(w, r, st)
@@ -1109,7 +1109,7 @@ func (s *Server) projectMyState(w http.ResponseWriter, r *http.Request, p *store
 		}
 		st, err := s.store.UpdateProjectUserState(r.Context(), p.ID, user, body.KeptPersonal, body.SourcesOpen)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeInternalError(w, r, err)
 			return
 		}
 		writeJSON(w, r, st)
@@ -1133,7 +1133,7 @@ func mayManageProjectMemory(p *store.Project, m *store.Memory, user string) bool
 func (s *Server) projectMemoryPermitted(w http.ResponseWriter, r *http.Request, p *store.Project, memID, user string) *store.Memory {
 	m, err := s.store.GetProjectMemory(r.Context(), p.ID, memID)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return nil
 	}
 	if m == nil {
@@ -1181,7 +1181,7 @@ func (s *Server) projectMemories(w http.ResponseWriter, r *http.Request, p *stor
 			ValidTo:   req.ValidTo,
 		})
 		if err != nil {
-			writeMemoryStoreError(w, err)
+			writeMemoryStoreError(w, r, err)
 			return
 		}
 		writeJSON(w, r, memory)
@@ -1190,14 +1190,14 @@ func (s *Server) projectMemories(w http.ResponseWriter, r *http.Request, p *stor
 			return
 		}
 		if err := s.store.DeleteProjectMemory(r.Context(), p.ID, memID, user); err != nil {
-			writeMemoryStoreError(w, err)
+			writeMemoryStoreError(w, r, err)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
 	case memID == "" && r.Method == http.MethodGet:
 		memories, err := s.store.ListProjectMemories(r.Context(), p.ID)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeInternalError(w, r, err)
 			return
 		}
 		if memories == nil {
@@ -1217,7 +1217,7 @@ func (s *Server) projectMemories(w http.ResponseWriter, r *http.Request, p *stor
 		if id := strings.TrimSpace(req.FromMemoryID); id != "" {
 			memory, err := s.store.MoveMemoryToProject(r.Context(), user, id, p.ID)
 			if err != nil {
-				writeMemoryStoreError(w, err)
+				writeMemoryStoreError(w, r, err)
 				return
 			}
 			writeJSON(w, r, memory)
@@ -1225,7 +1225,7 @@ func (s *Server) projectMemories(w http.ResponseWriter, r *http.Request, p *stor
 		}
 		memory, err := s.store.CreateProjectMemory(r.Context(), p.ID, user, req.Content, req.Kind)
 		if err != nil {
-			writeMemoryStoreError(w, err)
+			writeMemoryStoreError(w, r, err)
 			return
 		}
 		writeJSON(w, r, memory)
@@ -1257,12 +1257,12 @@ func (s *Server) projectExport(w http.ResponseWriter, r *http.Request, p *store.
 	}
 	memories, err := s.store.ListProjectMemories(r.Context(), p.ID)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 	convIDs, err := s.store.ListProjectConversationIDs(r.Context(), p.ID)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return
 	}
 	if memories == nil {
@@ -1406,14 +1406,14 @@ func (s *Server) createConversationForRequest(w http.ResponseWriter, r *http.Req
 			http.Error(w, "the chat made with this client_request_id was deleted; retry with a new one", http.StatusConflict)
 			return nil, false
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, r, err)
 		return nil, false
 	}
 	if projectID == "" {
 		if defaults := s.defaultEnabledOptionalMCPServers(r.Context(), user); len(defaults) > 0 {
 			if err := s.store.SetOptionalMCPServers(r.Context(), user, conv.ID, defaults); err != nil {
 				s.rollbackCreatedConversation(user, conv.ID)
-				http.Error(w, err.Error(), http.StatusInternalServerError)
+				writeInternalError(w, r, err)
 				return nil, false
 			}
 			conv.OptionalMCPServersEnabled = defaults

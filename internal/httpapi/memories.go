@@ -38,7 +38,7 @@ type memoryPatchRequest struct {
 // caller's input was bad (400). Anything else is the store's fault and is a
 // 500 — a Postgres outage used to be reported to the UI as "Bad Request", and
 // the UI showed the user their own mistake.
-func writeMemoryStoreError(w http.ResponseWriter, err error) {
+func writeMemoryStoreError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case writeAccountGone(w, err):
 	case errors.Is(err, store.ErrMemoryNotFound), errors.Is(err, store.ErrMemoryProposalNotFound):
@@ -50,7 +50,7 @@ func writeMemoryStoreError(w http.ResponseWriter, err error) {
 	case store.IsInputError(err):
 		http.Error(w, err.Error(), http.StatusBadRequest)
 	default:
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalErrorFromHelper(w, r, err)
 	}
 }
 
@@ -60,7 +60,7 @@ func (s *Server) memories(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		memories, err := s.store.ListMemories(r.Context(), user)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeInternalError(w, r, err)
 			return
 		}
 		writeJSON(w, r, map[string]any{"memories": memories})
@@ -71,7 +71,7 @@ func (s *Server) memories(w http.ResponseWriter, r *http.Request) {
 		}
 		memory, err := s.store.CreateMemory(r.Context(), user, req.Content, "manual", req.Kind)
 		if err != nil {
-			writeMemoryStoreError(w, err)
+			writeMemoryStoreError(w, r, err)
 			return
 		}
 		writeJSON(w, r, memory)
@@ -118,7 +118,7 @@ func (s *Server) memoryByID(w http.ResponseWriter, r *http.Request) {
 			}
 			memory, err := s.store.AcceptMemoryProposalIntoProject(r.Context(), user, id, p.ID)
 			if err != nil {
-				writeMemoryStoreError(w, err)
+				writeMemoryStoreError(w, r, err)
 				return
 			}
 			writeJSON(w, r, map[string]any{"memory": memory, "supersede": store.SupersedeNone, "project_id": p.ID})
@@ -126,7 +126,7 @@ func (s *Server) memoryByID(w http.ResponseWriter, r *http.Request) {
 		}
 		memory, supersede, err := s.store.AcceptMemoryProposal(r.Context(), user, id)
 		if err != nil {
-			writeMemoryStoreError(w, err)
+			writeMemoryStoreError(w, r, err)
 			return
 		}
 		// The envelope (vs the bare memory) carries the #515 stage-2 outcome:
@@ -150,13 +150,13 @@ func (s *Server) memoryByID(w http.ResponseWriter, r *http.Request) {
 			ValidTo:   req.ValidTo,
 		})
 		if err != nil {
-			writeMemoryStoreError(w, err)
+			writeMemoryStoreError(w, r, err)
 			return
 		}
 		writeJSON(w, r, memory)
 	case http.MethodDelete:
 		if err := s.store.DeleteMemory(r.Context(), user, id); err != nil {
-			writeMemoryStoreError(w, err)
+			writeMemoryStoreError(w, r, err)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
