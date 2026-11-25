@@ -14,10 +14,12 @@ import (
 
 // User-authored Agent Skills (the skills builder, docs/SKILLS.md phase 2).
 // DB-owned, per-user: a user's ACTIVE skills are materialized into their own
-// conversation workspaces at turn start and listed in their prompt roster —
-// they never enter other users' runs and never touch the operator's bundle.
-// Graduating a good skill to the whole deployment stays an operator action
-// (copy it into the bundle's skills/ dir).
+// conversation workspaces at turn start and listed in their prompt roster.
+// They never touch the operator's bundle, and they enter another user's chat
+// turns in one case only: an admin turned a workspace-shared skill on for
+// everyone (enabled_for_all, docs/SKILLS.md "On for everyone"). Graduating a
+// skill into the bundle itself stays an operator action (copy it into the
+// bundle's skills/ dir).
 
 // User-skill statuses. A PROPOSED skill was drafted by the agent
 // (propose_skill) and is inert until its owner approves it in the builder —
@@ -62,8 +64,13 @@ type UserSkill struct {
 	Status      string `json:"status"`
 	Visibility  string `json:"visibility"`
 	SharedBy    string `json:"shared_by,omitempty"`
-	CreatedAt   int64  `json:"created_at"`
-	UpdatedAt   int64  `json:"updated_at"`
+	// EnabledForAll marks a workspace-shared skill an admin turned on for
+	// everyone. The row keeps the flag while it is disabled, so enabling it
+	// again resumes it; ListEnabledForAllUserSkills is what decides whether it
+	// reaches a turn.
+	EnabledForAll bool  `json:"enabled_for_all,omitempty"`
+	CreatedAt     int64 `json:"created_at"`
+	UpdatedAt     int64 `json:"updated_at"`
 }
 
 func normalizeUserSkillVisibility(visibility string) (string, error) {
@@ -271,7 +278,9 @@ func (s *Store) UpdateUserSkillWithVisibility(ctx context.Context, userEmail, id
 				now := time.Now().Unix()
 				if _, err := tx.ExecContext(ctx, `
 					UPDATE user_skills
-					SET description=$3, body=$4, status=$5, visibility=$6, updated_at=$7
+					SET description=$3, body=$4, status=$5, visibility=$6,
+					    enabled_for_all = enabled_for_all AND $6 = 'workspace',
+					    updated_at=$7
 					WHERE user_email=$1 AND id=$2`,
 					email, targetID, strings.TrimSpace(description), body, status, effectiveVis, now); err != nil {
 					return nil, err
@@ -309,6 +318,7 @@ func (s *Store) UpdateUserSkillWithVisibility(ctx context.Context, userEmail, id
 		UPDATE user_skills
 		SET name=$3, description=$4, body=$5, status=$6,
 		    visibility=COALESCE(NULLIF($7, ''), visibility),
+		    enabled_for_all = enabled_for_all AND COALESCE(NULLIF($7, ''), visibility) = 'workspace',
 		    updated_at=$8
 		WHERE user_email=$1 AND id=$2`,
 		email, id, name, strings.TrimSpace(description), body, status, vis, time.Now().Unix())
@@ -327,11 +337,11 @@ func (s *Store) UpdateUserSkillWithVisibility(ctx context.Context, userEmail, id
 // GetUserSkill fetches one owned skill.
 func (s *Store) GetUserSkill(ctx context.Context, userEmail, id string) (*UserSkill, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, user_email, name, description, body, status, visibility, created_at, updated_at
+		SELECT id, user_email, name, description, body, status, visibility, enabled_for_all, created_at, updated_at
 		FROM user_skills WHERE user_email=$1 AND id=$2`,
 		normalizeEmail(userEmail), id)
 	var sk UserSkill
-	err := row.Scan(&sk.ID, &sk.UserEmail, &sk.Name, &sk.Description, &sk.Body, &sk.Status, &sk.Visibility, &sk.CreatedAt, &sk.UpdatedAt)
+	err := row.Scan(&sk.ID, &sk.UserEmail, &sk.Name, &sk.Description, &sk.Body, &sk.Status, &sk.Visibility, &sk.EnabledForAll, &sk.CreatedAt, &sk.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrUserSkillNotFound
 	}
@@ -344,7 +354,7 @@ func (s *Store) GetUserSkill(ctx context.Context, userEmail, id string) (*UserSk
 // ListUserSkills returns all of a user's skills, name order.
 func (s *Store) ListUserSkills(ctx context.Context, userEmail string) ([]UserSkill, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, user_email, name, description, body, status, visibility, created_at, updated_at
+		SELECT id, user_email, name, description, body, status, visibility, enabled_for_all, created_at, updated_at
 		FROM user_skills WHERE user_email=$1 ORDER BY name`,
 		normalizeEmail(userEmail))
 	if err != nil {
@@ -354,7 +364,7 @@ func (s *Store) ListUserSkills(ctx context.Context, userEmail string) ([]UserSki
 	out := []UserSkill{}
 	for rows.Next() {
 		var sk UserSkill
-		if err := rows.Scan(&sk.ID, &sk.UserEmail, &sk.Name, &sk.Description, &sk.Body, &sk.Status, &sk.Visibility, &sk.CreatedAt, &sk.UpdatedAt); err != nil {
+		if err := rows.Scan(&sk.ID, &sk.UserEmail, &sk.Name, &sk.Description, &sk.Body, &sk.Status, &sk.Visibility, &sk.EnabledForAll, &sk.CreatedAt, &sk.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, sk)
@@ -372,7 +382,7 @@ const MaxWorkspaceSharedSkills = 100
 // checkWorkspaceShareCapacity (MaxWorkspaceSharedSkills).
 func (s *Store) ListWorkspaceSharedUserSkills(ctx context.Context) ([]UserSkill, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT DISTINCT ON (name) id, user_email, name, description, body, status, visibility, created_at, updated_at
+		SELECT DISTINCT ON (name) id, user_email, name, description, body, status, visibility, enabled_for_all, created_at, updated_at
 		FROM user_skills
 		WHERE status = $1 AND visibility = $2
 		ORDER BY name, updated_at DESC, id ASC`,
@@ -384,7 +394,60 @@ func (s *Store) ListWorkspaceSharedUserSkills(ctx context.Context) ([]UserSkill,
 	out := []UserSkill{}
 	for rows.Next() {
 		var sk UserSkill
-		if err := rows.Scan(&sk.ID, &sk.UserEmail, &sk.Name, &sk.Description, &sk.Body, &sk.Status, &sk.Visibility, &sk.CreatedAt, &sk.UpdatedAt); err != nil {
+		if err := rows.Scan(&sk.ID, &sk.UserEmail, &sk.Name, &sk.Description, &sk.Body, &sk.Status, &sk.Visibility, &sk.EnabledForAll, &sk.CreatedAt, &sk.UpdatedAt); err != nil {
+			return nil, err
+		}
+		sk.SharedBy = sk.UserEmail
+		out = append(out, sk)
+	}
+	return out, rows.Err()
+}
+
+// SetUserSkillEnabledForAll turns an owned skill on for everyone, or back off.
+// Turning it on needs an ACTIVE, workspace-shared row: a private or disabled
+// skill has nothing for a teammate to read. Whether the caller may do this at
+// all (an admin) is the HTTP layer's decision; the store only keeps the flag
+// consistent with the row.
+func (s *Store) SetUserSkillEnabledForAll(ctx context.Context, userEmail, id string, on bool) (*UserSkill, error) {
+	email := normalizeEmail(userEmail)
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE user_skills
+		SET enabled_for_all=$3, updated_at=$4
+		WHERE user_email=$1 AND id=$2
+		  AND ($3 = FALSE OR (status = $5 AND visibility = $6))`,
+		email, id, on, time.Now().Unix(), UserSkillStatusActive, UserSkillVisibilityWorkspace)
+	if err != nil {
+		return nil, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		if _, gerr := s.GetUserSkill(ctx, email, id); gerr != nil {
+			return nil, gerr
+		}
+		return nil, fmt.Errorf("%w: only an active skill shared with the workspace can be turned on for everyone", ErrUserSkillInvalid)
+	}
+	return s.GetUserSkill(ctx, email, id)
+}
+
+// ListEnabledForAllUserSkills returns the active workspace-shared skills that
+// are turned on for everyone, across all users, ordered by name. Two owners can
+// each hold one of the same name; both rows are returned (most recently updated
+// first) so the caller, which knows who is still an admin, picks the first one
+// whose owner may still do this.
+func (s *Store) ListEnabledForAllUserSkills(ctx context.Context) ([]UserSkill, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, user_email, name, description, body, status, visibility, enabled_for_all, created_at, updated_at
+		FROM user_skills
+		WHERE status = $1 AND visibility = $2 AND enabled_for_all
+		ORDER BY name, updated_at DESC, id ASC`,
+		UserSkillStatusActive, UserSkillVisibilityWorkspace)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []UserSkill{}
+	for rows.Next() {
+		var sk UserSkill
+		if err := rows.Scan(&sk.ID, &sk.UserEmail, &sk.Name, &sk.Description, &sk.Body, &sk.Status, &sk.Visibility, &sk.EnabledForAll, &sk.CreatedAt, &sk.UpdatedAt); err != nil {
 			return nil, err
 		}
 		sk.SharedBy = sk.UserEmail
@@ -396,7 +459,9 @@ func (s *Store) ListWorkspaceSharedUserSkills(ctx context.Context) ([]UserSkill,
 // ListActiveUserSkills returns a user's ACTIVE skills (the subset that
 // participates in runs), ordered by name. Teammate-shared workspace skills are
 // published to the Workspace pack catalog for 1-click opt-in ("Add to my
-// skills") rather than auto-injected without recipient consent.
+// skills"); the ones an admin turned on for everyone reach chat turns through
+// ListEnabledForAllUserSkills, never through this list, so a scheduled task
+// (which inlines full bodies) keeps running with its owner's own skills only.
 func (s *Store) ListActiveUserSkills(ctx context.Context, userEmail string) ([]UserSkill, error) {
 	all, err := s.ListUserSkills(ctx, userEmail)
 	if err != nil {

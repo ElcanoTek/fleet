@@ -1,0 +1,13 @@
+-- 0215_user_skill_enabled_for_all: a workspace-shared skill an admin turned on
+-- for everyone (docs/SKILLS.md "On for everyone").
+--
+-- A workspace-shared skill (visibility = 'workspace') is opt-in for teammates:
+-- each one clicks "Add to my skills" and gets a private copy. With
+-- enabled_for_all set, an ACTIVE workspace-shared skill is instead loaded into
+-- every user's chat turns from the owner's row, so nobody has to add it and an
+-- edit by the owner reaches everyone. Only an admin can set it (the HTTP layer
+-- checks the caller, and each turn checks that the owner still is one); the
+-- store clears it when the row stops being workspace-shared.
+--
+-- FALSE for every existing row, so nothing changes until an admin uses it.
+ALTER TABLE chat.user_skills ADD COLUMN IF NOT EXISTS enabled_for_all BOOLEAN NOT NULL DEFAULT FALSE;

@@ -27,6 +27,7 @@ import {
 import { ClampText } from "../ui/atoms";
 import { responseErrorText } from "@/app/lib/responseError";
 import { errorMessage } from "@/app/shared/lib/errorMessage";
+import { fetchMe } from "@/app/shared/lib/account";
 
 // Skills library (Settings → Skills, fleet-unified settings pass). Two panels
 // on the design's .skill-row anatomy: "Your skills" — the personal skill
@@ -45,6 +46,10 @@ type SkillEntry = {
   source: string; // "bundle" | "plugin" | "builtin" | "workspace"
   plugin?: string; // the Agent Plugin name when source is "plugin"
   shared_by?: string; // author email when source is "workspace"
+  // A workspace-shared skill an admin turned on for everyone: it already takes
+  // part in the viewer's chats, so the row shows that instead of "Add to my
+  // skills".
+  enabled_for_all?: boolean;
   // The skill's declared `allowed-tools` (from SKILL.md frontmatter), surfaced
   // for review. fleet does NOT enforce it — a skill's real limits are the
   // sandbox, MCP allowlist, and approval gate — so it reads as a declared
@@ -63,6 +68,9 @@ type UserSkill = {
   body: string;
   status: "active" | "disabled" | "proposed";
   visibility?: "private" | "workspace";
+  // On for everyone (admins only): every user's chats load this skill from
+  // this row, with no "Add to my skills" step.
+  enabled_for_all?: boolean;
 };
 
 const EMPTY_DRAFT = {
@@ -139,6 +147,19 @@ export default function SkillsPage() {
   const firstFieldRef = useFocusOnOpen<HTMLInputElement>(draft !== null, draft?.id ?? null);
   const [busy, setBusy] = useState(false);
   const editorRef = useRef<HTMLDivElement | null>(null);
+  // Whether to offer "Turn on for everyone". Presentation only: the server
+  // refuses the write from anyone who is not an admin, and a failed account
+  // read simply leaves the button out.
+  const [isAdmin, setIsAdmin] = useState(false);
+  useEffect(() => {
+    let stale = false;
+    void fetchMe().then((me) => {
+      if (!stale) setIsAdmin(me?.admin === true);
+    });
+    return () => {
+      stale = true;
+    };
+  }, []);
 
   useEffect(() => {
     let stale = false;
@@ -251,6 +272,32 @@ export default function SkillsPage() {
         await reloadWorkspacePack();
       })
       .catch((e: unknown) => setError(errorMessage(e, tr("Share update failed."))))
+      .finally(() => setBusy(false));
+  };
+
+  // toggleForAllMine switches a workspace-shared skill on (or off) for
+  // everyone. The rest of the skill is sent back unchanged, since the route
+  // replaces the whole row.
+  const toggleForAllMine = (sk: UserSkill) => {
+    setBusy(true);
+    setError(null);
+    fetch(`/api/user-skills/${encodeURIComponent(sk.id)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: sk.name,
+        description: sk.description,
+        body: sk.body,
+        status: sk.status,
+        enabled_for_all: !sk.enabled_for_all,
+      }),
+    })
+      .then(async (res) => {
+        if (!res.ok) throw new Error(await responseErrorText(res, tr("Update failed")));
+        await reloadMine();
+        await reloadWorkspacePack();
+      })
+      .catch((e: unknown) => setError(errorMessage(e, tr("Update failed."))))
       .finally(() => setBusy(false));
   };
 
@@ -585,6 +632,11 @@ export default function SkillsPage() {
                         {sk.status === "active" ? tr("Shared with workspace") : tr("Shared (when enabled)")}
                       </ConnBadge>
                     ) : null}
+                    {sk.visibility === "workspace" && sk.enabled_for_all ? (
+                      <ConnBadge variant="success">
+                        {sk.status === "active" ? tr("On for everyone") : tr("On for everyone (when enabled)")}
+                      </ConnBadge>
+                    ) : null}
                   </span>
                   <span className={SKILL_ACTIONS}>
                     {sk.status === "proposed" ? (
@@ -627,6 +679,18 @@ export default function SkillsPage() {
                         )}
                       </button>
                     )}
+                    {sk.visibility === "workspace" &&
+                    sk.status === "active" &&
+                    (isAdmin || sk.enabled_for_all) ? (
+                      <button
+                        type="button"
+                        className={btnClass({ sm: true, reveal: true })}
+                        disabled={busy}
+                        onClick={() => toggleForAllMine(sk)}
+                      >
+                        {sk.enabled_for_all ? tr("Turn off for everyone") : tr("Turn on for everyone")}
+                      </button>
+                    ) : null}
                     <button
                       type="button"
                       className={btnClass({ sm: true, reveal: true })}
@@ -716,9 +780,14 @@ export default function SkillsPage() {
                             ? tr("Plugin{0}", [s.plugin ? `: ${s.plugin}` : ""])
                             : tr("Built-in")}
                     </ConnBadge>
+                    {s.source === "workspace" && s.enabled_for_all ? (
+                      <ConnBadge variant="success">{tr("On for everyone")}</ConnBadge>
+                    ) : null}
                   </span>
                   <span className={SKILL_ACTIONS}>
-                    {s.source === "workspace" && !mine?.some((m) => m.name === s.name) ? (
+                    {s.source === "workspace" &&
+                    !s.enabled_for_all &&
+                    !mine?.some((m) => m.name === s.name) ? (
                       <button
                         type="button"
                         className={btnClass({ sm: true, reveal: true })}

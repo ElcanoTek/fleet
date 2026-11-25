@@ -235,7 +235,47 @@ to `GET /skills` under `shared_skills` (`source: "workspace"`,
 Teammates' shared skills are **never** auto-injected into another user's prompt
 or workspace without consent: a teammate inspects the skill in the Workspace
 pack and clicks **Add to my skills** to create an active private copy in their
-own `user_skills` roster.
+own `user_skills` roster. The one exception is the next paragraph.
+
+**On for everyone (`enabled_for_all`, migration 0215)**: an admin can switch
+one of their own active workspace-shared skills on for the whole workspace
+(**Turn on for everyone** on the row in **Settings → Skills**). From then on
+every user's chat turns load it from the admin's row, exactly as they load the
+user's own skills: materialized under `user-skills/<name>/SKILL.md`, listed in
+the prompt roster, offered in the composer's `/` menu and matched by `/name`.
+Nobody has to click **Add to my skills**, and because it is the owner's row and
+not a copy, an edit by the owner reaches everyone on their next turn. What
+keeps this from being "any teammate can put instructions into everyone's
+chats":
+
+- **Only an admin can switch it on.** `PUT /user-skills/{id}` with
+  `enabled_for_all: true` from anyone else is refused with 403 before anything
+  is written. `enabled_for_all: false` is the owner's to send whatever their
+  role is; leaving the field out keeps the current value.
+- **The owner has to be an admin on every turn, not just when they pressed the
+  button.** `enabledForAllSkills` (internal/httpapi/user_skills.go) drops a row
+  whose owner is no longer an admin or whose account is disabled, so a demoted
+  admin's skill leaves everyone's chats at once with no cleanup step. A deleted
+  account's skills are deleted with it (docs/IDENTITY.md).
+- **The agent cannot change it by itself.** `propose_skill` stages a proposed
+  revision that the owner has to approve, as for any other skill.
+- **The row has to stay active and workspace-shared.** Unsharing clears the
+  flag (sharing it again does not bring it back); disabling keeps the flag but
+  takes the skill out of every turn until it is enabled again.
+
+A user's own active skill of the same name wins over one that is on for
+everyone, the same way it customizes a bundle skill. Where two admins each
+turned on a skill of one name, the most recently updated is used. In
+`GET /skills` such a skill carries `enabled_for_all: true` under
+`shared_skills`, and the Workspace skills list shows an **On for everyone**
+badge in place of **Add to my skills** (**Clone & edit** stays).
+
+Not shipped, on purpose: a per-user off switch (a user who does not want it
+makes their own skill of that name), and scheduled tasks. A scheduled run
+inlines full skill bodies into its system prompt, so adding every
+on-for-everyone skill to every user's tasks would change the cost and the
+behaviour of tasks that already run; tasks keep using their owner's own skills
+only. Chat patrols are chat turns and do get them.
 
 **Scheduled tasks load the owner's active skills too**: the runner resolves the
 task owner (`task.CreatedBy` → chat email, the same resolution the remote-MCP

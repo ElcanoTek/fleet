@@ -885,13 +885,19 @@ of general-purpose skills, and your deployment can add its own. Under
 **Settings → Skills**, you can also create personal skills, publish a skill to
 **Workspace skills** (**Share with your workspace**), click **Add to my skills**
 on a teammate-shared skill in Workspace skills to enable it for your own chats
-and tasks, or click **Clone & edit** on any workspace skill to load its
+and tasks (a skill marked **On for everyone** was switched on for the whole
+workspace by an admin and already works in your chats, so it has nothing to
+add), or click **Clone & edit** on any workspace skill to load its
 instructions into the editor and customize it (you can also ask the assistant in
 chat to propose a skill or edit an existing one, then click **Approve** or
 **Approve & share** in **Settings → Skills**). Your active personal skills appear
 alongside the workspace's skills in the composer's `/` autocomplete menu (and if
 you customize a workspace skill under the same name, your version overrides the
-default description and instructions for your runs).
+default description and instructions for your runs). An admin sees one more
+button on their own shared skills, **Turn on for everyone**: it makes the skill
+work in every person's chats without anyone adding it, and later edits by that
+admin reach everyone. It applies to chats and chat patrols, not to scheduled
+tasks, and **Turn off for everyone** or **Unshare** undoes it.
 
 ### Your own personas and digital twin
 
