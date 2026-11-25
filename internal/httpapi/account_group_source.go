@@ -29,16 +29,17 @@ const (
 	// accountGroupSourceCallTimeout bounds one call to the source, as a
 	// context deadline and as the per-call budget the broker child applies.
 	accountGroupSourceCallTimeout = 15 * time.Second
-	// accountGroupSourceFirstWait is how long the first catalog read after
-	// boot waits for the first answer, so the picker opens with its chips.
-	// After that a read never waits: it is served the last answer while a
-	// refresh runs behind it.
-	accountGroupSourceFirstWait = 2 * time.Second
 	// accountGroupSourceRetry is how soon a failed refresh is tried again.
 	accountGroupSourceRetry = 60 * time.Second
 	// accountGroupSourceMaxBytes bounds the answer fleet will parse.
 	accountGroupSourceMaxBytes = 1 << 20
 )
+
+// accountGroupSourceFirstWait is how long the first catalog read after boot
+// waits for the first answer, so the picker opens with its chips. After that
+// a read never waits: it is served the last answer while a refresh runs
+// behind it. Var, not const: tests lengthen it.
+var accountGroupSourceFirstWait = 2 * time.Second
 
 // accountGroupSource caches the last good answer of the bundle's source.
 type accountGroupSource struct {
