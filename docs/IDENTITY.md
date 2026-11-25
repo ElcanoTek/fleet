@@ -299,7 +299,10 @@ advises on each demoted split admin, unknown role and duplicate username in it.
   goes, counted read-only (`store.AccountDeletionSummary`): the account's
   role, its conversations (those in the recycle bin too), the projects it
   owns, its memories and its projects' shared ones, and its remote MCP
-  connections, followed by the rest of the list above. The operator types
+  connections, followed by the rest of the list above, and that a `fleet
+  backup` dump holds only the database rows: the uploads, private workspace
+  files and user API keys come back only from the file-level backups
+  [BACKUP_RESTORE.md](BACKUP_RESTORE.md) describes. The operator types
   the email back to go on — compared as identity emails are (other capitals
   match; a different address never does, even one Unicode case folding
   calls the same); any other answer prints `aborted` and deletes nothing
@@ -310,13 +313,17 @@ advises on each demoted split admin, unknown role and duplicate username in it.
   is exit 1 whether it comes before the prompt or from the deletion itself
   (a team-shared project still owned included); a deletion stopped because
   the account's keys could not be bound or its files moved aside exits 5,
-  also with nothing deleted. Without a
-  terminal (a pipe, cron, CI) nobody can answer, so both refuse (exit 1)
+  also with nothing deleted. Without a terminal (a pipe, cron, CI) nobody
+  can answer, so both refuse (exit 1)
   unless `--no-confirm` (alias `--yes`) is passed; with it they ask nothing
   and read nothing before the deletion. The server-presence lock is taken
   only after the answer, so a prompt left open never keeps a server from
-  starting. Both take exactly one email (`--` before it ends the flags) and
-  refuse a second one.
+  starting. When the database deletion commits but a later step is left
+  (exit 6), the closing line says only the account and its database rows
+  were deleted and names what may remain (its user API keys, or some of its
+  files); the warnings before it say how each is removed. Both take
+  exactly one email (`--` before it ends the flags) and refuse a second
+  one.
 
   **Work in flight.** The server runs one deletion of an account at a time:
   a second one while the first runs is answered 409 `a deletion of this

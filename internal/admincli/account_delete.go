@@ -192,7 +192,8 @@ func accountDeletionWarning(sum store.AccountDeletionSummary) string {
 	fmt.Fprintf(&b, "  - memories: %d (its own and the shared memories of its projects)\n", sum.Memories)
 	fmt.Fprintf(&b, "  - remote MCP connections: %d (with their stored sign-ins)\n", sum.RemoteMCPServers)
 	b.WriteString("  - its skills, personas, schedules, settings, user API keys, uploads and Operations Center access\n")
-	b.WriteString("Only a restore from a backup brings it back (fleet backup takes one).")
+	b.WriteString("No fleet command brings it back. A fleet backup dump holds only its database rows; its uploads, private workspace\n" +
+		"files and user API keys (api_keys.json) come back only from the file-level backups docs/BACKUP_RESTORE.md describes.")
 	return b.String()
 }
 
@@ -213,10 +214,35 @@ func deletedExitCode(res accountdelete.Result) int {
 }
 
 // accountDeletedLine is the success line of `fleet admin rm` and `fleet chat
-// user del`, admin or not.
+// user del`, admin or not. With steps left (res.Problems: the database
+// deletion committed, but keys or files were not removed) it claims only the
+// database rows and names what is left; the warnings printed before it say
+// how each is removed.
 func accountDeletedLine(email string, res accountdelete.Result) string {
-	return fmt.Sprintf("deleted the account %s, everything it owned (login, Operations Center access, conversations, projects, memories, connections, files) and %s",
-		email, userKeysPhrase(res.KeysDeleted))
+	if len(res.Problems) == 0 {
+		return fmt.Sprintf("deleted the account %s, everything it owned (login, Operations Center access, conversations, projects, memories, connections, files) and %s",
+			email, userKeysPhrase(res.KeysDeleted))
+	}
+	var keysLeft, filesLeft bool
+	for _, p := range res.Problems {
+		switch p.Kind {
+		case accountdelete.KeysUnavailable, accountdelete.KeysFailed:
+			keysLeft = true
+		default:
+			filesLeft = true
+		}
+	}
+	var left []string
+	keys := " and " + userKeysPhrase(res.KeysDeleted)
+	if keysLeft {
+		left = append(left, "its user API keys")
+		keys = ""
+	}
+	if filesLeft {
+		left = append(left, "some of its uploads or private workspace files")
+	}
+	return fmt.Sprintf("deleted the account %s and its database rows (login, Operations Center access, conversations, projects, memories, connections)%s; "+
+		"%s may remain: see the warnings above for what is left and what removes it", email, keys, strings.Join(left, " and "))
 }
 
 // userKeysPhrase says how many user API keys a deletion removed.

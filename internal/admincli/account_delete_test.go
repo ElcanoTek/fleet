@@ -160,8 +160,13 @@ func TestCLIAccountDeletionWithStepsLeftExits6(t *testing.T) {
 	if _, err := chat.CreateUser(ctx, "left@acctdel.test", "delete-password-1"); err != nil {
 		t.Fatal(err)
 	}
-	if code := chatUserDel([]string{"left@acctdel.test", "--no-confirm"}); code != exitDeletedStepsLeft {
-		t.Fatalf("exit %d, want %d", code, exitDeletedStepsLeft)
+	out := captureStdout(t, func() {
+		if code := chatUserDel([]string{"left@acctdel.test", "--no-confirm"}); code != exitDeletedStepsLeft {
+			t.Fatalf("exit %d, want %d", code, exitDeletedStepsLeft)
+		}
+	})
+	if strings.Contains(out, "everything it owned") || !strings.Contains(out, "its database rows") || !strings.Contains(out, "may remain") {
+		t.Errorf("output %q claims more than the database rows went, or does not say what may remain", out)
 	}
 	if _, err := chat.GetUser(ctx, "left@acctdel.test"); err == nil {
 		t.Fatal("the account survived")

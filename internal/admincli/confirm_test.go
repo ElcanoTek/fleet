@@ -167,7 +167,8 @@ func TestConfirmAccountDeletion(t *testing.T) {
 		if code != 0 || id != "ann-id" {
 			t.Fatalf("id %q, exit %d; want the shown account's id, 0 (output %q)", id, code, out)
 		}
-		for _, w := range []string{"permanently deletes the account ann@x.com (role admin)", "conversations: 12", "projects it owns: 1", "memories: 34", "remote MCP connections: 2", "user API keys", "Type ann@x.com to confirm"} {
+		for _, w := range []string{"permanently deletes the account ann@x.com (role admin)", "conversations: 12", "projects it owns: 1", "memories: 34", "remote MCP connections: 2", "user API keys", "Type ann@x.com to confirm",
+			"only its database rows", "api_keys.json", "docs/BACKUP_RESTORE.md"} {
 			if !strings.Contains(out.String(), w) {
 				t.Errorf("prompt %q does not say %q", out, w)
 			}
@@ -275,6 +276,40 @@ func TestAccountDeletionErrorCode(t *testing.T) {
 		}
 		if tc.detail != "" && !strings.Contains(stderr, tc.detail) {
 			t.Errorf("%v: stderr %q does not carry %q", tc.err, stderr, tc.detail)
+		}
+	}
+}
+
+// The success line claims only what went: with steps left it names the
+// database rows as deleted and what may remain, never "everything".
+func TestAccountDeletedLine(t *testing.T) {
+	t.Parallel()
+	files := accountdelete.Problem{Kind: accountdelete.UploadsFailed, Email: "ann@x.com", Err: "EACCES"}
+	keys := accountdelete.Problem{Kind: accountdelete.KeysFailed, Email: "ann@x.com", Err: "busy"}
+	for _, tc := range []struct {
+		name    string
+		res     accountdelete.Result
+		want    []string
+		notWant []string
+	}{
+		{"complete", accountdelete.Result{KeysDeleted: 2}, []string{"deleted the account ann@x.com, everything it owned", "files)", "2 user API keys"}, []string{"may remain"}},
+		{"files left", accountdelete.Result{KeysDeleted: 1, Problems: []accountdelete.Problem{files}},
+			[]string{"its database rows", "and 1 user API key;", "some of its uploads or private workspace files may remain", "warnings above"}, []string{"everything it owned", "files)"}},
+		{"keys left", accountdelete.Result{Problems: []accountdelete.Problem{keys}},
+			[]string{"its database rows", "its user API keys may remain"}, []string{"everything it owned", "0 user API keys"}},
+		{"both left", accountdelete.Result{Problems: []accountdelete.Problem{keys, files}},
+			[]string{"its user API keys and some of its uploads or private workspace files may remain"}, []string{"everything it owned"}},
+	} {
+		got := accountDeletedLine("ann@x.com", tc.res)
+		for _, w := range tc.want {
+			if !strings.Contains(got, w) {
+				t.Errorf("%s: %q does not say %q", tc.name, got, w)
+			}
+		}
+		for _, w := range tc.notWant {
+			if strings.Contains(got, w) {
+				t.Errorf("%s: %q says %q", tc.name, got, w)
+			}
 		}
 	}
 }
