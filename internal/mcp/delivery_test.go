@@ -51,8 +51,41 @@ func TestRequestNotSent(t *testing.T) {
 			t.Errorf("%s: RequestNotSent = %v, want %v", tc.name, got, tc.want)
 		}
 	}
-	if MarkNotSent(nil) != nil {
-		t.Error("MarkNotSent(nil) must stay nil")
+}
+
+// An HTTP 4xx is the server's refusal of a request it received: it did not
+// act. A 5xx is not. The plain transport branch of callTool keeps that.
+func TestRequestRefused(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"422", &HTTPStatusError{StatusCode: 422, Body: "missing parameter"}, true},
+		{"429", &HTTPStatusError{StatusCode: 429}, true},
+		{"401", &HTTPStatusError{StatusCode: 401}, true},
+		{"502", &HTTPStatusError{StatusCode: 502}, false},
+		{"504", &HTTPStatusError{StatusCode: 504}, false},
+		{"marked", MarkRefused(errors.New("masked")), true},
+		{"wrapped 422", fmt.Errorf("x: %w", &HTTPStatusError{StatusCode: 422}), true},
+		{"callTool's mark on a 422", markDelivery(&HTTPStatusError{StatusCode: 422}, callNotSent(&HTTPStatusError{StatusCode: 422})), true},
+		{"callTool's mark on a 503", markDelivery(&HTTPStatusError{StatusCode: 503}, callNotSent(&HTTPStatusError{StatusCode: 503})), false},
+		{"unmarked plain error", errors.New("EOF"), false},
+		{"nil", nil, false},
+	}
+	for _, tc := range cases {
+		if got := RequestRefused(tc.err); got != tc.want {
+			t.Errorf("%s: RequestRefused = %v, want %v", tc.name, got, tc.want)
+		}
+		if RequestRefused(tc.err) && RequestNotSent(tc.err) {
+			t.Errorf("%s: both refused and not sent", tc.name)
+		}
+	}
+}
+
+func TestMarksKeepNil(t *testing.T) {
+	if MarkNotSent(nil) != nil || MarkRefused(nil) != nil {
+		t.Error("a mark of a nil error must stay nil")
 	}
 }
 

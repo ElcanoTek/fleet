@@ -37,7 +37,7 @@ var emailFailures = []struct {
 	result    string
 	succeeded bool
 }{
-	{"request not delivered", mcpCallErrorPrefix(inflightEmailTool, true) + "tool call failed after server restart: stdio write failed (request not delivered)", false},
+	{"request not delivered", mcpCallErrorPrefix(inflightEmailTool, mcpCallNotSent) + "tool call failed after server restart: stdio write failed (request not delivered)", false},
 	{"not dispatched", mcpCallNotSentPrefix + "context deadline exceeded", false},
 	{"provider rejected", `{"status_code":400,"error":"invalid recipient"}`, true},
 	{"is-error answer", `{"success":false,"error":"invalid recipient"}`, false},
@@ -61,7 +61,7 @@ var emailUnknownOutcomes = []struct {
 	{"connection dropped", "Error calling " + inflightEmailTool + ": read tcp 10.0.0.2:5432: connection reset by peer", false},
 	{"server reports unknown outcome", `{"success":false,"error_code":"ses_outcome_unknown"}`, true},
 	{"contained panic", containedToolPanicText("inc-123"), false},
-	{"server died, restart failed too", mcpCallErrorPrefix(inflightEmailTool, false) + restartAlsoFailedText, false},
+	{"server died, restart failed too", mcpCallErrorPrefix(inflightEmailTool, mcpCallMaybeSent) + restartAlsoFailedText, false},
 	{"provider 500", `{"status_code":500,"error":"internal error"}`, true},
 	{"gateway 502", `{"status_code":502,"error":"bad gateway"}`, true},
 	{"gateway timeout 504", `{"status_code":504}`, true},
@@ -545,6 +545,13 @@ func TestMCPEmail_DeliveryComesFromTheMarkNotTheText(t *testing.T) {
 		{"server died after reading, restart failed", errors.New(restartAlsoFailedText), false},
 		{"request never left", mcp.MarkNotSent(errors.New("stdio write failed (request not delivered): broken pipe")), true},
 		{"stopped before send", mcp.ErrStoppedBeforeSend, true},
+		// An HTTP MCP email server that answered 4xx received the request and
+		// refused it: nothing was sent, so the retry goes out. A 5xx may
+		// have been sent.
+		{"provider refused with HTTP 422", &mcp.HTTPStatusError{StatusCode: 422, Body: "invalid recipient"}, true},
+		{"provider rate-limited with HTTP 429", &mcp.HTTPStatusError{StatusCode: 429, Body: "slow down; request timed out"}, true},
+		{"refusal carried across the broker", mcp.MarkRefused(errors.New("mcpbroker: the server refused the request (HTTP 422)")), true},
+		{"gateway 502", &mcp.HTTPStatusError{StatusCode: 502, Body: "bad gateway"}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -588,7 +595,7 @@ func TestScheduledEmail_FinishDoesNotRedemandAnEmailInDoubt(t *testing.T) {
 	if blocked, msg := o.checkCriticalTool(inflightEmailTool, "", inflightEmailInput); blocked {
 		t.Fatalf("send refused: %q", msg)
 	}
-	o.recordToolResult(inflightEmailTool, inflightEmailInput, mcpCallErrorPrefix(inflightEmailTool, false)+"context deadline exceeded", false)
+	o.recordToolResult(inflightEmailTool, inflightEmailInput, mcpCallErrorPrefix(inflightEmailTool, mcpCallMaybeSent)+"context deadline exceeded", false)
 
 	ok, msgs := o.checkFinishEnforcement()
 	if ok || len(msgs) != 1 {
@@ -607,7 +614,7 @@ func TestEmailLast_AbortWithSummaryInDoubtDoesNotDemandAnother(t *testing.T) {
 	o := newOrchStateForTest()
 	confirmAudit(t, o, []criticalActionStruct{{Tool: elXandrCreate}, {Tool: elEmail}}, nil)
 	mustNotBlock(t, o, elXandrCreate, elName("C"), elDefinitive)
-	if blocked, msg := elCall(o, elEmail, elEmailArgs, mcpCallErrorPrefix(elEmail, false)+"context deadline exceeded", false); blocked {
+	if blocked, msg := elCall(o, elEmail, elEmailArgs, mcpCallErrorPrefix(elEmail, mcpCallMaybeSent)+"context deadline exceeded", false); blocked {
 		t.Fatalf("summary email refused: %s", msg)
 	}
 	if ok, msgs := elFinish(t, o); ok || len(msgs) == 0 || !strings.Contains(msgs[0], "may already have been delivered") {
@@ -629,7 +636,7 @@ func TestScheduledEmail_FinishWaivesOnlyTheEmailsInDoubt(t *testing.T) {
 	if blocked, msg := o.checkCriticalTool(inflightEmailTool, "", inflightEmailInput); blocked {
 		t.Fatalf("send refused: %q", msg)
 	}
-	o.recordToolResult(inflightEmailTool, inflightEmailInput, mcpCallErrorPrefix(inflightEmailTool, false)+"context deadline exceeded", false)
+	o.recordToolResult(inflightEmailTool, inflightEmailInput, mcpCallErrorPrefix(inflightEmailTool, mcpCallMaybeSent)+"context deadline exceeded", false)
 
 	ok, msgs := o.checkFinishEnforcement()
 	if ok || len(msgs) != 1 {

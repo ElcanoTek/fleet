@@ -1044,11 +1044,13 @@ var emailUnknownOutcomeMarkers = []string{
 //
 //   - a contained panic (isContainedToolPanicText) is unknown: its result
 //     says the call may have committed;
-//   - an MCP call fleet knows never reached its server is a plain failure:
-//     mcpTool says so in the error's prefix ("Error calling <tool> (not
-//     sent): …", from mcp.RequestNotSent), as it does for a call refused
-//     before dispatch ("MCP call not sent: …"). Both are fleet's own words at
-//     the start of the text, which no server output can reach;
+//   - an MCP call fleet knows never reached its server, or that its server
+//     received and refused with an HTTP 4xx, is a plain failure: mcpTool says
+//     so in the error's prefix ("Error calling <tool> (not sent): …" from
+//     mcp.RequestNotSent, "… (refused by the server): …" from
+//     mcp.RequestRefused), as it does for a call refused before dispatch
+//     ("MCP call not sent: …"). These are fleet's own words at the start of
+//     the text, which no server output can reach;
 //   - any other transport error ("Error calling <tool>: …") is unknown: the
 //     request may have reached the server before the failure;
 //   - a provider status_code of 500 or above is unknown: a gateway that timed
@@ -1065,10 +1067,11 @@ func emailOutcomeUnknown(toolName, resultText string) bool {
 	switch {
 	case isContainedToolPanicText(resultText):
 		return true
-	case strings.HasPrefix(resultText, mcpCallErrorPrefix(toolName, true)),
+	case strings.HasPrefix(resultText, mcpCallErrorPrefix(toolName, mcpCallNotSent)),
+		strings.HasPrefix(resultText, mcpCallErrorPrefix(toolName, mcpCallRefused)),
 		strings.HasPrefix(resultText, mcpCallNotSentPrefix):
 		return false
-	case strings.HasPrefix(resultText, mcpCallErrorPrefix(toolName, false)):
+	case strings.HasPrefix(resultText, mcpCallErrorPrefix(toolName, mcpCallMaybeSent)):
 		return true
 	}
 	if code, ok := resultStatusCode(resultText); ok && code >= 500 {

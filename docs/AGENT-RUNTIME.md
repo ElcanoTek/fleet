@@ -1199,8 +1199,15 @@ those fields are missing. The guard keeps three records:
 A failed send that fleet treats as not delivered leaves no record, so an
 identical retry in the same turn goes out. That is:
 
-- a provider that answered with a refusal: a 4xx `status_code`, or an error
-  payload or is-error answer with none of the markers above;
+- a provider that answered with a refusal: a 4xx `status_code` in the
+  result, or an error payload or is-error answer with none of the markers
+  above;
+- an MCP server that received the call and refused it with an HTTP 4xx
+  (422 invalid arguments, 429 rate limited, …): the HTTP transport's typed
+  status marks the error refused, the out-of-process credential broker
+  carries that mark across its boundary, and the model sees
+  `Error calling <tool> (refused by the server): …`. A 5xx from the server
+  stays "may have been sent";
 - an MCP call fleet knows never reached its server. The code that knows marks
   the error where it is raised, and only that mark counts; no error text is
   read for it, since an HTTP server's error body can say anything. Marked

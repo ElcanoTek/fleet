@@ -69,12 +69,12 @@ func TestConnectorStudioEveryoneShareSurvivesFailedAttempt(t *testing.T) {
 				t.Fatalf("first attempt refused at the share check: %v", err)
 			}
 
-			allow, explicit := s.uiSecrets.consumeEveryoneShare(user, conv.ID)
+			allow, explicit, _ := s.uiSecrets.consumeEveryoneShare(user, conv.ID)
 			if !allow || !explicit {
 				t.Fatalf("after a failed attempt the confirmation is (allow=%v, explicit=%v), want it still there for the retry", allow, explicit)
 			}
 			// It is still single use: taking it above used it up.
-			if allow, _ := s.uiSecrets.consumeEveryoneShare(user, conv.ID); allow {
+			if allow, _, _ := s.uiSecrets.consumeEveryoneShare(user, conv.ID); allow {
 				t.Fatal("confirmation reusable after it was taken")
 			}
 		})
@@ -89,24 +89,25 @@ func TestConnectorStudioEveryoneShareNotRevivedAfterExpiry(t *testing.T) {
 
 	var swept uiSecretStash
 	swept.setAllowEveryone(user, conv, true)
-	if allow, _ := swept.consumeEveryoneShare(user, conv); !allow {
+	allow, _, gen := swept.consumeEveryoneShare(user, conv)
+	if !allow {
 		t.Fatal("setup: confirmation not taken")
 	}
 	swept.mu.Lock()
 	delete(swept.buckets, uiSecretKey(user, conv)) // the sweep of an expired bucket
 	swept.mu.Unlock()
-	swept.restoreEveryoneShare(user, conv)
-	if allow, explicit := swept.consumeEveryoneShare(user, conv); allow || explicit {
+	swept.restoreEveryoneShare(user, conv, gen)
+	if allow, explicit, _ := swept.consumeEveryoneShare(user, conv); allow || explicit {
 		t.Fatalf("swept bucket revived: allow=%v explicit=%v", allow, explicit)
 	}
 
 	var expired uiSecretStash
 	expired.setAllowEveryone(user, conv, true)
-	_, _ = expired.consumeEveryoneShare(user, conv)
+	_, _, gen = expired.consumeEveryoneShare(user, conv)
 	expired.mu.Lock()
 	expired.buckets[uiSecretKey(user, conv)].updatedAt = time.Now().Add(-2 * uiSecretTTL)
 	expired.mu.Unlock()
-	expired.restoreEveryoneShare(user, conv)
+	expired.restoreEveryoneShare(user, conv, gen)
 	expired.mu.Lock()
 	b := expired.buckets[uiSecretKey(user, conv)]
 	revived := b != nil && b.allowEveryoneShare
@@ -114,4 +115,41 @@ func TestConnectorStudioEveryoneShareNotRevivedAfterExpiry(t *testing.T) {
 	if revived {
 		t.Fatal("expired bucket re-armed")
 	}
+}
+
+// Giving a confirmation back never overwrites a decision made since it was
+// taken: neither a newer form submission nor a newer confirmation another
+// connector took.
+func TestConnectorStudioEveryoneShareRestoreKeepsNewerDecision(t *testing.T) {
+	t.Parallel()
+	const user, conv = "admin@example.com", "conv-1"
+
+	t.Run("user chose personal while the call ran", func(t *testing.T) {
+		t.Parallel()
+		var st uiSecretStash
+		st.setAllowEveryone(user, conv, true)
+		_, _, gen := st.consumeEveryoneShare(user, conv) // call A takes it
+		st.setAllowEveryone(user, conv, false)           // the user submits personal
+		st.restoreEveryoneShare(user, conv, gen)         // call A fails
+		if allow, explicit, _ := st.consumeEveryoneShare(user, conv); allow || !explicit {
+			t.Fatalf("after the restore: allow=%v explicit=%v, want the user's personal decision", allow, explicit)
+		}
+	})
+
+	t.Run("another connector took a newer confirmation", func(t *testing.T) {
+		t.Parallel()
+		var st uiSecretStash
+		st.setAllowEveryone(user, conv, true)
+		_, _, genA := st.consumeEveryoneShare(user, conv) // call A takes the first
+		st.setAllowEveryone(user, conv, true)             // the user confirms again
+		_, _, genB := st.consumeEveryoneShare(user, conv) // call B takes the second
+		st.restoreEveryoneShare(user, conv, genA)         // call A fails: B's use stands
+		if allow, _, _ := st.consumeEveryoneShare(user, conv); allow {
+			t.Fatal("call A's restore revived a confirmation call B already used")
+		}
+		st.restoreEveryoneShare(user, conv, genB) // call B fails: its own is given back
+		if allow, _, _ := st.consumeEveryoneShare(user, conv); !allow {
+			t.Fatal("call B's own confirmation was not given back")
+		}
+	})
 }

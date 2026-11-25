@@ -127,6 +127,9 @@ func (c *Client) callMCP(ctx context.Context, scope, server, tool string, args m
 		if resp.NotSent {
 			return resp.Text, resp.IsError, mcp.MarkNotSent(errors.New(resp.Err))
 		}
+		if resp.Refused {
+			return resp.Text, resp.IsError, mcp.MarkRefused(errors.New(resp.Err))
+		}
 		return resp.Text, resp.IsError, errors.New(resp.Err)
 	}
 	return resp.Text, resp.IsError, nil
