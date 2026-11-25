@@ -145,13 +145,20 @@ export function ToolsPopover({
     ? tr(n === 1 ? "Applies to {0} connection shown" : "Applies to {0} connections shown", [n])
     : tr(n === 1 ? "Applies to {0} connection" : "Applies to {0} connections", [n]);
 
-  // Keep the active row in view as the arrows move it.
+  // Keep the active row in view as the arrows (or a typed search) move it.
+  // A row the pointer made active is already under the pointer: scrolling it
+  // would move the list under the mouse, and a scroll outside an account menu
+  // closes that menu, so a click on a row's account pill would open the menu
+  // and lose it at once.
+  const byPointer = useRef(false);
   useEffect(() => {
-    if (active < 0) return;
+    const pointer = byPointer.current;
+    byPointer.current = false;
+    if (active < 0 || pointer) return;
     listRef.current
       ?.querySelector<HTMLElement>(`[data-row-index="${active}"]`)
       ?.scrollIntoView?.({ block: "nearest" });
-  }, [active]);
+  }, [active, nav]);
 
   // A dimmed row (needs setup, unavailable) has no switch: activating it
   // opens that connection in the library, where its status is explained.
@@ -296,7 +303,13 @@ export function ToolsPopover({
 
       <div
         ref={listRef}
-        className="flex min-h-0 flex-1 flex-col overflow-y-auto pb-1.5 pl-1.5 pr-1 pt-1 [scrollbar-gutter:stable] [scrollbar-width:thin]"
+        // `relative`: each switch carries a hidden, absolutely positioned
+        // form input (the composer is a form). Contained here, those inputs
+        // scroll with their rows. Contained by the popover instead, they
+        // stayed where the unscrolled list put them, which made the popover
+        // itself scrollable: bringing a row into view could push the search
+        // row out of sight.
+        className="relative flex min-h-0 flex-1 flex-col overflow-y-auto pb-1.5 pl-1.5 pr-1 pt-1 [scrollbar-gutter:stable] [scrollbar-width:thin]"
       >
         {loading && servers.length === 0 ? (
           <div className="px-2.5 py-2 text-[0.75rem] text-[var(--color-text-subtle)]">{tr("Loading…")}</div>
@@ -325,6 +338,7 @@ export function ToolsPopover({
                     ring={idx === active && nav}
                     onHover={() => {
                       if (active !== idx || nav) {
+                        byPointer.current = true;
                         setActive(idx);
                         setNav(false);
                       }

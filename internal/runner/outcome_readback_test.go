@@ -223,11 +223,15 @@ func TestOutcomeUnwrittenAtShutdownIsDeadLetteredNotRerun(t *testing.T) {
 // outageSpanningLeaseExpiry drives the bug's own trigger to its worst case:
 // the run ends, the database goes away before its success write lands, and
 // stays away past the lease (renewals fail with it, so the lease runs out).
-// It returns once the run is retrying with an expired lease, and the claim
-// token the row is leased by.
-func outageSpanningLeaseExpiry(t *testing.T, store *storage.Storage, pool *Pool, taskID uuid.UUID) string {
+// It starts the pool itself, after the write failure is in place: a pool
+// already running can claim the task, end the run and land its success write
+// before the failure is installed, and then nothing is left to retry.
+// It returns once the run is retrying with an expired lease: the claim token
+// the row is leased by, and the pool's stop.
+func outageSpanningLeaseExpiry(t *testing.T, store *storage.Storage, pool *Pool, taskID uuid.UUID) (token string, stop func()) {
 	t.Helper()
 	attempts := failStatusWrites(t, store, taskID, 1<<30, "57P01", models.TaskStatusSuccess)
+	stop = runPool(t, pool)
 	waitFor(t, 5*time.Second, func() bool { return attempts() >= 3 })
 	row, err := store.GetTask(taskID)
 	if err != nil || row.Status != models.TaskStatusRunning || row.LeaseOwner == nil {
@@ -240,7 +244,7 @@ func outageSpanningLeaseExpiry(t *testing.T, store *storage.Storage, pool *Pool,
 		`UPDATE tasks SET lease_expires_at = now() - interval '1 minute' WHERE id = $1`, taskID); err != nil {
 		t.Fatalf("expire lease: %v", err)
 	}
-	return *row.LeaseOwner
+	return *row.LeaseOwner, stop
 }
 
 // When the database comes back after an outage longer than the lease, this
@@ -262,9 +266,8 @@ func TestOutageSpanningLeaseExpiryIsLeftToTheRunningRun(t *testing.T) {
 		}}, nil
 	}), Config{Notifier: notif})
 	store.SetLeaseHolder(pool.HeldLeaseTokens) // as cmd/fleet wires the scheduler's storage
-	stop := runPool(t, pool)
 
-	token := outageSpanningLeaseExpiry(t, store, pool, task.ID)
+	token, stop := outageSpanningLeaseExpiry(t, store, pool, task.ID)
 
 	// The database answers again, and the sweep gets there first.
 	if n, err := store.RecoverExpiredLeases(); err != nil || n != 0 {
@@ -318,9 +321,8 @@ func TestOutageSpanningLeaseExpiryRecoveredElsewhereIsNotRerun(t *testing.T) {
 		return &models.LogSession{ID: "s-" + tk.ID.String()}, nil
 	}), Config{Notifier: notif})
 	store.SetLeaseHolder(pool.HeldLeaseTokens)
-	stop := runPool(t, pool)
 
-	outageSpanningLeaseExpiry(t, store, pool, task.ID)
+	_, stop := outageSpanningLeaseExpiry(t, store, pool, task.ID)
 
 	elsewhere := storage.New() // a second server on the same database
 	elsewhere.SetDatabase(store.DB())
