@@ -279,18 +279,10 @@ func TestUserSkillsEnabledForAll(t *testing.T) {
 		t.Fatalf("workspace listing = %+v", ws)
 	}
 
-	// A second owner's skill of the same name is listed too; the catalog's
-	// one-per-name pick prefers the one that is on for everyone even though
-	// the other is newer.
+	// A second owner's skill of the same name is listed too, newest first.
 	other, err := s.CreateUserSkillWithVisibility(ctx, second, "deal-check", "another deal check", "Other.", UserSkillVisibilityWorkspace)
 	if err != nil {
 		t.Fatalf("create second: %v", err)
-	}
-	if _, err := s.db.ExecContext(ctx, `UPDATE user_skills SET updated_at = updated_at + 100 WHERE id = $1`, other.ID); err != nil {
-		t.Fatal(err)
-	}
-	if ws, _ := s.ListWorkspaceSharedUserSkills(ctx); len(ws) != 1 || ws[0].ID != shared.ID {
-		t.Fatalf("workspace listing with a newer plain share = %+v, want the one on for everyone", ws)
 	}
 	if _, err := s.SetUserSkillEnabledForAll(ctx, second, other.ID, true); err != nil {
 		t.Fatalf("second switch on: %v", err)
@@ -304,6 +296,18 @@ func TestUserSkillsEnabledForAll(t *testing.T) {
 	if err := s.DeleteUserSkill(ctx, second, other.ID); err != nil {
 		t.Fatal(err)
 	}
+
+	assertEnabledForAllFollowsTheRow(t, s, admin, shared.ID, private.ID)
+}
+
+// assertEnabledForAllFollowsTheRow is the second half of
+// TestUserSkillsEnabledForAll: what later writes to a row that is on for
+// everyone do to the flag.
+func assertEnabledForAllFollowsTheRow(t *testing.T, s *Store, admin, sharedID, privateID string) {
+	t.Helper()
+	ctx := context.Background()
+	shared := &UserSkill{ID: sharedID}
+	private := &UserSkill{ID: privateID}
 
 	// An edit that does not touch visibility keeps it on.
 	edited, err := s.UpdateUserSkill(ctx, admin, shared.ID, "deal-check", "verify a deal sheet", "Check the totals twice.", UserSkillStatusActive)

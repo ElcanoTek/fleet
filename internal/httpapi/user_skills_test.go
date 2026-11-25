@@ -99,6 +99,16 @@ func (s *skillsFakeStore) ListEnabledForAllUserSkills(_ context.Context) ([]stor
 	return out, nil
 }
 
+func (s *skillsFakeStore) GetUserSkill(_ context.Context, email, id string) (*store.UserSkill, error) {
+	for i := range s.skills {
+		if s.skills[i].ID == id && (s.skills[i].UserEmail == "" || s.skills[i].UserEmail == email) {
+			cp := s.skills[i]
+			return &cp, nil
+		}
+	}
+	return nil, store.ErrUserSkillNotFound
+}
+
 func (s *skillsFakeStore) SetUserSkillEnabledForAll(_ context.Context, _, id string, on bool) (*store.UserSkill, error) {
 	for i := range s.skills {
 		if s.skills[i].ID != id {
@@ -357,45 +367,77 @@ func TestUserSkillOverridesBundleSkill(t *testing.T) {
 	}
 }
 
-// A workspace-shared skill an admin turned on for everyone takes part in every
-// user's chat turns from the admin's row, with no "Add to my skills" step:
-// only an admin can switch it on, a teammate's own active skill of the same
-// name still wins, an edit by the owner reaches everyone, and it stops the
-// moment the owner is no longer an admin.
-func TestUserSkillEnabledForAll(t *testing.T) {
+// forAllFixture is the world the "on for everyone" tests share: an admin with
+// a workspace-shared skill and a private one, a member with a shared skill,
+// and a teammate with none.
+type forAllFixture struct {
+	s    *Server
+	fs   *skillsFakeStore
+	base *fakeChatStore
+}
+
+const forAllAdmin, forAllMember, forAllTeammate = "admin@x.com", "member@x.com", "teammate@x.com"
+
+func newForAllFixture(t *testing.T) *forAllFixture {
+	t.Helper()
 	t.Setenv("FLEET_WORKSPACE_ROOT", t.TempDir())
-	const admin, member, teammate = "admin@x.com", "member@x.com", "teammate@x.com"
 	base := newFakeChatStore()
 	base.users = map[string]*store.User{
-		admin:    {Email: admin, Role: store.RoleAdmin},
-		member:   {Email: member, Role: store.RoleMember},
-		teammate: {Email: teammate, Role: store.RoleMember},
+		forAllAdmin:    {Email: forAllAdmin, Role: store.RoleAdmin},
+		forAllMember:   {Email: forAllMember, Role: store.RoleMember},
+		forAllTeammate: {Email: forAllTeammate, Role: store.RoleMember},
 	}
 	fs := &skillsFakeStore{fakeChatStore: base, skills: []store.UserSkill{
-		{ID: "team-1", UserEmail: admin, Name: "deal-check", Description: "verify a deal sheet", Body: "Check the totals.", Status: store.UserSkillStatusActive, Visibility: store.UserSkillVisibilityWorkspace},
-		{ID: "mem-1", UserEmail: member, Name: "member-tips", Description: "a member's shared skill", Body: "Tips.", Status: store.UserSkillStatusActive, Visibility: store.UserSkillVisibilityWorkspace},
-		{ID: "priv-1", UserEmail: admin, Name: "private-notes", Description: "an admin's private skill", Body: "Notes.", Status: store.UserSkillStatusActive, Visibility: store.UserSkillVisibilityPrivate},
+		{ID: "team-1", UserEmail: forAllAdmin, Name: "deal-check", Description: "verify a deal sheet", Body: "Check the totals.", Status: store.UserSkillStatusActive, Visibility: store.UserSkillVisibilityWorkspace},
+		{ID: "mem-1", UserEmail: forAllMember, Name: "member-tips", Description: "a member's shared skill", Body: "Tips.", Status: store.UserSkillStatusActive, Visibility: store.UserSkillVisibilityWorkspace},
+		{ID: "priv-1", UserEmail: forAllAdmin, Name: "private-notes", Description: "an admin's private skill", Body: "Notes.", Status: store.UserSkillStatusActive, Visibility: store.UserSkillVisibilityPrivate},
 	}}
-	s := &Server{store: fs}
+	return &forAllFixture{s: &Server{store: fs}, fs: fs, base: base}
+}
+
+func (f *forAllFixture) put(t *testing.T, email, role, id, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	r := httptest.NewRequest(http.MethodPut, "/user-skills/"+id, strings.NewReader(body))
+	r = r.WithContext(asUserRole(r.Context(), email, role))
+	w := httptest.NewRecorder()
+	f.s.userSkillByID(w, r)
+	return w
+}
+
+// switchOn turns the admin's shared skill on for everyone.
+func (f *forAllFixture) switchOn(t *testing.T) {
+	t.Helper()
+	w := f.put(t, forAllAdmin, store.RoleAdmin, "team-1", `{"name":"deal-check","description":"verify a deal sheet","body":"Check the totals.","enabled_for_all":true}`)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"enabled_for_all":true`) {
+		t.Fatalf("admin enable for all = %d %s", w.Code, w.Body.String())
+	}
+}
+
+func skillEntryNames(entries []agent.UserSkillPromptEntry) string {
+	out := make([]string, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, e.Name)
+	}
+	return strings.Join(out, ",")
+}
+
+// Switching a skill on for everyone is refused unless an admin asks for a row
+// that ends up active and workspace-shared, and a refused request saves
+// nothing it carried.
+func TestUserSkillEnabledForAllRefusals(t *testing.T) {
+	f := newForAllFixture(t)
+	s, fs := f.s, f.fs
+	const admin, member, teammate = forAllAdmin, forAllMember, forAllTeammate
 	put := func(email, role, id, body string) *httptest.ResponseRecorder {
 		t.Helper()
-		r := httptest.NewRequest(http.MethodPut, "/user-skills/"+id, strings.NewReader(body))
-		r = r.WithContext(asUserRole(r.Context(), email, role))
-		w := httptest.NewRecorder()
-		s.userSkillByID(w, r)
-		return w
+		return f.put(t, email, role, id, body)
 	}
-	names := func(entries []agent.UserSkillPromptEntry) string {
-		var out []string
-		for _, e := range entries {
-			out = append(out, e.Name)
-		}
-		return strings.Join(out, ",")
-	}
-
+	names := skillEntryNames
+	_, _, _, _, _ = fs, put, names, admin, member
+	var w *httptest.ResponseRecorder
 	// A member cannot switch it on, and the refused request writes nothing
 	// (the body change it carried is not applied either).
-	w := put(member, store.RoleMember, "mem-1", `{"name":"member-tips","description":"a member's shared skill","body":"Changed.","enabled_for_all":true}`)
+	w = put(member, store.RoleMember, "mem-1", `{"name":"member-tips","description":"a member's shared skill","body":"Changed.","enabled_for_all":true}`)
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("member enable for all = %d %s, want 403", w.Code, w.Body.String())
 	}
@@ -406,18 +448,36 @@ func TestUserSkillEnabledForAll(t *testing.T) {
 		t.Fatalf("teammate roster before anything is on = %q, want empty", got)
 	}
 
-	// A private skill cannot be turned on for everyone, even by an admin.
-	w = put(admin, store.RoleAdmin, "priv-1", `{"name":"private-notes","description":"an admin's private skill","body":"Notes.","enabled_for_all":true}`)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("private skill enable for all = %d %s, want 400", w.Code, w.Body.String())
+	// A private skill cannot be turned on for everyone, even by an admin, and
+	// the refused request saves nothing: not the body it carried, and not the
+	// unshare a request for the shared skill carried.
+	w = put(admin, store.RoleAdmin, "priv-1", `{"name":"private-notes","description":"an admin's private skill","body":"Changed.","enabled_for_all":true}`)
+	if w.Code != http.StatusBadRequest || fs.skills[2].Body != "Notes." {
+		t.Fatalf("private skill enable for all = %d %s (row %+v), want 400 and no change", w.Code, w.Body.String(), fs.skills[2])
 	}
+	w = put(admin, store.RoleAdmin, "team-1", `{"name":"deal-check","description":"verify a deal sheet","body":"Check the totals.","visibility":"private","enabled_for_all":true}`)
+	if w.Code != http.StatusBadRequest || fs.skills[0].Visibility != store.UserSkillVisibilityWorkspace {
+		t.Fatalf("unshare + enable for all = %d %s (row %+v), want 400 and no change", w.Code, w.Body.String(), fs.skills[0])
+	}
+	w = put(admin, store.RoleAdmin, "team-1", `{"name":"deal-check","description":"verify a deal sheet","body":"Check the totals.","status":"disabled","enabled_for_all":true}`)
+	if w.Code != http.StatusBadRequest || fs.skills[0].Status != store.UserSkillStatusActive {
+		t.Fatalf("disable + enable for all = %d %s (row %+v), want 400 and no change", w.Code, w.Body.String(), fs.skills[0])
+	}
+}
 
-	// The admin switches the shared skill on: the response says so, and the
-	// teammate's next turn has it with no opt-in.
-	w = put(admin, store.RoleAdmin, "team-1", `{"name":"deal-check","description":"verify a deal sheet","body":"Check the totals.","enabled_for_all":true}`)
-	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"enabled_for_all":true`) {
-		t.Fatalf("admin enable for all = %d %s", w.Code, w.Body.String())
+// A workspace-shared skill an admin turned on for everyone takes part in every
+// user's chat turns from the admin's row, with no "Add to my skills" step.
+func TestUserSkillEnabledForAll(t *testing.T) {
+	f := newForAllFixture(t)
+	s, fs := f.s, f.fs
+	const admin, member, teammate = forAllAdmin, forAllMember, forAllTeammate
+	put := func(email, role, id, body string) *httptest.ResponseRecorder {
+		t.Helper()
+		return f.put(t, email, role, id, body)
 	}
+	names := skillEntryNames
+	_, _, _, _, _ = fs, put, names, admin, member
+	f.switchOn(t)
 	entries := s.materializeUserSkills(context.Background(), teammate, "conv-all-1")
 	if names(entries) != "deal-check" || entries[0].Path != "user-skills/deal-check/SKILL.md" {
 		t.Fatalf("teammate roster = %+v, want deal-check", entries)
@@ -451,6 +511,45 @@ func TestUserSkillEnabledForAll(t *testing.T) {
 	if !marked["deal-check"] || marked["member-tips"] {
 		t.Fatalf("shared_skills enabled_for_all = %v, want only deal-check", marked)
 	}
+}
+
+// What happens after a skill is on for everyone: the library shows the row
+// chats load, the owner's edit reaches everyone, a teammate's own skill of the
+// same name wins, and it stops the moment the owner is no longer an admin.
+func TestUserSkillEnabledForAllLater(t *testing.T) {
+	f := newForAllFixture(t)
+	s, fs := f.s, f.fs
+	const admin, member, teammate = forAllAdmin, forAllMember, forAllTeammate
+	put := func(email, role, id, body string) *httptest.ResponseRecorder {
+		t.Helper()
+		return f.put(t, email, role, id, body)
+	}
+	names := skillEntryNames
+	_, _, _, _, _ = fs, put, names, admin, member
+	base := f.base
+	f.switchOn(t)
+	s.materializeUserSkills(context.Background(), teammate, "conv-all-1")
+	wsDir, _ := tools.EnsureWorkspaceDir("conv-all-1")
+	var w *httptest.ResponseRecorder
+	var rec *httptest.ResponseRecorder
+	var r *http.Request
+	// A teammate shares a newer skill under the same name: the library still
+	// shows, and serves, the one that is on for everyone, which is the one
+	// chats load.
+	fs.skills = append(fs.skills, store.UserSkill{ID: "mem-2", UserEmail: member, Name: "deal-check", Description: "a member's deal check", Body: "Member version.", Status: store.UserSkillStatusActive, Visibility: store.UserSkillVisibilityWorkspace})
+	catalog, forAll := s.sharedSkillCatalog(context.Background())
+	for _, sk := range catalog {
+		if sk.Name == "deal-check" && (sk.ID != "team-1" || !forAll[sk.ID]) {
+			t.Fatalf("catalog row for deal-check = %+v (forAll %v), want the one on for everyone", sk, forAll)
+		}
+	}
+	rec = httptest.NewRecorder()
+	r = httptest.NewRequest(http.MethodGet, "/skills/deal-check", nil)
+	s.skillByName(rec, r.WithContext(asUserRole(r.Context(), teammate, store.RoleMember)))
+	if !strings.Contains(rec.Body.String(), "Check the totals.") || strings.Contains(rec.Body.String(), "Member version.") {
+		t.Fatalf("GET /skills/deal-check = %s, want the text chats load", rec.Body.String())
+	}
+	fs.skills = fs.skills[:len(fs.skills)-1]
 
 	// The owner edits the skill without naming the flag: it stays on, and the
 	// teammate's next turn gets the new text.

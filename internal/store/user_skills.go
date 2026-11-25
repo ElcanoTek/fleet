@@ -377,15 +377,15 @@ func (s *Store) ListUserSkills(ctx context.Context, userEmail string) ([]UserSki
 const MaxWorkspaceSharedSkills = 100
 
 // ListWorkspaceSharedUserSkills returns active workspace-shared skills across
-// all users in the deployment, deduplicated by name (one that is on for
-// everyone wins, then the most recently updated), ordered by name. Capacity is enforced at write time by
+// all users in the deployment, deduplicated by name (most recently updated
+// wins), ordered by name. Capacity is enforced at write time by
 // checkWorkspaceShareCapacity (MaxWorkspaceSharedSkills).
 func (s *Store) ListWorkspaceSharedUserSkills(ctx context.Context) ([]UserSkill, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT DISTINCT ON (name) id, user_email, name, description, body, status, visibility, enabled_for_all, created_at, updated_at
 		FROM user_skills
 		WHERE status = $1 AND visibility = $2
-		ORDER BY name, enabled_for_all DESC, updated_at DESC, id ASC`,
+		ORDER BY name, updated_at DESC, id ASC`,
 		UserSkillStatusActive, UserSkillVisibilityWorkspace)
 	if err != nil {
 		return nil, err

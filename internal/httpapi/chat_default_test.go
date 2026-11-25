@@ -267,6 +267,10 @@ func (s *fakeChatStore) ListEnabledForAllUserSkills(_ context.Context) ([]store.
 	return nil, nil
 }
 
+func (s *fakeChatStore) GetUserSkill(_ context.Context, _, _ string) (*store.UserSkill, error) {
+	return nil, store.ErrUserSkillNotFound
+}
+
 func (s *fakeChatStore) SetUserSkillEnabledForAll(_ context.Context, _, _ string, _ bool) (*store.UserSkill, error) {
 	return nil, store.ErrUserSkillNotFound
 }

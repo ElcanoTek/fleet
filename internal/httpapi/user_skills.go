@@ -98,9 +98,29 @@ func (s *Server) userSkillByID(w http.ResponseWriter, r *http.Request) {
 		// turns, so only an admin may switch it on. Refused before anything is
 		// written, so a refused request changes nothing. Switching it off is
 		// the owner's to do whatever their role is now.
-		if req.EnabledForAll != nil && *req.EnabledForAll && !s.callerIsAdmin(r.Context()) {
-			http.Error(w, "forbidden — only an admin can turn a skill on for everyone", http.StatusForbidden)
-			return
+		if req.EnabledForAll != nil && *req.EnabledForAll {
+			if !s.callerIsAdmin(r.Context()) {
+				http.Error(w, "forbidden — only an admin can turn a skill on for everyone", http.StatusForbidden)
+				return
+			}
+			// The row this request leaves behind has to be active and
+			// workspace-shared, and that is checked here, before the update
+			// below: the store checks it again when it sets the flag, but by
+			// then the rest of the request would already be saved, and a
+			// request answered 400 must not have changed the skill.
+			vis := strings.TrimSpace(req.Visibility)
+			if vis == "" {
+				existing, gerr := s.store.GetUserSkill(r.Context(), user, id)
+				if gerr != nil {
+					s.userSkillError(w, gerr)
+					return
+				}
+				vis = existing.Visibility
+			}
+			if req.Status != store.UserSkillStatusActive || vis != store.UserSkillVisibilityWorkspace {
+				http.Error(w, "invalid skill: only an active skill shared with the workspace can be turned on for everyone", http.StatusBadRequest)
+				return
+			}
 		}
 		var (
 			sk  *store.UserSkill

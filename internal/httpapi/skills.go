@@ -79,20 +79,9 @@ func (s *Server) listSkills(w http.ResponseWriter, r *http.Request) {
 	}
 	skills := s.bundleSkills(r.Context())
 	sharedByName := map[string]store.UserSkill{}
-	var sharedList []store.UserSkill
-	if s.store != nil {
-		if shared, err := s.store.ListWorkspaceSharedUserSkills(r.Context()); err == nil {
-			sharedList = shared
-			for _, sk := range shared {
-				sharedByName[sk.Name] = sk
-			}
-		}
-	}
-	forAll := map[string]bool{}
-	if s.store != nil {
-		for _, sk := range s.enabledForAllSkills(r.Context()) {
-			forAll[sk.ID] = true
-		}
+	sharedList, forAll := s.sharedSkillCatalog(r.Context())
+	for _, sk := range sharedList {
+		sharedByName[sk.Name] = sk
 	}
 	bundleNames := make(map[string]bool, len(skills))
 	entries := make([]skillEntry, 0, len(skills))
@@ -146,6 +135,35 @@ func (s *Server) listSkills(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, r, skillsResponse{Skills: entries, Shared: sharedEntries, UserSkills: userEntries})
 }
 
+// sharedSkillCatalog returns the workspace-shared skills the library shows, one
+// per name, and the ids among them that are on for everyone. The store picks
+// the most recently updated row of a name; where a skill of that name is on
+// for everyone, that row replaces the pick, so the text a person reads in the
+// library is the text their chats actually load, even when another teammate
+// shared a newer skill under the same name. A store error yields an empty
+// catalog, as before.
+func (s *Server) sharedSkillCatalog(ctx context.Context) (shared []store.UserSkill, forAll map[string]bool) {
+	forAll = map[string]bool{}
+	if s.store == nil {
+		return nil, forAll
+	}
+	shared, err := s.store.ListWorkspaceSharedUserSkills(ctx)
+	if err != nil {
+		return nil, forAll
+	}
+	effective := map[string]store.UserSkill{}
+	for _, sk := range s.enabledForAllSkills(ctx) {
+		effective[sk.Name] = sk
+		forAll[sk.ID] = true
+	}
+	for i := range shared {
+		if sk, ok := effective[shared[i].Name]; ok {
+			shared[i] = sk
+		}
+	}
+	return shared, forAll
+}
+
 // skillOrigin reports where a merged-roster skill came from — the bundle's
 // own skills/, an Agent Plugin, or the built-in pack — with the same
 // precedence the merged tree was built with (clientconfig.Bundle.SkillOrigin).
@@ -165,24 +183,21 @@ func (s *Server) skillByName(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := strings.Trim(strings.TrimPrefix(r.URL.Path, "/skills/"), "/")
-	if s.store != nil {
-		if shared, err := s.store.ListWorkspaceSharedUserSkills(r.Context()); err == nil {
-			for _, sk := range shared {
-				if sk.Name != name {
-					continue
-				}
-				resp := map[string]any{
-					"name":        sk.Name,
-					"description": sk.Description,
-					"source":      "workspace",
-					"shared_by":   sk.SharedBy,
-					"body":        sk.Body,
-					"content":     store.RenderUserSkillMarkdown(&sk),
-				}
-				writeJSON(w, r, resp)
-				return
-			}
+	shared, _ := s.sharedSkillCatalog(r.Context())
+	for _, sk := range shared {
+		if sk.Name != name {
+			continue
 		}
+		resp := map[string]any{
+			"name":        sk.Name,
+			"description": sk.Description,
+			"source":      "workspace",
+			"shared_by":   sk.SharedBy,
+			"body":        sk.Body,
+			"content":     store.RenderUserSkillMarkdown(&sk),
+		}
+		writeJSON(w, r, resp)
+		return
 	}
 	for _, sk := range s.bundleSkills(r.Context()) {
 		if sk.Name != name {
