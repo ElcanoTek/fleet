@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/tools"
@@ -82,6 +83,33 @@ func (s *skillsFakeStore) UpdateUserSkillWithVisibility(_ context.Context, _, id
 			cp := s.skills[i]
 			return &cp, nil
 		}
+	}
+	return nil, store.ErrUserSkillNotFound
+}
+
+func (s *skillsFakeStore) ListEnabledForAllUserSkills(_ context.Context) ([]store.UserSkill, error) {
+	var out []store.UserSkill
+	for _, sk := range s.skills {
+		if sk.Status == store.UserSkillStatusActive && sk.Visibility == store.UserSkillVisibilityWorkspace && sk.EnabledForAll {
+			cp := sk
+			cp.SharedBy = sk.UserEmail
+			out = append(out, cp)
+		}
+	}
+	return out, nil
+}
+
+func (s *skillsFakeStore) SetUserSkillEnabledForAll(_ context.Context, _, id string, on bool) (*store.UserSkill, error) {
+	for i := range s.skills {
+		if s.skills[i].ID != id {
+			continue
+		}
+		if on && (s.skills[i].Status != store.UserSkillStatusActive || s.skills[i].Visibility != store.UserSkillVisibilityWorkspace) {
+			return nil, store.ErrUserSkillInvalid
+		}
+		s.skills[i].EnabledForAll = on
+		cp := s.skills[i]
+		return &cp, nil
 	}
 	return nil, store.ErrUserSkillNotFound
 }
@@ -326,5 +354,139 @@ func TestUserSkillOverridesBundleSkill(t *testing.T) {
 	w = userSkillsReq(t, s, s.skillByName, http.MethodGet, "/skills/campaign-optimization-log", "")
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "1. Read Fast.io protocol.") {
 		t.Fatalf("GET /skills/campaign-optimization-log did not serve workspace override: %d %s", w.Code, w.Body.String())
+	}
+}
+
+// A workspace-shared skill an admin turned on for everyone takes part in every
+// user's chat turns from the admin's row, with no "Add to my skills" step:
+// only an admin can switch it on, a teammate's own active skill of the same
+// name still wins, an edit by the owner reaches everyone, and it stops the
+// moment the owner is no longer an admin.
+func TestUserSkillEnabledForAll(t *testing.T) {
+	t.Setenv("FLEET_WORKSPACE_ROOT", t.TempDir())
+	const admin, member, teammate = "admin@x.com", "member@x.com", "teammate@x.com"
+	base := newFakeChatStore()
+	base.users = map[string]*store.User{
+		admin:    {Email: admin, Role: store.RoleAdmin},
+		member:   {Email: member, Role: store.RoleMember},
+		teammate: {Email: teammate, Role: store.RoleMember},
+	}
+	fs := &skillsFakeStore{fakeChatStore: base, skills: []store.UserSkill{
+		{ID: "team-1", UserEmail: admin, Name: "deal-check", Description: "verify a deal sheet", Body: "Check the totals.", Status: store.UserSkillStatusActive, Visibility: store.UserSkillVisibilityWorkspace},
+		{ID: "mem-1", UserEmail: member, Name: "member-tips", Description: "a member's shared skill", Body: "Tips.", Status: store.UserSkillStatusActive, Visibility: store.UserSkillVisibilityWorkspace},
+		{ID: "priv-1", UserEmail: admin, Name: "private-notes", Description: "an admin's private skill", Body: "Notes.", Status: store.UserSkillStatusActive, Visibility: store.UserSkillVisibilityPrivate},
+	}}
+	s := &Server{store: fs}
+	put := func(email, role, id, body string) *httptest.ResponseRecorder {
+		t.Helper()
+		r := httptest.NewRequest(http.MethodPut, "/user-skills/"+id, strings.NewReader(body))
+		r = r.WithContext(asUserRole(r.Context(), email, role))
+		w := httptest.NewRecorder()
+		s.userSkillByID(w, r)
+		return w
+	}
+	names := func(entries []agent.UserSkillPromptEntry) string {
+		var out []string
+		for _, e := range entries {
+			out = append(out, e.Name)
+		}
+		return strings.Join(out, ",")
+	}
+
+	// A member cannot switch it on, and the refused request writes nothing
+	// (the body change it carried is not applied either).
+	w := put(member, store.RoleMember, "mem-1", `{"name":"member-tips","description":"a member's shared skill","body":"Changed.","enabled_for_all":true}`)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("member enable for all = %d %s, want 403", w.Code, w.Body.String())
+	}
+	if fs.skills[1].EnabledForAll || fs.skills[1].Body != "Tips." {
+		t.Fatalf("refused request changed the row: %+v", fs.skills[1])
+	}
+	if got := names(s.materializeUserSkills(context.Background(), teammate, "conv-all-1")); got != "" {
+		t.Fatalf("teammate roster before anything is on = %q, want empty", got)
+	}
+
+	// A private skill cannot be turned on for everyone, even by an admin.
+	w = put(admin, store.RoleAdmin, "priv-1", `{"name":"private-notes","description":"an admin's private skill","body":"Notes.","enabled_for_all":true}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("private skill enable for all = %d %s, want 400", w.Code, w.Body.String())
+	}
+
+	// The admin switches the shared skill on: the response says so, and the
+	// teammate's next turn has it with no opt-in.
+	w = put(admin, store.RoleAdmin, "team-1", `{"name":"deal-check","description":"verify a deal sheet","body":"Check the totals.","enabled_for_all":true}`)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"enabled_for_all":true`) {
+		t.Fatalf("admin enable for all = %d %s", w.Code, w.Body.String())
+	}
+	entries := s.materializeUserSkills(context.Background(), teammate, "conv-all-1")
+	if names(entries) != "deal-check" || entries[0].Path != "user-skills/deal-check/SKILL.md" {
+		t.Fatalf("teammate roster = %+v, want deal-check", entries)
+	}
+	wsDir, _ := tools.EnsureWorkspaceDir("conv-all-1")
+	md, err := os.ReadFile(filepath.Join(wsDir, "user-skills", "deal-check", "SKILL.md"))
+	if err != nil || !strings.Contains(string(md), "Check the totals.") {
+		t.Fatalf("materialized SKILL.md = %q, %v", md, err)
+	}
+	// The owner's own roster lists it once, not twice.
+	if got := names(s.materializeUserSkills(context.Background(), admin, "conv-all-admin")); got != "deal-check,private-notes" {
+		t.Fatalf("admin roster = %q", got)
+	}
+	// "/deal-check" works for the teammate, worded as a workspace skill.
+	if got := s.applySkillInvocation(context.Background(), teammate, "/deal-check acme", "/deal-check acme"); !strings.Contains(got, "user-skills/deal-check/SKILL.md") || !strings.Contains(got, "the workspace skill") {
+		t.Fatalf("teammate invocation = %q", got)
+	}
+	// GET /skills marks it, so the library shows it as on instead of offering "Add to my skills".
+	r := httptest.NewRequest(http.MethodGet, "/skills", nil)
+	r = r.WithContext(asUserRole(r.Context(), teammate, store.RoleMember))
+	rec := httptest.NewRecorder()
+	s.listSkills(rec, r)
+	var listed skillsResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &listed); err != nil {
+		t.Fatal(err)
+	}
+	marked := map[string]bool{}
+	for _, e := range listed.Shared {
+		marked[e.Name] = e.EnabledForAll
+	}
+	if !marked["deal-check"] || marked["member-tips"] {
+		t.Fatalf("shared_skills enabled_for_all = %v, want only deal-check", marked)
+	}
+
+	// The owner edits the skill without naming the flag: it stays on, and the
+	// teammate's next turn gets the new text.
+	w = put(admin, store.RoleAdmin, "team-1", `{"name":"deal-check","description":"verify a deal sheet","body":"Check the totals twice."}`)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"enabled_for_all":true`) {
+		t.Fatalf("admin edit = %d %s", w.Code, w.Body.String())
+	}
+	s.materializeUserSkills(context.Background(), teammate, "conv-all-1")
+	if md, _ := os.ReadFile(filepath.Join(wsDir, "user-skills", "deal-check", "SKILL.md")); !strings.Contains(string(md), "Check the totals twice.") {
+		t.Fatalf("teammate did not get the owner's edit: %q", md)
+	}
+
+	// A teammate's own active skill of the same name wins over it.
+	fs.skills = append(fs.skills, store.UserSkill{ID: "own-1", UserEmail: teammate, Name: "deal-check", Description: "my own version", Body: "Mine.", Status: store.UserSkillStatusActive, Visibility: store.UserSkillVisibilityPrivate})
+	s.materializeUserSkills(context.Background(), teammate, "conv-all-1")
+	if md, _ := os.ReadFile(filepath.Join(wsDir, "user-skills", "deal-check", "SKILL.md")); !strings.Contains(string(md), "Mine.") {
+		t.Fatalf("teammate's own skill did not win: %q", md)
+	}
+	fs.skills = fs.skills[:len(fs.skills)-1]
+
+	// The owner stops being an admin: the flag is still on the row, and the
+	// skill is out of the teammate's turns and no longer marked in GET /skills.
+	base.mu.Lock()
+	base.users[admin] = &store.User{Email: admin, Role: store.RoleMember}
+	base.mu.Unlock()
+	if got := names(s.materializeUserSkills(context.Background(), teammate, "conv-all-1")); got != "" {
+		t.Fatalf("teammate roster after the owner lost admin = %q, want empty", got)
+	}
+	if _, err := os.Stat(filepath.Join(wsDir, "user-skills", "deal-check")); !os.IsNotExist(err) {
+		t.Fatalf("stale materialization left behind: %v", err)
+	}
+	// ...and as a member they can no longer switch it on, but can switch it off.
+	if w = put(admin, store.RoleMember, "team-1", `{"name":"deal-check","description":"verify a deal sheet","body":"Check the totals twice.","enabled_for_all":true}`); w.Code != http.StatusForbidden {
+		t.Fatalf("former admin enable for all = %d, want 403", w.Code)
+	}
+	if w = put(admin, store.RoleMember, "team-1", `{"name":"deal-check","description":"verify a deal sheet","body":"Check the totals twice.","enabled_for_all":false}`); w.Code != http.StatusOK || fs.skills[0].EnabledForAll {
+		t.Fatalf("former admin switch off = %d %s (row %+v)", w.Code, w.Body.String(), fs.skills[0])
 	}
 }

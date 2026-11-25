@@ -263,6 +263,14 @@ func (s *fakeChatStore) ListWorkspaceSharedUserSkills(_ context.Context) ([]stor
 	return nil, nil
 }
 
+func (s *fakeChatStore) ListEnabledForAllUserSkills(_ context.Context) ([]store.UserSkill, error) {
+	return nil, nil
+}
+
+func (s *fakeChatStore) SetUserSkillEnabledForAll(_ context.Context, _, _ string, _ bool) (*store.UserSkill, error) {
+	return nil, store.ErrUserSkillNotFound
+}
+
 // User personas (docs/USER-PERSONAS.md): the fake has none — GET /personas
 // lists them alongside the bundle roster.
 func (s *fakeChatStore) ListUserPersonas(_ context.Context, _ string) ([]store.UserPersona, error) {

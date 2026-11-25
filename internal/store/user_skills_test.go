@@ -231,3 +231,115 @@ func TestUserSkillsWorkspaceSharing(t *testing.T) {
 		t.Fatalf("visibility after unshare = %q", unshared.Visibility)
 	}
 }
+
+// enabled_for_all: only an active workspace-shared skill can be switched on,
+// the listing returns exactly those rows (across owners, newest first within a
+// name), an ordinary edit keeps the flag, and it is cleared the moment the
+// row stops being workspace-shared.
+func TestUserSkillsEnabledForAll(t *testing.T) {
+	t.Parallel()
+
+	s := newTestStore(t)
+	seedAccount(t, s, "admin@elcano.com", "second@elcano.com")
+	ctx := context.Background()
+	const admin = "admin@elcano.com"
+	const second = "second@elcano.com"
+
+	private, err := s.CreateUserSkill(ctx, admin, "private-notes", "an admin's private skill", "Notes.")
+	if err != nil {
+		t.Fatalf("create private: %v", err)
+	}
+	if _, err := s.SetUserSkillEnabledForAll(ctx, admin, private.ID, true); !errors.Is(err, ErrUserSkillInvalid) {
+		t.Fatalf("private skill on for everyone: err = %v, want ErrUserSkillInvalid", err)
+	}
+	if _, err := s.SetUserSkillEnabledForAll(ctx, second, private.ID, true); !errors.Is(err, ErrUserSkillNotFound) {
+		t.Fatalf("another user's skill: err = %v, want ErrUserSkillNotFound", err)
+	}
+
+	shared, err := s.CreateUserSkillWithVisibility(ctx, admin, "deal-check", "verify a deal sheet", "Check the totals.", UserSkillVisibilityWorkspace)
+	if err != nil {
+		t.Fatalf("create shared: %v", err)
+	}
+	if shared.EnabledForAll {
+		t.Fatal("a new shared skill is on for everyone by default")
+	}
+	if got, _ := s.ListEnabledForAllUserSkills(ctx); len(got) != 0 {
+		t.Fatalf("listing before anything is on = %+v", got)
+	}
+	on, err := s.SetUserSkillEnabledForAll(ctx, admin, shared.ID, true)
+	if err != nil || !on.EnabledForAll {
+		t.Fatalf("switch on: %+v, %v", on, err)
+	}
+	got, err := s.ListEnabledForAllUserSkills(ctx)
+	if err != nil || len(got) != 1 || got[0].ID != shared.ID || got[0].SharedBy != admin {
+		t.Fatalf("listing = %+v, %v", got, err)
+	}
+	// The shared catalog carries the flag too.
+	if ws, _ := s.ListWorkspaceSharedUserSkills(ctx); len(ws) != 1 || !ws[0].EnabledForAll {
+		t.Fatalf("workspace listing = %+v", ws)
+	}
+
+	// A second owner's skill of the same name is listed too; the catalog's
+	// one-per-name pick prefers the one that is on for everyone even though
+	// the other is newer.
+	other, err := s.CreateUserSkillWithVisibility(ctx, second, "deal-check", "another deal check", "Other.", UserSkillVisibilityWorkspace)
+	if err != nil {
+		t.Fatalf("create second: %v", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE user_skills SET updated_at = updated_at + 100 WHERE id = $1`, other.ID); err != nil {
+		t.Fatal(err)
+	}
+	if ws, _ := s.ListWorkspaceSharedUserSkills(ctx); len(ws) != 1 || ws[0].ID != shared.ID {
+		t.Fatalf("workspace listing with a newer plain share = %+v, want the one on for everyone", ws)
+	}
+	if _, err := s.SetUserSkillEnabledForAll(ctx, second, other.ID, true); err != nil {
+		t.Fatalf("second switch on: %v", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE user_skills SET updated_at = updated_at + 100 WHERE id = $1`, other.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.ListEnabledForAllUserSkills(ctx); len(got) != 2 || got[0].ID != other.ID || got[1].ID != shared.ID {
+		t.Fatalf("listing with two owners = %+v, want the newer first", got)
+	}
+	if err := s.DeleteUserSkill(ctx, second, other.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	// An edit that does not touch visibility keeps it on.
+	edited, err := s.UpdateUserSkill(ctx, admin, shared.ID, "deal-check", "verify a deal sheet", "Check the totals twice.", UserSkillStatusActive)
+	if err != nil || !edited.EnabledForAll {
+		t.Fatalf("edit: %+v, %v", edited, err)
+	}
+	// Disabled: the flag stays on the row, the listing drops it, and enabling resumes it.
+	if _, err := s.UpdateUserSkill(ctx, admin, shared.ID, "deal-check", "verify a deal sheet", "Check the totals twice.", UserSkillStatusDisabled); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.ListEnabledForAllUserSkills(ctx); len(got) != 0 {
+		t.Fatalf("a disabled skill is listed: %+v", got)
+	}
+	if _, err := s.UpdateUserSkill(ctx, admin, shared.ID, "deal-check", "verify a deal sheet", "Check the totals twice.", UserSkillStatusActive); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.ListEnabledForAllUserSkills(ctx); len(got) != 1 {
+		t.Fatalf("re-enabled skill not listed: %+v", got)
+	}
+
+	// Made private: the flag is cleared, so sharing it again does not put it
+	// back in everyone's turns by itself.
+	unshared, err := s.UpdateUserSkillWithVisibility(ctx, admin, shared.ID, "deal-check", "verify a deal sheet", "Check the totals twice.", UserSkillStatusActive, UserSkillVisibilityPrivate)
+	if err != nil || unshared.EnabledForAll {
+		t.Fatalf("unshare: %+v, %v", unshared, err)
+	}
+	reshared, err := s.UpdateUserSkillWithVisibility(ctx, admin, shared.ID, "deal-check", "verify a deal sheet", "Check the totals twice.", UserSkillStatusActive, UserSkillVisibilityWorkspace)
+	if err != nil || reshared.EnabledForAll {
+		t.Fatalf("reshare: %+v, %v", reshared, err)
+	}
+	if got, _ := s.ListEnabledForAllUserSkills(ctx); len(got) != 0 {
+		t.Fatalf("listing after unshare and reshare = %+v", got)
+	}
+
+	// Switching off needs no particular state.
+	if off, err := s.SetUserSkillEnabledForAll(ctx, admin, private.ID, false); err != nil || off.EnabledForAll {
+		t.Fatalf("switch off a private skill: %+v, %v", off, err)
+	}
+}

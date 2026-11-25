@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import SkillsPage from "./page";
 import { jsonResponse, textResponse } from "@/test/fetch";
+import { _resetMeForTests } from "@/app/shared/lib/account";
 
 // SkillsPage — declared allowed-tools are surfaced for REVIEW as an advisory
 // signal, never as an enforced boundary. Load-bearing: a skill that declares
@@ -20,6 +21,7 @@ function mockFetch(skills: unknown[]) {
 
 afterEach(() => {
   cleanup();
+  _resetMeForTests();
 });
 
 describe("SkillsPage declared allowed-tools", () => {
@@ -280,5 +282,93 @@ describe("SkillsPage failure states", () => {
     expect((screen.getByLabelText(/Instructions \(markdown/i) as HTMLTextAreaElement).value).toBe(
       "1. Open workbench.",
     );
+  });
+});
+
+// "On for everyone": an admin can switch a workspace-shared skill on for the
+// whole workspace; everyone else sees it as already on, with nothing to add.
+describe("SkillsPage skills that are on for everyone", () => {
+  function forAllFetch(admin: boolean) {
+    return vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url === "/api/me") {
+        return jsonResponse({ email: "u@x.com", role: admin ? "admin" : "member", team_id: "", admin });
+      }
+      if (url === "/api/user-skills/u1" && init?.method === "PUT") {
+        return jsonResponse({});
+      }
+      if (url.startsWith("/api/user-skills")) {
+        return jsonResponse({
+          skills: [
+            {
+              id: "u1",
+              name: "my-deal-check",
+              description: "Check a deal sheet",
+              body: "1. Check totals.",
+              status: "active",
+              visibility: "workspace",
+            },
+            {
+              id: "u2",
+              name: "my-private",
+              description: "Private notes",
+              body: "Notes.",
+              status: "active",
+              visibility: "private",
+            },
+          ],
+        });
+      }
+      return jsonResponse({
+        skills: [],
+        shared_skills: [
+          {
+            name: "team-qa",
+            description: "Team QA workflow",
+            source: "workspace",
+            shared_by: "admin@x.com",
+            enabled_for_all: true,
+          },
+          { name: "team-optional", description: "Optional workflow", source: "workspace", shared_by: "a@x.com" },
+        ],
+      });
+    });
+  }
+
+  it("lets an admin turn a shared skill on for everyone, and shows such a skill as already on", async () => {
+    const fetchMock = forAllFetch(true);
+    vi.stubGlobal("fetch", fetchMock);
+    render(<SkillsPage />);
+
+    const myRow = await screen.findByTestId("skill-row-my-deal-check");
+    fireEvent.click(await within(myRow).findByRole("button", { name: "Turn on for everyone" }));
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/user-skills/u1",
+        expect.objectContaining({
+          method: "PUT",
+          body: expect.stringContaining('"enabled_for_all":true'),
+        }),
+      ),
+    );
+    // Only a workspace-shared skill offers it.
+    const privateRow = screen.getByTestId("skill-row-my-private");
+    expect(within(privateRow).queryByRole("button", { name: "Turn on for everyone" })).toBeNull();
+
+    // A skill that is on for everyone is badged and has nothing to add; an
+    // ordinary shared one keeps "Add to my skills".
+    const onRow = await screen.findByTestId("skill-row-team-qa");
+    expect(within(onRow).getByText("On for everyone")).toBeInTheDocument();
+    expect(within(onRow).queryByRole("button", { name: "Add to my skills" })).toBeNull();
+    expect(within(onRow).getByRole("button", { name: "Clone & edit" })).toBeInTheDocument();
+    const optionalRow = screen.getByTestId("skill-row-team-optional");
+    expect(within(optionalRow).getByRole("button", { name: "Add to my skills" })).toBeInTheDocument();
+  });
+
+  it("does not offer the switch to someone who is not an admin", async () => {
+    vi.stubGlobal("fetch", forAllFetch(false));
+    render(<SkillsPage />);
+    const myRow = await screen.findByTestId("skill-row-my-deal-check");
+    expect(await within(myRow).findByRole("button", { name: "Unshare" })).toBeInTheDocument();
+    expect(within(myRow).queryByRole("button", { name: "Turn on for everyone" })).toBeNull();
   });
 });

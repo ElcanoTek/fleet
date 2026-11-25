@@ -40,6 +40,10 @@ type skillEntry struct {
 	Source   string `json:"source"`
 	Plugin   string `json:"plugin,omitempty"`
 	SharedBy string `json:"shared_by,omitempty"`
+	// EnabledForAll marks a workspace-shared skill an admin turned on for
+	// everyone: it already takes part in the caller's chat turns, so the
+	// library shows it as on instead of offering "Add to my skills".
+	EnabledForAll bool `json:"enabled_for_all,omitempty"`
 	// DeclaredAllowedTools is the skill's frontmatter `allowed-tools` (nil when
 	// absent), surfaced for REVIEW/observability — the library UI shows it so an
 	// operator can see a skill's declared tool contract. NOT an authorization
@@ -84,6 +88,12 @@ func (s *Server) listSkills(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	forAll := map[string]bool{}
+	if s.store != nil {
+		for _, sk := range s.enabledForAllSkills(r.Context()) {
+			forAll[sk.ID] = true
+		}
+	}
 	bundleNames := make(map[string]bool, len(skills))
 	entries := make([]skillEntry, 0, len(skills))
 	for _, sk := range skills {
@@ -97,6 +107,7 @@ func (s *Server) listSkills(w http.ResponseWriter, r *http.Request) {
 			entry.Description = sharedSk.Description
 			entry.Source = "workspace"
 			entry.SharedBy = sharedSk.SharedBy
+			entry.EnabledForAll = forAll[sharedSk.ID]
 			entry.Plugin = ""
 			entry.DeclaredAllowedTools = nil
 		}
@@ -108,10 +119,11 @@ func (s *Server) listSkills(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		sharedEntries = append(sharedEntries, skillEntry{
-			Name:        sk.Name,
-			Description: sk.Description,
-			Source:      "workspace",
-			SharedBy:    sk.SharedBy,
+			Name:          sk.Name,
+			Description:   sk.Description,
+			Source:        "workspace",
+			SharedBy:      sk.SharedBy,
+			EnabledForAll: forAll[sk.ID],
 		})
 	}
 	var userEntries []skillEntry

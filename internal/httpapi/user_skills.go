@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
+	"github.com/ElcanoTek/fleet/internal/pgtext"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/tools"
 )
@@ -18,9 +19,12 @@ import (
 // makes them usable: before a turn runs, the user's ACTIVE skills are written
 // into the conversation workspace (user-skills/<name>/SKILL.md — writable,
 // per-conversation, already inside the sandbox mount surface) and their
-// Level-1 metadata rides TurnInput.UserSkills into the prompt roster. Only
-// the author's own runs ever see them; graduating a skill to the whole
-// deployment stays an operator action (copy it into the bundle's skills/).
+// Level-1 metadata rides TurnInput.UserSkills into the prompt roster. A skill
+// reaches its author's turns only, with one exception: a workspace-shared skill
+// an admin turned on for everyone (enabled_for_all) is loaded into every
+// user's chat turns from the admin's row (docs/SKILLS.md "On for everyone").
+// Putting a skill into the bundle itself stays an operator action (copy it
+// into the bundle's skills/).
 
 // userSkillsRoot is the workspace subdir user skills materialize into. It is
 // deliberately distinct from the read-only "skills/" symlink so a user skill
@@ -33,6 +37,9 @@ type userSkillRequest struct {
 	Body        string `json:"body"`
 	Status      string `json:"status,omitempty"`
 	Visibility  string `json:"visibility,omitempty"`
+	// EnabledForAll turns a workspace-shared skill on for everyone (true, admins
+	// only) or back off (false). Absent leaves it as it is.
+	EnabledForAll *bool `json:"enabled_for_all,omitempty"`
 }
 
 // userSkillsCollection handles GET (list) and POST (create) /user-skills.
@@ -87,6 +94,14 @@ func (s *Server) userSkillByID(w http.ResponseWriter, r *http.Request) {
 		if req.Status == "" {
 			req.Status = store.UserSkillStatusActive
 		}
+		// A skill that is on for everyone is instructions in every user's
+		// turns, so only an admin may switch it on. Refused before anything is
+		// written, so a refused request changes nothing. Switching it off is
+		// the owner's to do whatever their role is now.
+		if req.EnabledForAll != nil && *req.EnabledForAll && !s.callerIsAdmin(r.Context()) {
+			http.Error(w, "forbidden — only an admin can turn a skill on for everyone", http.StatusForbidden)
+			return
+		}
 		var (
 			sk  *store.UserSkill
 			err error
@@ -99,6 +114,15 @@ func (s *Server) userSkillByID(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			s.userSkillError(w, err)
 			return
+		}
+		if req.EnabledForAll != nil {
+			// sk.ID, not the path id: approving a staged "<name>-proposed"
+			// revision returns the base skill it was merged into.
+			sk, err = s.store.SetUserSkillEnabledForAll(r.Context(), user, sk.ID, *req.EnabledForAll)
+			if err != nil {
+				s.userSkillError(w, err)
+				return
+			}
 		}
 		writeJSON(w, r, sk)
 	case http.MethodDelete:
@@ -124,14 +148,71 @@ func (s *Server) userSkillError(w http.ResponseWriter, err error) {
 	}
 }
 
-// effectiveUserSkills returns the caller's own user skills for materialization
-// and explicit "/<name>" invocation. Teammates' workspace-shared skills stay
-// opt-in (via "Add to my skills" or "Clone & edit" in Settings → Skills) before
-// entering the caller's prompt roster, while an active skill owned by the
-// caller with the same name as a bundle/plugin/built-in skill customizes
-// (overrides) that skill's SKILL.md for the caller's runs.
+// effectiveUserSkills returns the skills that take part in the caller's chat
+// turns, for materialization and explicit "/<name>" invocation: the caller's
+// own, plus the workspace-shared skills an admin turned on for everyone
+// (enabledForAllSkills). Every other teammate-shared skill stays opt-in (via
+// "Add to my skills" or "Clone & edit" in Settings → Skills) before entering
+// the caller's prompt roster. An active skill the caller owns wins over a
+// skill of the same name that is on for everyone, the same way it customizes
+// (overrides) a bundle/plugin/built-in skill's SKILL.md for the caller's runs.
 func (s *Server) effectiveUserSkills(ctx context.Context, user string) ([]store.UserSkill, error) {
-	return s.store.ListUserSkills(ctx, user)
+	own, err := s.store.ListUserSkills(ctx, user)
+	if err != nil {
+		return nil, err
+	}
+	ownActive := map[string]bool{}
+	for _, sk := range own {
+		if sk.Status == store.UserSkillStatusActive {
+			ownActive[sk.Name] = true
+		}
+	}
+	userKey := pgtext.EmailKey(user)
+	for _, sk := range s.enabledForAllSkills(ctx) {
+		if ownActive[sk.Name] || pgtext.EmailKey(sk.UserEmail) == userKey {
+			continue
+		}
+		own = append(own, sk)
+	}
+	return own, nil
+}
+
+// enabledForAllSkills returns the workspace-shared skills that are on for
+// everyone right now, one per name. The store row says an admin switched it
+// on; this also requires that the row's owner is an admin NOW, so a skill
+// stops reaching other people's turns the moment its owner loses the role
+// (or the account is disabled), without anyone having to remember to switch it
+// off. Where two admins each have one of the same name, the most recently
+// updated wins. Best-effort like the rest of the skill roster: a store error
+// yields none, and the turn runs with the caller's own skills.
+func (s *Server) enabledForAllSkills(ctx context.Context) []store.UserSkill {
+	rows, err := s.store.ListEnabledForAllUserSkills(ctx)
+	if err != nil || len(rows) == 0 {
+		return nil
+	}
+	ownerIsAdmin := map[string]bool{}
+	seen := map[string]bool{}
+	out := make([]store.UserSkill, 0, len(rows))
+	for _, sk := range rows {
+		if seen[sk.Name] {
+			continue
+		}
+		ok, known := ownerIsAdmin[sk.UserEmail]
+		if !known {
+			// GetUser answers only for an enabled account, so a disabled
+			// owner is out even where ADMIN_EMAILS still names them.
+			if u, uerr := s.store.GetUser(ctx, sk.UserEmail); uerr == nil && u != nil {
+				ok = u.Role == store.RoleAdmin || s.isAdmin(sk.UserEmail)
+			}
+			ownerIsAdmin[sk.UserEmail] = ok
+		}
+		if !ok {
+			continue
+		}
+		seen[sk.Name] = true
+		out = append(out, sk)
+	}
+	return out
 }
 
 // materializeUserSkills syncs the user's ACTIVE skills into the conversation
@@ -222,7 +303,11 @@ func matchUserSkillInvocation(message string, skills []store.UserSkill) string {
 		if sk.Status != store.UserSkillStatusActive || sk.Name != token {
 			continue
 		}
-		return "\n\n[Skill invoked: " + sk.Name + "]\nThe user explicitly invoked their own skill \"" + sk.Name +
+		whose := "their own skill"
+		if sk.SharedBy != "" {
+			whose = "the workspace skill"
+		}
+		return "\n\n[Skill invoked: " + sk.Name + "]\nThe user explicitly invoked " + whose + " \"" + sk.Name +
 			"\". Read `" + userSkillsRoot + "/" + sk.Name + "/SKILL.md` now and follow its instructions for this request (any supporting reference files or scripts under `skills/" + sk.Name + "/` remain available on disk)."
 	}
 	return ""

@@ -75,6 +75,8 @@ type chatStore interface {
 	UpdateUserSkillWithVisibility(ctx context.Context, userEmail, id, name, description, body, status, visibility string) (*store.UserSkill, error)
 	ListUserSkills(ctx context.Context, userEmail string) ([]store.UserSkill, error)
 	ListWorkspaceSharedUserSkills(ctx context.Context) ([]store.UserSkill, error)
+	SetUserSkillEnabledForAll(ctx context.Context, userEmail, id string, on bool) (*store.UserSkill, error)
+	ListEnabledForAllUserSkills(ctx context.Context) ([]store.UserSkill, error)
 	DeleteUserSkill(ctx context.Context, userEmail, id string) error
 	// User-authored personas (docs/USER-PERSONAS.md).
 	ListUserPersonas(ctx context.Context, userEmail string) ([]store.UserPersona, error)
