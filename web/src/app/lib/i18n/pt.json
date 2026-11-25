@@ -4953,6 +4953,7 @@
   "remote MCP OAuth is not configured": "O OAuth de MCP remoto não está configurado",
   "remote MCP connections are not configured on this server": "As ligações MCP remotas não estão configuradas neste servidor",
   "remote MCP server not found": "O servidor MCP remoto não foi encontrado",
+  "refuse.code {0} is not a valid code": "refuse.code {0} não é um código válido",
   "remote connector {0} must be enabled directly in the Tools picker": "O conector remoto {0} deve ser ativado diretamente no seletor de ferramentas",
   "remove tags: {0}": "Eliminar etiquetas: {0}",
   "removed line": "linha removida",
