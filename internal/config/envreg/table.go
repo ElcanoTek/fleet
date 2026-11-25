@@ -190,7 +190,7 @@ var table = []Entry{
 	{Name: "DB_SSLMODE", Group: GroupDatabase, Scope: ScopeServer, Type: TypeString, Default: "disable",
 		Description: "Postgres sslmode for the discrete DSN parts."},
 	{Name: "FLEET_CHAT_DB_MAX_CONNS", Group: GroupDatabase, Scope: ScopeServer, Type: TypeInt, Default: "25", Knob: loader,
-		Description: "Chat pool: maximum open connections. The /readyz chat_db check holds one more connection of its own, outside this pool."},
+		Description: "Chat pool: maximum open connections. The /readyz chat_db check holds one more connection of its own, outside this pool, and a running server holds two more for its owner and presence locks (ADR-0122)."},
 	{Name: "FLEET_CHAT_DB_MIN_CONNS", Group: GroupDatabase, Scope: ScopeServer, Type: TypeInt, Default: "5", Knob: loader,
 		Description: "Chat pool: maximum idle connections kept."},
 	{Name: "FLEET_CHAT_DB_MAX_CONN_IDLE_TIME", Group: GroupDatabase, Scope: ScopeServer, Type: TypeDuration, Default: "0", Knob: loader,

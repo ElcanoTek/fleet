@@ -327,7 +327,7 @@ func (s *Store) tryServerOwnership(ctx context.Context, opts ServerOwnershipOpti
 // another session holds it.
 func (s *Store) tryOwnerLock(ctx context.Context, name string) (*sql.Conn, lockSession, bool, error) {
 	var sess lockSession
-	conn, err := s.db.Conn(ctx)
+	conn, err := s.lockConn(ctx)
 	if err != nil {
 		return nil, sess, false, err
 	}

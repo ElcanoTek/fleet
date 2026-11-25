@@ -62,8 +62,14 @@ it recovers or writes anything.**
   keep a replacement server out (below), and a lingering CLI deletion
   session would hold a starting server in its presence wait, which has no
   deadline. Postgres ignores these settings on a Unix-socket connection,
-  where the peer is on the same host and its socket closes with it. The
-  connections are discarded, never returned to the pool, when let go.
+  where the peer is on the same host and its socket closes with it.
+- **The lock connections are not the pool's.** They come from a small
+  database handle of their own (at most four connections, opened on first
+  use), never from the pool `FLEET_CHAT_DB_MAX_CONNS` sizes, and are
+  discarded when let go. A lock session is held for the life of the
+  process; taken from the pool, the owner and presence sessions would leave
+  a pool of two (or one) with no connection for the server's queries, the
+  presence heartbeat first, and the boot would hang.
 - **No other server without it.** Holding the lock, the starting server also
   refuses while (a) any other session holds the presence lock *shared* — a
   running server without the owner lock: an earlier release (so the first
@@ -132,8 +138,9 @@ it recovers or writes anything.**
   again, harmlessly, until the other server stops.
 - A restart within an hour of a crash waits five seconds before it goes
   on; a clean restart does not wait.
-- The owner holds one more connection of its chat pool for its lifetime
-  (the presence lock holds another).
+- A running server keeps two Postgres connections beyond its pools for its
+  lifetime (owner and presence locks), briefly three or four while one is
+  taken again; a CLI account deletion keeps one beyond its pool.
 - Both locks are per database, so the check depends on no unit name, port or
   host. A session pooler in transaction mode (PgBouncer) between fleet and
   Postgres breaks session advisory locks (and the keepalive settings would

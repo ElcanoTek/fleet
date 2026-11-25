@@ -563,6 +563,47 @@ func TestServerOwnershipDoesNotEndAForeignSessionOfTheSameName(t *testing.T) {
 	}
 }
 
+// The lock sessions do not come out of the configured pool: a server whose
+// pool has one or two connections (FLEET_CHAT_DB_MAX_CONNS) takes ownership,
+// marks itself running (whose heartbeat goes through the pool) and still
+// has its pool for queries; so does a CLI account deletion holding its lock.
+func TestServerLocksLeaveTheConfiguredPoolFree(t *testing.T) {
+	t.Parallel()
+	_, dsn := newTestStoreDSN(t)
+	for _, size := range []int{1, 2} {
+		pool := testPool()
+		pool.MaxOpenConns, pool.MaxIdleConns = size, size
+		s, err := Open(dsn, pool)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		o, err := s.ClaimServerOwnership(ctx, ServerOwnershipOptions{})
+		if err != nil {
+			t.Fatalf("pool of %d: claim: %v", size, err)
+		}
+		release, err := s.HoldServerPresence(ctx)
+		if err != nil {
+			t.Fatalf("pool of %d: presence: %v", size, err)
+		}
+		if _, err := s.ListUsers(ctx); err != nil {
+			t.Fatalf("pool of %d: a query with the server locks held: %v", size, err)
+		}
+		release()
+		o.Release()
+		unlock, err := s.ExcludeServers(ctx)
+		if err != nil {
+			t.Fatalf("pool of %d: CLI deletion lock: %v", size, err)
+		}
+		if _, err := s.ListUsers(ctx); err != nil {
+			t.Fatalf("pool of %d: a query with the CLI deletion lock held: %v", size, err)
+		}
+		unlock()
+		cancel()
+		_ = s.Close()
+	}
+}
+
 func TestTruncateOwnerName(t *testing.T) {
 	t.Parallel()
 	long := strings.Repeat("a", 62) + "é" // é straddles byte 63

@@ -163,7 +163,7 @@ func (s *Store) waitForPresenceLock(ctx context.Context) (*sql.Conn, error) {
 // not kept out for hours); got is false (and no connection kept) while it is
 // held exclusive.
 func (s *Store) tryPresenceLock(ctx context.Context) (*sql.Conn, bool, error) {
-	conn, err := s.db.Conn(ctx)
+	conn, err := s.lockConn(ctx)
 	if err != nil {
 		return nil, false, err
 	}
@@ -336,7 +336,7 @@ func (s *Store) ExcludeServers(ctx context.Context) (release func(), err error) 
 	if s == nil || s.db == nil {
 		return func() {}, nil
 	}
-	conn, err := s.db.Conn(ctx)
+	conn, err := s.lockConn(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("server presence check: %w", err)
 	}
