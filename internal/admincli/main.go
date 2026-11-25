@@ -229,7 +229,11 @@ Operator lifecycle (bootstrap → update → status/doctor):
 Users, credentials, notes:
   fleet admin add <email>                             (ONE step: web login + chat-admin + Operations Center admin; prompts for password)
   fleet admin list                                    (every chat login + whether it's an Operations Center admin)
-  fleet admin rm <email>                              (remove from both planes; refused while the server runs —
+  fleet admin rm <email> [--no-confirm]               (DELETES the account and everything it owns, admin or not: login,
+                                                       Operations Center access, conversations, owned projects, memories,
+                                                       remote MCP connections, user API keys, files. Asks first: shows the
+                                                       counts and wants the email typed back; without a terminal it refuses
+                                                       unless --no-confirm (alias --yes). Refused while the server runs —
                                                        delete from Settings → Admin → Users then, or stop the server)
   fleet account-events export                         (every chat account's membership as JSON Lines, read-only; what central
                                                        Auth's import-teams reads)
@@ -253,7 +257,7 @@ Users, credentials, notes:
   fleet chat user add <email>    --password -
   fleet chat user update <email> --password -
   fleet chat user role <email>   --role member|viewer|admin [--team <id>]
-  fleet chat user del <email>                         (refused while the server runs, as admin rm)
+  fleet chat user del <email> [--no-confirm]          (the same deletion as admin rm: asks first, refused while the server runs)
   fleet chat user list
   fleet chat set-model --model <slug> [--from-model <slug>] [--notify] [--dry-run] [--no-confirm]
   fleet model status [--json]                         (effective workspace model tiers + chat & task counts by model)
@@ -266,7 +270,8 @@ Users, credentials, notes:
   fleet sched user add <username> --role admin|client|readonly --password -
   fleet sched user update <username> --password -
   fleet sched user set-role <username> --role admin|client|readonly
-  fleet sched user del <username>
+  fleet sched user del <username>                     (ends Operations Center access only; the account and its data stay.
+                                                       An admin's access is their role: fleet chat user role <email> --role member)
   fleet sched user list
   fleet sched apikey create <name> [--type admin|task|webhook|readonly] [--rate-limit-per-minute N] [--trigger-slugs a,b] [--role admin]
                                                       (typed keys are fleet_<type>_<base58>, legacy --role keys sk-…; send as X-API-Key.
@@ -337,7 +342,9 @@ Database migrations (#256):
 Backup / restore (pg_dump -Fc / pg_restore; --db=all is one file, one snapshot):
   fleet backup  [--db=chat|sched|all] [--out DIR]   (all = one snapshot of chat+core+sched, plus the connectors' state
                                                      folders under <workspace>/mcp-runs as fleet-files-<stamp>.tar.gz; prints the paths)
-  fleet restore  [--db=all] <fleet-all dump>         (whole database only, one transaction; --clean --if-exists; overwrites it)
+  fleet restore  [--db=all] [--no-confirm] <fleet-all dump>
+                                                     (whole database only, one transaction; --clean --if-exists; overwrites it;
+                                                      asks first)
 
 Legacy migration (one-time; docs/LEGACY-IMPORT.md):
   fleet import <bundle.json> [--dry-run] [--live-only]   (ingest a chat/moc migration bundle; idempotent re-runs)
@@ -354,6 +361,11 @@ in-process: both DBs reachable, the sandbox image present + runnable, required
 env vars set, the client bundle loads, and the systemd unit state.
 
 Passwords are read from stdin with --password - (never on argv).
+
+These verbs delete or overwrite what nothing else brings back, and ask first on a terminal:
+restore, migrate down/force, chat set-model, sched task set-model, model set/rollout/reset,
+admin rm, chat user del. Without a terminal they refuse unless --no-confirm (alias --yes) is
+passed. (chats delete --permanent never asks: it needs --yes every time.)
 
   fleet version                                       (print build version + VCS revision; a.k.a. --version)
 

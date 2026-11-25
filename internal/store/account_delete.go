@@ -243,6 +243,53 @@ func (s *Store) DeleteUserPreflight(ctx context.Context, email string) error {
 	return nil
 }
 
+// AccountDeletionSummary is what DeleteUser would remove for an account,
+// counted: what `fleet admin rm` and `fleet chat user del` show before they
+// ask the operator to confirm.
+type AccountDeletionSummary struct {
+	// ID is the account's core.users.id: a caller deletes this account only
+	// (accountdelete.Options.ExpectedID), not one created under the email
+	// after the summary was read.
+	ID    string
+	Email string
+	Role  string
+	// Conversations is every conversation the account owns, those in the
+	// recycle bin included.
+	Conversations int
+	// OwnedProjects is every project the account owns.
+	OwnedProjects int
+	// Memories is the account's own memories plus the shared memories of the
+	// projects it owns.
+	Memories int
+	// RemoteMCPServers is the remote MCP connections the account added.
+	RemoteMCPServers int
+}
+
+// AccountDeletionSummary counts, read-only, what DeleteUser would remove for
+// email now (ErrUserNotFound when there is no account). The counts are a
+// snapshot for the operator and decide nothing: DeleteUser reads again in its
+// own transaction.
+func (s *Store) AccountDeletionSummary(ctx context.Context, email string) (AccountDeletionSummary, error) {
+	sum := AccountDeletionSummary{Email: normalizeEmail(email)}
+	if sum.Email == "" {
+		return sum, ErrUserNotFound
+	}
+	err := s.db.QueryRowContext(ctx,
+		`SELECT u.id::text, u.role,
+		        (SELECT count(*) FROM chat.conversations WHERE user_email = u.email),
+		        (SELECT count(*) FROM chat.projects WHERE owner_email = u.email),
+		        (SELECT count(*) FROM chat.memories
+		          WHERE user_email = u.email
+		             OR project_id IN (SELECT id FROM chat.projects WHERE owner_email = u.email)),
+		        (SELECT count(*) FROM chat.remote_mcp_servers WHERE user_email = u.email)
+		   FROM core.users u WHERE u.email = $1`, sum.Email).
+		Scan(&sum.ID, &sum.Role, &sum.Conversations, &sum.OwnedProjects, &sum.Memories, &sum.RemoteMCPServers)
+	if errors.Is(err, sql.ErrNoRows) {
+		return sum, ErrUserNotFound
+	}
+	return sum, err
+}
+
 // externalSessionLifetime is the longest a fleet session minted from a central
 // sign-in lives (websession.AbsoluteSeconds, ADR-0064). A central sign-in
 // session generation not used for longer can be carried by no live session.

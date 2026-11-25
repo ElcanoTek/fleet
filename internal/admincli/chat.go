@@ -2,7 +2,6 @@ package admincli
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -115,7 +114,7 @@ func chatSetModel(argv []string) int {
 	fromModel := fs.String("from-model", "", "only re-assign conversations currently pinned to this slug")
 	notify := fs.Bool("notify", false, "insert a UI-only model upgrade notice into non-empty conversations whose model changes")
 	dryRun := fs.Bool("dry-run", false, "print the conversations that would change without writing")
-	noConfirm := fs.Bool("no-confirm", false, "skip the interactive confirmation (for scripted bulk updates)")
+	noConfirm := noConfirmFlag(fs, "for scripted bulk updates")
 	if err := fs.Parse(argv); err != nil {
 		return 1
 	}
@@ -131,7 +130,7 @@ func chatSetModel(argv []string) int {
 		return errf(1, "open chat DB: %v", err)
 	}
 	defer st.Close()
-	return runChatSetModelWithNotify(context.Background(), st, os.Stdout, os.Stderr, strings.TrimSpace(*model), strings.TrimSpace(*fromModel), *notify, *dryRun, *noConfirm)
+	return runChatSetModelWithNotify(context.Background(), st, os.Stdout, os.Stderr, strings.TrimSpace(*model), strings.TrimSpace(*fromModel), *notify, *dryRun, noConfirm())
 }
 
 func runChatSetModel(ctx context.Context, st chatModelStore, outW, errW io.Writer, model, fromModel string, dryRun, noConfirm bool) int {
@@ -325,15 +324,23 @@ func chatUserUpsert(argv []string, create bool) int {
 	return 0
 }
 
+// chatUserDel deletes an account and everything it owns — the same deletion
+// as `fleet admin rm` (deleteAccount). It asks first
+// (confirmAccountDeletion) unless --no-confirm.
 func chatUserDel(argv []string) int {
 	fs := flag.NewFlagSet("chat user del", flag.ContinueOnError)
 	dbURL := fs.String("database-url", "", "chat Postgres DSN")
-	email, flagArgs := splitPositional(argv)
+	noConfirm := noConfirmFlag(fs, "for scripted deletions")
+	email, flagArgs := splitPositionalMixed(argv, noConfirmBoolFlags)
 	if err := fs.Parse(flagArgs); err != nil {
 		return 1
 	}
+	email = strings.TrimSpace(email)
 	if email == "" {
 		return errf(1, "email required")
+	}
+	if fs.NArg() > 0 {
+		return errf(1, "chat user del takes one email (got also %q)", fs.Args())
 	}
 	dsn, err := chatDSN(*dbURL)
 	if err != nil {
@@ -344,18 +351,7 @@ func chatUserDel(argv []string) int {
 		return errf(1, "open chat DB: %v", err)
 	}
 	defer st.Close()
-	res, err := deleteAccount(context.Background(), st, email)
-	if err != nil {
-		if errors.Is(err, errKeyStore) {
-			return errf(1, "%v — nothing was deleted", err)
-		}
-		if errors.Is(err, errServerRunning) {
-			return errf(1, "delete %s: %v", email, err)
-		}
-		return errf(5, "%v", err)
-	}
-	fmt.Printf("deleted chat user %s and %s\n", email, userKeysPhrase(res.KeysDeleted))
-	return deletedExitCode(res)
+	return runAccountDeletion(context.Background(), st, "delete", email, noConfirm(), stdConfirmIO())
 }
 
 func chatUserList(argv []string) int {

@@ -80,8 +80,19 @@ func (e *KeysNotBoundError) Error() string {
 
 func (e *KeysNotBoundError) Unwrap() error { return e.Err }
 
+// ErrNotTheExpectedAccount refuses Delete when Options.ExpectedID is set and
+// the address holds another account by then (the one expected was deleted and
+// another created under the address): nothing is deleted.
+var ErrNotTheExpectedAccount = errors.New("the address now holds another account than the one confirmed; nothing was deleted")
+
 // Options says where the account's keys and files are.
 type Options struct {
+	// ExpectedID, when set, is the id (core.users.id) of the account the
+	// caller showed the operator before they confirmed (the CLI's prompt):
+	// Delete deletes that account only, refusing with
+	// ErrNotTheExpectedAccount before it touches anything when the address
+	// holds another. "" deletes whichever account the address holds.
+	ExpectedID string
 	// Keys is the API-key store the server reads. nil is reported in
 	// Result.Problems: a caller must not silently skip it.
 	Keys Keys
@@ -187,8 +198,9 @@ var afterDatabaseDeletion func()
 // Delete deletes the account email: the database rows, then its user API
 // keys, then its files. An error means nothing was deleted: the database's
 // (store.ErrUserNotFound, *store.OwnsSharedProjectsError,
-// store.ErrAccountChanged, …), a *KeysNotBoundError, a
-// *FilesNotSetAsideError or an *OutcomeUnconfirmedError.
+// store.ErrAccountChanged, …), ErrNotTheExpectedAccount, a
+// *KeysNotBoundError, a *FilesNotSetAsideError or an
+// *OutcomeUnconfirmedError.
 //
 // Before the rows go, the address's user API keys that name no account yet
 // (minted before keys named their account) are bound to this account, read
@@ -218,6 +230,9 @@ func Delete(ctx context.Context, st Store, email string, opt Options) (Result, e
 	id, err := st.AccountForDeletion(ctx, email)
 	if err != nil {
 		return res, err
+	}
+	if opt.ExpectedID != "" && id != opt.ExpectedID {
+		return res, ErrNotTheExpectedAccount
 	}
 	if opt.Keys != nil {
 		if _, err := opt.Keys.BindUnboundUserKeys(ctx, email, id); err != nil {

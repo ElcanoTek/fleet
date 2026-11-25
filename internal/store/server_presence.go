@@ -281,6 +281,22 @@ func (s *Store) heartbeat(ctx context.Context, instance string) error {
 	return err
 }
 
+// ServerHeartbeatSeen reports whether a fleet server wrote its heartbeat row
+// within serverHeartbeatFresh. It takes no lock and decides nothing —
+// ExcludeServers is the check a deletion relies on — but lets a CLI deletion
+// say a server is running before it asks the operator to confirm a deletion
+// ExcludeServers would then refuse.
+func (s *Store) ServerHeartbeatSeen(ctx context.Context) (bool, error) {
+	if s == nil || s.db == nil {
+		return false, nil
+	}
+	var fresh bool
+	err := s.db.QueryRowContext(ctx,
+		`SELECT EXISTS (SELECT 1 FROM core.server_presence WHERE last_seen > now() - make_interval(secs => $1))`,
+		serverHeartbeatFresh.Seconds()).Scan(&fresh)
+	return fresh, err
+}
+
 // ExcludeServers takes the server-presence lock exclusive without waiting, on
 // a connection of its own, and returns the function that releases it. It
 // answers ErrServerRunning, holding nothing, when a fleet server holds the

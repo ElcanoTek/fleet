@@ -4,8 +4,10 @@
 package admincli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,8 +23,8 @@ import (
 // service's attachment directory. Another account's keys and files stay.
 func TestCLIAccountDeletionRemovesKeysAndFiles(t *testing.T) {
 	for name, verb := range map[string]func(email string) int{
-		"fleet admin rm":      func(email string) int { return adminRm([]string{email}) },
-		"fleet chat user del": func(email string) int { return chatUserDel([]string{email}) },
+		"fleet admin rm":      func(email string) int { return adminRm([]string{email, "--no-confirm"}) },
+		"fleet chat user del": func(email string) int { return chatUserDel([]string{email, "--no-confirm"}) },
 	} {
 		t.Run(name, func(t *testing.T) {
 			d := fleetEnv(t)
@@ -72,8 +74,8 @@ func TestCLIAccountDeletionRemovesKeysAndFiles(t *testing.T) {
 					t.Fatalf("exit %d", code)
 				}
 			})
-			if !strings.Contains(out, "1 user API key") {
-				t.Errorf("output %q does not say the user key was deleted", out)
+			if !strings.Contains(out, "deleted the account "+gone+", everything it owned") || !strings.Contains(out, "1 user API key") {
+				t.Errorf("output %q does not say the account, what it owned and its user key were deleted", out)
 			}
 			if _, err := chat.GetUser(ctx, gone); err == nil {
 				t.Error("the account survived")
@@ -116,7 +118,7 @@ func TestCLIAccountDeletionStopsOnAnUnreadableKeyStore(t *testing.T) {
 	if _, err := chat.CreateUser(ctx, "kept@acctdel.test", "delete-password-1"); err != nil {
 		t.Fatal(err)
 	}
-	if code := chatUserDel([]string{"kept@acctdel.test"}); code == 0 {
+	if code := chatUserDel([]string{"kept@acctdel.test", "--no-confirm"}); code == 0 {
 		t.Fatal("deleted with an unreadable key store")
 	}
 	if _, err := chat.GetUser(ctx, "kept@acctdel.test"); err != nil {
@@ -158,8 +160,13 @@ func TestCLIAccountDeletionWithStepsLeftExits6(t *testing.T) {
 	if _, err := chat.CreateUser(ctx, "left@acctdel.test", "delete-password-1"); err != nil {
 		t.Fatal(err)
 	}
-	if code := chatUserDel([]string{"left@acctdel.test"}); code != exitDeletedStepsLeft {
-		t.Fatalf("exit %d, want %d", code, exitDeletedStepsLeft)
+	out := captureStdout(t, func() {
+		if code := chatUserDel([]string{"left@acctdel.test", "--no-confirm"}); code != exitDeletedStepsLeft {
+			t.Fatalf("exit %d, want %d", code, exitDeletedStepsLeft)
+		}
+	})
+	if strings.Contains(out, "everything it owned") || !strings.Contains(out, "its database rows") || !strings.Contains(out, "may remain") {
+		t.Errorf("output %q claims more than the database rows went, or does not say what may remain", out)
 	}
 	if _, err := chat.GetUser(ctx, "left@acctdel.test"); err == nil {
 		t.Fatal("the account survived")
@@ -286,7 +293,7 @@ func TestUserKeyForAnAccountDeletedWhileMintingIsNotMinted(t *testing.T) {
 		if lookups++; lookups == 1 && found {
 			// Between the lookup and the key's write: the account is
 			// deleted, keys and all (there are none yet).
-			if _, derr := deleteAccount(ctx, chat, email); derr != nil {
+			if _, derr := deleteAccount(ctx, chat, email, ""); derr != nil {
 				t.Errorf("delete the account: %v", derr)
 			}
 		}
@@ -320,8 +327,8 @@ func TestUserKeyForAnAccountDeletedWhileMintingIsNotMinted(t *testing.T) {
 // delete.
 func TestCLIAccountDeletionRefusedWhileTheServerRuns(t *testing.T) {
 	for name, verb := range map[string]func(email string) int{
-		"fleet admin rm":      func(email string) int { return adminRm([]string{email}) },
-		"fleet chat user del": func(email string) int { return chatUserDel([]string{email}) },
+		"fleet admin rm":      func(email string) int { return adminRm([]string{"--yes", email}) },
+		"fleet chat user del": func(email string) int { return chatUserDel([]string{"--yes", email}) },
 	} {
 		t.Run(name, func(t *testing.T) {
 			d := fleetEnv(t)
@@ -355,5 +362,181 @@ func TestCLIAccountDeletionRefusedWhileTheServerRuns(t *testing.T) {
 				t.Fatalf("after the server stopped: exit %d", code)
 			}
 		})
+	}
+}
+
+// useConfirmIO points the verbs' confirmation at a fake terminal (tty) or a
+// pipe answering answer, for the rest of the test, and returns what they
+// print there.
+func useConfirmIO(t *testing.T, tty bool, answer string) *bytes.Buffer {
+	t.Helper()
+	var out bytes.Buffer
+	prev := stdConfirmIO
+	stdConfirmIO = func() confirmIO { return confirmIO{in: strings.NewReader(answer), out: &out, tty: tty} }
+	t.Cleanup(func() { stdConfirmIO = prev })
+	return &out
+}
+
+// Both deletion verbs ask first. Without a terminal they refuse unless
+// --no-confirm; on one they show what goes, counted from the database, and
+// delete only when the email is typed back.
+func TestCLIAccountDeletionAsksFirst(t *testing.T) {
+	for name, verb := range map[string]func(args ...string) int{
+		"fleet admin rm":      func(args ...string) int { return adminRm(args) },
+		"fleet chat user del": func(args ...string) int { return chatUserDel(args) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			d := fleetEnv(t)
+			t.Setenv("FLEET_DATA_DIR", t.TempDir())
+			t.Setenv("EMAIL_ATTACHMENT_DIR", t.TempDir())
+			t.Setenv("FLEET_SERVICE_NAME", "fleet-account-delete-test-none")
+			ctx := context.Background()
+			chat := d.Chat(t)
+			const email = "ask@acctdel.test"
+			if _, err := chat.CreateUser(ctx, email, "delete-password-1"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := chat.CreateConversation(ctx, email, "kept until confirmed", "", "", false); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := chat.CreateMemory(ctx, email, "a memory", "manual", ""); err != nil {
+				t.Fatal(err)
+			}
+			stillThere := func(when string) {
+				t.Helper()
+				if _, err := chat.GetUser(ctx, email); err != nil {
+					t.Fatalf("%s: the account is gone: %v", when, err)
+				}
+			}
+
+			useConfirmIO(t, false, email+"\n")
+			var code int
+			stderr := captureStderr(t, func() { code = verb(email) })
+			if code != 1 || !strings.Contains(stderr, "--no-confirm") {
+				t.Errorf("no terminal, no flag: exit %d, stderr %q; want 1 naming --no-confirm", code, stderr)
+			}
+			stillThere("no terminal")
+
+			out := useConfirmIO(t, true, "yes\n")
+			if code := verb(email); code != 1 {
+				t.Errorf("a wrong answer: exit %d, want 1", code)
+			}
+			for _, w := range []string{email, "conversations: 1 ", "memories: 1 ", "Type " + email + " to confirm"} {
+				if !strings.Contains(out.String(), w) {
+					t.Errorf("prompt %q does not say %q", out, w)
+				}
+			}
+			stillThere("a wrong answer")
+
+			useConfirmIO(t, true, "ASK@acctdel.test\n")
+			if code := verb(email); code != 0 {
+				t.Fatalf("the email typed back: exit %d", code)
+			}
+			if _, err := chat.GetUser(ctx, email); err == nil {
+				t.Fatal("the account survived a confirmed deletion")
+			}
+
+			useConfirmIO(t, true, email+"\n")
+			if code := verb(email); code != 2 {
+				t.Errorf("an account that does not exist: exit %d, want 2", code)
+			}
+		})
+	}
+}
+
+// `fleet sched user del` on an admin refuses and names the narrower step —
+// demoting them, which ends their Operations Center access and keeps the
+// account — before the full deletion; that step does what the hint says.
+func TestSchedUserDelOnAnAdminNamesTheNarrowerStep(t *testing.T) {
+	d := fleetEnv(t)
+	ctx := context.Background()
+	chat := d.Chat(t)
+	const email = "boss@acctdel.test"
+	if _, err := chat.CreateUser(ctx, email, "delete-password-1"); err != nil {
+		t.Fatal(err)
+	}
+	admin := "admin"
+	if _, err := chat.SetUserRoleTeam(ctx, email, &admin, nil); err != nil {
+		t.Fatal(err)
+	}
+	var code int
+	stderr := captureStderr(t, func() { code = schedUserDel([]string{email}) })
+	if code != 1 {
+		t.Fatalf("exit %d, want 1", code)
+	}
+	for _, w := range []string{"fleet chat user role " + email + " --role member", "keeping the account", "deletes the account and everything it owns"} {
+		if !strings.Contains(stderr, w) {
+			t.Errorf("stderr %q does not say %q", stderr, w)
+		}
+	}
+	captureStdout(t, func() {
+		if code := chatUserRole([]string{email, "--role", "member"}); code != 0 {
+			t.Fatalf("chat user role: exit %d", code)
+		}
+	})
+	u, err := chat.GetUser(ctx, email)
+	if err != nil {
+		t.Fatalf("the account is gone: %v", err)
+	}
+	if u.Role == "admin" || u.LegacyOpsRole() != "" {
+		t.Errorf("after the demotion: role %q, Operations Center role %q; want a non-admin with no access", u.Role, u.LegacyOpsRole())
+	}
+}
+
+// recreateOnRead is a terminal answer that, while the operator is being
+// asked, has the account deleted and another created under its email.
+type recreateOnRead struct {
+	answer string
+	swap   func()
+	done   bool
+}
+
+func (r *recreateOnRead) Read(p []byte) (int, error) {
+	if !r.done {
+		r.done = true
+		r.swap()
+	}
+	n := copy(p, r.answer)
+	r.answer = r.answer[n:]
+	if n == 0 {
+		return 0, io.EOF
+	}
+	return n, nil
+}
+
+// A confirmation deletes the account the operator was shown, not another
+// one created under the email while the prompt was open: that one is
+// refused, with nothing deleted.
+func TestCLIAccountDeletionDeletesOnlyTheConfirmedAccount(t *testing.T) {
+	d := fleetEnv(t)
+	t.Setenv("FLEET_DATA_DIR", t.TempDir())
+	t.Setenv("EMAIL_ATTACHMENT_DIR", t.TempDir())
+	t.Setenv("FLEET_SERVICE_NAME", "fleet-account-delete-test-none")
+	ctx := context.Background()
+	chat := d.Chat(t)
+	const email = "again@acctdel.test"
+	if _, err := chat.CreateUser(ctx, email, "delete-password-1"); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	prev := stdConfirmIO
+	stdConfirmIO = func() confirmIO {
+		return confirmIO{out: &out, tty: true, in: &recreateOnRead{answer: email + "\n", swap: func() {
+			if _, err := deleteAccount(ctx, chat, email, ""); err != nil {
+				t.Errorf("delete the shown account: %v", err)
+			}
+			if _, err := chat.CreateUser(ctx, email, "delete-password-2"); err != nil {
+				t.Errorf("create another account under the email: %v", err)
+			}
+		}}}
+	}
+	t.Cleanup(func() { stdConfirmIO = prev })
+	var code int
+	stderr := captureStderr(t, func() { code = adminRm([]string{email}) })
+	if code != 1 || !strings.Contains(stderr, "another account than the one this command read") {
+		t.Fatalf("exit %d, stderr %q; want 1 saying the account changed", code, stderr)
+	}
+	if _, err := chat.AccountForDeletion(ctx, email); err != nil {
+		t.Fatalf("the account created meanwhile was deleted: %v", err)
 	}
 }

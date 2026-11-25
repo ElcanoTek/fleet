@@ -80,8 +80,9 @@ chat-server and the Operations Center all apply them:
   sync"); the script stops and says so rather than guessing.
 - **Removing someone.** Removing Fleet from their access in Auth signs them
   out of both planes and keeps their data (reversible). Erasing their Fleet
-  data is a deliberate root command on the server, `fleet admin rm <email>`:
-  Auth is never able to delete Fleet data.
+  data is a deliberate root command on the server, `fleet admin rm <email>`,
+  which shows what it will delete and asks for the email typed back
+  (`--no-confirm` for a script): Auth is never able to delete Fleet data.
 - Unchanged: central SSO sessions, the `elcano_auth` cookie, machine API keys,
   webhook signatures, the operator's shared-token channel and every root CLI
   command (`fleet admin add`, `fleet chat user passwd`, …). Password rows are

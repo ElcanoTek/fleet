@@ -429,7 +429,12 @@ each piece yourself):
    >   not without everything: a user budget is matched by email, so its
    >   limit and the spend counted in its current window apply to the later
    >   account until an admin removes it. What goes and what stays:
-   >   [IDENTITY.md](IDENTITY.md), "Deleting an account".
+   >   [IDENTITY.md](IDENTITY.md), "Deleting an account". On a terminal the
+   >   CLI shows what goes, counted, and asks for the email typed back;
+   >   without one it refuses unless `--no-confirm` (alias `--yes`) is
+   >   passed. To end only someone's Operations Center access and keep the
+   >   account, use `fleet sched user del <email>` instead (for an admin:
+   >   `fleet chat user role <email> --role member`).
    > - **During a database outage** the server stops admitting account work
    >   within about a second of its presence lock's connection dropping:
    >   account requests, uploads and webhook turns are answered `503` with

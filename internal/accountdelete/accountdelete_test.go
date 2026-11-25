@@ -804,6 +804,31 @@ func TestDeleteRefusesWhenTheKeysCannotBeBound(t *testing.T) {
 	}
 }
 
+// With ExpectedID set, an address that holds another account than the one
+// expected (deleted and created again since the caller read it) is refused
+// before anything is touched; the expected one is deleted as usual.
+func TestDeleteRefusesAnotherAccountThanTheExpectedOne(t *testing.T) {
+	t.Parallel()
+	att := t.TempDir()
+	files := seedFiles(t, att, "gone@x.com")
+	st, keys := &fakeStore{}, &fakeKeys{}
+	_, err := Delete(context.Background(), st, "gone@x.com", Options{Keys: keys, AttachmentDir: att, ExpectedID: "an-earlier-account-id"})
+	if !errors.Is(err, ErrNotTheExpectedAccount) {
+		t.Fatalf("err = %v, want ErrNotTheExpectedAccount", err)
+	}
+	if len(st.deleted) != 0 || len(keys.calls) != 0 {
+		t.Fatalf("store deletions %v, key deletions %v; want none", st.deleted, keys.calls)
+	}
+	for _, f := range files {
+		if _, err := os.Stat(f); err != nil {
+			t.Errorf("%s was touched although the deletion was refused: %v", f, err)
+		}
+	}
+	if _, err := Delete(context.Background(), st, "gone@x.com", Options{Keys: keys, AttachmentDir: att, ExpectedID: "deleted-account-id"}); err != nil || len(st.deleted) != 1 {
+		t.Fatalf("the expected account: err %v, deletions %v", err, st.deleted)
+	}
+}
+
 // TestEveryAccountDeletionGoesThroughDelete: outside the store (which defines
 // DeleteUser and DeleteAccount and calls them in its own tests) and this
 // package, no code reaches either directly — neither a call nor a method value

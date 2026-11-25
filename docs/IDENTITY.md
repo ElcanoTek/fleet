@@ -148,7 +148,11 @@ advises on each demoted split admin, unknown role and duplicate username in it.
 - **CLI.** `fleet admin add|list|rm` act on the one row (`--sched-database-url`
   is accepted and ignored). `fleet sched user add|update|set-role|del|list`
   are deprecated aliases: `del` ends Operations Center access (scope none) and
-  keeps the account; `update` sets the one Fleet password; `rename` is refused.
+  keeps the account — for an admin it refuses, because their access is the
+  admin role, and names `fleet chat user role <email> --role member`, which
+  ends the role and with it the access (demotion clears the scope to none)
+  while keeping the account; `update` sets the one Fleet password; `rename`
+  is refused.
   `fleet import` maps sched users onto accounts (never making an admin).
   The account verbs (`sched user …`, `sched task set-owner`, `sched task
   import`, and `fleet import` of a bundle with sched users or tasks) need the
@@ -288,6 +292,39 @@ advises on each demoted split admin, unknown role and duplicate username in it.
   was moved aside: a tree found there is removed while no account has its
   digest, and named in a warning (left in place) when an account created
   under the address since holds it.
+
+  **The CLI asks first.** On a terminal, `fleet admin rm` and `fleet chat
+  user del` first refuse, with nothing deleted, what the deletion would
+  refuse anyway — no such account (exit 2), a server's heartbeat younger
+  than 45 seconds, a team-shared project still owned — then print what
+  goes, counted read-only (`store.AccountDeletionSummary`): the account's
+  role, its conversations (those in the recycle bin too), the projects it
+  owns, its memories and its projects' shared ones, and its remote MCP
+  connections, followed by the rest of the list above, and that a `fleet
+  backup` dump holds only the database rows: the uploads, private workspace
+  files and user API keys come back only from the file-level backups
+  [BACKUP_RESTORE.md](BACKUP_RESTORE.md) describes. The operator types
+  the email back to go on — compared as identity emails are (other capitals
+  match; a different address never does, even one Unicode case folding
+  calls the same); any other answer prints `aborted` and deletes nothing
+  (exit 1). The counts are a snapshot: the deletion reads again in its own
+  transaction. It deletes only the account it showed: if that account was
+  deleted and another created under the email while the prompt was open,
+  it refuses with nothing deleted (exit 1). A refusal by the checks above
+  is exit 1 whether it comes before the prompt or from the deletion itself
+  (a team-shared project still owned included); a deletion stopped because
+  the account's keys could not be bound or its files moved aside exits 5,
+  also with nothing deleted. Without a terminal (a pipe, cron, CI) nobody
+  can answer, so both refuse (exit 1)
+  unless `--no-confirm` (alias `--yes`) is passed; with it they ask nothing
+  and read nothing before the deletion. The server-presence lock is taken
+  only after the answer, so a prompt left open never keeps a server from
+  starting. When the database deletion commits but a later step is left
+  (exit 6), the closing line says only the account and its database rows
+  were deleted and names what may remain (its user API keys, or some of its
+  files); the warnings before it say how each is removed. Both take
+  exactly one email (`--` before it ends the flags) and refuse a second
+  one.
 
   **Work in flight.** The server runs one deletion of an account at a time:
   a second one while the first runs is answered 409 `a deletion of this
