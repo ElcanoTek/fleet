@@ -379,6 +379,7 @@ func (s *Server) call(callCtx context.Context, req request, stopCh <-chan struct
 		// host-side first (redacted) so the failure is diagnosable here
 		// instead of nowhere — see logMasked.
 		resp.Err = describeCallError(err)
+		resp.NotSent = mcp.RequestNotSent(err)
 		if resp.Err == errBrokerCallFailed {
 			logMasked(callCtx, "tool call", req.Server+"."+req.Tool, err)
 		} else {

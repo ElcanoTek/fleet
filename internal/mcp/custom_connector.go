@@ -168,7 +168,7 @@ func (t *playwrightToolTransport) Call(ctx context.Context, method string, param
 	spec, ok := t.tools[name]
 	t.mu.RUnlock()
 	if !ok {
-		return nil, fmt.Errorf("playwright tool not found: %s", name)
+		return nil, MarkNotSent(fmt.Errorf("playwright tool not found: %s", name))
 	}
 	args, _ := p["arguments"].(map[string]interface{})
 	switch {

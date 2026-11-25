@@ -539,7 +539,7 @@ func (c *Client) CallToolOn(ctx context.Context, serverName, toolName string, ar
 	server, ok := c.servers[serverName]
 	c.mu.RUnlock()
 	if !ok {
-		return nil, fmt.Errorf("MCP server not found: %s", serverName)
+		return nil, MarkNotSent(fmt.Errorf("MCP server not found: %s", serverName))
 	}
 	return server.callTool(ctx, toolName, arguments)
 }
@@ -692,7 +692,7 @@ func (s *Server) callTool(ctx context.Context, name string, arguments map[string
 	// let go of its arguments, which can be a multi-MiB base64 workspace-file
 	// window charged until this returns (ADR-0088) — when it is cancelled.
 	if err := lockWithContext(ctx, &s.mu); err != nil {
-		return nil, fmt.Errorf("MCP server %s: %s was not sent; the call was cancelled while it waited for the server's previous call: %w", s.name, name, err)
+		return nil, MarkNotSent(fmt.Errorf("MCP server %s: %s was not sent; the call was cancelled while it waited for the server's previous call: %w", s.name, name, err))
 	}
 	defer s.mu.Unlock()
 
@@ -701,7 +701,7 @@ func (s *Server) callTool(ctx context.Context, name string, arguments map[string
 	// can reach a stdio server in a write/cancel race (and marks the transport
 	// broken), so a deal write could land with the caller already gone.
 	if err := ctx.Err(); err != nil {
-		return nil, fmt.Errorf("MCP server %s: %s was not sent; the call's deadline expired while it waited for the server's previous call: %w", s.name, name, err)
+		return nil, MarkNotSent(fmt.Errorf("MCP server %s: %s was not sent; the call's deadline expired while it waited for the server's previous call: %w", s.name, name, err))
 	}
 	if d, ok := CallTimeout(ctx); ok {
 		var cancel context.CancelFunc
@@ -718,7 +718,7 @@ func (s *Server) callTool(ctx context.Context, name string, arguments map[string
 	// retirement lands completes first (and the retirer closes whatever
 	// transport it leaves behind).
 	if s.retired {
-		return nil, fmt.Errorf("MCP server %s was retired (removed by a reload or client shutdown)", s.name)
+		return nil, MarkNotSent(fmt.Errorf("MCP server %s was retired (removed by a reload or client shutdown)", s.name))
 	}
 
 	// A nil arguments map marshals to "arguments": null, which strict MCP
@@ -759,12 +759,17 @@ func (s *Server) callTool(ctx context.Context, name string, arguments map[string
 	}
 	result, err := s.transport.Call(ctx, "tools/call", params)
 	if err != nil {
+		// Every failure below is marked with whether THIS request reached
+		// the server (RequestNotSent), decided from the error of the call
+		// itself — never from a phrase in the combined text, which can
+		// belong to the restart's own initialize.
+		//
 		// If this is a stdio server and the error looks like a broken pipe / EOF,
 		// try to restart the server process and retry the call once.
 		if s.def.Command != "" && isTransportDeadError(err) {
 			logging.From(ctx).Warn("MCP server appears dead; attempting restart", "name", s.name, "err", err)
 			if restartErr := s.restartLocked(ctx); restartErr != nil {
-				return nil, fmt.Errorf("tool call failed and server restart also failed: original=%w, restart=%w", err, restartErr)
+				return nil, restartFailedError(err, restartErr)
 			}
 			// Only replay the call when the request provably never reached
 			// the server (write failure, or a transport poisoned by an
@@ -772,19 +777,19 @@ func (s *Server) callTool(ctx context.Context, name string, arguments map[string
 			// request was written) means the server may have already
 			// executed the call — blindly re-sending a non-idempotent tool
 			// like send_email or a deal-create would double-execute it.
-			if !isRequestNotDeliveredError(err) {
-				return nil, fmt.Errorf(
+			if !callNotSent(err) {
+				return nil, markDelivery(fmt.Errorf(
 					"MCP server %s died while executing %s and was restarted; the call's outcome is UNKNOWN — "+
 						"verify whether the action took effect (e.g. query for the created object or sent email) "+
-						"before re-issuing it: %w", s.name, name, err)
+						"before re-issuing it: %w", s.name, name, err), false)
 			}
 			logging.From(ctx).Warn("MCP server restarted successfully, retrying tool call (request was never delivered)", "name", s.name)
 			result, err = s.transport.Call(ctx, "tools/call", params)
 			if err != nil {
-				return nil, fmt.Errorf("tool call failed after server restart: %w", err)
+				return nil, markDelivery(fmt.Errorf("tool call failed after server restart: %w", err), callNotSent(err))
 			}
 		} else {
-			return nil, err
+			return nil, markDelivery(err, callNotSent(err))
 		}
 	}
 
@@ -823,15 +828,20 @@ func (s *Server) restartLocked(ctx context.Context) error {
 
 // errStdioTransportDead is the sentinel message for a transport poisoned by
 // a cancelled call. isTransportDeadError matches on it so the restart path
-// in Server.callTool kicks in, and isRequestNotDeliveredError matches on it
-// because a transport poisoned before any write means the request for the
-// NEXT call never reached the server (safe to replay after restart).
+// in Server.callTool kicks in. StdioTransport.Call marks the error it
+// returns not sent: a transport poisoned before any write means the request
+// for the NEXT call never reached the server (safe to replay after restart).
 const errStdioTransportDead = "stdio transport marked dead after cancelled call"
 
-// errStdioWriteFailed marks a request that failed before reaching the
-// server. isRequestNotDeliveredError matches on it to decide whether a
-// restarted call may be retried without double-execution risk.
+// errStdioWriteFailed is the text of a request whose write failed before
+// reaching the server. The text is for people; whether the request was sent
+// is the error's mark (MarkNotSent), never this text, which a server's own
+// error body could quote.
 const errStdioWriteFailed = "stdio write failed (request not delivered)"
+
+// errStdioWriteInterrupted is the text of a write the call's context
+// interrupted: part or all of the request may have reached the server.
+const errStdioWriteInterrupted = "stdio write interrupted by cancellation (the request may have reached the server)"
 
 // errTransportDesynced marks a stdio transport whose previous call was
 // cancelled mid-read: the subprocess may still write the old response,
@@ -840,33 +850,28 @@ const errStdioWriteFailed = "stdio write failed (request not delivered)"
 // restart path (fresh subprocess, clean stream).
 //
 // Its message is errStdioTransportDead, so the substring-matching
-// isTransportDeadError and isRequestNotDeliveredError both recognize it
-// even when it has been wrapped and the sentinel identity is lost, while
-// callers that still hold the unwrapped error can match it precisely with
-// errors.Is.
+// isTransportDeadError recognizes it even when it has been wrapped and the
+// sentinel identity is lost, while callers that still hold the unwrapped
+// error can match it precisely with errors.Is.
 var errTransportDesynced = errors.New(errStdioTransportDead)
 
-// isRequestNotDeliveredError reports whether a failed call's request
-// provably never reached the server, making a post-restart retry safe from
-// double execution. Two shapes qualify: a write-side failure (broken pipe
-// before the request bytes were delivered) and a transport pre-marked dead
-// by an earlier cancelled call (the new request was rejected before any
-// write).
-func isRequestNotDeliveredError(err error) bool {
-	if err == nil {
-		return false
-	}
-	// Application-level JSON-RPC errors are never a delivery failure.
-	var rpcErr *RPCError
-	if errors.As(err, &rpcErr) {
-		return false
-	}
-	if errors.Is(err, errTransportDesynced) {
-		return true
-	}
-	errStr := strings.ToLower(err.Error())
-	return strings.Contains(errStr, "request not delivered") ||
-		strings.Contains(errStr, "transport marked dead")
+// restartFailedError is a tool call whose transport died (err) and whose
+// restart failed too (restartErr). Whether the tool request was delivered
+// comes from err alone: restartErr is about the fresh process's initialize,
+// whose own "request not delivered" says nothing about the tool request —
+// which, after a read-side death, the old server may well have executed.
+func restartFailedError(err, restartErr error) error {
+	return markDelivery(fmt.Errorf("tool call failed and server restart also failed: original=%w, restart=%w", err, restartErr), callNotSent(err))
+}
+
+// callNotSent reports whether a transport's error for one request says
+// that request never reached the server. Only the transport's own mark
+// counts (MarkNotSent at the source — StdioTransport's failed write and
+// poisoned-transport refusal, a tool not found, a stop before send), never
+// the error's text: an HTTP transport's error carries the server's response
+// body, which can say anything, "request not delivered" included.
+func callNotSent(err error) bool {
+	return RequestNotSent(err)
 }
 
 // isTransportDeadError returns true if the error indicates the transport
@@ -1098,7 +1103,8 @@ func (t *StdioTransport) Call(ctx context.Context, method string, params interfa
 	defer t.stderr.ClearAttribution()
 
 	if t.broken {
-		return nil, errTransportDesynced
+		// Refused before anything is written: this request never left.
+		return nil, MarkNotSent(errTransportDesynced)
 	}
 
 	t.nextID++
@@ -1284,9 +1290,10 @@ func EncodeJSONLine(v any) ([]byte, error) {
 // the orphaned writer may still complete later. The next Call fails fast
 // with errTransportDesynced and the server layer restarts the subprocess —
 // whose teardown closes stdin, which also unblocks the orphaned writer.
-// Errors carry the errStdioWriteFailed marker: the child never received the
-// full request line, so a post-restart replay is double-execution-safe.
-// Caller must hold t.mu.
+// A write that failed before the context ended is marked not sent
+// (MarkNotSent): the child never received the full request line, so a
+// post-restart replay is double-execution-safe. A write the context
+// interrupted is not: see the cancellation branch. Caller must hold t.mu.
 func (t *StdioTransport) writeLocked(ctx context.Context, b []byte) error {
 	writeDone := make(chan error, 1)
 	go func() {
@@ -1297,15 +1304,15 @@ func (t *StdioTransport) writeLocked(ctx context.Context, b []byte) error {
 	case <-ctx.Done():
 		// Both select cases can be ready when cancellation races a
 		// fast write; Go picks one at random. A completed write must
-		// not be reported as "request not delivered" — the child has
-		// the full line and may execute the call, and that error text
-		// invites re-issuing a non-idempotent tool. Drain writeDone
-		// non-blockingly: a finished write keeps its honest outcome
-		// (success falls through to the read side's ctx handling).
+		// not be reported as not sent — the child has the full line
+		// and may execute the call, and "not sent" invites re-issuing
+		// a non-idempotent tool. Drain writeDone non-blockingly: a
+		// finished write keeps its honest outcome (success falls
+		// through to the read side's ctx handling).
 		select {
 		case err := <-writeDone:
 			if err != nil {
-				return fmt.Errorf("%s: %w", errStdioWriteFailed, err)
+				return MarkNotSent(fmt.Errorf("%s: %w", errStdioWriteFailed, err))
 			}
 			return nil
 		default:
@@ -1317,10 +1324,14 @@ func (t *StdioTransport) writeLocked(ctx context.Context, b []byte) error {
 		// restart), so close stdin: the write fails, the goroutine exits and
 		// b is freed instead of living as long as the wedged server.
 		_ = t.stdin.Close()
-		return fmt.Errorf("%s: %w", errStdioWriteFailed, ctx.Err())
+		// Not "not sent": the write was still in progress, so part of
+		// the line — possibly all of it but the trailing newline, which
+		// a line reader hands over at EOF once stdin closes — may have
+		// reached the child. Whether it ran is unknown.
+		return markDelivery(fmt.Errorf("%s: %w", errStdioWriteInterrupted, ctx.Err()), false)
 	case err := <-writeDone:
 		if err != nil {
-			return fmt.Errorf("%s: %w", errStdioWriteFailed, err)
+			return MarkNotSent(fmt.Errorf("%s: %w", errStdioWriteFailed, err))
 		}
 		return nil
 	}

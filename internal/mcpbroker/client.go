@@ -124,6 +124,9 @@ func (c *Client) callMCP(ctx context.Context, scope, server, tool string, args m
 		if resp.Err == mcp.ErrStoppedBeforeSend.Error() {
 			return resp.Text, resp.IsError, mcp.ErrStoppedBeforeSend
 		}
+		if resp.NotSent {
+			return resp.Text, resp.IsError, mcp.MarkNotSent(errors.New(resp.Err))
+		}
 		return resp.Text, resp.IsError, errors.New(resp.Err)
 	}
 	return resp.Text, resp.IsError, nil
@@ -190,7 +193,7 @@ func (s *Scope) CallMCP(ctx context.Context, server, tool string, args map[strin
 	s.mu.Lock()
 	if s.closed || s.closing {
 		s.mu.Unlock()
-		return "", false, errScopeClosed
+		return "", false, mcp.MarkNotSent(errScopeClosed)
 	}
 	s.active++
 	s.mu.Unlock()
@@ -480,7 +483,8 @@ func (c *Client) roundtrip(ctx context.Context, req request) (response, error) {
 	if c.closed {
 		err := c.closeErr
 		c.mu.Unlock()
-		return response{}, err
+		// Nothing was written for this request.
+		return response{}, mcp.MarkNotSent(err)
 	}
 	c.pending[req.ID] = ch
 	if req.Progress {
@@ -498,9 +502,10 @@ func (c *Client) roundtrip(ctx context.Context, req request) (response, error) {
 		if err == nil {
 			// Cancelled while queued for the write lock: nothing went out,
 			// so there is nothing for the child to cancel or retain.
-			return response{}, ctx.Err()
+			return response{}, mcp.MarkNotSent(ctx.Err())
 		}
-		return response{}, fmt.Errorf("mcpbroker: send: %w", err)
+		// sendLive reports the frame was not written.
+		return response{}, mcp.MarkNotSent(fmt.Errorf("mcpbroker: send: %w", err))
 	}
 
 	// A stoppable call (request.Stoppable): its stop signal becomes ONE

@@ -237,7 +237,7 @@ func (t *a2aToolTransport) Call(ctx context.Context, method string, params inter
 	spec := t.peers[binding.peer]
 	t.mu.RUnlock()
 	if !ok {
-		return nil, fmt.Errorf("a2a tool not found: %s", name)
+		return nil, MarkNotSent(fmt.Errorf("a2a tool not found: %s", name))
 	}
 	args, _ := p["arguments"].(map[string]interface{})
 

@@ -245,6 +245,25 @@ func (st *uiSecretStash) consumeEveryoneShare(userEmail, convID string) (allow b
 	return allow, true
 }
 
+// restoreEveryoneShare re-arms a fleet-wide share confirmation that
+// userConfirmedEveryoneShare used up for a connector that was then never
+// shared, because connecting or creating it failed first. The confirmation
+// was for sharing that connector; it did not happen, so the agent's corrected
+// retry does not need a second one. Only a live bucket is re-armed, keeping
+// its timestamp, so the confirmation lasts no longer than it would have: a
+// bucket that expired, or was swept as expired while the call ran, is left
+// gone rather than revived as a fresh confirmation.
+func (st *uiSecretStash) restoreEveryoneShare(userEmail, convID string) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	b, ok := st.buckets[uiSecretKey(userEmail, convID)]
+	if !ok || time.Since(b.updatedAt) > uiSecretTTL {
+		return
+	}
+	b.shareScopeSet = true
+	b.allowEveryoneShare = true
+}
+
 func (st *uiSecretStash) isFieldOriginAllowed(userEmail, convID, fieldID, targetURLOrHost string) (allowed bool, hasExplicitBinding bool) {
 	targetHost := normalizeOriginHost(targetURLOrHost)
 	if targetHost == "" {
@@ -1390,8 +1409,20 @@ func (s *Server) connectorStudioConnectMCP(ctx context.Context, user string, con
 	if conv != nil {
 		convID = conv.ID
 	}
-	if strings.EqualFold(strings.TrimSpace(params.ShareScope), "everyone") && !s.userConfirmedEveryoneShare(ctx, user, convID) {
-		return nil, fmt.Errorf("share_scope=\"everyone\" requires explicit user confirmation in the show_ui form (share_scope=\"everyone\") or chat conversation; use share_scope=\"personal\" or ask the user to confirm fleet-wide sharing first")
+	// The confirmation is used up by the check below, before the connector
+	// exists. If anything fails before the connector is shared, it is given
+	// back (everyoneShareDone stays false), so the retry the agent makes
+	// with corrected arguments does not need the user to confirm again.
+	everyoneShareDone := false
+	if strings.EqualFold(strings.TrimSpace(params.ShareScope), "everyone") {
+		if !s.userConfirmedEveryoneShare(ctx, user, convID) {
+			return nil, fmt.Errorf("share_scope=\"everyone\" requires explicit user confirmation in the show_ui form (share_scope=\"everyone\") or chat conversation; use share_scope=\"personal\" or ask the user to confirm fleet-wide sharing first")
+		}
+		defer func() {
+			if !everyoneShareDone {
+				s.uiSecrets.restoreEveryoneShare(user, convID)
+			}
+		}()
 	}
 	apiKey, err := s.resolveSecretForConnectorURL(ctx, user, convID, params.Name, params.SecretRef, params.URL)
 	if err != nil {
@@ -1431,6 +1462,7 @@ func (s *Server) connectorStudioConnectMCP(ctx context.Context, user string, con
 		if serr := s.remoteMCP.ShareServer(ctx, user, server.ID, "*"); serr != nil {
 			return nil, fmt.Errorf("server connected, but sharing with everyone failed: %w", serr)
 		}
+		everyoneShareDone = true
 	}
 
 	s.enableConnectorOnConversation(ctx, user, conv, server.Name, server.Account)
@@ -1476,8 +1508,20 @@ func (s *Server) connectorStudioCreateCustom(ctx context.Context, user string, c
 	if conv != nil {
 		convID = conv.ID
 	}
-	if strings.EqualFold(strings.TrimSpace(params.ShareScope), "everyone") && !s.userConfirmedEveryoneShare(ctx, user, convID) {
-		return nil, fmt.Errorf("share_scope=\"everyone\" requires explicit user confirmation in the show_ui form (share_scope=\"everyone\") or chat conversation; use share_scope=\"personal\" or ask the user to confirm fleet-wide sharing first")
+	// The confirmation is used up by the check below, before the connector
+	// exists. If anything fails before the connector is shared, it is given
+	// back (everyoneShareDone stays false), so the retry the agent makes
+	// with corrected arguments does not need the user to confirm again.
+	everyoneShareDone := false
+	if strings.EqualFold(strings.TrimSpace(params.ShareScope), "everyone") {
+		if !s.userConfirmedEveryoneShare(ctx, user, convID) {
+			return nil, fmt.Errorf("share_scope=\"everyone\" requires explicit user confirmation in the show_ui form (share_scope=\"everyone\") or chat conversation; use share_scope=\"personal\" or ask the user to confirm fleet-wide sharing first")
+		}
+		defer func() {
+			if !everyoneShareDone {
+				s.uiSecrets.restoreEveryoneShare(user, convID)
+			}
+		}()
 	}
 
 	transport := strings.ToLower(strings.TrimSpace(params.Transport))
@@ -1585,6 +1629,7 @@ func (s *Server) connectorStudioCreateCustom(ctx context.Context, user string, c
 	if err != nil {
 		return nil, fmt.Errorf("create custom connector: %s", agentcore.RedactSecrets(err.Error()))
 	}
+	everyoneShareDone = true // the create applied ShareScope
 
 	s.enableConnectorOnConversation(ctx, user, conv, server.Name, server.Account)
 

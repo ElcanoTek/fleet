@@ -879,7 +879,7 @@ func (m *mcpTool) call(ctx context.Context, toolName string, params fantasy.Tool
 	// out-of-process call sends the request before it notices ctx, and the
 	// tool may have side effects.
 	if err := callCtx.Err(); err != nil {
-		message, _ := governToolOutput(ctx, toolName, fmt.Sprintf("MCP call not sent: %v", err))
+		message, _ := governToolOutput(ctx, toolName, fmt.Sprintf("%s%v", mcpCallNotSentPrefix, err))
 		return toolCallOutcome{resp: fantasy.NewTextErrorResponse(message), failed: true}
 	}
 	// Sentry breadcrumb (#193): a trail of every MCP call so a captured
@@ -900,7 +900,7 @@ func (m *mcpTool) call(ctx context.Context, toolName string, params fantasy.Tool
 		// Transport errors are untrusted connector output. Evaluate Error directly
 		// while the universal MCP wrapper can recover; fmt's %v would swallow a
 		// panicking Error method into a raw %!v(PANIC=...) diagnostic.
-		errText := "Error calling " + toolName + ": " + err.Error()
+		errText := mcpCallErrorPrefix(toolName, mcp.RequestNotSent(err)) + err.Error()
 		errText, _ = governToolOutput(ctx, toolName, errText)
 		return toolCallOutcome{resp: fantasy.NewTextErrorResponse(errText), failed: true}
 	}
@@ -938,6 +938,23 @@ func (m *mcpTool) call(ctx context.Context, toolName string, params fantasy.Tool
 	}
 
 	return toolCallOutcome{resp: fantasy.NewTextResponse(resultText), failed: false}
+}
+
+// mcpCallNotSentPrefix heads the error of an MCP call refused before
+// dispatch (its deadline or cancellation came first): nothing was sent.
+const mcpCallNotSentPrefix = "MCP call not sent: "
+
+// mcpCallErrorPrefix heads the error of an MCP call the broker failed. A
+// call whose request provably never reached its server (mcp.RequestNotSent)
+// says so in the prefix, ahead of the error text, so the model can tell a
+// safe retry from one that might act twice, and so can the policy reading
+// the result (emailOutcomeUnknown): the words sit before the first colon,
+// where nothing a server put in its error text can reach.
+func mcpCallErrorPrefix(toolName string, notSent bool) string {
+	if notSent {
+		return "Error calling " + toolName + " (not sent): "
+	}
+	return "Error calling " + toolName + ": "
 }
 
 func (m *mcpTool) ProviderOptions() fantasy.ProviderOptions     { return m.providerOptions }

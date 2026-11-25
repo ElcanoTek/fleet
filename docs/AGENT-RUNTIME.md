@@ -1149,6 +1149,93 @@ error only after Fantasy's tool goroutines settle. See
 
 ---
 
+## The `send_email` duplicate guard
+
+Within one chat turn, or one scheduled run, fleet refuses a `send_email`
+(any `send_email` or `*_send_email` tool) whose payload is identical to one
+it has already handled. "Identical" means the same fingerprint: normalized
+recipients, subject, body and attachment set, or the raw arguments when
+those fields are missing. The guard keeps three records:
+
+- **Sent.** A payload is recorded as sent after its call came back cleanly
+  and reported no failure: no error payload, no `"success": false`, and no
+  provider `status_code` outside 2xx. A server that answers without a
+  `status_code` counts. In chat, an identical call after that is refused with
+  `identical send_email payload already sent in this turn`. In a scheduled
+  run it is refused with the duplicate-send suppression text, which also
+  counts the send as done for the run's audited commitments.
+- **Running.** A payload the gates let through is held as running until its
+  result is recorded. An identical call made while it runs is refused with
+  `an identical send_email is already running`, and the refusal says this
+  call sent nothing. This is what stops two identical calls made at once (a
+  bundle can list its send tool in `parallel_safe_tools`) from both sending.
+  It applies to every way a send runs without a card: session pre-approval,
+  conversation auto-approve, an Autonomous-mode self-addressed send, a
+  transport with no approval UI, and an audited scheduled send.
+- **May have been sent.** Any failed send that fleet does not treat as not
+  delivered (below) is held as "may have been sent". That covers a transport
+  error after the request may have reached the server (a timeout, a dropped
+  connection, a server that died mid-call, including one whose restart then
+  failed), a provider `status_code` of 500 or above (a 502 or 504 from a
+  gateway, say), a result carrying an unknown-outcome or timeout marker
+  (`*_outcome_unknown`, `*_ambiguous_transport`, fleet's `outcome is UNKNOWN`,
+  `timeout`, `timed out`, a reset or aborted connection), and a contained
+  tool panic. An identical call is refused for the rest of the turn or run.
+  The refusal says the earlier email may have been sent or may have failed
+  before sending, that this call was not sent, and not to send it again or
+  reword it to look different. In chat it asks the model to tell the user to
+  check their inbox, the sent folder or the Outbox: if nothing arrived, the
+  user asks again in a new message, and the next turn starts without the
+  record. A scheduled run cannot ask, so the refusal tells it to say in its
+  answer that delivery is uncertain and, if the send is still owed, to end
+  with `confirm_audit(success=false, …)` saying so. The refusal counts
+  nothing as done. Finish enforcement stops demanding one owed `send_email`
+  for each send in doubt, and still demands any further owed email, whose
+  content differs: it asks for the rest of the owed work and then that
+  abort. An aborted email-last run whose summary email is in doubt is not
+  pushed to send another one. A new run of the task starts without the
+  record.
+
+A failed send that fleet treats as not delivered leaves no record, so an
+identical retry in the same turn goes out. That is:
+
+- a provider that answered with a refusal: a 4xx `status_code`, or an error
+  payload or is-error answer with none of the markers above;
+- an MCP call fleet knows never reached its server. The code that knows marks
+  the error where it is raised, and only that mark counts; no error text is
+  read for it, since an HTTP server's error body can say anything. Marked
+  this way: a stdio write that failed before the call's deadline, a stdio
+  transport already poisoned by an earlier cancelled call, a server that was
+  not found or had been retired, a tool not found, a call cancelled or out of
+  time while it waited for the server, a stop before send, and, in the
+  out-of-process credential broker, a closed scope or a request frame that
+  was never written. The model sees these as
+  `Error calling <tool> (not sent): …`. A stdio write the deadline
+  interrupted counts as "may have been sent": part or all of the request may
+  have reached the server. A restart's own failure never makes the tool
+  request count as not sent;
+- a call refused before dispatch (`MCP call not sent: …`, an attachment that
+  could not be prepared);
+- a call refused after the gates but before it ran: one whose arguments fail
+  the tool's own check, or whose intent could not be written to the turn
+  journal.
+
+A call staged as an approval card has not run in the turn and holds nothing
+either. The gates after the send gate never refuse a send
+(`TestGateChains_LaterGatesPassEmailThrough`); if one did, the running
+record would be handed back.
+
+The limit of three sends per turn (per run when scheduled) is separate and
+unchanged: it counts sends whose provider answered with a 2xx `status_code`.
+
+What it does not do: the records live in memory for the turn or run. Only
+`send_email` is covered; `send_template_email` is not deduplicated. Leaning
+towards "may have been sent" can refuse a retry that would in fact have been
+safe, for the rest of the turn: it leans towards refusing a retry rather
+than risking a second send.
+
+---
+
 ## Per-persona tool allowlist (least-privilege by role)
 
 Different personas have different roles and risk surfaces. A `code-reviewer`

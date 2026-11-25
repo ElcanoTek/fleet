@@ -134,7 +134,7 @@ func TestStdioCall_OversizedResponseFailsLoud(t *testing.T) {
 	if isTransportDeadError(err) {
 		t.Errorf("over-cap error %q matches the dead-transport markers — a healthy subprocess would be restarted for nothing", err)
 	}
-	if isRequestNotDeliveredError(err) {
+	if RequestNotSent(err) {
 		t.Errorf("over-cap error %q reads as not-delivered — a retry would just fetch the same oversized response", err)
 	}
 
@@ -210,8 +210,12 @@ func TestStdioWrite_WedgedStdinHonorsCtx(t *testing.T) {
 		if !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("Call = %v, want a ctx deadline error", err)
 		}
-		if !isRequestNotDeliveredError(err) {
-			t.Errorf("wedged-write error %q must read as not-delivered — the server never received a full request line", err)
+		// The write was still in progress when the context ended: part of
+		// the line, possibly all of it but the newline, may have reached the
+		// child, which a line reader hands over at EOF once stdin closes. So
+		// the outcome is unknown, not "not sent".
+		if RequestNotSent(err) {
+			t.Errorf("wedged-write error %q reads as not sent — part or all of the request may have reached the server", err)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Call ignored ctx while writing to a wedged subprocess — the write path is not context-aware")
@@ -414,7 +418,7 @@ func TestCallTool_NilArgumentsBecomeEmptyObject(t *testing.T) {
 // ===========================================================================
 // cutlass suite — Client integration over stdio/HTTP transports, SSE parsing,
 // RPCError / JSONRPCID handling, the env-UTF8 contract, and the write-vs-read
-// delivery distinction (isRequestNotDeliveredError).
+// delivery distinction (RequestNotSent).
 // ===========================================================================
 
 func TestStdioTransport(t *testing.T) {
@@ -1583,22 +1587,30 @@ func TestIsTransportDeadError(t *testing.T) {
 	}
 }
 
-func TestIsRequestNotDeliveredError(t *testing.T) {
+// Whether a request was sent comes from the transport's mark, never from the
+// error's text: an HTTP transport's error carries the server's body, which can
+// quote fleet's own "request not delivered" wording.
+func TestCallNotSent_MarkNotText(t *testing.T) {
 	tests := []struct {
+		name string
 		err  error
 		want bool
 	}{
-		{nil, false},
+		{"nil", nil, false},
 		// Read-side death: request may have executed — NOT safe to retry.
-		{fmt.Errorf("failed to read response: EOF"), false},
-		{fmt.Errorf("connection reset by peer"), false},
-		// Write-side death / poisoned transport: request never delivered — safe.
-		{fmt.Errorf("%s: write |1: broken pipe", errStdioWriteFailed), true},
-		{errors.New(errStdioTransportDead), true},
+		{"read-side EOF", fmt.Errorf("failed to read response: EOF"), false},
+		{"connection reset", fmt.Errorf("connection reset by peer"), false},
+		// The texts alone, with no mark, prove nothing.
+		{"write-failed text, unmarked", fmt.Errorf("%s: write |1: broken pipe", errStdioWriteFailed), false},
+		{"transport-dead text, unmarked", errors.New(errStdioTransportDead), false},
+		{"HTTP 502 quoting the phrases", &HTTPStatusError{StatusCode: 502, Body: "upstream: stdio write failed (request not delivered); transport marked dead"}, false},
+		// Marked at the source: request never delivered — safe.
+		{"write failure, marked", MarkNotSent(fmt.Errorf("%s: write |1: broken pipe", errStdioWriteFailed)), true},
+		{"poisoned transport, marked", MarkNotSent(errTransportDesynced), true},
 	}
 	for _, tt := range tests {
-		if got := isRequestNotDeliveredError(tt.err); got != tt.want {
-			t.Errorf("isRequestNotDeliveredError(%v) = %v, want %v", tt.err, got, tt.want)
+		if got := callNotSent(tt.err); got != tt.want {
+			t.Errorf("%s: callNotSent(%v) = %v, want %v", tt.name, tt.err, got, tt.want)
 		}
 	}
 }
@@ -1676,7 +1688,7 @@ func TestStdioTransportDeadAfterCancel(t *testing.T) {
 	if !isTransportDeadError(err) {
 		t.Fatalf("post-cancel error must be transport-dead so the restart path fires, got: %v", err)
 	}
-	if !isRequestNotDeliveredError(err) {
+	if !RequestNotSent(err) {
 		t.Fatalf("post-cancel error must be retry-safe (request never delivered), got: %v", err)
 	}
 }
