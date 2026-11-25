@@ -123,6 +123,31 @@ func (b *sourceBroker) set(answer string, err error) {
 	b.answer, b.err = answer, err
 }
 
+// hold makes every call wait until release is called, so a test can look at
+// what readers are served while a refresh is still asking the source. The
+// calls are released at the end of the test too, and release may be called
+// more than once.
+func (b *sourceBroker) hold(t *testing.T) (release func()) {
+	t.Helper()
+	gate := make(chan struct{})
+	b.mu.Lock()
+	b.gate = gate
+	b.mu.Unlock()
+	var once sync.Once
+	release = func() {
+		once.Do(func() {
+			b.mu.Lock()
+			if b.gate == gate {
+				b.gate = nil
+			}
+			b.mu.Unlock()
+			close(gate)
+		})
+	}
+	t.Cleanup(release)
+	return release
+}
+
 type sourceEngine struct {
 	*fakeTurnEngine
 	broker *sourceBroker
@@ -145,6 +170,18 @@ func sourcePolicy(t *testing.T, parallelSafe ...string) {
 	t.Helper()
 	t.Cleanup(func() { agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{}) })
 	agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{ParallelSafeTools: parallelSafe})
+	patientFirstRead(t)
+}
+
+// patientFirstRead lengthens the first read's wait for the first answer far
+// past anything a loaded test machine needs, so a read that waits always gets
+// the answer and a read that must not wait is told apart by a wide margin.
+// The first read still returns as soon as the refresh ends.
+func patientFirstRead(t *testing.T) {
+	t.Helper()
+	prev := accountGroupSourceFirstWait
+	t.Cleanup(func() { accountGroupSourceFirstWait = prev })
+	accountGroupSourceFirstWait = 30 * time.Second
 }
 
 func waitForRefresh(t *testing.T, s *Server) {
@@ -195,13 +232,23 @@ func TestSourcedAccountGroupsCachesAndRefreshes(t *testing.T) {
 	}
 
 	// Stale: the next read is served the old answer at once and refreshes
-	// behind it.
+	// behind it. The source is held until the read has returned, so the new
+	// answer cannot land first.
 	broker.set(`{"groups": [{"name": "Only One", "accounts": [{"server": "ix"}]}]}`, nil)
+	release := broker.hold(t)
 	s.accountGroupSource.mu.Lock()
 	s.accountGroupSource.nextRefresh = time.Now().Add(-time.Second)
 	s.accountGroupSource.mu.Unlock()
 	if got := groupIDs(s.sourcedAccountGroups(ctx, src)); len(got) != 2 {
+		release()
 		t.Fatalf("a stale read should serve the last answer, got %v", got)
+	}
+	s.accountGroupSource.mu.Lock()
+	running := s.accountGroupSource.refreshing != nil
+	s.accountGroupSource.mu.Unlock()
+	release()
+	if !running {
+		t.Fatal("a stale read did not start a refresh")
 	}
 	waitForRefresh(t, s)
 	if got := groupIDs(s.sourcedAccountGroups(ctx, src)); !reflect.DeepEqual(got, []string{"only-one"}) {
@@ -245,6 +292,7 @@ func TestSourcedAccountGroupsCallsOnlyADeclaredRead(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Cleanup(func() { agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{}) })
 			agentcore.ConfigureAgentPolicy(policy)
+			patientFirstRead(t)
 			broker := &sourceBroker{answer: twoGroups}
 			s := &Server{store: newFakeChatStore(), agent: &sourceEngine{fakeTurnEngine: &fakeTurnEngine{}, broker: broker}}
 			if got := s.sourcedAccountGroups(context.Background(), src); len(got) != 0 {
