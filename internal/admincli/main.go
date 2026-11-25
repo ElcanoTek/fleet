@@ -335,7 +335,8 @@ Database migrations (#256):
   fleet migrate force <version> [--database-url <dsn>] [--no-confirm]   (repair the ledger after a half-applied migration)
 
 Backup / restore (pg_dump -Fc / pg_restore; --db=all is one file, one snapshot):
-  fleet backup  [--db=chat|sched|all] [--out DIR]   (all = one snapshot of chat+core+sched; prints the path)
+  fleet backup  [--db=chat|sched|all] [--out DIR]   (all = one snapshot of chat+core+sched, plus the connectors' state
+                                                     folders under <workspace>/mcp-runs as fleet-files-<stamp>.tar.gz; prints the paths)
   fleet restore  [--db=all] <fleet-all dump>         (whole database only, one transaction; --clean --if-exists; overwrites it)
 
 Legacy migration (one-time; docs/LEGACY-IMPORT.md):

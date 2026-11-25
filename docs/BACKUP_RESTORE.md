@@ -13,13 +13,23 @@ The databases are **not** the whole state, though: fleet also persists plain
 files on disk that `fleet backup` does **not** capture — attachment/upload
 files (`<data dir>/attachments`, whose paths conversation history references
 for image replay), task upload files (`<data dir>/temp_uploads`), and the
-per-conversation workspaces (`./workspace`). On a systemd deploy these all
+per-conversation workspaces (`./workspace`), except the connector state that
+`--db=all` archives (below). On a systemd deploy these all
 live under `/var/lib/fleet` (the unit's `StateDirectory`); a box migrated from
 the legacy chat app may additionally serve attachment files from the legacy
 data dir at its original path (see [`CUTOVER.md`](CUTOVER.md) step 6). Include
 those directories in your file-level backups alongside the DB dumps —
 restoring the DBs alone brings back the conversations and tasks but not the
 files they reference (history replay silently drops a missing file).
+
+**Connector state is archived with the dump.** Client-bundle connectors keep
+deployment-wide state as files under `<workspace root>/mcp-runs/` (written
+host-side only, read-only in every sandbox): a campaign-code counter
+(`mcp-runs/campaign-codes`), the team's email templates
+(`mcp-runs/email-templates`). No schema holds them, and some cannot be rebuilt
+safely (a counter that comes back empty can hand out a code it already gave),
+so `fleet backup --db=all` also writes `fleet-files-<stamp>.tar.gz` beside the
+dump — see [Connector state](#connector-state).
 
 **API keys are a file too.** Every API key — the Operations Center's keys and
 the user keys `fleet chat`, `fleet acp` and fleet-bench sign in with — lives
@@ -109,6 +119,10 @@ asks for one store at a time. The dump filename is
 another. Each dump path is printed on **stdout** (the human-readable progress
 line goes to stderr), so a script can capture the paths.
 
+`--db=all` also writes **`fleet-files-<UTC timestamp>.tar.gz`** (same stamp)
+with the [connector state](#connector-state), and prints its path on stdout as
+well. With no connector state on the box it writes nothing and says so.
+
 Every dump is **verified** immediately after it is written (`pg_restore --list`
 confirms it is a valid custom-format archive); a corrupt dump fails the run
 non-zero rather than reporting a false success.
@@ -117,7 +131,8 @@ non-zero rather than reporting a false success.
 current directory.
 
 **Retention pruning** — `--prune` deletes this tool's own dumps
-(`fleet-{all,chat,sched}-*.dump`) older than `FLEET_BACKUP_RETENTION_DAYS` (default
+(`fleet-{all,chat,sched}-*.dump`) and connector-state archives
+(`fleet-files-*.tar.gz`) older than `FLEET_BACKUP_RETENTION_DAYS` (default
 30) from the output directory after a successful backup. The knob must be a
 positive whole number: since #1273 it is a row in the one env-knob registry
 (`internal/config/knobs.go`), and a malformed or non-positive value **fails the
@@ -168,6 +183,51 @@ fleet status        # both DBs answer SELECT 1, unit healthy
 The database self-migrates on connect (one runner, every store open), so a dump
 taken from an older schema is brought up to date when the service restarts —
 or, for a dump from before M6, reconciled with its legacy ledgers first.
+
+## Connector state
+
+What `fleet backup --db=all` archives in `fleet-files-<stamp>.tar.gz`: every
+directory directly under `<workspace root>/mcp-runs/` (the workspace root is
+`FLEET_WORKSPACE_ROOT` from the shell or the env file, else `workspace` under
+the service home: `/var/lib/fleet/workspace` on a systemd box) **except** the per-run
+`task-<task UUID>` directories (matched by that exact name) — one scheduled
+occurrence's ledger, removed by the maintenance sweep once its task is done —
+with every file and folder inside it. Paths in the archive start with
+`mcp-runs/`, relative to the workspace root, and keep their owner and mode.
+
+- **Never followed:** a symlinked `mcp-runs/` fails the archive; symlinks,
+  sockets, FIFOs and devices inside it are skipped. Files are opened inside
+  `mcp-runs/` only (an `os.Root`), so nothing outside it can be read into the
+  archive.
+- **No connector lock is taken.** Each file is copied up to the size it had when
+  it was opened. A connector whose state is an append-only log plus a counter
+  replaced by rename (the campaign-code store) reads such a copy as its state at
+  that moment, at worst minus a line torn mid-append, which its reader skips.
+- **Bounded:** over 1 GiB of files — counted as they are copied, so a file that
+  grows during the run counts at its copied size — fails the archive rather than filling the
+  backup disk every night for the retention window; connector state is counters,
+  logs and templates.
+- **Checked:** the archive is written under a temporary name, read back end to
+  end (gzip checksum, every entry), then renamed into place, owner-only (0600).
+- **A failure keeps the dump.** The verified database dump stays, the prune
+  still runs, and the run exits 5 so the timer, the journal and `fleet doctor`
+  show it.
+
+**Restore** with `tar`, as root, with the service stopped so no connector writes
+mid-restore, then put the database back as usual:
+
+```sh
+fleet stop
+tar -xzpf /var/backups/fleet/fleet-files-20261126T020000Z.tar.gz -C /var/lib/fleet/workspace
+fleet restore --db=all /var/backups/fleet/fleet-all-20261126T020000Z.dump
+fleet restart
+```
+
+`tar -x` as root restores the files' owner (the service user) and modes. It
+overwrites the files the archive holds and leaves any others in place. A
+connector may have its own steps after a restore (the campaign-code store's
+"After a restore" in the client bundle's `deal_profiles/README.md`: codes issued
+after the archive was taken are not in it).
 
 ## Verifying a backup
 
@@ -278,9 +338,10 @@ Be clear-eyed about the scope of a scheduled `fleet backup`:
   the volume, or the datacenter. Copy them somewhere else (object storage,
   another box, a snapshot of the backup volume) if that matters to you, and
   verify the copy by restoring it.
-- **It does not capture on-disk files.** `fleet backup` dumps the two stores
-  and nothing else — no attachment/upload files, no workspaces (see the file
-  list at the top of this page). Restoring the dumps brings back conversations
+- **It does not capture on-disk files**, apart from the connector state under
+  `mcp-runs/`. `fleet backup` dumps the two stores — no attachment/upload files,
+  no conversation workspaces, no API key file (see the file list at the top of
+  this page). Restoring the dumps brings back conversations
   and tasks but not the files they reference.
 - **It is not tested by taking it.** A dump is verified as a readable archive,
   not as a restorable database. Do the round trip described in

@@ -428,9 +428,11 @@ func backupFileName(db string, now time.Time) string {
 	return fmt.Sprintf("fleet-%s-%s.dump", db, now.UTC().Format("20060102T150405Z"))
 }
 
-// backupFilePattern matches the dump files this tool writes (fleet-{chat,sched}-*.dump),
-// so prune only ever deletes our own artifacts — never an unrelated file in the dir.
-var backupFilePattern = regexp.MustCompile(`^fleet-(all|chat|sched)-.*\.dump$`)
+// backupFilePattern matches the files this tool writes — the dumps
+// (fleet-{all,chat,sched}-*.dump) and the connector-state archives
+// (fleet-files-*.tar.gz, backup_files.go) — so prune only ever deletes our own
+// artifacts, never an unrelated file in the dir.
+var backupFilePattern = regexp.MustCompile(`^(fleet-(all|chat|sched)-.*\.dump|fleet-files-.*\.tar\.gz)$`)
 
 // verifyDump confirms a freshly-written file is a valid pg custom-format archive
 // by listing its table of contents (pg_restore --list: no connection, no data
@@ -525,12 +527,13 @@ func isTerminal(f *os.File) bool {
 	return err == nil && (fi.Mode()&os.ModeCharDevice) != 0
 }
 
-// cmdBackup handles `fleet backup [--db=chat|sched|all] [--out DIR]`.
+// cmdBackup handles `fleet backup [--db=chat|sched|all] [--out DIR]`. --db=all
+// also writes the connector-state archive beside the dump (backup_files.go).
 func cmdBackup(argv []string) int {
 	fs := flag.NewFlagSet("backup", flag.ContinueOnError)
 	db := fs.String("db", "all", "which database to back up: chat|sched|all")
 	out := fs.String("out", "", "output directory for the dump file(s) (else FLEET_BACKUP_DIR from the shell or the env file, else .)")
-	prune := fs.Bool("prune", false, "after backing up, delete dumps older than FLEET_BACKUP_RETENTION_DAYS (default 30)")
+	prune := fs.Bool("prune", false, "after backing up, delete dumps and connector-state archives older than FLEET_BACKUP_RETENTION_DAYS (default 30)")
 	chatURL := fs.String("chat-database-url", "", "chat Postgres DSN (else DATABASE_URL, schema chat)")
 	schedURL := fs.String("sched-database-url", "", "sched Postgres DSN (else DATABASE_URL, schema sched)")
 	if err := fs.Parse(argv); err != nil {
@@ -567,6 +570,14 @@ func cmdBackup(argv []string) int {
 		fmt.Fprintf(os.Stderr, "backed up %s → %s (verified)\n", storeLabel(name), path)
 		fmt.Println(path)
 	}
+	// A whole-fleet backup also keeps the connectors' own state files
+	// (backup_files.go): they are in no schema. A failure here leaves the
+	// verified dump in place and still prunes, but the run exits non-zero so
+	// the timer, the journal and `fleet doctor` show it.
+	var stateErr error
+	if *db == "all" || *db == "" {
+		stateErr = backupConnectorState(outDir, now)
+	}
 	if *prune {
 		days, err := retentionDays()
 		if err != nil {
@@ -577,6 +588,9 @@ func cmdBackup(argv []string) int {
 			return errf(5, "prune: %v", err)
 		}
 		fmt.Fprintf(os.Stderr, "pruned %d old backup(s) older than %d days\n", n, days)
+	}
+	if stateErr != nil {
+		return errf(5, "backup: %v", stateErr)
 	}
 	return 0
 }
