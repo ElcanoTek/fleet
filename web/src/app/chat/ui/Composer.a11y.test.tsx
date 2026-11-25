@@ -225,6 +225,33 @@ describe("Composer — tools popover seat menu", () => {
     expect(toggleMcpServer).toHaveBeenCalledWith(null, "gamma");
   });
 
+  // A row the pointer is on is already in view. Scrolling it would move the
+  // list under the mouse, and a scroll outside an open account menu closes
+  // that menu, so a click on a row's account pill opened the menu and lost it
+  // at once. Only the keyboard's highlight is brought into view.
+  it("does not scroll a row the pointer makes active, and does for the arrow keys", async () => {
+    const proto = Element.prototype as { scrollIntoView?: () => void };
+    const had = Object.prototype.hasOwnProperty.call(proto, "scrollIntoView");
+    const original = proto.scrollIntoView;
+    const scrolled = vi.fn();
+    proto.scrollIntoView = scrolled;
+    try {
+      render(<Host overrides={{ mcpServers: SEATED }} />);
+      fireEvent.click(screen.getByRole("button", { name: "Tools" }));
+      const row = await screen.findByTestId("chat-tools-row-ix");
+      fireEvent.mouseEnter(row);
+      // The highlight took, with no scroll.
+      await waitFor(() => expect(row.className).toContain("bg-[var(--color-selected-bg)]"));
+      expect(scrolled).not.toHaveBeenCalled();
+
+      fireEvent.keyDown(screen.getByRole("textbox", { name: "Search tools" }), { key: "ArrowDown" });
+      await waitFor(() => expect(scrolled).toHaveBeenCalledWith({ block: "nearest" }));
+    } finally {
+      if (had) proto.scrollIntoView = original;
+      else delete proto.scrollIntoView;
+    }
+  });
+
   it("labels a bundled connector's default seat with the deployment name", async () => {
     render(<Host overrides={{ mcpServers: SEATED }} />);
     fireEvent.click(screen.getByRole("button", { name: "Tools" }));

@@ -258,18 +258,36 @@ for (const height of [860, 620, 480]) {
     );
     await boot(page, { admin: true, servers: many });
     await page.getByRole("button", { name: "Tools", exact: true }).click();
-    await expect(page.getByTestId("chat-tools-popover")).toBeVisible();
+    const popover = page.getByTestId("chat-tools-popover");
+    await expect(popover).toBeVisible();
+    // Wait out the popover's entrance (it rises into place as it fades in).
+    // A click on a target that is still moving is retried, and a retried
+    // click first scrolls its target to the list's end. That scroll's event
+    // fires a frame later, just after the menu opens, and closes it: a scroll
+    // outside the menu closes it, as it should.
+    await expect(popover).toHaveCSS("opacity", "1");
     const pill = page.getByTestId("mcp-seat-indexexchange");
     await expect(pill).toHaveText(/Elcano/);
-    // Put the row fully in view first and let that scroll pass: a scroll
-    // outside the menu closes it, as it should.
+    // Put the row fully in view first and let that scroll pass, for the same
+    // reason.
     await pill.evaluate((el) => el.scrollIntoView({ block: "center" }));
     await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+    // Bringing a row into view scrolls the list, never the popover itself:
+    // its search row stays where it is.
+    expect(await popover.evaluate((el) => el.scrollTop)).toBe(0);
+    await expect(page.getByRole("textbox", { name: "Search tools" })).toBeInViewport({ ratio: 1 });
+    const scrolledTo = () =>
+      pill.evaluate((el) => (el.closest(".overflow-y-auto") as HTMLElement).scrollTop);
+    const before = await scrolledTo();
     await pill.click();
 
     const menu = page.locator("[data-seat-menu]");
     await expect(menu).toBeVisible();
     await expect(menu).toHaveCSS("opacity", "1");
+    // The pointer is on the row now. That does not scroll the list: a scroll
+    // outside the menu would have closed it.
+    expect(await scrolledTo()).toBe(before);
+    expect(await popover.evaluate((el) => el.scrollTop)).toBe(0);
     const box = (await menu.boundingBox())!;
     expect(box.y).toBeGreaterThanOrEqual(0);
     expect(box.y + box.height).toBeLessThanOrEqual(height);
