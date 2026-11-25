@@ -22,9 +22,10 @@ import (
 
 // ── graceful shutdown helpers (#278) ──
 
-// awaitShutdown blocks until a terminal signal or a fatal listener error,
-// returning whether shutdown should be graceful (SIGTERM — deployment restart)
-// or immediate (SIGINT — dev Ctrl-C — or a listener error). SIGUSR1 logs a
+// awaitShutdown blocks until a terminal signal or a fatal error on errCh (a
+// listener's, or the database ownership lost to another server), returning
+// whether shutdown should be graceful (SIGTERM — deployment restart) or
+// immediate (SIGINT — dev Ctrl-C — or an error on errCh). SIGUSR1 logs a
 // diagnostic in-flight snapshot and keeps waiting (no shutdown).
 func awaitShutdown(sigCh <-chan os.Signal, errCh <-chan error, chatSrv *httpapi.Server, pool *runner.Pool, lim *admission.Limiter) bool {
 	for {
@@ -41,7 +42,7 @@ func awaitShutdown(sigCh <-chan os.Signal, errCh <-chan error, chatSrv *httpapi.
 				slog.Info("fleet: status", "active_chat_turns", chatSrv.ActiveTurns(), "active_sched_tasks", pool.ActiveTasks(), "admission_inflight", lim.InFlight(), "admission_total", lim.Total())
 			}
 		case err := <-errCh:
-			slog.Error("fleet: listener error; shutting down", "err", err)
+			slog.Error("fleet: listener error or database ownership lost; shutting down", "err", err)
 			return false
 		}
 	}

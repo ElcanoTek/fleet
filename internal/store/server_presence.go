@@ -87,12 +87,11 @@ func (s *Store) HoldServerPresence(ctx context.Context) (release func(), err err
 	if err != nil {
 		return nil, err
 	}
-	var idb [8]byte
-	if _, err := rand.Read(idb[:]); err != nil {
+	instance, err := s.serverInstanceID()
+	if err != nil {
 		s.unlockPresence(ctx, conn)
 		return nil, err
 	}
-	instance := hex.EncodeToString(idb[:])
 	if err := s.heartbeat(ctx, instance); err != nil {
 		s.unlockPresence(ctx, conn)
 		return nil, fmt.Errorf("server presence heartbeat: %w", err)
@@ -115,6 +114,22 @@ func (s *Store) HoldServerPresence(ctx context.Context) (release func(), err err
 			wg.Wait()
 		})
 	}, nil
+}
+
+// serverInstanceID is this server's id in core.server_presence, the same for
+// its presence heartbeat and its owner lock (ClaimServerOwnership); drawn at
+// random on first use.
+func (s *Store) serverInstanceID() (string, error) {
+	s.serverInstanceMu.Lock()
+	defer s.serverInstanceMu.Unlock()
+	if s.serverInstance == "" {
+		var idb [8]byte
+		if _, err := rand.Read(idb[:]); err != nil {
+			return "", err
+		}
+		s.serverInstance = hex.EncodeToString(idb[:])
+	}
+	return s.serverInstance, nil
 }
 
 // waitForPresenceLock takes the presence lock shared on a new dedicated
@@ -142,11 +157,23 @@ func (s *Store) waitForPresenceLock(ctx context.Context) (*sql.Conn, error) {
 }
 
 // tryPresenceLock takes the lock shared without waiting, on a new dedicated
-// connection; got is false (and no connection kept) while it is held
-// exclusive.
+// connection named "fleet presence <instance> <host> pid <pid>" with the lock
+// session settings (configureLockSession: Postgres lets go of the lock of a
+// host that vanished within about half a minute, so a replacement server is
+// not kept out for hours); got is false (and no connection kept) while it is
+// held exclusive.
 func (s *Store) tryPresenceLock(ctx context.Context) (*sql.Conn, bool, error) {
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
+		return nil, false, err
+	}
+	name, err := s.lockSessionName("fleet presence")
+	if err != nil {
+		discardSQLConn(conn)
+		return nil, false, err
+	}
+	if err := configureLockSession(ctx, conn, name); err != nil {
+		discardSQLConn(conn)
 		return nil, false, err
 	}
 	var got bool
@@ -155,21 +182,19 @@ func (s *Store) tryPresenceLock(ctx context.Context) (*sql.Conn, bool, error) {
 		return nil, false, err
 	}
 	if !got {
-		_ = conn.Close()
+		discardSQLConn(conn)
 		return nil, false, nil
 	}
 	return conn, true, nil
 }
 
-// unlockPresence releases the shared lock and its connection.
+// unlockPresence releases the shared lock and discards its connection (its
+// session settings must not follow it back into the pool).
 func (s *Store) unlockPresence(ctx context.Context, conn *sql.Conn) {
 	unlockCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
-	if _, err := conn.ExecContext(unlockCtx, `SELECT pg_advisory_unlock_shared($1)`, serverPresenceLockKey); err != nil {
-		discardSQLConn(conn)
-		return
-	}
-	_ = conn.Close()
+	_, _ = conn.ExecContext(unlockCtx, `SELECT pg_advisory_unlock_shared($1)`, serverPresenceLockKey)
+	discardSQLConn(conn)
 }
 
 // ServerPresenceLost reports whether this server's presence lock connection
@@ -315,23 +340,32 @@ func (s *Store) ExcludeServers(ctx context.Context) (release func(), err error) 
 	if err != nil {
 		return nil, fmt.Errorf("server presence check: %w", err)
 	}
+	// A server starting meanwhile waits for this lock without a deadline:
+	// the same session settings as the servers' let Postgres drop it within
+	// about half a minute if this host vanishes while it holds it.
+	name, err := s.lockSessionName("fleet account deletion")
+	if err != nil {
+		discardSQLConn(conn)
+		return nil, fmt.Errorf("server presence check: %w", err)
+	}
+	if err := configureLockSession(ctx, conn, name); err != nil {
+		discardSQLConn(conn)
+		return nil, fmt.Errorf("server presence check: %w", err)
+	}
 	var got bool
 	if err := conn.QueryRowContext(ctx, `SELECT pg_try_advisory_lock($1)`, serverPresenceLockKey).Scan(&got); err != nil {
 		discardSQLConn(conn)
 		return nil, fmt.Errorf("server presence check: %w", err)
 	}
 	if !got {
-		_ = conn.Close()
+		discardSQLConn(conn)
 		return nil, ErrServerRunning
 	}
 	unlock := func() {
 		unlockCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
-		if _, err := conn.ExecContext(unlockCtx, `SELECT pg_advisory_unlock($1)`, serverPresenceLockKey); err != nil {
-			discardSQLConn(conn)
-			return
-		}
-		_ = conn.Close()
+		_, _ = conn.ExecContext(unlockCtx, `SELECT pg_advisory_unlock($1)`, serverPresenceLockKey)
+		discardSQLConn(conn)
 	}
 	for look := 0; look < 2; look++ {
 		if look == 1 && !sleepCtx(ctx, serverPresenceGrace) {

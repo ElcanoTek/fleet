@@ -46,7 +46,10 @@ journal carries the exact governed, bounded model-visible bytes from the
 ## Startup recovery
 
 `Store.RecoverStrandedTurns` runs at boot (`cmd/fleet` `run()`, after
-`SetSearchEnabled`, before serving). Per `running` turn, in one transaction:
+`SetSearchEnabled`, before serving), and only once the server owns the
+database: a second `fleet serve` on a database another one runs against
+refuses before it gets here, so a live server's running turns are never
+taken for a crash's ([ADR-0122](adr/0122-one-server-owns-the-database.md)). Per `running` turn, in one transaction:
 rebuild entries from the journal (authoritative for calls/results) interleaved
 with `turn_events` text/reasoning (`turn.retry` drops the abandoned attempt's
 text; steered `user.message` events project as user entries exactly once by

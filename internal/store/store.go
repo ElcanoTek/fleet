@@ -75,6 +75,11 @@ type Store struct {
 	// presenceLost is set while this server's presence lock connection has
 	// dropped and the lock is not held again yet (ServerPresenceLost).
 	presenceLost atomic.Bool
+	// serverInstance names this server in core.server_presence: the row its
+	// presence heartbeat writes and the one its owner lock writes while it
+	// takes that lock back (serverInstanceID).
+	serverInstanceMu sync.Mutex
+	serverInstance   string
 	// tokenCipher encrypts the per-user remote-MCP OAuth secrets at rest (#443).
 	// nil = the remote-MCP-OAuth feature is disabled (no FLEET_MCP_OAUTH_ENCRYPTION_KEY);
 	// the token CRUD then fails closed via secretbox.ErrNoCipher rather than

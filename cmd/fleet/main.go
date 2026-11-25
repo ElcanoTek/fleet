@@ -397,10 +397,54 @@ func run() error {
 
 	// Resolve the sandbox image, OCI runtime, backend (and its kubernetes
 	// settings) and egress allowlist from env + bundle (env wins). Fail-closed
-	// on an unrecognized backend value (#989).
+	// on an unrecognized backend value (#989) — before the database is opened,
+	// so a bad configuration fails without migrating or waiting for it.
 	if err := resolveSandboxInto(cfg, bundle); err != nil {
 		return err
 	}
+
+	// ── DB pools (both self-migrate on open) ──
+	// cfg's DSNs come from config.ResolveDSNs: one database, the chat store
+	// in schema chat and the sched store in schema sched (#2049, ADR-0098).
+	chatDB, schedDB := cfg.DatabaseURL, cfg.SchedDatabaseURL
+	if err := config.EnsureDistinctStores(chatDB, schedDB); err != nil {
+		return err
+	}
+	chatStore, err := store.Open(chatDB, store.PoolConfig{
+		MaxOpenConns:    cfg.ChatDBPool.MaxOpenConns,
+		MaxIdleConns:    cfg.ChatDBPool.MaxIdleConns,
+		ConnMaxIdleTime: cfg.ChatDBPool.ConnMaxIdleTime,
+		ConnMaxLifetime: cfg.ChatDBPool.ConnMaxLifetime,
+		ConnectTimeout:  cfg.ChatDBPool.ConnectTimeout,
+	})
+	if err != nil {
+		return fmt.Errorf("open chat DB: %w", err)
+	}
+	defer chatStore.Close()
+	slog.Info("chat DB connected + migrated")
+	// Full-text search (#308): honor FLEET_SEARCH_ENABLED, then backfill the
+	// message-content index for any pre-FTS messages in the background so startup
+	// isn't blocked on a large walk. Idempotent + batched (see BackfillSearchContent).
+	chatStore.SetSearchEnabled(cfg.SearchEnabled)
+	// Conversation soft-delete (#279): honor FLEET_CONVERSATION_SOFT_DELETE. When
+	// enabled, delete operations tombstone rows (deleted_at = NOW()) instead of
+	// hard-deleting; reads hide tombstoned rows and SweepExpired permanently
+	// purges rows older than 30 days. Default off = unchanged hard-delete behavior.
+	chatStore.SetSoftDelete(cfg.ConversationSoftDelete)
+	if cfg.ConversationSoftDelete {
+		slog.Info("conversation soft-delete: ENABLED (deleted rows tombstoned, purged after 30 days)")
+	}
+	// One fleet serve owns the database (ADR-0122): take it — refusing, with
+	// nothing recovered or written, while another server runs against it —
+	// and mark this server as running for the CLI account deletion. As early
+	// as the database can be opened: before the MCP broker starts, skills are
+	// staged and anything is written. Only the migrations store.Open just ran
+	// came first, as every CLI's store open runs them.
+	owner, releaseDatabase, err := takeTheDatabase(chatStore, databaseOwnerWait)
+	if err != nil {
+		return exitQuietlyIfStopped(err)
+	}
+	defer releaseDatabase()
 
 	// Install the bundle's agent tool-behavior policy (parallel-safe tools,
 	// critical-tool suffixes, substitute map). The generic bundle ships none, so
@@ -495,60 +539,14 @@ func run() error {
 	// Args are ints (%d) from operator-set FLEET_MAX_CONCURRENT_AGENTS — no CR/LF, no log-injection vector.
 	slog.Info("admission: limits set", "total", agentLimiter.Total(), "scheduled_max", agentLimiter.SchedulableSlots(), "interactive_reserved", agentLimiter.Total()-agentLimiter.SchedulableSlots())
 
-	// ── DB pools (both self-migrate on open) ──
-	// cfg's DSNs come from config.ResolveDSNs: one database, the chat store
-	// in schema chat and the sched store in schema sched (#2049, ADR-0098).
-	chatDB, schedDB := cfg.DatabaseURL, cfg.SchedDatabaseURL
-	if err := config.EnsureDistinctStores(chatDB, schedDB); err != nil {
+	// Stranded-turn recovery (#798) projects any turn left 'running' by a
+	// crash into canonical history — only while this server still owns the
+	// database, which takeTheDatabase (above) took before anything was
+	// written. After SetSearchEnabled (projection writes FTS rows) and BEFORE
+	// the scheduler store and the HTTP server.
+	if err := recoverAsOwner(owner, chatStore, cfg.InputQueueRetentionDays); err != nil {
 		return err
 	}
-	chatStore, err := store.Open(chatDB, store.PoolConfig{
-		MaxOpenConns:    cfg.ChatDBPool.MaxOpenConns,
-		MaxIdleConns:    cfg.ChatDBPool.MaxIdleConns,
-		ConnMaxIdleTime: cfg.ChatDBPool.ConnMaxIdleTime,
-		ConnMaxLifetime: cfg.ChatDBPool.ConnMaxLifetime,
-		ConnectTimeout:  cfg.ChatDBPool.ConnectTimeout,
-	})
-	if err != nil {
-		return fmt.Errorf("open chat DB: %w", err)
-	}
-	defer chatStore.Close()
-	slog.Info("chat DB connected + migrated")
-	// While this server runs, `fleet admin rm` / `fleet chat user del` refuse
-	// to delete an account against the same database (store.ExcludeServers):
-	// the server's own deletion stops the account's work and moves its files
-	// aside under its request gate, which a CLI cannot reach. A CLI deletion
-	// already running is waited for, without a deadline, before anything
-	// here opens a listener; a stop signal meanwhile exits cleanly.
-	presenceCtx, stopPresenceWait := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
-	releasePresence, err := chatStore.HoldServerPresence(presenceCtx)
-	stoppedWaiting := presenceCtx.Err() != nil
-	stopPresenceWait()
-	if err != nil {
-		if stoppedWaiting {
-			slog.Info("stopped while waiting for an account deletion run from the CLI to finish")
-			return nil
-		}
-		return fmt.Errorf("mark the server as running: %w", err)
-	}
-	defer releasePresence()
-
-	// Full-text search (#308): honor FLEET_SEARCH_ENABLED, then backfill the
-	// message-content index for any pre-FTS messages in the background so startup
-	// isn't blocked on a large walk. Idempotent + batched (see BackfillSearchContent).
-	chatStore.SetSearchEnabled(cfg.SearchEnabled)
-	// Conversation soft-delete (#279): honor FLEET_CONVERSATION_SOFT_DELETE. When
-	// enabled, delete operations tombstone rows (deleted_at = NOW()) instead of
-	// hard-deleting; reads hide tombstoned rows and SweepExpired permanently
-	// purges rows older than 30 days. Default off = unchanged hard-delete behavior.
-	chatStore.SetSoftDelete(cfg.ConversationSoftDelete)
-	if cfg.ConversationSoftDelete {
-		slog.Info("conversation soft-delete: ENABLED (deleted rows tombstoned, purged after 30 days)")
-	}
-	// Stranded-turn recovery (#798): project any turn left 'running' by a crash
-	// into canonical history. Runs AFTER SetSearchEnabled (projection writes
-	// FTS rows) and BEFORE the HTTP server serves.
-	recoverStrandedTurns(chatStore, cfg.InputQueueRetentionDays)
 	if cfg.SearchEnabled {
 		safe.Go("store.fts-backfill", func() {
 			bfCtx, bfCancel := context.WithTimeout(context.Background(), 30*time.Minute)
@@ -1159,7 +1157,7 @@ func run() error {
 		pool.Run(ctx)
 	}()
 
-	errCh := make(chan error, 3)
+	errCh := make(chan error, 4) // three listeners + the ownership watch
 	go func() {
 		// A panic in the serve loop triggers graceful shutdown (errCh) rather than
 		// crashing the process or hanging; handler panics are caught upstream.
@@ -1170,6 +1168,9 @@ func run() error {
 			errCh <- fmt.Errorf("chat-server: %w", err)
 		}
 	}()
+	// Another server took the database over while this one's owner lock
+	// connection was down: stop at once, as on a listener error.
+	stopOnOwnershipLoss(ctx, owner, errCh)
 	serveInBackground("orchestrator", orchServer, errCh)
 	serveInBackground("web", webServer, errCh) // nil (skipped) when FLEET_WEB_ADDR=off
 	startApprovalSweepers(ctx, chatSrv)
@@ -1188,7 +1189,7 @@ func run() error {
 	// then drain. Extracted so run() stays within the cyclomatic budget.
 	graceful := awaitShutdown(sigCh, errCh, chatSrv, pool, agentLimiter)
 	performShutdown(graceful, grace, cancel, chatSrv, pool, poolDone, chatServer, orchServer, webServer)
-	return nil
+	return ownershipLossErr(owner)
 }
 
 // startApprovalSweepers launches the background tickers for pending approval

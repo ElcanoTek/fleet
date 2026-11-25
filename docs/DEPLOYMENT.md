@@ -35,7 +35,15 @@ listeners themselves stay loopback-only.
 > database leases and the worker-pool concurrency cap is a per-process semaphore —
 > both assume one running process. fleet scales **vertically**: put it on a
 > bigger box, not more replicas. One well-specced server goes a long way (see the
-> sizing table below).
+> sizing table below). The database enforces it: a second `fleet serve` against
+> the same database (one started by hand while the service runs, or a cloned box
+> with the same `DATABASE_URL`) waits up to 60 seconds for the running one to stop,
+> then exits non-zero naming it (host, pid, address), having recovered and
+> written nothing ([ADR-0122](adr/0122-one-server-owns-the-database.md)). The
+> CLIs (`fleet migrate`, `fleet backup`, `fleet admin`, …) still run alongside
+> the server. The check uses Postgres session advisory locks, so fleet needs a
+> direct connection to Postgres or a session-mode pooler: a pooler in
+> transaction mode (PgBouncer's `pool_mode = transaction`) breaks it.
 
 ## Choosing a host (sizing)
 
