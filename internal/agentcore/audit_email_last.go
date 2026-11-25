@@ -706,6 +706,14 @@ func (o *orchestrationState) abortNotifyFinishNudge() (bool, []string) {
 	if !o.emailLastAttempted || o.summaryEmailSent {
 		return true, nil
 	}
+	// A summary email whose send ended with an unknown outcome may have
+	// reached the reader. Demanding "the ONE summary email" now would push
+	// the model to send a second, reworded copy past the duplicate guard;
+	// the run already says in its answer that delivery is in doubt.
+	if o.summaryEmailMaybeSent {
+		o.log().Warn("Enforcement: allowing finish after a terminal abort — the summary email's outcome is unknown, so another is not demanded")
+		return true, nil
+	}
 	if o.abortNotifyNudges >= maxAbortNotifyNudges {
 		o.log().Warn("Enforcement: allowing finish after a terminal abort WITHOUT the failure-summary email — nudges exhausted", "nudges", maxAbortNotifyNudges)
 		return true, nil

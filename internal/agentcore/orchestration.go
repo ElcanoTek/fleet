@@ -117,6 +117,12 @@ type orchestrationState struct {
 	// call is refused (checkEmailLastOrder), and settled-failed creates no
 	// longer block finish (finishOwed).
 	summaryEmailSent bool
+	// summaryEmailMaybeSent records that a send_email AFTER email-last work
+	// began ended with an unknown outcome (emailOutcomeUnknown): the batch's
+	// summary email may have reached its reader. An aborted run then stops
+	// demanding one (abortNotifyFinishNudge), which would push the model
+	// towards a second copy.
+	summaryEmailMaybeSent bool
 	// abortNotifyNudges counts finish refusals issued after an abort to demand
 	// the failure-summary email; bounded by maxAbortNotifyNudges.
 	abortNotifyNudges int
@@ -213,7 +219,35 @@ type orchestrationState struct {
 
 	// ── email safety (both modes) ──
 	sendEmailSuccessCount int
+	// sentEmailFingerprints holds the dedup key (emailDedupKey) of every
+	// send_email that SUCCEEDED in this turn or run, and nothing else: it is
+	// written only by recordToolResult, for a call that returned cleanly and
+	// reported no failure (the same success the critical-action accounting
+	// uses, so a server that answers without a status_code counts). An
+	// identical payload is refused as "already sent", which the model reads
+	// (and repeats to the user) as a fact, and the scheduled guard
+	// discharges the send's commitment on it, so it must never hold a send
+	// that failed or has not returned yet.
 	sentEmailFingerprints map[string]struct{}
+	// maybeSentEmailFingerprints holds the dedup key of every send_email
+	// whose outcome is unknown: the call failed in a way that leaves open
+	// whether the provider took the message (a timeout or transport death
+	// after the request went out, a server reporting an unknown outcome, a
+	// contained panic). Retrying such a send could deliver the email twice,
+	// and "already sent" could be false, so an identical call is refused
+	// with its own text (maybeSentEmailRefusal) that says the email may have
+	// gone out and how to proceed. Like the other two records it lasts one
+	// turn or run.
+	maybeSentEmailFingerprints map[string]struct{}
+	// inFlightEmailFingerprints holds the dedup key of every send_email the
+	// gates have let through whose result has not come back. A second,
+	// identical call while the first is out is refused, which is what stops
+	// two parallel identical calls (a bundle may list send_email in
+	// parallel_safe_tools) from both sending. The key leaves the set when the
+	// call's result is recorded, success or failure, or when the call is
+	// refused after the gates and never runs (releaseAdmittedToolCall), so a
+	// failed send can be retried with the same payload in the same turn.
+	inFlightEmailFingerprints map[string]struct{}
 
 	// ── approval / memory staging (interactive) ──
 	approvalSink   ApprovalStager
@@ -918,6 +952,12 @@ func (o *orchestrationState) checkEmailSafety(toolName, toolCallID, rawInput str
 	if _, dup := o.sentEmailFingerprints[fp]; dup {
 		return true, "Safety guard: identical send_email payload already sent in this turn."
 	}
+	if _, maybe := o.maybeSentEmailFingerprints[fp]; maybe {
+		return true, maybeSentEmailRefusal(false)
+	}
+	if _, running := o.inFlightEmailFingerprints[fp]; running {
+		return true, inFlightEmailRefusal("turn")
+	}
 	if o.approvalSink != nil {
 		id, err := o.approvalSink.Stage(toolName, toolCallID, rawInput)
 		if refused := stageRefusal(err); refused != "" {
@@ -930,19 +970,16 @@ func (o *orchestrationState) checkEmailSafety(toolName, toolCallID, rawInput str
 		switch id {
 		case PreApprovedSentinel:
 			// Session pre-approval (#300): run the send without a card, while keeping
-			// the per-turn limit and dedup checks above active.
-			if o.sentEmailFingerprints == nil {
-				o.sentEmailFingerprints = make(map[string]struct{})
-			}
-			o.sentEmailFingerprints[fp] = struct{}{}
+			// the per-turn limit and dedup checks above active. The payload is
+			// held in flight, not marked sent: it is "sent" only once its result
+			// says so (recordToolResult), so a send that fails can be retried.
+			o.claimEmailSend(fp)
 			return false, ""
 		case RecordedSentinel:
 			// Self-addressed owner email in Autonomous mode: durable receipt was
-			// persisted in chat.approvals; let the send proceed.
-			if o.sentEmailFingerprints == nil {
-				o.sentEmailFingerprints = make(map[string]struct{})
-			}
-			o.sentEmailFingerprints[fp] = struct{}{}
+			// persisted in chat.approvals; let the send proceed (in flight, as
+			// above).
+			o.claimEmailSend(fp)
 			if _, ok := o.approvalSink.(ActionResultRecorder); ok && ApprovalResultCard(toolName) {
 				o.notifyRecordedCalls = append(o.notifyRecordedCalls, notifyRecordedCall{tool: toolName, rawInput: rawInput, toolCallID: toolCallID})
 			}
@@ -953,7 +990,142 @@ func (o *orchestrationState) checkEmailSafety(toolName, toolCallID, rawInput str
 		return true, fmt.Sprintf("APPROVAL_REQUIRED: this send_email call has been staged for explicit user approval "+
 			"(approval_id=%s). Do NOT retry. Summarize to the user what you would send and wait for them to click Send.", id)
 	}
+	o.claimEmailSend(fp)
 	return false, ""
+}
+
+// inFlightEmailRefusal is the text for a send_email refused because an
+// identical one is still running. scope names the span the guard covers
+// ("turn" in chat, "run" for a scheduled run). It says plainly that nothing
+// has been sent by THIS call and that a retry is fine once the other one has
+// failed with a clear error (an unknown outcome refuses the retry instead,
+// maybeSentEmailRefusal), so the model neither reports the email as
+// delivered nor gives up on a send that did not happen.
+func inFlightEmailRefusal(scope string) string {
+	return "Safety guard: an identical send_email is already running in this " + scope +
+		", so this call was not sent. Wait for that call's result: if it succeeded the email is sent; if it failed with a clear error, you may send it again."
+}
+
+// maybeSentEmailRefusal is the text for a send_email refused because an
+// identical one earlier in the turn (or run) ended with an unknown outcome.
+// It must not say the email was sent, nor invite a retry — blind, or
+// disguised by rewording the content until the fingerprint no longer matches
+// — and it names the way forward: in chat the user checks and, if nothing
+// arrived, asks again in a new message (the record lasts one turn, so the
+// next turn starts clean); a scheduled run cannot ask, so it reports the
+// doubt and, if the send is still owed, ends with an abort that says so.
+func maybeSentEmailRefusal(scheduled bool) string {
+	const head = "Safety guard: an identical send_email earlier in this %s ended without a clear result: it may have been sent, or it may have failed before sending. " +
+		"This call was not sent. Do NOT send it again in this %s, and do NOT alter the content to make it look different. "
+	if scheduled {
+		return fmt.Sprintf(head, "run", "run") +
+			"Say in your final answer that this email may or may not have been delivered and should be checked. " +
+			"If this send is still owed, call confirm_audit(success=false, user_visible_summary=...) saying so. A new run of the task starts without this record."
+	}
+	return fmt.Sprintf(head, "turn", "turn") +
+		"Tell the user it may have gone out and ask them to check (their inbox, the sent folder or the Outbox). " +
+		"If it did not arrive, they can ask for it again in a new message: the next turn starts without this record."
+}
+
+// emailUnknownOutcomeMarkers are fragments of a failed send's result that
+// leave open whether the provider took the message: a bundle server's
+// unknown-outcome codes, fleet's restart text, and the timeout and
+// dropped-connection wording of a server reporting its own upstream call
+// (botocore's "Read timeout on endpoint URL", a reset socket). Matched
+// case-insensitively anywhere; a false match only refuses an identical
+// retry for the rest of the turn.
+var emailUnknownOutcomeMarkers = []string{
+	"outcome_unknown", "ambiguous_transport", "outcome is unknown",
+	"timeout", "timed out", "connection reset", "connection aborted", "broken pipe", "remote end closed",
+}
+
+// emailOutcomeUnknown reports whether a FAILED send_email's result leaves
+// open whether the provider took the message. In order:
+//
+//   - a contained panic (isContainedToolPanicText) is unknown: its result
+//     says the call may have committed;
+//   - an MCP call fleet knows never reached its server, or that its server
+//     received and refused with an HTTP 4xx, is a plain failure: mcpTool says
+//     so in the error's prefix ("Error calling <tool> (not sent): …" from
+//     mcp.RequestNotSent, "… (refused by the server): …" from
+//     mcp.RequestRefused), as it does for a call refused before dispatch
+//     ("MCP call not sent: …"). These are fleet's own words at the start of
+//     the text, which no server output can reach;
+//   - any other transport error ("Error calling <tool>: …") is unknown: the
+//     request may have reached the server before the failure;
+//   - a provider status_code of 500 or above is unknown: a gateway that timed
+//     out (502, 504) or a provider that failed mid-request may have taken the
+//     message;
+//   - an unknown-outcome marker (emailUnknownOutcomeMarkers) is unknown.
+//
+// Anything else — a 4xx status_code, an error payload or an is-error answer
+// with no such marker, an attachment that could not be prepared — is a
+// provider or fleet refusal that delivered nothing: a plain failure, safe to
+// retry. Erring towards "unknown" only refuses a retry in this turn, never
+// sends twice, which is the direction this guard must lean.
+func emailOutcomeUnknown(toolName, resultText string) bool {
+	switch {
+	case isContainedToolPanicText(resultText):
+		return true
+	case strings.HasPrefix(resultText, mcpCallErrorPrefix(toolName, mcpCallNotSent)),
+		strings.HasPrefix(resultText, mcpCallErrorPrefix(toolName, mcpCallRefused)),
+		strings.HasPrefix(resultText, mcpCallNotSentPrefix):
+		return false
+	case strings.HasPrefix(resultText, mcpCallErrorPrefix(toolName, mcpCallMaybeSent)):
+		return true
+	}
+	if code, ok := resultStatusCode(resultText); ok && code >= 500 {
+		return true
+	}
+	lower := strings.ToLower(resultText)
+	for _, m := range emailUnknownOutcomeMarkers {
+		if strings.Contains(lower, m) {
+			return true
+		}
+	}
+	return false
+}
+
+// resultStatusCode returns the top-level numeric status_code of a JSON
+// object result.
+func resultStatusCode(resultText string) (int, bool) {
+	trimmed := strings.TrimSpace(resultText)
+	if trimmed == "" || trimmed[0] != '{' {
+		return 0, false
+	}
+	var probe struct {
+		StatusCode *float64 `json:"status_code"`
+	}
+	if err := json.Unmarshal([]byte(trimmed), &probe); err != nil || probe.StatusCode == nil {
+		return 0, false
+	}
+	return int(*probe.StatusCode), true
+}
+
+// claimEmailSend holds fp in flight for a send_email the gates are letting
+// through. It is the last step of an admission, taken under the same o.mu
+// hold as the duplicate checks, so of two identical calls racing through the
+// gates exactly one is admitted. Callers must hold o.mu.
+func (o *orchestrationState) claimEmailSend(fp string) {
+	if o.inFlightEmailFingerprints == nil {
+		o.inFlightEmailFingerprints = make(map[string]struct{})
+	}
+	o.inFlightEmailFingerprints[fp] = struct{}{}
+}
+
+// releaseAdmittedToolCall undoes what the gates reserved for a call they let
+// through, for a call that is then refused before it runs (the tool's own
+// argument check, or a failed intent-journal write in runGovernedToolCall).
+// Such a call never reaches recordToolResult, so without this its send_email
+// payload would stay in flight for the rest of the turn and refuse every
+// identical retry as "already running".
+func (o *orchestrationState) releaseAdmittedToolCall(toolName, rawInput string) {
+	if o == nil || !isEmailTool(toolName) {
+		return
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	delete(o.inFlightEmailFingerprints, emailDedupKey(rawInput))
 }
 
 // checkProposal is the one interception path for the propose_* tools
@@ -1290,10 +1462,34 @@ func (o *orchestrationState) recordToolResult(toolName, rawInput, resultText str
 	// (checkRepeatedCall's async-poll exemption).
 	o.noteAsyncPollResult(toolName, rawInput, resultText, effectiveSucceeded)
 
-	if isEmailTool(toolName) && succeeded {
-		if sendEmailSucceeded(strings.TrimSpace(resultText)) {
+	if isEmailTool(toolName) {
+		// The call has returned, so its payload is no longer in flight
+		// whatever the outcome. A call that returned cleanly and reported no
+		// failure becomes "already sent"; one whose outcome is unknown becomes
+		// "may have been sent"; a plain failure leaves no marker, and an
+		// identical retry goes through the gates afresh.
+		fp := emailDedupKey(rawInput)
+		delete(o.inFlightEmailFingerprints, fp)
+		switch {
+		case effectiveSucceeded:
+			if o.sentEmailFingerprints == nil {
+				o.sentEmailFingerprints = make(map[string]struct{})
+			}
+			o.sentEmailFingerprints[fp] = struct{}{}
+		case emailOutcomeUnknown(toolName, resultText):
+			if o.maybeSentEmailFingerprints == nil {
+				o.maybeSentEmailFingerprints = make(map[string]struct{})
+			}
+			o.maybeSentEmailFingerprints[fp] = struct{}{}
+			if o.emailLastAttempted && !o.summaryEmailSent {
+				o.summaryEmailMaybeSent = true
+			}
+			o.log().Warn("send_email outcome unknown; an identical send is refused for the rest of the turn", "tool", toolName)
+		}
+		// The per-turn count and the summary-email bookkeeping keep their
+		// stricter rule: a 2xx status_code.
+		if succeeded && sendEmailSucceeded(strings.TrimSpace(resultText)) {
 			o.sendEmailSuccessCount++
-			o.sentEmailFingerprints[emailDedupKey(rawInput)] = struct{}{}
 			o.noteSummaryEmailSent()
 			o.log().Info("send_email queued successfully", "sent", o.sendEmailSuccessCount, "limit", maxSendEmailCallsPerTask)
 		}
@@ -1313,10 +1509,12 @@ func (o *orchestrationState) recordToolResult(toolName, rawInput, resultText str
 			o.criticalToolFailureAttempts = make(map[string]int)
 		}
 
+		madeProgress := false
 		outcomes, ok := parseDealOutcomes(resultText)
 		switch {
 		case ok:
 			newly, failed := o.recordDealOutcomes(toolName, rawInput, outcomes)
+			madeProgress = newly > 0
 			// A canary must be a SUCCESSFUL call: a transport error or an
 			// isError response is no proof of the operation, even when its
 			// body still carries a success row for the requested record.
@@ -1355,6 +1553,7 @@ func (o *orchestrationState) recordToolResult(toolName, rawInput, resultText str
 			o.noteCreateFailure(toolName, rawInput, resultText, argsHash, false)
 		case effectiveSucceeded:
 			// Single-call critical tool (no per-record results[]).
+			madeProgress = true
 			o.criticalExecutedCount++
 			delete(o.criticalToolFailureAttempts, key)
 			o.markPendingCriticalDone(toolName, rawInput)
@@ -1382,6 +1581,21 @@ func (o *orchestrationState) recordToolResult(toolName, rawInput, resultText str
 		// the last committed record is discharged, then auto-locks.
 		if o.allCommitmentsExhausted() {
 			o.auditConfirmed = false
+		}
+		// A critical call that made no progress yet spent the token (no
+		// commitment holds it open) also forgets the last passed audit's
+		// fingerprint. That fingerprint lets confirm_audit answer an identical
+		// re-audit with "Audit already confirmed. Finish now" without granting
+		// anything — but it was recorded when the token was granted, before
+		// the call it unlocked ran. After such a failure the model re-audits
+		// to retry, often with the same structured arguments; the shortcut
+		// then neither re-granted the token nor let the retry through, and
+		// told the model to finish with the action never done. Cleared here,
+		// that re-audit takes the full path and grants the token again. While
+		// a commitment keeps the token live the retry needs no re-audit, so
+		// the fingerprint stays.
+		if !madeProgress && !o.auditConfirmed {
+			o.lastSuccessfulAuditFP = ""
 		}
 	}
 

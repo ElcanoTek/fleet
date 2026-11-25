@@ -308,6 +308,17 @@ type response struct {
 	// back to a non-nil Go error on the client; an unknown method or a server-side
 	// failure to run the call lands here.
 	Err string `json:"err,omitempty"`
+	// NotSent says a failed methodCall's tool request provably never reached
+	// its MCP server (mcp.RequestNotSent), so nothing ran. Err is masked text
+	// that cannot say so itself; the client marks the error it returns
+	// (mcp.MarkNotSent), so a caller deciding whether a retry could act twice
+	// gets the same answer as in-process.
+	NotSent bool `json:"notSent,omitempty"`
+	// Refused says the MCP server received a failed methodCall's tool
+	// request and refused it with an HTTP 4xx (mcp.RequestRefused), so it did
+	// not act. The typed status does not survive the masked Err, so the
+	// client marks the error it returns (mcp.MarkRefused).
+	Refused bool `json:"refused,omitempty"`
 	// Tools answers methodListTools; Accounts answers methodListAccounts. Both are
 	// public catalog data (no credentials).
 	Tools    []ToolDescriptor `json:"tools,omitempty"`

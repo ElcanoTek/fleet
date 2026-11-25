@@ -89,8 +89,15 @@ func runGovernedToolCall(ctx context.Context, f toolCallFraming, params fantasy.
 			return governedToolRefusal(ctx, f.name, params.ID, msg), nil
 		}
 	}
+	// From here on the policy has admitted the call, and may have reserved
+	// state for it that only its result record releases (a send_email held
+	// in flight against an identical duplicate). Each refusal below means the
+	// call will never run or record a result, so it hands that reservation
+	// back first; otherwise an identical retry would be refused for the rest
+	// of the turn as a duplicate of a call that never happened.
 	if f.validate != nil {
 		if refusal, ok := f.validate(); !ok {
+			releaseAdmittedCall(f.policy, f.name, params.Input)
 			return governedToolRefusal(ctx, f.name, params.ID, refusal), nil
 		}
 	}
@@ -101,6 +108,7 @@ func runGovernedToolCall(ctx context.Context, f toolCallFraming, params fantasy.
 	// pairs with an explicit unknown-outcome result rather than losing the
 	// record.
 	if refusal, ok := journalToolIntent(ctx, f.journal, f.name, params.ID, params.Input); !ok {
+		releaseAdmittedCall(f.policy, f.name, params.Input)
 		return governedToolRefusal(ctx, f.name, params.ID, refusal), nil
 	}
 	out := f.execute(ctx)
@@ -150,6 +158,20 @@ func runGovernedToolCall(ctx context.Context, f toolCallFraming, params fantasy.
 		return resp, &boundedModelToolError{cause: out.cause, message: resp.Content}
 	}
 	return resp, nil
+}
+
+// releaseAdmittedCall hands back what policy's gates reserved for a call they
+// admitted that is then refused before it runs. The reservation lives on the
+// run's orchestrationState, found through any wrapping policy (Unwrap), so a
+// driver that layers its own Policy over a built-in one needs no extra method.
+// A nil policy ran no gate, and so reserved nothing.
+func releaseAdmittedCall(policy Policy, name, input string) {
+	if policy == nil {
+		return
+	}
+	if o, ok := policyOrchestration(policy); ok {
+		o.releaseAdmittedToolCall(name, input)
+	}
 }
 
 // governedToolRefusal is the shared no-execute exit every pre-dispatch gate

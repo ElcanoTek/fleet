@@ -206,7 +206,7 @@ func (t *httpToolTransport) Call(ctx context.Context, method string, params inte
 	spec, ok := t.tools[name]
 	t.mu.RUnlock()
 	if !ok {
-		return nil, fmt.Errorf("http tool not found: %s", name)
+		return nil, MarkNotSent(fmt.Errorf("http tool not found: %s", name))
 	}
 	args, _ := p["arguments"].(map[string]interface{})
 	if t.refuseRedactedArgs {

@@ -37,7 +37,13 @@ type uiSecretBucket struct {
 	allowedHosts       map[string]bool
 	shareScopeSet      bool
 	allowEveryoneShare bool
-	updatedAt          time.Time
+	// shareGen identifies the bucket's current share decision: every write
+	// of it (a form submission, a confirmation consumed or given back) takes
+	// a fresh value from uiSecretStash.shareSeq. restoreEveryoneShare
+	// compares it to the value its consumption saw, so giving a confirmation
+	// back never overwrites a decision made since.
+	shareGen  uint64
+	updatedAt time.Time
 }
 
 // uiSecretStash holds host-side vaulted secrets submitted through show_ui
@@ -49,6 +55,10 @@ type uiSecretBucket struct {
 type uiSecretStash struct {
 	mu      sync.Mutex
 	buckets map[string]*uiSecretBucket
+	// shareSeq numbers share decisions across all buckets (shareGen), so a
+	// value taken from a bucket that is later swept and re-created can never
+	// match the new bucket's decision.
+	shareSeq uint64
 }
 
 func uiSecretKey(userEmail, convID string) string {
@@ -212,7 +222,17 @@ func (st *uiSecretStash) allowOrigin(userEmail, convID, rawURLOrHost string) {
 	b.updatedAt = now
 }
 
-func (st *uiSecretStash) setAllowEveryone(userEmail, convID string, allow bool) {
+// nextShareGenLocked records a new share decision on b. Callers must hold
+// st.mu.
+func (st *uiSecretStash) nextShareGenLocked(b *uiSecretBucket) uint64 {
+	st.shareSeq++
+	b.shareGen = st.shareSeq
+	return b.shareGen
+}
+
+// setAllowEveryone records the user's share decision and returns its
+// generation (shareGen).
+func (st *uiSecretStash) setAllowEveryone(userEmail, convID string, allow bool) uint64 {
 	now := time.Now()
 	st.mu.Lock()
 	defer st.mu.Unlock()
@@ -220,29 +240,59 @@ func (st *uiSecretStash) setAllowEveryone(userEmail, convID string, allow bool) 
 	b.shareScopeSet = true
 	b.allowEveryoneShare = allow
 	b.updatedAt = now
+	return st.nextShareGenLocked(b)
 }
 
-func (st *uiSecretStash) consumeEveryoneShare(userEmail, convID string) (allow bool, explicit bool) {
+// consumeEveryoneShare reads the share decision and uses up a positive one.
+// gen is the generation of the decision consumption left behind, the value
+// restoreEveryoneShare needs to give it back.
+func (st *uiSecretStash) consumeEveryoneShare(userEmail, convID string) (allow bool, explicit bool, gen uint64) {
 	now := time.Now()
 	key := uiSecretKey(userEmail, convID)
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	if st.buckets == nil {
-		return false, false
+		return false, false, 0
 	}
 	b, ok := st.buckets[key]
 	if !ok || now.Sub(b.updatedAt) > uiSecretTTL {
-		return false, false
+		return false, false, 0
 	}
 	if !b.shareScopeSet {
-		return false, false
+		return false, false, 0
 	}
-	allow = b.allowEveryoneShare
 	// Consume a positive confirmation so it cannot be reused on a subsequent connector.
 	if b.allowEveryoneShare {
 		b.allowEveryoneShare = false
+		return true, true, st.nextShareGenLocked(b)
 	}
-	return allow, true
+	return false, true, b.shareGen
+}
+
+// restoreEveryoneShare re-arms a fleet-wide share confirmation that
+// userConfirmedEveryoneShare used up for a connector that was then never
+// shared, because connecting or creating it failed first. The confirmation
+// was for sharing that connector; it did not happen, so the agent's corrected
+// retry does not need a second one.
+//
+// It gives back only the decision it took: gen is the generation the
+// consumption left (consumeEveryoneShare), and the bucket must still hold it.
+// If the user submitted a newer decision while the call ran (personal scope,
+// say), or another connector consumed a newer confirmation, that decision
+// stands and nothing is written. Only a live bucket is re-armed, keeping its
+// timestamp, so the confirmation lasts no longer than it would have: a bucket
+// that expired, or was swept as expired while the call ran, is left gone
+// rather than revived as a fresh confirmation.
+func (st *uiSecretStash) restoreEveryoneShare(userEmail, convID string, gen uint64) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	b, ok := st.buckets[uiSecretKey(userEmail, convID)]
+	if !ok || gen == 0 || b.shareGen != gen || time.Since(b.updatedAt) > uiSecretTTL {
+		return
+	}
+	b.shareScopeSet = true
+	b.allowEveryoneShare = true
+	st.nextShareGenLocked(b)
 }
 
 func (st *uiSecretStash) isFieldOriginAllowed(userEmail, convID, fieldID, targetURLOrHost string) (allowed bool, hasExplicitBinding bool) {
@@ -701,16 +751,19 @@ func isShareScopeFieldID(fieldID string) bool {
 	return strings.HasSuffix(k, "_scope")
 }
 
-func (s *Server) userConfirmedEveryoneShare(ctx context.Context, userEmail, convID string) bool {
-	if allow, explicit := s.uiSecrets.consumeEveryoneShare(userEmail, convID); explicit {
-		return allow
+// userConfirmedEveryoneShare reports whether the caller confirmed fleet-wide
+// sharing and uses the confirmation up. gen is the generation of the decision
+// that left behind, for restoreEveryoneShare.
+func (s *Server) userConfirmedEveryoneShare(ctx context.Context, userEmail, convID string) (confirmed bool, gen uint64) {
+	if allow, explicit, g := s.uiSecrets.consumeEveryoneShare(userEmail, convID); explicit {
+		return allow, g
 	}
 	if s.store == nil || strings.TrimSpace(convID) == "" {
-		return false
+		return false, 0
 	}
 	history, err := s.store.LoadHistory(ctx, convID)
 	if err != nil {
-		return false
+		return false, 0
 	}
 	ownerEmail := s.conversationOwnerEmail(ctx, userEmail, convID)
 	for i := len(history) - 1; i >= 0; i-- {
@@ -733,11 +786,11 @@ func (s *Server) userConfirmedEveryoneShare(ctx context.Context, userEmail, conv
 			strings.Contains(lower, "whole team")
 		if confirmed {
 			// Mark consumed so a single turn's confirmation cannot authorize a later connector.
-			s.uiSecrets.setAllowEveryone(userEmail, convID, false)
+			gen = s.uiSecrets.setAllowEveryone(userEmail, convID, false)
 		}
-		return confirmed
+		return confirmed, gen
 	}
-	return false
+	return false, 0
 }
 
 func (s *Server) vaultSubmissionMap(userEmail, convID, prefix string, data map[string]any, pwFields map[string]bool, cardFound bool) (mutated bool, vaultedKeys []string, cardOrigins []string) {
@@ -1390,8 +1443,21 @@ func (s *Server) connectorStudioConnectMCP(ctx context.Context, user string, con
 	if conv != nil {
 		convID = conv.ID
 	}
-	if strings.EqualFold(strings.TrimSpace(params.ShareScope), "everyone") && !s.userConfirmedEveryoneShare(ctx, user, convID) {
-		return nil, fmt.Errorf("share_scope=\"everyone\" requires explicit user confirmation in the show_ui form (share_scope=\"everyone\") or chat conversation; use share_scope=\"personal\" or ask the user to confirm fleet-wide sharing first")
+	// The confirmation is used up by the check below, before the connector
+	// exists. If anything fails before the connector is shared, it is given
+	// back (everyoneShareDone stays false), so the retry the agent makes
+	// with corrected arguments does not need the user to confirm again.
+	everyoneShareDone := false
+	if strings.EqualFold(strings.TrimSpace(params.ShareScope), "everyone") {
+		confirmed, shareGen := s.userConfirmedEveryoneShare(ctx, user, convID)
+		if !confirmed {
+			return nil, fmt.Errorf("share_scope=\"everyone\" requires explicit user confirmation in the show_ui form (share_scope=\"everyone\") or chat conversation; use share_scope=\"personal\" or ask the user to confirm fleet-wide sharing first")
+		}
+		defer func() {
+			if !everyoneShareDone {
+				s.uiSecrets.restoreEveryoneShare(user, convID, shareGen)
+			}
+		}()
 	}
 	apiKey, err := s.resolveSecretForConnectorURL(ctx, user, convID, params.Name, params.SecretRef, params.URL)
 	if err != nil {
@@ -1431,6 +1497,7 @@ func (s *Server) connectorStudioConnectMCP(ctx context.Context, user string, con
 		if serr := s.remoteMCP.ShareServer(ctx, user, server.ID, "*"); serr != nil {
 			return nil, fmt.Errorf("server connected, but sharing with everyone failed: %w", serr)
 		}
+		everyoneShareDone = true
 	}
 
 	s.enableConnectorOnConversation(ctx, user, conv, server.Name, server.Account)
@@ -1476,8 +1543,21 @@ func (s *Server) connectorStudioCreateCustom(ctx context.Context, user string, c
 	if conv != nil {
 		convID = conv.ID
 	}
-	if strings.EqualFold(strings.TrimSpace(params.ShareScope), "everyone") && !s.userConfirmedEveryoneShare(ctx, user, convID) {
-		return nil, fmt.Errorf("share_scope=\"everyone\" requires explicit user confirmation in the show_ui form (share_scope=\"everyone\") or chat conversation; use share_scope=\"personal\" or ask the user to confirm fleet-wide sharing first")
+	// The confirmation is used up by the check below, before the connector
+	// exists. If anything fails before the connector is shared, it is given
+	// back (everyoneShareDone stays false), so the retry the agent makes
+	// with corrected arguments does not need the user to confirm again.
+	everyoneShareDone := false
+	if strings.EqualFold(strings.TrimSpace(params.ShareScope), "everyone") {
+		confirmed, shareGen := s.userConfirmedEveryoneShare(ctx, user, convID)
+		if !confirmed {
+			return nil, fmt.Errorf("share_scope=\"everyone\" requires explicit user confirmation in the show_ui form (share_scope=\"everyone\") or chat conversation; use share_scope=\"personal\" or ask the user to confirm fleet-wide sharing first")
+		}
+		defer func() {
+			if !everyoneShareDone {
+				s.uiSecrets.restoreEveryoneShare(user, convID, shareGen)
+			}
+		}()
 	}
 
 	transport := strings.ToLower(strings.TrimSpace(params.Transport))
@@ -1585,6 +1665,7 @@ func (s *Server) connectorStudioCreateCustom(ctx context.Context, user string, c
 	if err != nil {
 		return nil, fmt.Errorf("create custom connector: %s", agentcore.RedactSecrets(err.Error()))
 	}
+	everyoneShareDone = true // the create applied ShareScope
 
 	s.enableConnectorOnConversation(ctx, user, conv, server.Name, server.Account)
 

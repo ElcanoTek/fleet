@@ -356,6 +356,16 @@ func (o *orchestrationState) checkCriticalTool(toolName, _ string, rawInput stri
 		}
 	}
 
+	// A send whose outcome is unknown may have reached the provider, so an
+	// identical one is refused for the rest of the run. Unlike the
+	// already-sent suppression above it discharges nothing: whether the
+	// email went out is exactly what is not known.
+	if isEmailTool(toolName) {
+		if _, maybe := o.maybeSentEmailFingerprints[emailDedupKey(rawInput)]; maybe {
+			return true, maybeSentEmailRefusal(true)
+		}
+	}
+
 	// Email-last, enforced from the write side: no email-last call may follow
 	// the batch's summary email (and any attempt marks the run as email-last
 	// work). See audit_email_last.go.
@@ -439,6 +449,21 @@ func (o *orchestrationState) checkCriticalTool(toolName, _ string, rawInput stri
 		}
 	}
 
+	// Every other gate has passed. A send_email is held in flight until its
+	// result is recorded, so an identical call racing it (parallel_safe_tools)
+	// is refused here instead of sending twice. An identical send still
+	// running is NOT done — it may yet fail — so unlike the already-sent
+	// suppression above this refusal discharges nothing, and it tells the
+	// model to wait for that result rather than report the email as sent.
+	// The check and the claim are the last step, under one o.mu hold, so a
+	// call another gate turned away never leaves a key behind.
+	if isEmailTool(toolName) {
+		fp := emailDedupKey(rawInput)
+		if _, running := o.inFlightEmailFingerprints[fp]; running {
+			return true, inFlightEmailRefusal("run")
+		}
+		o.claimEmailSend(fp)
+	}
 	return false, ""
 }
 
@@ -604,6 +629,9 @@ func (o *orchestrationState) checkFinishEnforcement() (bool, []string) {
 		for _, p := range o.pendingCriticalActions {
 			names = append(names, p.toolName)
 		}
+		if rest, waived := o.waiveEmailsInDoubt(names, isEmailTool); waived {
+			return false, []string{emailInDoubtFinishNudge(rest)}
+		}
 		o.log().Info("Enforcement: pending critical actions. Rejecting finish.", "pending", len(o.pendingCriticalActions))
 		return false, []string{fmt.Sprintf("Audit passed. Execute pending action(s): %v. Then finish.", names)}
 	}
@@ -611,6 +639,9 @@ func (o *orchestrationState) checkFinishEnforcement() (bool, []string) {
 	// finishOwed drops settled-failed creates once the summary email has
 	// recorded them (audit_email_last.go).
 	if missing, outstanding := o.finishOwed(); len(missing) > 0 {
+		if rest, waived := o.waiveEmailsInDoubt(missing, func(m string) bool { return m == sendEmailToolSuffix }); waived {
+			return false, []string{emailInDoubtFinishNudge(rest)}
+		}
 		o.log().Info("Enforcement: committed critical actions not yet executed. Rejecting finish.", "missing", len(missing), "outstanding", outstanding)
 		if o.typedAuditActive && len(outstanding) > 0 {
 			// A typed declaration carries the full tool name and its record
@@ -632,6 +663,43 @@ func (o *orchestrationState) checkFinishEnforcement() (bool, []string) {
 	}
 
 	return true, nil
+}
+
+// waiveEmailsInDoubt drops from owed one owed send_email (isEmail) for each
+// send in this run whose outcome is unknown (maybeSentEmailFingerprints), and
+// reports whether it dropped any. Each such send may be one of the emails
+// owed, already delivered, so demanding it would push a reworded second copy;
+// but it stands in for one email only, so any further owed email stays in
+// rest and is still demanded. Callers must hold o.mu.
+func (o *orchestrationState) waiveEmailsInDoubt(owed []string, isEmail func(string) bool) (rest []string, waived bool) {
+	budget := len(o.maybeSentEmailFingerprints)
+	for _, item := range owed {
+		if budget > 0 && isEmail(item) {
+			budget--
+			waived = true
+			continue
+		}
+		rest = append(rest, item)
+	}
+	return rest, waived
+}
+
+// emailInDoubtFinishNudge is finish enforcement's answer while the run still
+// owes a send_email that a send with an unknown outcome may already have
+// delivered (waiveEmailsInDoubt). Demanding "execute the outstanding
+// send_email" would push the model to send that email again, reworded until
+// the duplicate guard no longer recognizes it, to a reader who may already
+// have it. So it asks for the rest of the owed work — any other owed email
+// included, since its content differs — then an abort that says the email's
+// delivery is in doubt: the run ends honestly instead of either repeating the
+// email or claiming it. otherOwed names the owed actions still demanded.
+func emailInDoubtFinishNudge(otherOwed []string) string {
+	msg := "A send_email in this run ended without a clear result, so an email this run owes may already have been delivered. " +
+		"Do NOT send that email again, and do NOT alter its content to make it look different. "
+	if len(otherOwed) > 0 {
+		msg += fmt.Sprintf("Execute the other outstanding action(s) first: %v. Send any other owed email whose content differs. ", otherOwed)
+	}
+	return msg + "Then call confirm_audit(success=false, user_visible_summary=...) saying the email may or may not have been delivered and should be checked."
 }
 
 // ── confirm_audit tool ──

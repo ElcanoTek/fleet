@@ -58,56 +58,61 @@ func (p *InteractivePolicy) SetSkillProposer(sp SkillProposer) { p.orch.setSkill
 // bash/preview/schedule/suggest/critical gates are inert when no approval sink
 // is wired; the proposal gates are inert when no proposer is.
 func (p *InteractivePolicy) BeforeToolCall(toolName, toolCallID, rawInput string) (bool, string) {
-	if blocked, msg := p.orch.checkCeilings(); blocked {
-		return true, msg
+	return runGateChain(p.orch, p.orch.interactiveGates(), toolName, toolCallID, rawInput)
+}
+
+// interactiveGates is the interactive gate chain, in order (see
+// BeforeToolCall). Bundle-declared critical tools (agent_policy.critical_tools)
+// route through the same approval-card UX in interactive mode; that gate runs
+// AFTER the tailored gates so each of those keeps single ownership of its flow.
+func (o *orchestrationState) interactiveGates() []toolGate {
+	return []toolGate{
+		{name: "ceilings", check: func(string, string, string) (bool, string) { return o.checkCeilings() }},
+		{name: "repeated_call", check: func(n, _, in string) (bool, string) { return o.checkRepeatedCall(n, in) }},
+		{name: "email", check: o.checkEmailSafety, admitsSend: true},
+		{name: "bash", check: o.checkBashSafety},
+		{name: "python", check: func(n, _, in string) (bool, string) { return o.checkPythonSafety(n, in) }},
+		{name: "browser", check: o.checkBrowserSafety},
+		{name: "connector_studio", check: o.checkConnectorStudioSafety},
+		{name: "chat_patrol", check: o.checkChatPatrolSafety},
+		{name: "preview_email", check: o.checkPreviewEmailSafety},
+		{name: "schedule_task", check: o.checkScheduleTaskSafety},
+		{name: "manage_tasks", check: o.checkManageTasksSafety},
+		{name: "suggest_advanced_model", check: func(n, _, in string) (bool, string) { return o.checkSuggestAdvancedSafety(n, in) }},
+		{name: "critical_tool_approval", check: o.checkCriticalToolApproval},
+		{name: "memory_proposal", check: func(n, _, in string) (bool, string) { return o.checkMemoryProposal(n, in) }},
+		{name: "note_proposal", check: func(n, _, in string) (bool, string) { return o.checkNoteProposal(n, in) }},
+		{name: "skill_proposal", check: func(n, _, in string) (bool, string) { return o.checkSkillProposal(n, in) }},
 	}
-	if blocked, msg := p.orch.checkRepeatedCall(toolName, rawInput); blocked {
-		return true, msg
-	}
-	if blocked, msg := p.orch.checkEmailSafety(toolName, toolCallID, rawInput); blocked {
-		return true, msg
-	}
-	if blocked, msg := p.orch.checkBashSafety(toolName, toolCallID, rawInput); blocked {
-		return true, msg
-	}
-	if blocked, msg := p.orch.checkPythonSafety(toolName, rawInput); blocked {
-		return true, msg
-	}
-	if blocked, msg := p.orch.checkBrowserSafety(toolName, toolCallID, rawInput); blocked {
-		return true, msg
-	}
-	if blocked, msg := p.orch.checkConnectorStudioSafety(toolName, toolCallID, rawInput); blocked {
-		return true, msg
-	}
-	if blocked, msg := p.orch.checkChatPatrolSafety(toolName, toolCallID, rawInput); blocked {
-		return true, msg
-	}
-	if blocked, msg := p.orch.checkPreviewEmailSafety(toolName, toolCallID, rawInput); blocked {
-		return true, msg
-	}
-	if blocked, msg := p.orch.checkScheduleTaskSafety(toolName, toolCallID, rawInput); blocked {
-		return true, msg
-	}
-	if blocked, msg := p.orch.checkManageTasksSafety(toolName, toolCallID, rawInput); blocked {
-		return true, msg
-	}
-	if blocked, msg := p.orch.checkSuggestAdvancedSafety(toolName, rawInput); blocked {
-		return true, msg
-	}
-	// Bundle-declared critical tools (agent_policy.critical_tools) route through
-	// the same approval-card UX in interactive mode. Runs AFTER the tailored
-	// gates above so each of those keeps single ownership of its flow.
-	if blocked, msg := p.orch.checkCriticalToolApproval(toolName, toolCallID, rawInput); blocked {
-		return true, msg
-	}
-	if blocked, msg := p.orch.checkMemoryProposal(toolName, rawInput); blocked {
-		return true, msg
-	}
-	if blocked, msg := p.orch.checkNoteProposal(toolName, rawInput); blocked {
-		return true, msg
-	}
-	if blocked, msg := p.orch.checkSkillProposal(toolName, rawInput); blocked {
-		return true, msg
+}
+
+// toolGate is one step of a policy's gate chain. admitsSend marks the gate
+// that lets a send_email through and holds its payload in flight
+// (claimEmailSend): checkEmailSafety in chat, checkCriticalTool in a
+// scheduled run.
+type toolGate struct {
+	name       string
+	check      func(toolName, toolCallID, rawInput string) (bool, string)
+	admitsSend bool
+}
+
+// runGateChain runs gates in order and returns the first refusal. The gates
+// after the send gate are meant never to refuse a send_email (each matches
+// only its own tools; TestGateChains_LaterGatesPassEmailThrough pins it),
+// because the send gate's admission can already have recorded a durable
+// receipt for the send. Should one refuse anyway, the payload the send gate
+// held in flight is handed back, so it cannot refuse an identical retry for
+// the rest of the turn as "already running".
+func runGateChain(o *orchestrationState, gates []toolGate, toolName, toolCallID, rawInput string) (bool, string) {
+	admitted := false
+	for _, g := range gates {
+		if blocked, msg := g.check(toolName, toolCallID, rawInput); blocked {
+			if admitted {
+				o.releaseAdmittedToolCall(toolName, rawInput)
+			}
+			return true, msg
+		}
+		admitted = admitted || g.admitsSend
 	}
 	return false, ""
 }
@@ -208,31 +213,26 @@ func (p *ScheduledPolicy) AuditConfirmed() bool {
 // "unavailable" backstop (scheduled tasks use remember/recall, not
 // propose_memory — interactive-only).
 func (p *ScheduledPolicy) BeforeToolCall(toolName, toolCallID, rawInput string) (bool, string) {
-	if blocked, msg := p.orch.checkCeilings(); blocked {
-		return true, msg
+	return runGateChain(p.orch, p.orch.scheduledGates(), toolName, toolCallID, rawInput)
+}
+
+// scheduledGates is the scheduled gate chain, in order (see BeforeToolCall).
+//
+// Honest backstop for propose_memory (#285): the scheduled orchestration never
+// wires a memoryProposer (user memories are interactive-only — scheduled tasks
+// use the remember/recall task-memory tools instead), so its gate returns
+// MEMORY_PROPOSAL_UNAVAILABLE rather than letting the no-op tool body falsely
+// report "Memory proposal created". The scheduled prompt does not advertise
+// propose_memory, so this only fires if the model calls it unprompted.
+func (o *orchestrationState) scheduledGates() []toolGate {
+	return []toolGate{
+		{name: "ceilings", check: func(string, string, string) (bool, string) { return o.checkCeilings() }},
+		{name: "repeated_call", check: func(n, _, in string) (bool, string) { return o.checkRepeatedCall(n, in) }},
+		{name: "critical_tool", check: o.checkCriticalTool, admitsSend: true},
+		{name: "memory_proposal", check: func(n, _, in string) (bool, string) { return o.checkMemoryProposal(n, in) }},
+		{name: "note_proposal", check: func(n, _, in string) (bool, string) { return o.checkNoteProposal(n, in) }},
+		{name: "skill_proposal", check: func(n, _, in string) (bool, string) { return o.checkSkillProposal(n, in) }},
 	}
-	if blocked, msg := p.orch.checkRepeatedCall(toolName, rawInput); blocked {
-		return true, msg
-	}
-	if blocked, msg := p.orch.checkCriticalTool(toolName, toolCallID, rawInput); blocked {
-		return true, msg
-	}
-	// Honest backstop for propose_memory (#285): the scheduled orchestration never
-	// wires a memoryProposer (user memories are interactive-only — scheduled tasks
-	// use the remember/recall task-memory tools instead), so this returns
-	// MEMORY_PROPOSAL_UNAVAILABLE rather than letting the no-op tool body falsely
-	// report "Memory proposal created". The scheduled prompt does not advertise
-	// propose_memory, so this only fires if the model calls it unprompted.
-	if blocked, msg := p.orch.checkMemoryProposal(toolName, rawInput); blocked {
-		return true, msg
-	}
-	if blocked, msg := p.orch.checkNoteProposal(toolName, rawInput); blocked {
-		return true, msg
-	}
-	if blocked, msg := p.orch.checkSkillProposal(toolName, rawInput); blocked {
-		return true, msg
-	}
-	return false, ""
 }
 
 func (p *ScheduledPolicy) RecordToolResult(toolName, rawInput, resultText string, succeeded bool) {
