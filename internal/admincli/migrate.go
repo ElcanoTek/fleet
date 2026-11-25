@@ -70,13 +70,13 @@ func openMigrateDB(flagURL string) (*sql.DB, error) {
 func cmdMigrateForce(argv []string) int {
 	fs := flag.NewFlagSet("migrate force", flag.ContinueOnError)
 	dbURL := fs.String("database-url", "", "Postgres DSN of the one database (default DATABASE_URL)")
-	noConfirm := fs.Bool("no-confirm", false, "skip the interactive confirmation (for scripted repairs)")
+	noConfirm := noConfirmFlag(fs, "for scripted repairs")
 	version, ok := parseForceArgs(fs, argv)
 	if !ok {
 		fmt.Fprintln(os.Stderr, migrateUsage)
 		return 1
 	}
-	if code := confirmBulkMutation(*noConfirm, fmt.Sprintf("this will record migration version %d (and every version below it) as applied and clean in %s, and forget every version above it, running nothing.", version, migrations.Table)); code != 0 {
+	if code := confirmBulkMutation(noConfirm(), fmt.Sprintf("this will record migration version %d (and every version below it) as applied and clean in %s, and forget every version above it, running nothing.", version, migrations.Table)); code != 0 {
 		return code
 	}
 	db, err := openMigrateDB(*dbURL)
@@ -132,7 +132,7 @@ func cmdMigrateDown(argv []string) int {
 	dbURL := fs.String("database-url", "", "Postgres DSN of the one database (default DATABASE_URL)")
 	to := fs.Int("to", -1, "the version to go down to (required; at least 177)")
 	dryRun := fs.Bool("dry-run", false, "print what would be undone and change nothing")
-	noConfirm := fs.Bool("no-confirm", false, "skip the interactive confirmation (for scripted rollbacks)")
+	noConfirm := noConfirmFlag(fs, "for scripted rollbacks")
 	if err := fs.Parse(argv); err != nil || fs.NArg() != 0 {
 		fmt.Fprintln(os.Stderr, migrateUsage)
 		return 1
@@ -165,7 +165,7 @@ func cmdMigrateDown(argv []string) int {
 	if *dryRun {
 		return 0
 	}
-	if code := confirmBulkMutation(*noConfirm, fmt.Sprintf("this will run %d down migration(s) against the live database.", len(plan.Steps))); code != 0 {
+	if code := confirmBulkMutation(noConfirm(), fmt.Sprintf("this will run %d down migration(s) against the live database.", len(plan.Steps))); code != 0 {
 		return code
 	}
 	done, err := migrations.Down(ctx, db, *to, false)

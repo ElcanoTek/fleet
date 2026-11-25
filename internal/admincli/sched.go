@@ -237,9 +237,11 @@ func schedUserSetRole(argv []string) int {
 }
 
 // schedUserDel ends the account's Operations Center access (scope none). The
-// account itself — its chat login and data — stays: removing a person is
-// `fleet chat user del` / `fleet admin rm`. An admin is refused: their access
-// is the admin role.
+// account itself — its chat login and data — stays: deleting a person and
+// everything they own is `fleet chat user del` / `fleet admin rm`. An admin is
+// refused: their access is the admin role, which `fleet chat user role
+// <email> --role member` ends (demotion clears the scope to none) while
+// keeping the account.
 func schedUserDel(argv []string) int {
 	fs := flag.NewFlagSet("sched user del", flag.ContinueOnError)
 	dbURL := fs.String("database-url", "", "sched Postgres DSN")
@@ -259,11 +261,12 @@ func schedUserDel(argv []string) int {
 	}
 	if _, err := st.Identity().SetOpsAccess(ctx, username, identity.LegacyOpsNone); err != nil {
 		if identity.IsInputError(err) {
-			return errf(1, "%v (remove an admin with: fleet admin rm %s)", err, u.Email)
+			return errf(1, "%v: `fleet chat user role %s --role member` ends their admin role and with it their Operations Center access, "+
+				"keeping the account and its data (`fleet admin rm %s` instead deletes the account and everything it owns, after asking)", err, u.Email, u.Email)
 		}
 		return errf(5, "%v", err)
 	}
-	fmt.Printf("removed Operations Center access of %s (the account itself stays; remove it with: fleet chat user del %s)\n", u.Email, u.Email)
+	fmt.Printf("removed Operations Center access of %s (the account and its data stay; `fleet chat user del %s` would delete the account and everything it owns)\n", u.Email, u.Email)
 	return 0
 }
 

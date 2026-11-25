@@ -227,11 +227,25 @@ func splitPositionalValueFlags(argv []string) (first string, flagArgs []string) 
 // `fleet import bundle.json --dry-run` both bind bundle.json as the positional
 // (#714): splitPositional would misread a value flag's argument as the
 // positional, and splitPositionalValueFlags would let a boolean flag swallow
-// the bundle path.
+// the bundle path. "--" ends the flags: the token after it is the positional
+// when none came before (`fleet chat user del -- a@x`), and what follows is
+// left after a "--" in flagArgs, so fs.Parse stops there and fs.Args() holds
+// it. A second positional is left in flagArgs too, where fs.Parse stops. So
+// every caller must refuse fs.NArg() > 0: a flag after "--" or after a second
+// positional is never parsed, and ignoring it would drop it silently (a
+// --dry-run among them).
 func splitPositionalMixed(argv []string, boolFlags map[string]bool) (first string, flagArgs []string) {
 	i := 0
 	for i < len(argv) {
 		a := argv[i]
+		if a == "--" {
+			rest := argv[i+1:]
+			if first == "" && len(rest) > 0 {
+				first, rest = rest[0], rest[1:]
+			}
+			flagArgs = append(flagArgs, "--")
+			return first, append(flagArgs, rest...)
+		}
 		if len(a) > 1 && a[0] == '-' {
 			flagArgs = append(flagArgs, a)
 			name := strings.TrimLeft(a, "-")

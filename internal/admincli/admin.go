@@ -158,38 +158,30 @@ func adminList(argv []string) int {
 	return 0
 }
 
-// adminRm removes an account: its login, its Operations Center access and its
-// owned data — the store's delete cascade, its user API keys and its files
-// (deleteAccount, the same deletion as Settings → Admin → Users).
+// adminRm removes an account, admin or not: its login, its Operations Center
+// access and its owned data — the store's delete cascade, its user API keys
+// and its files (deleteAccount, the same deletion as Settings → Admin →
+// Users). It asks first (confirmAccountDeletion) unless --no-confirm.
 func adminRm(argv []string) int {
 	fs := flag.NewFlagSet("admin rm", flag.ContinueOnError)
 	chatURL := fs.String("chat-database-url", "", "chat Postgres DSN (default DATABASE_URL, schema chat)")
 	_ = fs.String("sched-database-url", "", "ignored: there is one identity table (#2049 M4)")
-	email, flagArgs := splitPositionalValueFlags(argv)
+	noConfirm := noConfirmFlag(fs, "for scripted deletions")
+	email, flagArgs := splitPositionalMixed(argv, noConfirmBoolFlags)
 	if err := fs.Parse(flagArgs); err != nil {
 		return 1
 	}
 	email = strings.TrimSpace(email)
 	if email == "" {
-		return errf(1, "email required — usage: fleet admin rm <email>")
+		return errf(1, "email required — usage: fleet admin rm <email> [--no-confirm]")
+	}
+	if fs.NArg() > 0 {
+		return errf(1, "admin rm takes one email (got also %q)", fs.Args())
 	}
 	st, code := openChatStore(*chatURL)
 	if st == nil {
 		return code
 	}
 	defer st.Close()
-	res, err := deleteAccount(context.Background(), st, email)
-	if err != nil {
-		switch {
-		case errors.Is(err, store.ErrUserNotFound):
-			return errf(2, "%s is not an account", email)
-		case errors.Is(err, errKeyStore):
-			return errf(1, "remove %s: %v — nothing was removed", email, err)
-		case errors.Is(err, errServerRunning):
-			return errf(1, "remove %s: %v", email, err)
-		}
-		return errf(5, "remove %s: %v", email, err)
-	}
-	fmt.Printf("removed admin %s (login, Operations Center access, owned data and %s)\n", email, userKeysPhrase(res.KeysDeleted))
-	return deletedExitCode(res)
+	return runAccountDeletion(context.Background(), st, "remove", email, noConfirm(), stdConfirmIO())
 }

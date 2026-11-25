@@ -168,8 +168,9 @@ valid archive, then asks for confirmation on an interactive terminal:
 WARNING: this will OVERWRITE the live whole fleet database (chat, core, sched) from …/fleet-all-….dump. Continue? [y/N]:
 ```
 
-Pass `--no-confirm` for scripted restores. In a non-interactive context (a pipe
-or CI) without `--no-confirm`, restore refuses rather than silently overwriting.
+Pass `--no-confirm` (alias `--yes`) for scripted restores. In a
+non-interactive context (a pipe or CI) without it, restore refuses rather than
+silently overwriting.
 
 **Stop the fleet service before restoring** so nothing writes mid-restore:
 

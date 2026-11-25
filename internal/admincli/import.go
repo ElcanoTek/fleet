@@ -182,6 +182,11 @@ func cmdImport(argv []string) int {
 	if strings.TrimSpace(file) == "" {
 		return errf(1, "usage: fleet import <bundle.json> [--dry-run] [--live-only] [--overwrite]")
 	}
+	// A second positional, or anything after "--" (where fs.Parse stops, so
+	// a --dry-run there was never read), is refused rather than ignored.
+	if fs.NArg() > 0 {
+		return errf(1, "import takes one bundle (got also %q)", fs.Args())
+	}
 
 	//nolint:gosec // G304: the bundle path is an operator-supplied CLI positional (like backup/restore's dump paths), never request or LLM input.
 	body, err := os.ReadFile(file)

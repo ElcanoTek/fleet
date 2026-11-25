@@ -194,7 +194,7 @@ the database, repair or undo what the migration did, and record the last version
 that is really applied:
 
 ```sh
-fleet migrate force <version>   # asks first; --no-confirm for scripts
+fleet migrate force <version>   # asks first; --no-confirm (alias --yes) for scripts
 ```
 
 `force` makes the ledger say "every version up to `<version>` is applied,
@@ -213,7 +213,7 @@ past 200 writes the sentinels in the same transaction. A dirty
 ```sh
 fleet backup --db=all                         # first, always
 fleet migrate down --to 177 --dry-run         # what would be undone
-fleet migrate down --to 177                   # asks first; --no-confirm for scripts
+fleet migrate down --to 177                   # asks first; --no-confirm (alias --yes) for scripts
 ```
 
 Stop fleet first, then start the release that ships the target version. `down`

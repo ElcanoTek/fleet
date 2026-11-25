@@ -1,7 +1,6 @@
 package admincli
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -253,7 +252,7 @@ func patrolSetPrompt(argv []string, stdin io.Reader, out, errW io.Writer) int {
 	notify := fs.Bool("notify", true, "write a notice into the chat saying the patrol's instructions were updated")
 	backupDir := fs.String("backup-dir", defaultPatrolBackupDir, "directory the old prompt is saved to before the change")
 	dryRun := fs.Bool("dry-run", false, "print the diff and change nothing")
-	yes := fs.Bool("yes", false, "apply without the confirmation prompt")
+	yes := noConfirmFlag(fs, "apply without asking")
 	asJSON := fs.Bool("json", false, "JSON output")
 	as := fs.String("as", "", "record the change as this administrator (default <unix user>@<host>)")
 	if err := fs.Parse(argv); err != nil {
@@ -322,7 +321,7 @@ func patrolSetPrompt(argv []string, stdin io.Reader, out, errW io.Writer) int {
 		}
 		return 0
 	}
-	if !*yes {
+	if !yes() {
 		if code := confirmPatrolEdit(stdin, errW, fmt.Sprintf("Change the prompt of %q in %q (owner %s)?", cur.Title, cur.ConversationTitle, cur.UserEmail)); code != 0 {
 			return code
 		}
@@ -369,18 +368,15 @@ func patrolSetPrompt(argv []string, stdin io.Reader, out, errW io.Writer) int {
 	return 0
 }
 
+// confirmPatrolEdit asks question on stdin/errW (confirmDestructive): an
+// operator patrol edit is backed up and noted in the chat, so it asks a plain
+// y/N, and refuses without a terminal unless --yes.
 func confirmPatrolEdit(stdin io.Reader, errW io.Writer, question string) int {
 	f, ok := stdin.(*os.File)
-	if !ok || !isTerminal(f) {
-		return errf(1, "refusing to change a patrol without confirmation: pass --yes (or --dry-run to preview)")
-	}
-	fmt.Fprintf(errW, "%s [y/N]: ", question)
-	line, _ := bufio.NewReader(stdin).ReadString('\n')
-	if ans := strings.ToLower(strings.TrimSpace(line)); ans != "y" && ans != "yes" {
-		fmt.Fprintln(errW, "aborted")
-		return 1
-	}
-	return 0
+	return confirmDestructive(confirmIO{in: stdin, out: errW, tty: ok && isTerminal(f)}, false, confirmPrompt{
+		question: question,
+		refusal:  "refusing to change a patrol without confirmation: pass --yes (or --dry-run to preview)",
+	})
 }
 
 func readPromptFile(path string, stdin io.Reader) (string, error) {
@@ -610,7 +606,7 @@ func patrolSetSchedule(argv []string, stdin io.Reader, out, errW io.Writer) int 
 	expect := fs.Int64("expect-def-version", -1, "def_version of the patrol the edit was chosen against, from `fleet patrol show` (required)")
 	reason := fs.String("reason", "", "why the schedule changed; recorded and shown in the chat's notice (required)")
 	dryRun := fs.Bool("dry-run", false, "print the new schedule and its next runs and change nothing")
-	yes := fs.Bool("yes", false, "apply without the confirmation prompt")
+	yes := noConfirmFlag(fs, "apply without asking")
 	asJSON := fs.Bool("json", false, "JSON output")
 	as := fs.String("as", "", "record the change as this administrator (default <unix user>@<host>)")
 	if err := fs.Parse(argv); err != nil {
@@ -666,7 +662,7 @@ func patrolSetSchedule(argv []string, stdin io.Reader, out, errW io.Writer) int 
 		}
 		return 0
 	}
-	if !*yes {
+	if !yes() {
 		question := fmt.Sprintf("Change the schedule of %q in %q (owner %s) to %s %s?", cur.Title, cur.ConversationTitle, cur.UserEmail, res.NewCron, res.NewTimezone)
 		if code := confirmPatrolEdit(stdin, errW, question); code != 0 {
 			return code

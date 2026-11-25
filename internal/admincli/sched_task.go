@@ -1,7 +1,6 @@
 package admincli
 
 import (
-	"bufio"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -672,7 +671,7 @@ func schedTaskSetModel(argv []string) int {
 	fallback := fs.String("fallback-model", "", "optional fallback model slug (omit to keep existing; '' clears it to NULL)")
 	fromModel := fs.String("from-model", "", "only re-assign tasks currently pinned to this slug")
 	dryRun := fs.Bool("dry-run", false, "print the tasks that would change without writing")
-	noConfirm := fs.Bool("no-confirm", false, "skip the interactive confirmation (for scripted bulk updates)")
+	noConfirm := noConfirmFlag(fs, "for scripted bulk updates")
 	if err := fs.Parse(argv); err != nil {
 		return 1
 	}
@@ -704,7 +703,7 @@ func schedTaskSetModel(argv []string) int {
 		return 0
 	}
 
-	if code := confirmBulkMutation(*noConfirm, setModelConfirmPrompt(*model, fallbackArg, *fromModel)); code != 0 {
+	if code := confirmBulkMutation(noConfirm(), setModelConfirmPrompt(*model, fallbackArg, *fromModel)); code != 0 {
 		return code
 	}
 
@@ -772,26 +771,6 @@ func setModelConfirmPrompt(model string, fallback *string, fromModel string) str
 		}
 	}
 	return fmt.Sprintf("this will re-assign model=%s on %s (%s).", model, scope, extra)
-}
-
-// confirmBulkMutation is the restore-style gate for fleet-wide writes (#1120):
-// --no-confirm proceeds; a TTY prompts [y/N]; a non-TTY without --no-confirm
-// refuses rather than silently mutating.
-func confirmBulkMutation(noConfirm bool, warning string) int {
-	if noConfirm {
-		return 0
-	}
-	if !isTerminal(os.Stdin) {
-		return errf(1, "refusing fleet-wide mutation without confirmation: pass --no-confirm for scripted updates (or --dry-run to preview)")
-	}
-	fmt.Fprintf(os.Stderr, "WARNING: %s Continue? [y/N]: ", warning)
-	reader := bufio.NewReader(os.Stdin)
-	line, _ := reader.ReadString('\n')
-	if ans := strings.ToLower(strings.TrimSpace(line)); ans != "y" && ans != "yes" {
-		fmt.Fprintln(os.Stderr, "aborted")
-		return 1
-	}
-	return 0
 }
 
 func schedTaskExport(argv []string) int {

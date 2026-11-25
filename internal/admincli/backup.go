@@ -1,7 +1,6 @@
 package admincli
 
 import (
-	"bufio"
 	"context"
 	"database/sql"
 	"flag"
@@ -603,7 +602,7 @@ func cmdBackup(argv []string) int {
 func cmdRestore(argv []string) int {
 	fs := flag.NewFlagSet("restore", flag.ContinueOnError)
 	db := fs.String("db", "all", "what to restore: all (a fleet-all dump; the only restore since #2049 M6)")
-	noConfirm := fs.Bool("no-confirm", false, "skip the interactive overwrite confirmation (for scripted restores)")
+	noConfirm := noConfirmFlag(fs, "for scripted restores")
 	chatURL := fs.String("chat-database-url", "", "chat Postgres DSN (else DATABASE_URL, schema chat)")
 	schedURL := fs.String("sched-database-url", "", "sched Postgres DSN (else DATABASE_URL, schema sched)")
 	if err := fs.Parse(argv); err != nil {
@@ -636,17 +635,12 @@ func cmdRestore(argv []string) int {
 	// Restore OVERWRITES the live database (--clean --if-exists). Confirm on a TTY
 	// unless --no-confirm; in a pipe/CI a confirmation can't be answered, so a
 	// non-TTY without --no-confirm is refused rather than silently proceeding.
-	if !*noConfirm {
-		if !isTerminal(os.Stdin) {
-			return errf(1, "refusing to overwrite the %s without confirmation: pass --no-confirm for scripted restores", storeLabel(*db))
-		}
-		fmt.Fprintf(os.Stderr, "WARNING: this will OVERWRITE the live %s from %s. Continue? [y/N]: ", storeLabel(*db), inPath)
-		reader := bufio.NewReader(os.Stdin)
-		line, _ := reader.ReadString('\n')
-		if ans := strings.ToLower(strings.TrimSpace(line)); ans != "y" && ans != "yes" {
-			fmt.Fprintln(os.Stderr, "restore aborted")
-			return 1
-		}
+	if code := confirmDestructive(stdConfirmIO(), noConfirm(), confirmPrompt{
+		warning: fmt.Sprintf("this will OVERWRITE the live %s from %s.", storeLabel(*db), inPath),
+		refusal: fmt.Sprintf("refusing to overwrite the %s without confirmation: pass --no-confirm for scripted restores", storeLabel(*db)),
+		aborted: "restore aborted",
+	}); code != 0 {
+		return code
 	}
 	if err := runPgRestoreAll(ctx, dsn, inPath); err != nil {
 		return errf(5, "restore %s: %v", *db, err)

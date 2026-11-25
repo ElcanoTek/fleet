@@ -572,6 +572,81 @@ func TestDeleteUserPreflight(t *testing.T) {
 	}
 }
 
+// AccountDeletionSummary counts what DeleteUser would remove — the account's
+// conversations, owned projects, its memories and its projects' shared ones —
+// and changes nothing.
+func TestAccountDeletionSummary(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	ctx := context.Background()
+	if _, err := s.AccountDeletionSummary(ctx, "nobody@x.com"); !errors.Is(err, ErrUserNotFound) {
+		t.Errorf("no account: err = %v, want ErrUserNotFound", err)
+	}
+	const owner, other = "owner@x.com", "other@x.com"
+	seedAccount(t, s, owner, other)
+	for i := 0; i < 2; i++ {
+		if _, err := s.CreateConversation(ctx, owner, "mine", "", "", false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.CreateConversation(ctx, other, "theirs", "", "", false); err != nil {
+		t.Fatal(err)
+	}
+	p, err := s.CreateProject(ctx, &Project{OwnerEmail: owner, Name: "owned"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateMemory(ctx, owner, "a personal memory", "manual", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateProjectMemory(ctx, p.ID, other, "a shared project memory", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateMemory(ctx, other, "someone else's memory", "manual", ""); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.AccountDeletionSummary(ctx, " Owner@X.com ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := s.AccountForDeletion(ctx, owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := AccountDeletionSummary{ID: id, Email: owner, Role: got.Role, Conversations: 2, OwnedProjects: 1, Memories: 2}
+	if got != want {
+		t.Errorf("summary = %+v, want %+v", got, want)
+	}
+	if got.Role == "" {
+		t.Error("the summary does not carry the account's role")
+	}
+	if _, err := s.GetUser(ctx, owner); err != nil {
+		t.Errorf("the summary changed the account: %v", err)
+	}
+}
+
+// ServerHeartbeatSeen sees a running server's heartbeat and none once it has
+// stopped.
+func TestServerHeartbeatSeen(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	ctx := context.Background()
+	if seen, err := s.ServerHeartbeatSeen(ctx); err != nil || seen {
+		t.Fatalf("no server: seen %v, err %v", seen, err)
+	}
+	release, err := s.HoldServerPresence(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if seen, err := s.ServerHeartbeatSeen(ctx); err != nil || !seen {
+		t.Errorf("a server running: seen %v, err %v", seen, err)
+	}
+	release()
+	if seen, err := s.ServerHeartbeatSeen(ctx); err != nil || seen {
+		t.Errorf("after the server stopped: seen %v, err %v", seen, err)
+	}
+}
+
 // A participant's write in a teammate's chat that meets the participant's
 // deletion waits for it and is then refused: it takes the account row before
 // the chat's, in DeleteUser's order. Not parallel: it uses DeleteUser's seam.

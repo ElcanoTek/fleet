@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -64,6 +65,20 @@ func TestImportBundle_Validation(t *testing.T) {
 		"--sched-database-url", "postgres://x/db1"})
 	if code != 1 {
 		t.Errorf("same DSN for both sections: got exit %d, want 1", code)
+	}
+
+	// Anything after the one bundle is refused before the bundle is read:
+	// a flag after "--" is never parsed, so a --dry-run there would
+	// otherwise be dropped and the import run for real.
+	for _, argv := range [][]string{
+		{"--", dual, "--dry-run"},
+		{dual, empty},
+	} {
+		var code int
+		stderr := captureStderr(t, func() { code = cmdImport(argv) })
+		if code != 1 || !strings.Contains(stderr, "import takes one bundle") {
+			t.Errorf("%q: exit %d, stderr %q; want 1 refusing the extra argument", argv, code, stderr)
+		}
 	}
 }
 
