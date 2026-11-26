@@ -42,6 +42,21 @@ func TestToolResultLooksFailed(t *testing.T) {
 		{"empty result", "", false},
 		{"error mentioned mid-text", `Report complete. Note: 0 errors encountered.`, false},
 		{"truncated status error json", `{"status":"error","message":"boom`, true},
+		// The session log holds the model-visible text: fleet's notes and a
+		// post_tool_use fragment follow the tool's payload.
+		{"error payload followed by a hook fragment", "{\"error\":\"upstream 400\"}\n\n[hook:fmt] formatter: clean", true},
+		{"unsuccessful payload followed by a date-window note", "{\"success\":false}\n\n[fleet date-window] runtime_today=2026-11-26", true},
+		{"successful payload followed by a hook fragment", "{\"status\":\"success\",\"message_id\":\"abc\"}\n\n[hook:fmt] ok", false},
+		// An MCP server's text is joined untrimmed, so a payload ending in a
+		// newline (or CRLF) still has its notes after a blank line.
+		{"error payload ending in a newline, then a hook fragment", "{\"error\":\"upstream 400\"}\n\n\n[hook:fmt] formatter: clean", true},
+		{"error payload ending in CRLF, then a hook fragment", "{\"error\":\"upstream 400\"}\r\n\n\n[hook:fmt] formatter: clean", true},
+		// Bracketed text that is not one of fleet's tags is the tool's own.
+		{"error payload, then the tool's own bracketed text", "{\"error\":\"upstream 400\"}\n\n[tool error] write failed", false},
+		{"error payload, then a tag with no blank line", "{\"error\":\"upstream 400\"}\n[hook:fmt] formatter: clean", false},
+		// Any other trailing text is not one of fleet's notes: the value is not
+		// read as the payload (as in the verifier's evidence).
+		{"error payload followed by other text", `{"error":"upstream 400"} and more`, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

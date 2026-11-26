@@ -277,3 +277,27 @@ func TestVerifierEvidencePreservesMultiRecipientEmailList(t *testing.T) {
 		}
 	}
 }
+
+// The session log holds the model-visible result, to which fleet joins its
+// date-window notes and post_tool_use fragments after the tool's payload.
+// The payload stays evidence; any other trailing text still makes the value
+// unknown, and arguments never take a trailing note.
+func TestVerifierEvidenceKeepsPayloadBeforeFleetNotes(t *testing.T) {
+	annotated := "{\"status\":\"sent\",\"message_id\":\"m-1\"}\n\n[hook:fmt] formatter: clean\n\n[fleet date-window] runtime_today=2026-11-26"
+	got := verifierEvidence(annotated)
+	if got["/status"] != "sent" || got["/message_id"] != "m-1" {
+		t.Fatalf("evidence before fleet notes = %v, want the payload's fields", got)
+	}
+	// The payload's own trailing newline comes before the joined notes.
+	if got := verifierEvidence("{\"status\":\"sent\"}\n\n\n[hook:fmt] formatter: clean"); got["/status"] != "sent" {
+		t.Fatalf("evidence for a newline-terminated payload before fleet notes = %v, want the payload's fields", got)
+	}
+	for _, raw := range []string{`{"status":"sent"} trailing words`, "{\"status\":\"sent\"}\n[hook:fmt] no blank line", "{\"status\":\"success\"}\n\n[tool error] write failed"} {
+		if len(verifierEvidence(raw)) != 0 {
+			t.Fatalf("evidence for %q must stay unknown", raw)
+		}
+	}
+	if args := projectVerifierArguments(annotated); !args.omitted {
+		t.Fatalf("arguments with a trailing note projected %v, want omitted", args.fields)
+	}
+}

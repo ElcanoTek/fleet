@@ -344,9 +344,10 @@ func extractResultCard(text string) (canonical []byte, ok bool, reason string) {
 	if text == "" || text[0] != '{' || len(text) > approvalResultMaxScanBytes {
 		return nil, false, ""
 	}
-	// The first JSON value only: on the notify path a post_tool_use hook's
-	// context may follow the tool's own JSON. The card itself is still
-	// decoded strictly.
+	// The first JSON value only: text may follow the tool's own JSON (the
+	// notify path records the tool's result without post_tool_use fragments,
+	// but nothing guarantees a server wrote nothing after its JSON). The card
+	// itself is still decoded strictly.
 	var top map[string]json.RawMessage
 	if err := json.NewDecoder(strings.NewReader(text)).Decode(&top); err != nil {
 		return nil, false, ""

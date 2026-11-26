@@ -293,6 +293,19 @@ func boundModelVisibleToolResponse(ctx context.Context, toolName, toolCallID str
 	return boundModelVisibleToolResponseWithin(ctx, toolName, toolCallID, resp, maxToolOutputBytes())
 }
 
+// passesModelVisibleBoundary reports whether boundModelVisibleToolResponseWithin
+// would hand resp back unchanged under limit: a text response within the
+// limit that carries no encoded binary. Pure — it stages nothing. The caller
+// passes the limit it bounded with rather than rereading the live one, which
+// an operator can lower (admin settings) between the two reads.
+func passesModelVisibleBoundary(resp fantasy.ToolResponse, limit int) bool {
+	if len(resp.Data) > 0 || resp.Type == "image" || resp.Type == "media" {
+		return false
+	}
+	limit = min(max(normalizeToolOutputLimit(limit), approvalTrailerTextFloor), HardMaxToolOutputBytes)
+	return len(resp.Content) <= limit && !containsEncodedBinary(resp.Content)
+}
+
 // boundModelVisibleToolResponseWithin is boundModelVisibleToolResponse for an
 // explicit limit (normalized to the documented range).
 func boundModelVisibleToolResponseWithin(ctx context.Context, toolName, toolCallID string, resp fantasy.ToolResponse, limit int) fantasy.ToolResponse {

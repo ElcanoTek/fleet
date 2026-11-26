@@ -74,6 +74,17 @@ JSON-object line wins, so diagnostics printed earlier are fine):
 - `additional_context` is itself run through fleet's output governance (secret
   scrubber, optional PII pass, workspace guardrail) before it enters the model
   context or the transcript — a hook fragment cannot bypass that choke point.
+- The fragment is appended to what the model, the transcript and the turn
+  journal see. Fleet's own accounting of the call reads the tool's result
+  without it: whether an email was sent, refused or may have gone out,
+  critical-action and commitment discharge, a batch's per-record results and
+  the task tracker. Fleet's own date-window notes on MCP results are kept out
+  of that accounting the same way. The end-of-run verifier reads the
+  transcript, so it reads the tool's result in front of the fragment instead.
+  A fragment therefore does not change how a result is classified, unless it
+  pushes the result past the model-visible output limit: the transcript then
+  holds a truncation envelope with only a preview of the result, and the
+  verifier judges from that.
 - A hook that exits nonzero, times out, or prints no valid decision (including a
   JSON line that carries none of `decision`/`reason`/`additional_context`) is a
   **failure**: an `enforce: true` hook **blocks**; an advisory hook is audited

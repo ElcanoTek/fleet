@@ -666,9 +666,10 @@ func (g *policyGuardedTool) call(ctx context.Context, name string, params fantas
 	resp, err := g.inner.Run(ctx, params)
 	if err != nil {
 		// Fantasy persists a non-nil Go error as the model-visible tool result.
-		// Evaluate it under the outer panic boundary, then govern and cap it here
-		// so policy audit, the stream sink, and provider replay all receive the
-		// exact same bytes. The shared epilogue wraps cause after bounding, so
+		// Evaluate it under the outer panic boundary, then govern it here so
+		// the stream sink and provider replay receive the exact same bytes (the
+		// policy records them without any post_tool_use fragment,
+		// policyRecordText). The shared epilogue wraps cause after bounding, so
 		// err and resp.Content stay byte-identical (boundedModelToolError).
 		cause := err
 		setToolPanicPhase(ctx, panicPhaseOutputRedact)
@@ -918,12 +919,17 @@ func (m *mcpTool) call(ctx context.Context, toolName string, params fantasy.Tool
 	var outputBlocked bool
 	resultText, outputBlocked = governToolOutput(ctx, toolName, resultText)
 
-	// Engine-authored date-window / empty-search reminders (#1026). Applied
+	// Engine-authored date-window / empty-search reminders (#1026). Computed
 	// after output governance so the reminder cannot be used to smuggle
-	// connector bytes past the scrubber, and before post_tool_use / the
-	// model-output boundary so it is capped like every other result.
+	// connector bytes past the scrubber. They travel as the outcome's
+	// modelNote: the shared framing joins them to the text before
+	// post_tool_use and the model-output boundary, so they are capped like
+	// every other result, while the policy records the server's own payload
+	// — a reminder appended to {"status_code":400} would leave nothing for
+	// the result classifiers to parse.
+	var note string
 	if !outputBlocked {
-		resultText = AnnotateDateWindow(toolName, params.Input, resultText, runtimeNow())
+		note = dateWindowNotes(toolName, params.Input, resultText, runtimeNow())
 	}
 
 	// Map MCP isError to a fantasy error response so both the LLM and the log
@@ -934,10 +940,10 @@ func (m *mcpTool) call(ctx context.Context, toolName string, params fantasy.Tool
 		if resultText == "" {
 			resultText = fmt.Sprintf("MCP tool %s returned isError=true with no text content", toolName)
 		}
-		return toolCallOutcome{resp: fantasy.NewTextErrorResponse(resultText), failed: true}
+		return toolCallOutcome{resp: fantasy.NewTextErrorResponse(resultText), failed: true, modelNote: note}
 	}
 
-	return toolCallOutcome{resp: fantasy.NewTextResponse(resultText), failed: false}
+	return toolCallOutcome{resp: fantasy.NewTextResponse(resultText), failed: false, modelNote: note}
 }
 
 // mcpCallNotSentPrefix heads the error of an MCP call refused before

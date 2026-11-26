@@ -112,9 +112,9 @@ three gaps at once:
 ### The policy reads raw results; a malformed `results[]` fails closed
 
 - On a successful call, the policy now records the governed text from
-  *before* the model-visible boundary: redacted, screened, with post-hook
-  fragments appended (`policyResultText`, `tool_call_framing.go`). That text
-  is capped at 8 MiB + 1 byte. The model, the journal and the log still get the
+  *before* the model-visible boundary: redacted and screened, without
+  post_tool_use fragments or fleet's notes (`policyRecordText`,
+  `tool_call_framing.go`). That text is capped at 8 MiB + 1 byte. The model, the journal and the log still get the
   bounded bytes. A 200-deal `results[]` is now discharged record by record
   instead of arriving as a truncation envelope.
 - `malformedDealOutcomes` (`batch_results.go`, port of the cutlass function of

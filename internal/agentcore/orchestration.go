@@ -1688,10 +1688,10 @@ const maxTaskTrackerRenderedBytes = 2048
 
 // extractTaskTrackerRendered pulls the human-readable plan text out of a
 // task_tracker result. Mirrors parseTaskTrackerSnapshot's tolerance: the clean
-// shape is the tool's JSON envelope (`output` field), but the governed
-// model-visible bytes can stop being one clean JSON document (hook fragments,
-// truncation envelopes) — then fall back to the raw text only when it visibly
-// carries the tool's own rendering. Empty means "nothing usable".
+// shape is the tool's JSON envelope (`output` field), but a recorded result
+// can stop being one clean JSON document (a truncation envelope) — then fall
+// back to the raw text only when it visibly carries the tool's own
+// rendering. Empty means "nothing usable".
 func extractTaskTrackerRendered(result string) string {
 	result = strings.TrimSpace(result)
 	if result == "" {
@@ -1733,16 +1733,15 @@ const maxSendEmailCallsPerTask = 3
 // parseTaskTrackerSnapshot parses task_tracker output into a snapshot. Minimal
 // form sufficient for the unified runtime: the tool's structured JSON, falling
 // back to the human "Summary: N total (a todo, b in progress, c done)" line.
-// The fallback is not decorative: the resultText recorded here is the GOVERNED
-// model-visible bytes, which can legitimately stop being one clean JSON
-// document — a post_tool_use hook appends its context fragment after the JSON
-// (appendHookContext), and an oversized result is rewritten into a truncation
-// envelope that only quotes the original's head/tail as a preview. Returning
-// Seen=false on those shapes silently disabled the pending-work finish gate
+// The fallback is not decorative: a recorded result can legitimately stop
+// being one clean JSON document — a result cut by the model-output boundary
+// is recorded as a truncation envelope that only quotes the original's
+// head/tail as a preview (policyRecordText). Returning Seen=false on that
+// shape silently disabled the pending-work finish gate
 // (checkFinishEnforcement), letting a run finish with open tasks. The Summary
-// line survives all of them verbatim — it contains no JSON-escaped characters,
-// and the tool renders it near the head of its output field — so scanning for
-// it keeps the gate coupled to what the tool actually said (#1125). The P3
+// line survives it verbatim — it contains no JSON-escaped characters, and the
+// tool renders it near the head of its output field — so scanning for it
+// keeps the gate coupled to what the tool actually said (#1125). The P3
 // native tool owns the richer line-level checkpoint summary.
 func parseTaskTrackerSnapshot(result string) taskTrackerSnapshot {
 	result = strings.TrimSpace(result)

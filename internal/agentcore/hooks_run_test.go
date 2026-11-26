@@ -84,9 +84,12 @@ func TestPolicyGuardedTool_PostHookAppendsContext(t *testing.T) {
 	if !strings.Contains(resp.Content, "edited") || !strings.Contains(resp.Content, "[hook:fmt] formatter: clean") {
 		t.Errorf("post-hook fragment should be appended to the result, got %q", resp.Content)
 	}
-	// The recorded (policy/log) bytes must be the SAME appended text.
-	if !strings.Contains(pol.lastResult.Load().(string), "formatter: clean") {
-		t.Error("RecordToolResult must see the same appended bytes the model sees")
+	// The policy records the tool's own bytes: it classifies results by
+	// parsing them, and a fragment appended to a JSON payload would leave
+	// nothing to parse. The fragment reaches the model (above), the journal
+	// and the log.
+	if got := pol.lastResult.Load().(string); got != "edited" {
+		t.Errorf("RecordToolResult saw %q, want the tool's own output without the fragment", got)
 	}
 }
 
