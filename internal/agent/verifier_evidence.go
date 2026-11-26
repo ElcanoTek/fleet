@@ -92,7 +92,8 @@ func projectVerifier(raw string, noExcerpts bool) verifierProjection {
 // decodeVerifierJSON decodes raw as one JSON object, or nil. With
 // allowFleetNotes, the object may be followed by the notes fleet joins to a
 // tool result in the session log — its date-window reminders and
-// post_tool_use fragments, each a blank line and then a "[" tag — and only
+// post_tool_use fragments, each a blank line and then a "[" tag
+// (fleetNotesFollow) — and only
 // the object is evidence; anything else after it still rejects the value.
 func decodeVerifierJSON(raw string, allowFleetNotes bool) map[string]any {
 	if len(raw) > verifierEvidenceInputCap {
@@ -106,7 +107,7 @@ func decodeVerifierJSON(raw string, allowFleetNotes bool) map[string]any {
 		return nil
 	}
 	// The same trailer rule as toolResultLooksFailed (decodeLeadingPayload).
-	if allowFleetNotes && strings.HasPrefix(text[decoder.InputOffset():], "\n\n[") {
+	if allowFleetNotes && fleetNotesFollow(text[decoder.InputOffset():]) {
 		return value
 	}
 	var extra any

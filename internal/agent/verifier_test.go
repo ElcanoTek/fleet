@@ -47,6 +47,11 @@ func TestToolResultLooksFailed(t *testing.T) {
 		{"error payload followed by a hook fragment", "{\"error\":\"upstream 400\"}\n\n[hook:fmt] formatter: clean", true},
 		{"unsuccessful payload followed by a date-window note", "{\"success\":false}\n\n[fleet date-window] runtime_today=2026-11-26", true},
 		{"successful payload followed by a hook fragment", "{\"status\":\"success\",\"message_id\":\"abc\"}\n\n[hook:fmt] ok", false},
+		// An MCP server's text is joined untrimmed, so a payload ending in a
+		// newline (or CRLF) still has its notes after a blank line.
+		{"error payload ending in a newline, then a hook fragment", "{\"error\":\"upstream 400\"}\n\n\n[hook:fmt] formatter: clean", true},
+		{"error payload ending in CRLF, then a hook fragment", "{\"error\":\"upstream 400\"}\r\n\n\n[hook:fmt] formatter: clean", true},
+		{"error payload, then a tag with no blank line", "{\"error\":\"upstream 400\"}\n[hook:fmt] formatter: clean", false},
 		// Any other trailing text is not one of fleet's notes: the value is not
 		// read as the payload (as in the verifier's evidence).
 		{"error payload followed by other text", `{"error":"upstream 400"} and more`, false},

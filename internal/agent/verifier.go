@@ -225,14 +225,24 @@ func toolResultLooksFailed(content string) bool {
 }
 
 // decodeLeadingPayload decodes the JSON value at the start of text into v
-// when nothing follows it but whitespace or fleet's notes ("\n\n[" …).
+// when nothing follows it but whitespace or fleet's notes (fleetNotesFollow).
 func decodeLeadingPayload(text string, v any) bool {
 	decoder := json.NewDecoder(strings.NewReader(text))
 	if decoder.Decode(v) != nil {
 		return false
 	}
 	rest := text[decoder.InputOffset():]
-	return strings.TrimSpace(rest) == "" || strings.HasPrefix(rest, "\n\n[")
+	return strings.TrimSpace(rest) == "" || fleetNotesFollow(rest)
+}
+
+// fleetNotesFollow reports whether rest — the text after a result's leading
+// JSON value — is fleet's notes as the framing joins them: a blank line, then
+// a "[" tag. A payload's own trailing whitespace may come first: an MCP
+// server's text is not trimmed before the notes are joined, so a payload
+// that ends in a newline is followed by "\n\n\n[", not "\n\n[".
+func fleetNotesFollow(rest string) bool {
+	notes := strings.TrimLeft(rest, " \t\r\n")
+	return strings.HasPrefix(notes, "[") && strings.HasSuffix(rest[:len(rest)-len(notes)], "\n\n")
 }
 
 func truncateTaskForVerifier(task string) string {
