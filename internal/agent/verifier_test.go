@@ -51,6 +51,8 @@ func TestToolResultLooksFailed(t *testing.T) {
 		// newline (or CRLF) still has its notes after a blank line.
 		{"error payload ending in a newline, then a hook fragment", "{\"error\":\"upstream 400\"}\n\n\n[hook:fmt] formatter: clean", true},
 		{"error payload ending in CRLF, then a hook fragment", "{\"error\":\"upstream 400\"}\r\n\n\n[hook:fmt] formatter: clean", true},
+		// Bracketed text that is not one of fleet's tags is the tool's own.
+		{"error payload, then the tool's own bracketed text", "{\"error\":\"upstream 400\"}\n\n[tool error] write failed", false},
 		{"error payload, then a tag with no blank line", "{\"error\":\"upstream 400\"}\n[hook:fmt] formatter: clean", false},
 		// Any other trailing text is not one of fleet's notes: the value is not
 		// read as the payload (as in the verifier's evidence).

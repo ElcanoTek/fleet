@@ -2,6 +2,7 @@ package agentcore
 
 import (
 	"context"
+	"strings"
 
 	"charm.land/fantasy"
 )
@@ -143,7 +144,11 @@ func runGovernedToolCall(ctx context.Context, f toolCallFraming, params fantasy.
 	// the single-pass journal/audit bytes are the more consistent choice:
 	// they match MCP's long-standing single-bound behavior, and the
 	// model-visible bytes converge at the outer boundary either way.)
-	resp := boundModelVisibleToolResponse(ctx, f.name, params.ID, out.resp)
+	// The live limit is read once: the policy record below asks whether the
+	// payload alone passes the boundary, and must ask it of the limit this
+	// response was bounded with.
+	outputLimit := maxToolOutputBytes()
+	resp := boundModelVisibleToolResponseWithin(ctx, f.name, params.ID, out.resp, outputLimit)
 	markOutputGoverned(ctx)
 	// Durable outcome record (#798): the exact bounded model-visible bytes,
 	// before the response re-enters the provider loop.
@@ -156,7 +161,7 @@ func runGovernedToolCall(ctx context.Context, f toolCallFraming, params fantasy.
 	//
 	// The record is the tool's own governed payload, without fleet's notes or
 	// a hook fragment (policyRecordText).
-	recordPolicyToolResult(ctx, f.policy, f.name, params.Input, policyRecordText(governed, out.resp, resp, out.failed), !out.failed)
+	recordPolicyToolResult(ctx, f.policy, f.name, params.Input, policyRecordText(governed, out.resp, resp, out.failed, outputLimit), !out.failed)
 	if out.cause != nil {
 		// Fantasy persists a non-nil Go error as the model-visible tool
 		// result. The typed wrapper carries the exact bounded bytes and
@@ -215,6 +220,26 @@ func appendGovernedPostHook(ctx context.Context, hooks *hookEngine, toolName, ca
 	return appendHookContext(text, governed)
 }
 
+// fleetNoteTags are the tags that open the text fleet joins to a tool result:
+// a post_tool_use fragment (hookEngine.postToolUse) and the date-window
+// reminders (dateWindowNotes).
+var fleetNoteTags = []string{"[hook:", "[fleet date-window]", "[fleet search]"}
+
+// StartsWithFleetNote reports whether text opens with one of the tags fleet
+// puts at the head of what it joins to a tool result. A reader of the session
+// log uses it to tell fleet's notes after a JSON payload from any other
+// bracketed text a tool wrote there itself, which is part of the result. It
+// is a format check, not provenance: a tool that writes one of these tags
+// after its own payload is read as payload plus notes.
+func StartsWithFleetNote(text string) bool {
+	for _, tag := range fleetNoteTags {
+		if strings.HasPrefix(text, tag) {
+			return true
+		}
+	}
+	return false
+}
+
 // appendHookContext appends a post-tool hook fragment to a tool result.
 func appendHookContext(content, frag string) string {
 	if frag == "" {
@@ -242,11 +267,12 @@ func appendHookContext(content, frag string) string {
 // text past the limit. Otherwise the bounded bytes are recorded: a truncation
 // envelope, which quotes only a preview of the text, or for a media response
 // an envelope with no preview at all.
-func policyRecordText(governed, annotated, bounded fantasy.ToolResponse, failed bool) string {
+// outputLimit is the limit bounded was cut with.
+func policyRecordText(governed, annotated, bounded fantasy.ToolResponse, failed bool, outputLimit int) string {
 	if !failed {
 		return policyResultText(governed, bounded)
 	}
-	if annotated.Content != governed.Content && passesModelVisibleBoundary(governed) {
+	if annotated.Content != governed.Content && passesModelVisibleBoundary(governed, outputLimit) {
 		return governed.Content
 	}
 	return bounded.Content

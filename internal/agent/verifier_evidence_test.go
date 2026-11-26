@@ -292,7 +292,7 @@ func TestVerifierEvidenceKeepsPayloadBeforeFleetNotes(t *testing.T) {
 	if got := verifierEvidence("{\"status\":\"sent\"}\n\n\n[hook:fmt] formatter: clean"); got["/status"] != "sent" {
 		t.Fatalf("evidence for a newline-terminated payload before fleet notes = %v, want the payload's fields", got)
 	}
-	for _, raw := range []string{`{"status":"sent"} trailing words`, "{\"status\":\"sent\"}\n[hook:fmt] no blank line"} {
+	for _, raw := range []string{`{"status":"sent"} trailing words`, "{\"status\":\"sent\"}\n[hook:fmt] no blank line", "{\"status\":\"success\"}\n\n[tool error] write failed"} {
 		if len(verifierEvidence(raw)) != 0 {
 			t.Fatalf("evidence for %q must stay unknown", raw)
 		}

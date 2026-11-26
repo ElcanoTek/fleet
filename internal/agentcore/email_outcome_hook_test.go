@@ -110,30 +110,45 @@ func TestPolicyRecordText(t *testing.T) {
 	governed := fantasy.NewTextErrorResponse(`{"status_code":500}`)
 	annotated := governed
 	annotated.Content = appendHookContext(governed.Content, "[hook:fmt] x")
-	if got := policyRecordText(governed, annotated, annotated, true); got != governed.Content {
+	if got := policyRecordText(governed, annotated, annotated, true, maxToolOutputBytes()); got != governed.Content {
 		t.Errorf("failed call with a whole annotated text recorded %q, want the payload", got)
 	}
 	// The annotations pushed the model-visible text past the limit, but the
 	// payload alone passes it whole: the payload is recorded.
 	envelope := annotated
 	envelope.Content = "[truncated envelope]"
-	if got := policyRecordText(governed, annotated, envelope, true); got != governed.Content {
+	if got := policyRecordText(governed, annotated, envelope, true, maxToolOutputBytes()); got != governed.Content {
 		t.Errorf("failed call whose payload fits on its own recorded %q, want the payload", got)
 	}
 	// The payload alone is past the limit: the envelope is all there is.
 	huge := fantasy.NewTextErrorResponse(strings.Repeat("upstream failure detail ", HardMaxToolOutputBytes/24+1))
 	hugeAnnotated := huge
 	hugeAnnotated.Content = appendHookContext(huge.Content, "[hook:fmt] x")
-	if got := policyRecordText(huge, hugeAnnotated, envelope, true); got != envelope.Content {
+	if got := policyRecordText(huge, hugeAnnotated, envelope, true, maxToolOutputBytes()); got != envelope.Content {
 		t.Errorf("failed call whose payload is past the limit recorded %d bytes, want the bounded envelope", len(got))
 	}
-	if got := policyRecordText(governed, governed, governed, true); got != governed.Content {
+	// The answer follows the limit the response was bounded with, not the
+	// live one: lowering the live limit afterwards changes nothing.
+	fits := fantasy.NewTextErrorResponse(`{"status_code":500,"detail":"` + strings.Repeat("x", 2*MinMaxToolOutputBytes) + `"}`)
+	fitsAnnotated := fits
+	fitsAnnotated.Content = appendHookContext(fits.Content, "[hook:fmt] x")
+	boundedWith := maxToolOutputBytes()
+	t.Cleanup(func() { SetMaxToolOutputBytes(-1) })
+	SetMaxToolOutputBytes(MinMaxToolOutputBytes)
+	if got := policyRecordText(fits, fitsAnnotated, envelope, true, boundedWith); got != fits.Content {
+		t.Errorf("a limit lowered after bounding changed the record to %d bytes, want the payload", len(got))
+	}
+	if got := policyRecordText(fits, fitsAnnotated, envelope, true, maxToolOutputBytes()); got != envelope.Content {
+		t.Errorf("under the lowered limit the payload does not fit: recorded %d bytes, want the envelope", len(got))
+	}
+	SetMaxToolOutputBytes(-1)
+	if got := policyRecordText(governed, governed, governed, true, maxToolOutputBytes()); got != governed.Content {
 		t.Errorf("failed call with no annotation recorded %q", got)
 	}
 	ok := fantasy.NewTextResponse(`{"status_code":200}`)
 	okAnnotated := ok
 	okAnnotated.Content = appendHookContext(ok.Content, "[hook:fmt] x")
-	if got := policyRecordText(ok, okAnnotated, okAnnotated, false); got != ok.Content {
+	if got := policyRecordText(ok, okAnnotated, okAnnotated, false, maxToolOutputBytes()); got != ok.Content {
 		t.Errorf("successful call recorded %q, want the payload", got)
 	}
 }
@@ -164,5 +179,27 @@ func TestEmailWithPostHook_LongFragmentUnderSmallLimit(t *testing.T) {
 	blocked, msg := p.BeforeToolCall(inflightEmailTool, "c-2", inflightEmailInput)
 	if !blocked || !strings.Contains(msg, maybeSentText) {
 		t.Fatalf("identical retry after a 502: blocked=%v msg=%q, want the may-have-been-sent refusal", blocked, msg)
+	}
+}
+
+// The session-log readers recognise fleet's notes by their opening tag
+// (StartsWithFleetNote), so every note fleet joins to a result must open with
+// a listed one.
+func TestFleetNotesOpenWithAListedTag(t *testing.T) {
+	frag := withPostToolHook(t).postToolUse(context.Background(), "bash", "c-1", `{}`, "ok", false)
+	notes := dateWindowNotes("mcp_gmail_search_emails", `{"query":"from:a@example.com","date_to":"2020-01-31"}`, `{"matches_found":0}`, runtimeNow())
+	lines := append([]string{frag}, strings.Split(notes, "\n")...)
+	if len(lines) < 3 {
+		t.Fatalf("setup: want a hook fragment and both date-window notes, got %q", lines)
+	}
+	for _, line := range lines {
+		if !StartsWithFleetNote(line) {
+			t.Errorf("fleet note %q opens with no listed tag", line)
+		}
+	}
+	for _, other := range []string{"[tool error] write failed", "[1, 2]", "hook: x", ""} {
+		if StartsWithFleetNote(other) {
+			t.Errorf("%q read as a fleet note", other)
+		}
 	}
 }

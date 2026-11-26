@@ -92,7 +92,7 @@ func projectVerifier(raw string, noExcerpts bool) verifierProjection {
 // decodeVerifierJSON decodes raw as one JSON object, or nil. With
 // allowFleetNotes, the object may be followed by the notes fleet joins to a
 // tool result in the session log — its date-window reminders and
-// post_tool_use fragments, each a blank line and then a "[" tag
+// post_tool_use fragments, each a blank line and then one of fleet's tags
 // (fleetNotesFollow) — and only
 // the object is evidence; anything else after it still rejects the value.
 func decodeVerifierJSON(raw string, allowFleetNotes bool) map[string]any {

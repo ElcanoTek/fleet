@@ -204,8 +204,8 @@ func toolResultLooksFailed(content string) bool {
 			Error json.RawMessage `json:"error"`
 		}
 		// The session log holds the model-visible text, to which fleet joins
-		// its own notes and post_tool_use fragments (a blank line, then a "["
-		// tag). Decoding the whole string would fail on them and read
+		// its own notes and post_tool_use fragments (a blank line, then one
+		// of fleet's tags). Decoding the whole string would fail on them and read
 		// {"error":"upstream 400"} as a success, so the leading JSON value is
 		// the payload when only such notes follow it — the same rule as the
 		// verifier's evidence (decodeVerifierJSON).
@@ -237,12 +237,15 @@ func decodeLeadingPayload(text string, v any) bool {
 
 // fleetNotesFollow reports whether rest — the text after a result's leading
 // JSON value — is fleet's notes as the framing joins them: a blank line, then
-// a "[" tag. A payload's own trailing whitespace may come first: an MCP
-// server's text is not trimmed before the notes are joined, so a payload
-// that ends in a newline is followed by "\n\n\n[", not "\n\n[".
+// one of fleet's own tags (agentcore.StartsWithFleetNote). Any other
+// bracketed text, such as a tool's own "[tool error] write failed", is part
+// of the result and leaves the value unread. A payload's own trailing
+// whitespace may come first: an MCP server's text is not trimmed before the
+// notes are joined, so a payload that ends in a newline is followed by
+// "\n\n\n[", not "\n\n[".
 func fleetNotesFollow(rest string) bool {
 	notes := strings.TrimLeft(rest, " \t\r\n")
-	return strings.HasPrefix(notes, "[") && strings.HasSuffix(rest[:len(rest)-len(notes)], "\n\n")
+	return agentcore.StartsWithFleetNote(notes) && strings.HasSuffix(rest[:len(rest)-len(notes)], "\n\n")
 }
 
 func truncateTaskForVerifier(task string) string {
