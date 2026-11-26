@@ -78,7 +78,9 @@ func projectVerifierArguments(raw string) verifierProjection {
 }
 
 func projectVerifier(raw string, noExcerpts bool) verifierProjection {
-	value := decodeVerifierJSON(raw)
+	// A result may carry fleet's notes after its payload (noExcerpts is the
+	// arguments' projection, which never does).
+	value := decodeVerifierJSON(raw, !noExcerpts)
 	if value == nil {
 		return verifierProjection{omitted: true}
 	}
@@ -87,15 +89,25 @@ func projectVerifier(raw string, noExcerpts bool) verifierProjection {
 	return projection
 }
 
-func decodeVerifierJSON(raw string) map[string]any {
+// decodeVerifierJSON decodes raw as one JSON object, or nil. With
+// allowFleetNotes, the object may be followed by the notes fleet joins to a
+// tool result in the session log — its date-window reminders and
+// post_tool_use fragments, each a blank line and then a "[" tag — and only
+// the object is evidence; anything else after it still rejects the value.
+func decodeVerifierJSON(raw string, allowFleetNotes bool) map[string]any {
 	if len(raw) > verifierEvidenceInputCap {
 		return nil
 	}
-	decoder := json.NewDecoder(strings.NewReader(agentcore.RedactSecrets(raw)))
+	text := agentcore.RedactSecrets(raw)
+	decoder := json.NewDecoder(strings.NewReader(text))
 	decoder.UseNumber() // Keep large identifiers exact instead of rounding to float64.
 	var value map[string]any
 	if decoder.Decode(&value) != nil {
 		return nil
+	}
+	// The same trailer rule as toolResultLooksFailed (decodeLeadingPayload).
+	if allowFleetNotes && strings.HasPrefix(text[decoder.InputOffset():], "\n\n[") {
+		return value
 	}
 	var extra any
 	if decoder.Decode(&extra) != io.EOF {
@@ -161,7 +173,7 @@ func (p *verifierProjection) collect(value map[string]any, path string, depth in
 				if key == "content" && len(nested) == 1 {
 					if block, ok := nested[0].(map[string]any); ok && block["type"] == "text" {
 						if text, ok := block["text"].(string); ok {
-							queue = append(queue, node{decodeVerifierJSON(text), fieldPath, current.depth + 1})
+							queue = append(queue, node{decodeVerifierJSON(text, false), fieldPath, current.depth + 1})
 							p.omitted = true // The MCP wrapper itself is not retained.
 							continue
 						}

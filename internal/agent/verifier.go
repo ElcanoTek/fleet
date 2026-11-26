@@ -203,7 +203,13 @@ func toolResultLooksFailed(content string) bool {
 			// RawMessage: "error" may be a string or an object.
 			Error json.RawMessage `json:"error"`
 		}
-		if err := json.Unmarshal([]byte(trimmed), &probe); err == nil {
+		// The session log holds the model-visible text, to which fleet joins
+		// its own notes and post_tool_use fragments (a blank line, then a "["
+		// tag). Decoding the whole string would fail on them and read
+		// {"error":"upstream 400"} as a success, so the leading JSON value is
+		// the payload when only such notes follow it — the same rule as the
+		// verifier's evidence (decodeVerifierJSON).
+		if decodeLeadingPayload(trimmed, &probe) {
 			// A top-level non-empty "error" with no explicit success field is a
 			// failed call — the same convention agentcore's mcpReportedFailure
 			// applies to commitments. It matters beyond the verifier summary:
@@ -216,6 +222,17 @@ func toolResultLooksFailed(content string) bool {
 		return strings.HasPrefix(trimmed, `{"status":"error"`) || strings.HasPrefix(trimmed, `{"status": "error"`)
 	}
 	return false
+}
+
+// decodeLeadingPayload decodes the JSON value at the start of text into v
+// when nothing follows it but whitespace or fleet's notes ("\n\n[" …).
+func decodeLeadingPayload(text string, v any) bool {
+	decoder := json.NewDecoder(strings.NewReader(text))
+	if decoder.Decode(v) != nil {
+		return false
+	}
+	rest := text[decoder.InputOffset():]
+	return strings.TrimSpace(rest) == "" || strings.HasPrefix(rest, "\n\n[")
 }
 
 func truncateTaskForVerifier(task string) string {

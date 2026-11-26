@@ -11,6 +11,12 @@ import (
 	"github.com/ElcanoTek/fleet/internal/mcp"
 )
 
+// annotateDateWindow is the model-visible result: the tool's result with
+// dateWindowNotes joined after it, as the shared framing joins them.
+func annotateDateWindow(toolName, rawInput, result string, now time.Time) string {
+	return appendHookContext(result, dateWindowNotes(toolName, rawInput, result, now))
+}
+
 func mustUTC(t *testing.T, s string) time.Time {
 	t.Helper()
 	ts, err := time.Parse(time.RFC3339, s)
@@ -94,7 +100,7 @@ func TestAnnotateDateWindow_StaleDateTo(t *testing.T) {
 	input := `{"sender_contains":"reports@openx.com","subject_contains":"OpenX | Daily","date_from":"2026-08-12","date_to":"2026-08-12","has_payload":true}`
 	result := `{"status":"success","matches_found":0,"emails":[]}`
 	for _, toolName := range []string{"mcp_explorer_search_emails", "mcp_email_search_emails"} {
-		got := AnnotateDateWindow(toolName, input, result, now)
+		got := annotateDateWindow(toolName, input, result, now)
 		if !strings.Contains(got, "[fleet date-window]") {
 			t.Fatalf("%s: missing stale-window note:\n%s", toolName, got)
 		}
@@ -114,7 +120,7 @@ func TestAnnotateDateWindow_OnOrBeforeAlias(t *testing.T) {
 	now := mustUTC(t, "2026-08-13T16:00:00Z")
 	input := `{"sender_contains":"openx.com","on_or_before":"2026-08-12","lookback_days":3}`
 	for _, toolName := range []string{"mcp_explorer_find_latest_report", "mcp_email_find_latest_report"} {
-		got := AnnotateDateWindow(toolName, input, `{"status":"success"}`, now)
+		got := annotateDateWindow(toolName, input, `{"status":"success"}`, now)
 		if !strings.Contains(got, "on_or_before=2026-08-12") {
 			t.Fatalf("%s: should treat on_or_before as an upper bound:\n%s", toolName, got)
 		}
@@ -125,7 +131,7 @@ func TestAnnotateDateWindow_CurrentWindowUnchanged(t *testing.T) {
 	now := mustUTC(t, "2026-08-13T16:00:00Z")
 	input := `{"date_from":"2026-08-11","date_to":"2026-08-13"}`
 	result := `{"status":"success","matches_found":2,"emails":[{"email_id":"a"},{"email_id":"b"}]}`
-	got := AnnotateDateWindow("mcp_email_search_emails", input, result, now)
+	got := annotateDateWindow("mcp_email_search_emails", input, result, now)
 	if got != result {
 		t.Fatalf("current window + hits should be unchanged:\n%s", got)
 	}
@@ -138,7 +144,7 @@ func TestAnnotateDateWindow_HistoricalWindowWithHitsUnchanged(t *testing.T) {
 	now := mustUTC(t, "2026-08-13T16:00:00Z")
 	input := `{"date_from":"2026-08-01","date_to":"2026-08-01"}`
 	result := `{"status":"success","matches_found":1,"emails":[{"email_id":"x"}]}`
-	got := AnnotateDateWindow("mcp_email_search_emails", input, result, now)
+	got := annotateDateWindow("mcp_email_search_emails", input, result, now)
 	if !strings.Contains(got, "[fleet date-window]") {
 		t.Fatal("historical date_to still excludes today and should be flagged")
 	}
@@ -153,7 +159,7 @@ func TestAnnotateDateWindow_EmptyExactSearchIsNotAbsence(t *testing.T) {
 	now := mustUTC(t, "2026-08-13T16:00:00Z")
 	input := `{"sender_contains":"reports@openx.com","subject_contains":"OpenX | Elcano","date_from":"2026-08-13","date_to":"2026-08-13","has_payload":true}`
 	result := `{"status":"success","matches_found":0,"emails":[]}`
-	got := AnnotateDateWindow("mcp_email_search_emails", input, result, now)
+	got := annotateDateWindow("mcp_email_search_emails", input, result, now)
 	if strings.Contains(got, "[fleet date-window]") {
 		t.Fatal("window already includes today; should not flag date_to")
 	}
@@ -170,7 +176,7 @@ func TestAnnotateDateWindow_SubjectPunctuationStillParsed(t *testing.T) {
 	// The pipe in an OpenX subject must not prevent JSON/date parsing.
 	input := `{"sender_contains":"reports@openx.com","subject_contains":"OpenX | Daily Performance | Elcano","date_from":"2026-08-12","date_to":"2026-08-12","has_payload":true}`
 	result := `{"status":"success","matches_found":0,"emails":[]}`
-	got := AnnotateDateWindow("mcp_email_search_emails", input, result, now)
+	got := annotateDateWindow("mcp_email_search_emails", input, result, now)
 	if !strings.Contains(got, "[fleet date-window]") || !strings.Contains(got, "[fleet search]") {
 		t.Fatalf("subject punctuation must not drop annotations:\n%s", got)
 	}
@@ -180,7 +186,7 @@ func TestAnnotateDateWindow_IgnoresUnrelatedTools(t *testing.T) {
 	now := mustUTC(t, "2026-08-13T16:00:00Z")
 	input := `{"path":"foo.go"}`
 	result := `{"ok":true}`
-	got := AnnotateDateWindow("view_file", input, result, now)
+	got := annotateDateWindow("view_file", input, result, now)
 	if got != result {
 		t.Fatalf("non-search tool should be unchanged: %s", got)
 	}
@@ -189,7 +195,7 @@ func TestAnnotateDateWindow_IgnoresUnrelatedTools(t *testing.T) {
 func TestAnnotateDateWindow_RFC3339DateTo(t *testing.T) {
 	now := mustUTC(t, "2026-08-13T16:00:00Z")
 	input := `{"date_to":"2026-08-12T23:59:59Z"}`
-	got := AnnotateDateWindow("mcp_email_search_emails", input, `{"matches_found":1,"emails":[{}]}`, now)
+	got := annotateDateWindow("mcp_email_search_emails", input, `{"matches_found":1,"emails":[{}]}`, now)
 	if !strings.Contains(got, "date_to=2026-08-12") {
 		t.Fatalf("RFC3339 date_to should collapse to the UTC day:\n%s", got)
 	}

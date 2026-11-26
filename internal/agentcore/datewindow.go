@@ -82,14 +82,16 @@ var dateToKeys = []string{"date_to", "on_or_before", "end_date", "before", "unti
 // date-lower-bound keys, included in the annotation for the model.
 var dateFromKeys = []string{"date_from", "start_date", "after", "since"}
 
-// AnnotateDateWindow appends engine-authored reminders to a tool result
-// when the call's date upper bound is before runtime_today, and when a
-// mailbox search returned zero matches. Empty exact search is not treated
-// as proof of absence (#1026). The original result is unchanged when
-// neither condition applies.
-func AnnotateDateWindow(toolName, rawInput, result string, now time.Time) string {
+// dateWindowNotes returns engine-authored reminders for a tool result, or ""
+// when there are none: one when the call's date upper bound is before
+// runtime_today, and one when a mailbox search returned zero matches. Empty
+// exact search is not treated as proof of absence (#1026). mcpTool hands them
+// to the shared framing as a model-facing note (toolCallOutcome.modelNote),
+// which joins them after the result for the model, while the policy
+// classifies the tool's own payload.
+func dateWindowNotes(toolName, rawInput, result string, now time.Time) string {
 	if result == "" {
-		return result
+		return ""
 	}
 	today := RuntimeToday(now)
 	from, to := FreshnessWindow(now)
@@ -108,10 +110,7 @@ func AnnotateDateWindow(toolName, rawInput, result string, now time.Time) string
 	if isMailboxSearchTool(toolName, args) && isZeroMatchResult(result) {
 		notes = append(notes, "[fleet search] matches_found=0 is not proof of absence. If this was an exact sender/subject query, also run independent recipient, sender-domain, and fuzzy searches and merge by id. Do not declare a source missing until those fallbacks complete.")
 	}
-	if len(notes) == 0 {
-		return result
-	}
-	return result + "\n\n" + strings.Join(notes, "\n")
+	return strings.Join(notes, "\n")
 }
 
 func formatOptionalFrom(dateFrom string) string {

@@ -42,6 +42,14 @@ func TestToolResultLooksFailed(t *testing.T) {
 		{"empty result", "", false},
 		{"error mentioned mid-text", `Report complete. Note: 0 errors encountered.`, false},
 		{"truncated status error json", `{"status":"error","message":"boom`, true},
+		// The session log holds the model-visible text: fleet's notes and a
+		// post_tool_use fragment follow the tool's payload.
+		{"error payload followed by a hook fragment", "{\"error\":\"upstream 400\"}\n\n[hook:fmt] formatter: clean", true},
+		{"unsuccessful payload followed by a date-window note", "{\"success\":false}\n\n[fleet date-window] runtime_today=2026-11-26", true},
+		{"successful payload followed by a hook fragment", "{\"status\":\"success\",\"message_id\":\"abc\"}\n\n[hook:fmt] ok", false},
+		// Any other trailing text is not one of fleet's notes: the value is not
+		// read as the payload (as in the verifier's evidence).
+		{"error payload followed by other text", `{"error":"upstream 400"} and more`, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
