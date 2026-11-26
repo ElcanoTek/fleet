@@ -6,23 +6,27 @@ package main
 import (
 	"context"
 	"errors"
-	"log/slog"
 
 	"github.com/ElcanoTek/fleet/internal/identity"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/sched/apikeys"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
 // bindUserKeysAtBoot binds every user key minted before keys named their
 // account (apikeys.Manager.BindUserKeys) against the identity table. Failures
-// are logged, never fatal: an undecided key is bound on its first use.
-func bindUserKeysAtBoot(keys *apikeys.Manager, st *store.Store) {
-	bound, missing, err := keys.BindUserKeys(context.Background(), accountLookup(st))
+// are logged, never fatal: an undecided key is bound on its first use. Nothing
+// is bound once ctx has ended (the database is another server's now).
+func bindUserKeysAtBoot(ctx context.Context, keys *apikeys.Manager, st *store.Store) {
+	if ctx.Err() != nil {
+		return
+	}
+	bound, missing, err := keys.BindUserKeys(ctx, accountLookup(st))
 	switch {
 	case err != nil:
-		slog.Warn("apikeys: binding user keys to their accounts failed (each is bound on its first use instead)", "err", err)
+		logging.From(ctx).Warn("apikeys: binding user keys to their accounts failed (each is bound on its first use instead)", "err", err)
 	case bound+missing > 0:
-		slog.Info("apikeys: bound user keys to their accounts", "bound", bound, "without_account", missing)
+		logging.From(ctx).Info("apikeys: bound user keys to their accounts", "bound", bound, "without_account", missing)
 	}
 }
 

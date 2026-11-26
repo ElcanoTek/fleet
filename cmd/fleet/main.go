@@ -445,6 +445,14 @@ func run() error {
 		return exitQuietlyIfStopped(err)
 	}
 	defer releaseDatabase()
+	// ownedCtx ends the moment the claim is lost (a replacement server took
+	// the database while this one's owner connection was down): the boot's
+	// background writers run under it, and each boot step that writes from
+	// here to the listeners runs only while the claim holds (asOwner and the
+	// gate before the scheduler starts), so the boot stops writing and
+	// returns the loss at once instead of finishing its boot first.
+	ownedCtx, stopOwned := ownedContext(owner)
+	defer stopOwned()
 
 	// Install the bundle's agent tool-behavior policy (parallel-safe tools,
 	// critical-tool suffixes, substitute map). The generic bundle ships none, so
@@ -493,13 +501,8 @@ func run() error {
 	// workspace claim so sandbox pods can read it (ADR-0055); podman keeps the
 	// data-dir tree. Must precede every registration of the skills dir below.
 	// Degrades loudly: the pool build then logs why in-sandbox skill reads
-	// will not resolve.
-	skillsDir, err := agent.StageSkillsForBackend(cfg, bundle)
-	if err != nil {
-		// Only the kubernetes backend stages, so the message can name it
-		// outright (no tainted backend string in the log line).
-		slog.Warn("warning: stage skills for the kubernetes sandbox backend — skills stay unreadable inside sandbox pods", "err", err)
-	}
+	// will not resolve. Skipped once the database is another server's.
+	skillsDir := stageSkillsAsOwner(owner, cfg, bundle)
 
 	// Workspace symlinks must point at the REAL loaded dirs — in particular
 	// the merged bundle+builtin skills dir — not the legacy $CWD/<name>
@@ -547,21 +550,7 @@ func run() error {
 	if err := recoverAsOwner(owner, chatStore, cfg.InputQueueRetentionDays); err != nil {
 		return err
 	}
-	if cfg.SearchEnabled {
-		safe.Go("store.fts-backfill", func() {
-			bfCtx, bfCancel := context.WithTimeout(context.Background(), 30*time.Minute)
-			defer bfCancel()
-			n, err := chatStore.BackfillSearchContent(bfCtx)
-			switch {
-			case err != nil:
-				logging.From(bfCtx).Error("search backfill: failed", "err", err, "indexed", n)
-			case n > 0:
-				logging.From(bfCtx).Info("search backfill: indexed pre-existing messages", "indexed", n)
-			}
-		})
-	} else {
-		slog.Info("full-text search: DISABLED (FLEET_SEARCH_ENABLED=false)")
-	}
+	startSearchBackfill(ownedCtx, cfg.SearchEnabled, chatStore)
 
 	// Persist every recovered panic (#241, #795) to the chat DB's panic_events
 	// table. Only the value-free class and opaque attribution cross this seam.
@@ -585,14 +574,8 @@ func run() error {
 	}
 
 	schedStorage := storage.New()
-	if err := schedStorage.Initialize(schedDB, scheddb.PoolConfig{
-		MaxOpenConns:    cfg.SchedDBPool.MaxOpenConns,
-		MaxIdleConns:    cfg.SchedDBPool.MaxIdleConns,
-		ConnMaxIdleTime: cfg.SchedDBPool.ConnMaxIdleTime,
-		ConnMaxLifetime: cfg.SchedDBPool.ConnMaxLifetime,
-		ConnectTimeout:  cfg.SchedDBPool.ConnectTimeout,
-	}); err != nil {
-		return fmt.Errorf("open sched DB: %w", err)
+	if err := asOwner(owner, func() error { return initSchedStorage(schedStorage, schedDB, cfg) }); err != nil {
+		return err
 	}
 	defer schedStorage.Close()
 	schedStorage.SetTimezone(timezone())
@@ -605,7 +588,7 @@ func run() error {
 	// Bootstrap operators (#458): provision/promote the configured emails as
 	// orchestrator admins so they reach the Operations Center seamlessly via the
 	// shared chat session cookie. See seedBootstrapAdmins for the rationale.
-	if err := seedBootstrapAdmins(schedStorage, cfg.AccountsManagedByAuth); err != nil {
+	if err := asOwner(owner, func() error { return seedBootstrapAdmins(schedStorage, cfg.AccountsManagedByAuth) }); err != nil {
 		return err
 	}
 
@@ -773,7 +756,7 @@ func run() error {
 	// account their email has now; one whose email has none acts as no one
 	// from here on (apikeys.APIKey.AccountMissing). A key whose lookup fails
 	// is bound on its first use instead.
-	bindUserKeysAtBoot(keyMgr, chatStore)
+	bindUserKeysAtBoot(ownedCtx, keyMgr, chatStore)
 	chatOpts = append(chatOpts, httpapi.WithAPIKeys(keyMgr))
 
 	chatSrv := httpapi.New(cfg, mgr, chatStore, chatOpts...)
@@ -783,9 +766,7 @@ func run() error {
 	// reconciled <workspace>/shared and a wiped workspace volume self-heals at
 	// boot instead of waiting an hour for the maintenance pass. Best-effort:
 	// a degraded library must not brick boot — Sync runs again every pass.
-	if err := chatSrv.SyncSharedFiles(context.Background()); err != nil {
-		slog.Warn("shared files: boot sync failed (the hourly maintenance pass will retry)", "err", err)
-	}
+	syncSharedFilesAtBoot(ownedCtx, chatSrv)
 
 	// Auto-approve-in-test (#225) bypasses the human-in-the-loop approval gate.
 	// It is off by default and intended only for CI/test pipelines with a mocked
@@ -972,7 +953,7 @@ func run() error {
 	// skips containers carrying this process's own instance label in every
 	// state — otherwise a warm container caught in "created" state would be
 	// force-removed by its own process. See sandbox.PruneOrphanedContainers.
-	pruneOrphanedSandboxes(mgr.SandboxPool())
+	pruneOrphanedSandboxes(ownedCtx, mgr.SandboxPool())
 
 	// Share the process shutdown grace with the pool so its in-flight-task drain
 	// uses the same budget as the chat-turn drain (#278).
@@ -1090,10 +1071,17 @@ func run() error {
 	// patrols and timers (the chat server is their deliverer). Started any
 	// earlier, a failed boot could leave a chat turn running, with its side
 	// effects, while fleet reports the failure and closes the stores under
-	// it. TestRunStartsTheSchedulerAfterTheLastFallibleStep pins this.
+	// it. TestRunStartsTheSchedulerAfterTheLastFallibleStep pins this. Nor
+	// does it start for a server that lost the database during the boot.
+	if err := ownershipLossErr(owner); err != nil {
+		return err
+	}
 	sch.SetChatScheduleDeliverer(chatSrv)
 	sch.Start()
-	defer sch.Stop()
+	// The scheduler runs on a context of its own: stopped at the end of
+	// run(), and at once if the claim is lost, so it promotes, recovers and
+	// fires nothing more next to the new owner during the shutdown.
+	defer stopSchedulerOnOwnershipLoss(ownedCtx, owner, sch)()
 
 	// Signal handling (#278) distinguishes deployment restart from dev Ctrl-C:
 	//   - SIGTERM → graceful: stop admitting, drain in-flight chat turns + tasks
@@ -1103,7 +1091,7 @@ func run() error {
 	// ctx drives the claim loop / pool; cancelling it stops NEW work but (by
 	// design) does NOT touch detached chat turns or in-flight tasks — those drain
 	// through their own decoupled contexts so the grace period is meaningful.
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(ownedCtx)
 	// Both stores are migrated: make sure a deleted conversation takes its
 	// chat schedules with it (ADR-0104). Sched migration 077 installs the
 	// cascade when the chat schema already exists; on a database the
@@ -1190,6 +1178,79 @@ func run() error {
 	graceful := awaitShutdown(sigCh, errCh, chatSrv, pool, agentLimiter)
 	performShutdown(graceful, grace, cancel, chatSrv, pool, poolDone, chatServer, orchServer, webServer)
 	return ownershipLossErr(owner)
+}
+
+// stageSkillsAsOwner stages the skills tree for the sandbox backend
+// (agent.StageSkillsForBackend) and returns the skills dir, unless the
+// database is already another server's (the kubernetes staging writes into
+// the shared workspace claim). Degrades loudly, never fatally.
+func stageSkillsAsOwner(owner ownership, cfg *config.Config, bundle *clientconfig.Bundle) string {
+	if ownershipLossErr(owner) != nil {
+		return bundle.SkillsDir
+	}
+	skillsDir, err := agent.StageSkillsForBackend(cfg, bundle)
+	if err != nil {
+		// Only the kubernetes backend stages, so the message can name it
+		// outright (no tainted backend string in the log line).
+		slog.Warn("warning: stage skills for the kubernetes sandbox backend — skills stay unreadable inside sandbox pods", "err", err)
+	}
+	return skillsDir
+}
+
+// syncSharedFilesAtBoot reconciles the shared file library's staged tree
+// before the listeners come up. It is skipped once ctx (the boot's
+// ownedContext) has ended; a sync that started runs to its end on a context
+// that the loss does not cancel, because cancelling would roll back the
+// transaction holding the library's namespace lock while the file
+// reconciliation went on unlocked, and could remove a file the new owner
+// just staged (ADR-0114).
+func syncSharedFilesAtBoot(ctx context.Context, chatSrv *httpapi.Server) {
+	if ctx.Err() != nil {
+		return
+	}
+	if err := chatSrv.SyncSharedFiles(context.WithoutCancel(ctx)); err != nil {
+		logging.From(ctx).Warn("shared files: boot sync failed (the hourly maintenance pass will retry)", "err", err)
+	}
+}
+
+// startSearchBackfill (#308) indexes, in the background, the messages written
+// before full-text search existed, so the boot never waits on a large walk;
+// idempotent and batched (store.BackfillSearchContent). It runs under ctx,
+// the boot's ownedContext, so it stops the moment the database is another
+// server's.
+func startSearchBackfill(ctx context.Context, enabled bool, chatStore *store.Store) {
+	if !enabled {
+		logging.From(ctx).Info("full-text search: DISABLED (FLEET_SEARCH_ENABLED=false)")
+		return
+	}
+	safe.Go("store.fts-backfill", func() {
+		bfCtx, bfCancel := context.WithTimeout(ctx, 30*time.Minute)
+		defer bfCancel()
+		n, err := chatStore.BackfillSearchContent(bfCtx)
+		switch {
+		case err != nil && ctx.Err() != nil:
+			logging.From(bfCtx).Info("search backfill: stopped (the server is stopping, or the database is another server's now)", "indexed", n)
+		case err != nil:
+			logging.From(bfCtx).Error("search backfill: failed", "err", err, "indexed", n)
+		case n > 0:
+			logging.From(bfCtx).Info("search backfill: indexed pre-existing messages", "indexed", n)
+		}
+	})
+}
+
+// initSchedStorage opens (and migrates) the scheduler store on the sched DSN
+// with the configured pool.
+func initSchedStorage(schedStorage *storage.Storage, schedDB string, cfg *config.Config) error {
+	if err := schedStorage.Initialize(schedDB, scheddb.PoolConfig{
+		MaxOpenConns:    cfg.SchedDBPool.MaxOpenConns,
+		MaxIdleConns:    cfg.SchedDBPool.MaxIdleConns,
+		ConnMaxIdleTime: cfg.SchedDBPool.ConnMaxIdleTime,
+		ConnMaxLifetime: cfg.SchedDBPool.ConnMaxLifetime,
+		ConnectTimeout:  cfg.SchedDBPool.ConnectTimeout,
+	}); err != nil {
+		return fmt.Errorf("open sched DB: %w", err)
+	}
+	return nil
 }
 
 // startApprovalSweepers launches the background tickers for pending approval
@@ -1838,8 +1899,11 @@ func orchestratorAddr() string {
 // podman containers otherwise. Best-effort — log and continue. Extracted from
 // run() to keep it within the cyclomatic budget; see the call site's comment
 // for why this must run only AFTER the manager (and thus the pool) exists.
-func pruneOrphanedSandboxes(pool *sandbox.Pool) {
-	pruneCtx, pruneCancel := context.WithTimeout(context.Background(), 30*time.Second)
+func pruneOrphanedSandboxes(ctx context.Context, pool *sandbox.Pool) {
+	if ctx.Err() != nil {
+		return // the database is another server's now (ownedContext)
+	}
+	pruneCtx, pruneCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer pruneCancel()
 	if kb := pool.KubernetesBackend(); kb != nil {
 		// Kubernetes backend (#989): orphans are pods, not podman containers.

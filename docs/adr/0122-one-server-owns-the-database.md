@@ -109,12 +109,39 @@ it recovers or writes anything.**
   next try. If
   any other session holds the lock through every try for 15 seconds (three
   graces — longer than a starting server holds it while it looks), another
-  server owns the database: this one stops at once (as on a listener error)
-  and exits non-zero. A server that is merely reconnecting is not stopped: a
-  starting server sees its row move and lets go. The claim is checked again
-  before boot recovery and after it, before the scheduler store opens. A
-  heartbeat row written while taking the lock back is removed when the
-  server stops, also when it stops before it held the presence lock.
+  server owns the database: this one stops at once and exits non-zero. A
+  server that is merely reconnecting is not stopped: a starting server sees
+  its row move and lets go. A heartbeat row written while taking the lock
+  back is removed when the server stops, also when it stops before it held
+  the presence lock.
+- **Losing it during the boot.** The claim can be lost at any point after it
+  is taken, also while the server is still booting. From the claim on, the
+  boot runs under a context that ends the moment the claim is lost:
+  - the writers it starts in the background stop: the search backfill at
+    once, and later the chat-schedule cascade, the upload backfill, the
+    SLA monitor, the sweepers, the maintenance loop and the worker pool;
+  - the scheduler, which runs on a context of its own, is stopped at once
+    too, so it promotes, recovers and fires nothing more next to the new
+    owner while this server shuts down;
+  - each remaining boot step that writes runs only while the claim holds.
+    Skills staging (the kubernetes copy into the shared workspace claim),
+    API-key binding, the shared-file sync and sandbox pruning are skipped;
+    opening the scheduler store and seeding the bootstrap administrators
+    return the loss; boot recovery is checked before and after it; and the
+    claim is looked at once more right before the scheduler starts. A
+    server that lost the claim returns the loss at the next gated step, at
+    the latest right before the scheduler starts, and exits non-zero
+    without serving. Once the listeners are up, a loss shuts the server
+    down at once, as a listener error does.
+
+  What it does not stop: a step already running when the claim is lost.
+  Boot recovery, the scheduler store's migrations, seeding the bootstrap
+  administrators and a shared-file sync that has started run to their end
+  (the sync on purpose: cancelling it would let go of the library's lock
+  while its files are still being reconciled, ADR-0114); the backfill,
+  key binding and pruning stop at their next statement. Nor is the podman
+  sweep of orphaned sandbox containers that building the sandbox pool runs
+  gated; it removes only containers whose labelled owning process is dead.
 - **Who takes it.** Only `fleet serve`. The CLIs that run alongside a server —
   `fleet migrate`, `fleet backup`, `fleet admin`, `fleet task run`, doctor,
   status — never take it, and still run while a server does. The CLI account
